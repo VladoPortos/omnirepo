@@ -136,7 +136,7 @@ func assertGet200(t *testing.T, client *http.Client, url, wantSubstr string) {
 	if err != nil {
 		t.Fatalf("GET %s: %v", url, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		t.Fatalf("GET %s: status=%d body=%s", url, resp.StatusCode, string(body))

@@ -55,7 +55,7 @@ func TestCertHolderPublicKeyMismatch(t *testing.T) {
 	}
 	// tls.X509KeyPair reports something containing "public key" or "mismatch".
 	msg := err.Error()
-	if !(strings.Contains(msg, "public key") || strings.Contains(msg, "mismatch")) {
+	if !strings.Contains(msg, "public key") && !strings.Contains(msg, "mismatch") {
 		t.Fatalf("unexpected error shape: %v", err)
 	}
 }

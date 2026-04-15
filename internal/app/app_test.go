@@ -117,7 +117,9 @@ func TestRun_FirstBootWritesSelfSignedCert(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	ready := make(chan struct{})
-	go func() { _ = app.Run(ctx, cfg, app.RunOptions{HTTPListener: httpLn, HTTPSListener: httpsLn, Ready: ready}) }()
+	go func() {
+		_ = app.Run(ctx, cfg, app.RunOptions{HTTPListener: httpLn, HTTPSListener: httpsLn, Ready: ready})
+	}()
 	<-ready
 	defer cancel()
 
@@ -167,7 +169,9 @@ func TestRun_IdempotentWhenDBAlreadySeeded(t *testing.T) {
 	httpLn, httpsLn := tcpPair(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	ready := make(chan struct{})
-	go func() { _ = app.Run(ctx, cfg, app.RunOptions{HTTPListener: httpLn, HTTPSListener: httpsLn, Ready: ready}) }()
+	go func() {
+		_ = app.Run(ctx, cfg, app.RunOptions{HTTPListener: httpLn, HTTPSListener: httpsLn, Ready: ready})
+	}()
 	<-ready
 	resp := waitFor(t, "http://"+httpLn.Addr().String()+"/healthz", http.DefaultTransport, 3*time.Second)
 	_ = resp.Body.Close()

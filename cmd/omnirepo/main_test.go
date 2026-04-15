@@ -39,7 +39,7 @@ func TestRunBadBootstrapExits2(t *testing.T) {
 	osExit = func(code int) { got = code; panic(code) }
 
 	defer func() {
-		recover() // swallow the panic from osExit
+		_ = recover() // swallow the panic from osExit
 		if got != 2 {
 			t.Fatalf("expected exit code 2, got %d", got)
 		}

@@ -1,0 +1,51 @@
+name: CI
+
+# Phase 1 CI workflow: binds every Phase 1 invariant gate to PR merges.
+# No untrusted event inputs are interpolated into run: blocks (no issue/PR
+# bodies, no commit messages, no head refs) — only fixed make / go commands.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  build-test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+
+      - name: Install git (spike requirement)
+        run: sudo apt-get update && sudo apt-get install -y git
+
+      - name: Install golangci-lint
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b "$(go env GOPATH)/bin" v2.11.4
+
+      - name: Lint
+        run: make lint
+
+      - name: Build
+        run: make build
+
+      - name: Unit tests + air-gap boot test
+        run: make test
+
+      - name: Air-gap invariant (explicit gate re-run)
+        run: make test-airgap
+
+      - name: grep-cdn gate
+        run: make grep-cdn
+
+      - name: SQLite contention bench
+        env:
+          BENCH_DURATION: 5s
+        run: make bench-sqlite
+
+      - name: go-git v6 spike
+        run: go test -mod=vendor -tags=spike ./internal/protocol/git/spike/... -count=1

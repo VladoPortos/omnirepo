@@ -52,34 +52,49 @@ func (r *ReposRepo) Create(
 ) (int64, error) {
 	var id int64
 	err := r.db.WriteTx(ctx, func(tx *sql.Tx) error {
-		// Assemble an insert that lets schema defaults apply when the pointer is nil.
-		as := int64(1)
-		if autoScan != nil {
-			as = boolInt(*autoScan)
-		}
-		bos := "none"
-		if blockOnSeverity != nil && *blockOnSeverity != "" {
-			bos = *blockOnSeverity
-		}
-		pr := int64(0)
-		if publicRead != nil {
-			pr = boolInt(*publicRead)
-		}
-		res, execErr := tx.ExecContext(ctx, `
-			INSERT INTO repos(project_id, type, name, description_md, auto_scan, block_on_severity, public_read)
-			VALUES (?, ?, ?, ?, ?, ?, ?)
-		`, projectID, typ, name, descriptionMD, as, bos, pr)
-		if execErr != nil {
-			return fmt.Errorf("repos: create (project=%d type=%s name=%s): %w", projectID, typ, name, execErr)
-		}
-		lid, lidErr := res.LastInsertId()
-		if lidErr != nil {
-			return fmt.Errorf("repos: last insert id: %w", lidErr)
-		}
-		id = lid
-		return nil
+		var insertErr error
+		id, insertErr = r.CreateInTx(ctx, tx, projectID, typ, name, descriptionMD, autoScan, blockOnSeverity, publicRead)
+		return insertErr
 	})
 	return id, err
+}
+
+// CreateInTx is the tx-aware sibling of Create. Lets callers atomically
+// commit related rows alongside the repo row (Phase 03 Plan 04: rpm/deb
+// signing-key generation in the same writer tx as the repos INSERT, D-02).
+func (r *ReposRepo) CreateInTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	projectID int64,
+	typ, name, descriptionMD string,
+	autoScan *bool,
+	blockOnSeverity *string,
+	publicRead *bool,
+) (int64, error) {
+	as := int64(1)
+	if autoScan != nil {
+		as = boolInt(*autoScan)
+	}
+	bos := "none"
+	if blockOnSeverity != nil && *blockOnSeverity != "" {
+		bos = *blockOnSeverity
+	}
+	pr := int64(0)
+	if publicRead != nil {
+		pr = boolInt(*publicRead)
+	}
+	res, execErr := tx.ExecContext(ctx, `
+		INSERT INTO repos(project_id, type, name, description_md, auto_scan, block_on_severity, public_read)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+	`, projectID, typ, name, descriptionMD, as, bos, pr)
+	if execErr != nil {
+		return 0, fmt.Errorf("repos: create (project=%d type=%s name=%s): %w", projectID, typ, name, execErr)
+	}
+	lid, lidErr := res.LastInsertId()
+	if lidErr != nil {
+		return 0, fmt.Errorf("repos: last insert id: %w", lidErr)
+	}
+	return lid, nil
 }
 
 // FindByTriple returns the live repo with matching (projectID, type, name).

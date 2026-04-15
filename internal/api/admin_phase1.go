@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"io"
@@ -51,6 +52,13 @@ type Deps struct {
 	// GCDeps is the Plan 02-12 admin GC trigger dependency bundle.
 	// nil-safe — when nil, /api/v1/admin/gc is not mounted.
 	GCDeps *GCDeps
+
+	// RepoCreateHook is invoked INSIDE the repo-create writer tx so the
+	// hook's writes (e.g. RPM/DEB signing-key generation, Phase 03 Plan 04
+	// D-02) commit atomically with the repos INSERT. Returns optional
+	// per-type extras to fold into the API response (e.g. fingerprint).
+	// nil = no-op (used by tests that don't care about per-type extras).
+	RepoCreateHook RepoCreateHookFn
 
 	// Clock is used for session/token issuance. Defaults to time.Now().UTC.
 	Clock func() time.Time
@@ -509,6 +517,12 @@ func (d Deps) handleRemoveMember(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
+// RepoCreateHookFn is invoked inside the repo-create writer tx so any
+// secondary INSERTs (signing keys, etc.) commit atomically with the repos
+// INSERT. Returns optional extras to fold into the API response. Errors
+// abort the tx and surface as 500 to the caller.
+type RepoCreateHookFn func(ctx context.Context, tx *sql.Tx, repoID int64, repoType, projectName, repoName string) (extras map[string]any, err error)
+
 func (d Deps) handleCreateRepo(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
 	p, err := d.Projects.FindByName(r.Context(), name)
@@ -529,9 +543,31 @@ func (d Deps) handleCreateRepo(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusUnprocessableEntity, ErrValidationFailed, "invalid type")
 		return
 	}
-	id, err := d.Repos.Create(r.Context(), p.ID, req.Type, req.Name, req.DescriptionMD, req.AutoScan, req.BlockOnSeverity, req.PublicRead)
-	if err != nil {
-		if strings.Contains(err.Error(), "UNIQUE") || strings.Contains(err.Error(), "constraint") {
+
+	// Compose repo INSERT + optional hook in a single writer tx so a hook
+	// failure (e.g. RPM signing-key generation breaking) rolls back the
+	// repos row (T-03-04-06).
+	var (
+		id     int64
+		extras map[string]any
+	)
+	txErr := d.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
+		var insErr error
+		id, insErr = d.Repos.CreateInTx(r.Context(), tx, p.ID, req.Type, req.Name, req.DescriptionMD, req.AutoScan, req.BlockOnSeverity, req.PublicRead)
+		if insErr != nil {
+			return insErr
+		}
+		if d.RepoCreateHook != nil {
+			ex, herr := d.RepoCreateHook(r.Context(), tx, id, req.Type, p.Name, req.Name)
+			if herr != nil {
+				return herr
+			}
+			extras = ex
+		}
+		return nil
+	})
+	if txErr != nil {
+		if strings.Contains(txErr.Error(), "UNIQUE") || strings.Contains(txErr.Error(), "constraint") {
 			writeJSONError(w, http.StatusConflict, ErrConflict, "repo exists")
 			return
 		}
@@ -541,8 +577,15 @@ func (d Deps) handleCreateRepo(w http.ResponseWriter, r *http.Request) {
 	if a, ok := auth.ActorFromContext(r.Context()); ok {
 		uid := a.ID
 		d.recordAudit(r, audit.Event{Kind: audit.EvtRepoCreated, ActorUserID: &uid, TargetKind: "repo", TargetID: p.Name + "/" + req.Type + "/" + req.Name})
+		if fp, ok := extras["fingerprint"].(string); ok && fp != "" {
+			d.recordAudit(r, audit.Event{Kind: audit.EvtSigningKeyCreated, ActorUserID: &uid, TargetKind: "repo", TargetID: p.Name + "/" + req.Type + "/" + req.Name, Details: map[string]any{"fingerprint": fp, "key_kind": "gpg_rsa4096"}})
+		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"id": id, "name": req.Name, "type": req.Type})
+	resp := map[string]any{"id": id, "name": req.Name, "type": req.Type}
+	for k, v := range extras {
+		resp[k] = v
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (d Deps) handleDeleteRepo(w http.ResponseWriter, r *http.Request) {

@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	cryptorand "crypto/rand"
+	"database/sql"
 	stdtls "crypto/tls"
 	"encoding/base64"
 	"errors"
@@ -387,6 +388,17 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 
 	// 6c. Admin + user REST at /api/v1. Mounted AFTER ociHandler so the
 	// OCIActions bundle can reference handlers that depend on it.
+	signingKeysRepo := metadata.NewSigningKeysRepo(db, aead)
+	rpmRepoCreateHook := func(ctx context.Context, tx *sql.Tx, repoID int64, repoType, projectName, repoName string) (map[string]any, error) {
+		fp, err := CreateRPMRepoHook(ctx, tx, repoID, repoType, projectName, repoName, signingKeysRepo, cfg.Signing.GPGKeyBits, nil)
+		if err != nil {
+			return nil, err
+		}
+		if fp == "" {
+			return nil, nil
+		}
+		return map[string]any{"fingerprint": fp}, nil
+	}
 	api.Mount(router, api.Deps{
 		DB:            db,
 		Users:         metadata.NewUsersRepo(db),
@@ -403,6 +415,8 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 		Trash:         storage.NewTrash(filepath.Join(cfg.DataRoot, "trash")),
 		Locks:         storage.NewLocks(),
 		SessionTTL:    cfg.Auth.SessionTTL,
+
+		RepoCreateHook: rpmRepoCreateHook,
 		// Plan 02-09: scan REST endpoints.
 		ScanDeps: &api.ScansDeps{
 			Scans:    metadata.NewScansRepo(db),
@@ -479,6 +493,19 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 		locks:       sharedLocks,
 	}.wirePyPI(router)
 	defer shutdownPyPIRegistry(context.Background(), pypiRegistry)
+
+	// 6f. Phase 03 Plan 04: RPM handler + per-repo regen coalescer registry.
+	// Shares signingKeysRepo with the api.Deps repo-create hook so a
+	// fresh-from-DB Lookup goes through the same instance the hook used to
+	// Insert (cache prefill happens lazily on first /public-key.asc GET).
+	rpmRegistry := rpmDeps{
+		cfg:         cfg,
+		db:          db,
+		auditLogger: auditLogger,
+		signingKeys: signingKeysRepo,
+		locks:       sharedLocks,
+	}.wireRPM(router)
+	defer shutdownRPMRegistry(context.Background(), rpmRegistry)
 
 	// 7. Listeners.
 	httpLn := opts.HTTPListener

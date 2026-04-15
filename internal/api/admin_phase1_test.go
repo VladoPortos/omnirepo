@@ -220,6 +220,56 @@ func TestLogin_WrongPassword(t *testing.T) {
 	}
 }
 
+// TestLoginTimingOracle is the WR-04 regression gate: login attempts with
+// (a) a nonexistent user, (b) a malformed login, and (c) a real user with a
+// wrong password should all take at least one argon2id cost cycle — i.e.
+// "unknown user" and "bad login format" must not short-circuit before the
+// argon2 verification. We verify the unknown-user path takes at least ~50%
+// of a real verify.
+func TestLoginTimingOracle(t *testing.T) {
+	s := newTestServer(t)
+	seedTestUser(t, s.db, "alice", "a@x", false, false)
+
+	// Measure a real wrong-password attempt (baseline for argon2 cost).
+	realStart := time.Now()
+	_, _, code := s.login(t, "alice", "completely-wrong")
+	if code != 401 {
+		t.Fatalf("wrong pw code=%d", code)
+	}
+	realDur := time.Since(realStart)
+
+	// Measure unknown user; should be comparable (within 50% of real).
+	unknownStart := time.Now()
+	_, _, code = s.login(t, "ghostuser", "anypassword")
+	if code != 401 {
+		t.Fatalf("unknown user code=%d", code)
+	}
+	unknownDur := time.Since(unknownStart)
+
+	// The unknown-user path MUST burn argon2 so it takes a substantial
+	// fraction of the real verify time. Without the fix, unknown users
+	// return in microseconds (zero DB match, no argon2 call). We allow
+	// noise tolerance: require at least 50% of real.
+	minExpected := realDur / 2
+	if unknownDur < minExpected {
+		t.Fatalf("unknown-user login too fast (%v) vs real (%v); timing oracle present",
+			unknownDur, realDur)
+	}
+
+	// Also check that a malformed-login response path still takes some
+	// argon2 time (not the earlier microsecond-LoginValid short-circuit).
+	badFmtStart := time.Now()
+	_, _, code = s.login(t, "has spaces & symbols!!!", "x")
+	if code != 401 {
+		t.Fatalf("malformed login code=%d", code)
+	}
+	badFmtDur := time.Since(badFmtStart)
+	if badFmtDur < minExpected {
+		t.Fatalf("malformed-login too fast (%v) vs real (%v); timing oracle present",
+			badFmtDur, realDur)
+	}
+}
+
 func TestLogin_MCPUser(t *testing.T) {
 	s := newTestServer(t)
 	seedTestUser(t, s.db, "carol", "c@x", false, true)

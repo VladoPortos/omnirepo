@@ -27,6 +27,51 @@ const (
 // otpAlphabet is the 62-char alphanumeric alphabet used by OneTimePassword.
 const otpAlphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
 
+// dummyArgon2Hash is a pre-computed argon2id hash used on login negative
+// paths (malformed input, unknown user) to ensure every failed login takes
+// approximately the same wall-clock time as a real password verification —
+// closing the WR-04 user-enumeration timing oracle. The plaintext it hashes
+// is constant and intentionally never matches a real password.
+//
+// Computed at package init using the SAME D-16 argon2id parameters as
+// HashPassword, so VerifyPassword(dummy, anything) spends the same CPU +
+// memory as verifying a real stored hash.
+var dummyArgon2Hash string
+
+func init() {
+	// Hash an arbitrary constant. Must never match any legal password; the
+	// leading "!" byte cannot appear in a user-chosen password since
+	// handlers validate LoginRequest.Password length-nonzero but not
+	// content — however VerifyPassword returns (false, nil) on mismatch
+	// regardless, so the constant here is only about getting a
+	// reproducibly-formatted hash at build time.
+	h, err := HashPassword("!dummy-login-timing-oracle-anchor!")
+	if err != nil {
+		// HashPassword only fails on crypto/rand failure. At init time
+		// there is nothing sensible to do except leave the hash empty;
+		// VerifyFixedCost will skip the argon2 path in that case, so
+		// timing protection degrades but login still works.
+		dummyArgon2Hash = ""
+		return
+	}
+	dummyArgon2Hash = h
+}
+
+// VerifyFixedCost burns the same argon2id CPU+memory cost as VerifyPassword
+// against a stored hash, but returns nothing and discards the result. Call
+// it on login negative paths (malformed input, unknown user) so every 401
+// response takes ~argon2-time — closing the enumeration timing oracle
+// (WR-04).
+//
+// Safe to call with any plain input. Does nothing when the package-level
+// dummy hash was not available at init.
+func VerifyFixedCost(plain string) {
+	if dummyArgon2Hash == "" {
+		return
+	}
+	_, _ = VerifyPassword(dummyArgon2Hash, plain)
+}
+
 // HashPassword derives an argon2id hash of plain using D-16 parameters and
 // encodes the result in the canonical PHC-ish format:
 //

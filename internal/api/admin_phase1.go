@@ -186,17 +186,26 @@ func (d Deps) resolveProjectTargetFromURL(r *http.Request) auth.Target {
 // -----------------------------------------------------------------------------
 
 func (d Deps) handleLogin(w http.ResponseWriter, r *http.Request) {
+	// WR-04: close the user-enumeration timing oracle by ensuring every
+	// negative path burns the same argon2id CPU+memory cost as a real
+	// password verification. Any early return on a failure path MUST have
+	// called auth.VerifyFixedCost first.
 	var req LoginRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSONError(w, http.StatusBadRequest, ErrValidationFailed, "invalid JSON")
-		return
-	}
-	if err := auth.LoginValid(req.Login); err != nil {
+		auth.VerifyFixedCost("")
 		writeJSONError(w, http.StatusUnauthorized, ErrUnauthenticated, "")
 		return
 	}
+	// Drop the LoginValid short-circuit: a malformed login can never match
+	// the UNIQUE index, so FindByLogin will return ErrNotFound just like a
+	// well-formed but unknown login. Treating both the same hides the
+	// "login format valid" signal from response timing.
 	u, err := d.Users.FindByLogin(r.Context(), req.Login)
 	if err != nil {
+		// Unknown user — burn argon2 anyway to match the wrong-password
+		// latency. Constant-time argument since req.Password is the same
+		// bytes an attacker would have sent for a real user.
+		auth.VerifyFixedCost(req.Password)
 		writeJSONError(w, http.StatusUnauthorized, ErrUnauthenticated, "")
 		d.recordAudit(r, audit.Event{Kind: audit.EvtAuthLoginFailure, TargetKind: "user", TargetID: req.Login, Outcome: "user_not_found"})
 		return

@@ -19,6 +19,21 @@ import (
 // the on-disk blob (inode/mtime) is untouched.
 type CAS interface {
 	Put(ctx context.Context, r io.Reader) (digest string, size int64, err error)
+	// PutFromPath hashes the file at srcPath, then promotes it into the
+	// CAS via a single atomic os.Rename (no second io.Copy). On success
+	// srcPath no longer exists: either it was renamed into the CAS, or
+	// — when the computed digest was already present — srcPath was
+	// removed and the existing on-disk blob was left untouched (inode
+	// preserved). Callers MUST NOT unlink srcPath after calling.
+	//
+	// Use this when the upload path already streamed bytes to a tmp
+	// file on the same filesystem as the CAS root (the OCI chunked
+	// upload state machine does exactly that). It avoids a second copy
+	// through user space and keeps promotion atomic under the
+	// single-filesystem guarantee.
+	//
+	// Errors from a missing srcPath wrap os.ErrNotExist.
+	PutFromPath(ctx context.Context, srcPath string) (digest string, size int64, err error)
 	Get(ctx context.Context, digest string) (io.ReadCloser, error)
 	Stat(ctx context.Context, digest string) (size int64, exists bool, err error)
 	Exists(ctx context.Context, digest string) (bool, error)
@@ -107,6 +122,71 @@ func (c *cas) Put(ctx context.Context, r io.Reader) (string, int64, error) {
 		return "", 0, fmt.Errorf("cas: rename: %w", err)
 	}
 	cleanup = false
+
+	// Parent fsync for durability.
+	if pf, err := os.Open(filepath.Dir(final)); err == nil {
+		_ = pf.Sync()
+		_ = pf.Close()
+	}
+	return digest, n, nil
+}
+
+// PutFromPath promotes the file at srcPath into the CAS via atomic rename.
+// See CAS.PutFromPath doc for semantics. Consumes srcPath on every success
+// path (either via rename-into-CAS or unlink-on-idempotent-skip); leaves it
+// untouched on error.
+func (c *cas) PutFromPath(ctx context.Context, srcPath string) (string, int64, error) {
+	if err := ctx.Err(); err != nil {
+		return "", 0, err
+	}
+	// Open + hash the source in one pass. Explicit fs.ErrNotExist wrapping
+	// so callers can distinguish a missing session tmp file from other IO
+	// errors.
+	f, err := os.Open(srcPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", 0, fmt.Errorf("cas: open %s: %w", srcPath, err)
+		}
+		return "", 0, fmt.Errorf("cas: open %s: %w", srcPath, err)
+	}
+	h := sha256.New()
+	n, copyErr := io.Copy(h, f)
+	closeErr := f.Close()
+	if copyErr != nil {
+		return "", 0, fmt.Errorf("cas: hash %s: %w", srcPath, copyErr)
+	}
+	if closeErr != nil {
+		return "", 0, fmt.Errorf("cas: close %s: %w", srcPath, closeErr)
+	}
+
+	digest := "sha256:" + hex.EncodeToString(h.Sum(nil))
+	final, err := c.blobPath(digest)
+	if err != nil {
+		return "", 0, err
+	}
+
+	// Idempotent skip: existing blob wins; drop the source.
+	if _, statErr := os.Stat(final); statErr == nil {
+		if rmErr := os.Remove(srcPath); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
+			return "", 0, fmt.Errorf("cas: remove idempotent src %s: %w", srcPath, rmErr)
+		}
+		return digest, n, nil
+	} else if !errors.Is(statErr, os.ErrNotExist) {
+		return "", 0, fmt.Errorf("cas: stat final: %w", statErr)
+	}
+
+	// Rename srcPath → final. os.Rename is atomic on a single Linux
+	// filesystem. Callers that stream to c.tmpDir (or a sibling path
+	// inside the data root) stay on the same FS as c.root and therefore
+	// get the atomic guarantee. If srcPath lies on a different FS, the
+	// rename returns EXDEV — we surface it as a typed error so the
+	// upload handler can fall back to a Put(io.Reader) path if needed.
+	if err := os.MkdirAll(filepath.Dir(final), 0o750); err != nil {
+		return "", 0, fmt.Errorf("cas: mkdir final dir: %w", err)
+	}
+	if err := os.Rename(srcPath, final); err != nil {
+		return "", 0, fmt.Errorf("cas: rename %s -> %s: %w", srcPath, final, err)
+	}
 
 	// Parent fsync for durability.
 	if pf, err := os.Open(filepath.Dir(final)); err == nil {

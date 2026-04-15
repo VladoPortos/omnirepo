@@ -125,3 +125,35 @@ func TestLoadNoFileNoEnvReturnsDefaults(t *testing.T) {
 		t.Errorf("Server.HTTPPort = %d, want 8080", cfg.Server.HTTPPort)
 	}
 }
+
+func TestTrivyDefaults(t *testing.T) {
+	d := config.Defaults()
+	if d.Trivy.BinaryPath != "/usr/local/bin/trivy" {
+		t.Errorf("Trivy.BinaryPath = %q, want /usr/local/bin/trivy", d.Trivy.BinaryPath)
+	}
+	if d.Trivy.DBPath != "/var/lib/omnirepo/trivy/db" {
+		t.Errorf("Trivy.DBPath = %q, want /var/lib/omnirepo/trivy/db", d.Trivy.DBPath)
+	}
+	if d.Trivy.CachePath != "/var/lib/omnirepo/trivy/cache" {
+		t.Errorf("Trivy.CachePath = %q, want /var/lib/omnirepo/trivy/cache", d.Trivy.CachePath)
+	}
+}
+
+func TestTrivyEnvOverride(t *testing.T) {
+	t.Setenv("OMNIREPO_TRIVY__BINARY_PATH", "/x")
+	t.Setenv("OMNIREPO_TRIVY__DB_PATH", "/y")
+	t.Setenv("OMNIREPO_TRIVY__CACHE_PATH", "/z")
+	cfg, err := config.Load("")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Trivy.BinaryPath != "/x" {
+		t.Errorf("Trivy.BinaryPath = %q, want /x", cfg.Trivy.BinaryPath)
+	}
+	if cfg.Trivy.DBPath != "/y" {
+		t.Errorf("Trivy.DBPath = %q, want /y", cfg.Trivy.DBPath)
+	}
+	if cfg.Trivy.CachePath != "/z" {
+		t.Errorf("Trivy.CachePath = %q, want /z", cfg.Trivy.CachePath)
+	}
+}

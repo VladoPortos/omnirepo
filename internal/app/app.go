@@ -279,38 +279,15 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 	}
 	scanHandlers["raw"] = scanHandlers["docker"]
 
-	go syncPool.Run(ctx)
-	go scanPool.Run(ctx)
+	// NOTE: syncPool.Run / scanPool.Run are started BELOW, after all
+	// sync handlers (02-10 pull-external etc.) have been registered.
+	// Running the pool before the map is complete would race the
+	// dispatcher against handler registration.
 
-	// 6. Router with global middleware + system routes + API.
+	// 6. Router with global middleware + system routes.
 	router := httpx.New(httpx.Deps{Config: cfg})
 	router.Get("/healthz", httpx.Healthz())
 	router.Get("/readyz", httpx.Readyz(httpx.ReadyzDeps{DB: db, Holder: holder}))
-	api.Mount(router, api.Deps{
-		DB:            db,
-		Users:         metadata.NewUsersRepo(db),
-		Sessions:      metadata.NewSessionsRepo(db),
-		APIKeys:       metadata.NewAPIKeysRepo(db),
-		Projects:      metadata.NewProjectsRepo(db),
-		Members:       metadata.NewMembersRepo(db),
-		Repos:         metadata.NewReposRepo(db),
-		Settings:      metadata.NewSettingsRepo(db),
-		UpstreamCreds: upstreamCreds,
-		Holder:        holder,
-		DataRoot:      cfg.DataRoot,
-		Audit:         auditLogger,
-		Trash:         storage.NewTrash(filepath.Join(cfg.DataRoot, "trash")),
-		Locks:         storage.NewLocks(),
-		SessionTTL:    cfg.Auth.SessionTTL,
-		// Plan 02-09: scan REST endpoints (manual rescan, scan list,
-		// scan get, vulnerabilities, SBOM download).
-		ScanDeps: &api.ScansDeps{
-			Scans:    metadata.NewScansRepo(db),
-			Vulns:    metadata.NewVulnerabilitiesRepo(db),
-			ScanKick: scanPool.Kick,
-			SBOMRoot: filepath.Join(cfg.DataRoot, "sboms"),
-		},
-	})
 
 	// 6b. /v2 OCI registry handler (Phase 02-05). Materialize the HMAC
 	// secret on first boot; subsequent boots reuse the existing secret.
@@ -356,6 +333,69 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 	})
 	ociHandler.Mount(router)
 	ociHandler.MountCosign(router)
+
+	// 6b.2. Plan 02-10: pull-external + promote.
+	// Register the sync-pool handler for kind="pull_external"; the REST
+	// endpoints are mounted via api.Mount below (they live on /api/v1).
+	pullExternalJob := oci.NewPullExternalHandler(oci.PullExternalDeps{
+		DB:        db,
+		CAS:       ociCAS,
+		Blobs:     metadata.NewDockerBlobsRepo(db),
+		Manifests: metadata.NewDockerManifestsRepo(db),
+		Tags:      metadata.NewDockerTagsRepo(db),
+		Scans:     metadata.NewScansRepo(db),
+		ScanKick:  scanPool.Kick,
+		Repos:     metadata.NewReposRepo(db),
+		Projects:  metadata.NewProjectsRepo(db),
+		Creds:     upstreamCreds,
+		Audit:     auditLogger,
+		OCI:       ociHandler,
+	})
+	syncHandlers[oci.PullExternalJobKind] = func(c context.Context, j *jobs.JobView) error {
+		return pullExternalJob.Handle(c, j.Payload, j.ProjectID, j.RepoID)
+	}
+	pullExternalREST := oci.NewPullExternalREST(ociHandler, upstreamCreds,
+		metadata.NewSyncJobsRepo(db), syncPool.Kick)
+	promoteREST := oci.NewPromoteREST(ociHandler)
+
+	// 6c. Admin + user REST at /api/v1. Mounted AFTER ociHandler so the
+	// OCIActions bundle can reference handlers that depend on it.
+	api.Mount(router, api.Deps{
+		DB:            db,
+		Users:         metadata.NewUsersRepo(db),
+		Sessions:      metadata.NewSessionsRepo(db),
+		APIKeys:       metadata.NewAPIKeysRepo(db),
+		Projects:      metadata.NewProjectsRepo(db),
+		Members:       metadata.NewMembersRepo(db),
+		Repos:         metadata.NewReposRepo(db),
+		Settings:      metadata.NewSettingsRepo(db),
+		UpstreamCreds: upstreamCreds,
+		Holder:        holder,
+		DataRoot:      cfg.DataRoot,
+		Audit:         auditLogger,
+		Trash:         storage.NewTrash(filepath.Join(cfg.DataRoot, "trash")),
+		Locks:         storage.NewLocks(),
+		SessionTTL:    cfg.Auth.SessionTTL,
+		// Plan 02-09: scan REST endpoints.
+		ScanDeps: &api.ScansDeps{
+			Scans:    metadata.NewScansRepo(db),
+			Vulns:    metadata.NewVulnerabilitiesRepo(db),
+			ScanKick: scanPool.Kick,
+			SBOMRoot: filepath.Join(cfg.DataRoot, "sboms"),
+		},
+		// Plan 02-10: OCI pull-external + promote.
+		OCIActions: &api.OCIActionsDeps{
+			PullExternal: pullExternalREST,
+			Promote:      promoteREST,
+		},
+	})
+
+	// Start pool dispatchers AFTER all handlers are registered (02-09 scan,
+	// 02-10 pull-external). Map mutation under read concurrency is
+	// impossible because Run reads handlers only inside its dispatcher
+	// goroutine, which hasn't started yet.
+	go syncPool.Run(ctx)
+	go scanPool.Run(ctx)
 
 	// 6c. RAW pass-through handler (Phase 02-08, D-27..D-31). Mounted on
 	// the root router because the URL path includes the project slug —

@@ -44,6 +44,10 @@ type Deps struct {
 	// nil-safe — when nil, scan endpoints are not mounted.
 	ScanDeps *ScansDeps
 
+	// OCIActions is the Plan 02-10 pull-external + promote dependency bundle.
+	// nil-safe — when nil, the two endpoints are not mounted.
+	OCIActions *OCIActionsDeps
+
 	// Clock is used for session/token issuance. Defaults to time.Now().UTC.
 	Clock func() time.Time
 
@@ -164,6 +168,13 @@ func Mount(r chi.Router, d Deps) {
 			// scan detail, vulnerabilities, SBOM download). Mount only when
 			// ScanDeps is wired by app.Run.
 			d.mountScans(r)
+
+			// Phase 02-10: OCI pull-external + promote (D-04, D-05, D-12).
+			// Mounted inside the already-auth'd subtree so SessionOrAPIKey
+			// has populated the actor on ctx; the oci.PullExternalREST /
+			// PromoteREST handlers re-check membership inline (same pattern
+			// as upstream-creds) so they can return distinct 401/403/404.
+			RegisterOCIActionsRoutes(r, d.OCIActions)
 		})
 	})
 }

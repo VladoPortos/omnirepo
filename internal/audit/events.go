@@ -69,6 +69,15 @@ const (
 	EvtOCIManifestDeleted  EventKind = "oci.manifest.deleted"
 	EvtOCITagDeleted       EventKind = "oci.tag.deleted"
 
+	// Phase 2 Plan 10 — OCI pull-external + promote (D-04, D-05, D-12, D-13).
+	// pull_external.started/finished/failed are emitted by the pull-external
+	// sync-job handler and its REST enqueue endpoint. oci.promote is emitted
+	// by the promote REST handler after the zero-blob-copy retag tx commits.
+	EvtOCIPullExternalStarted  EventKind = "oci.pull_external.started"
+	EvtOCIPullExternalFinished EventKind = "oci.pull_external.finished"
+	EvtOCIPullExternalFailed   EventKind = "oci.pull_external.failed"
+	EvtOCIPromote              EventKind = "oci.promote"
+
 	// Phase 2 Plan 09 — scan pipeline (D-23..D-26, SCAN-03..08).
 	// Emitted by the scan handler (started/finished/failed) and by the
 	// severity gate middleware (gate.blocked) on a 403 deny. Best-effort:

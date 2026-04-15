@@ -199,64 +199,17 @@ func (h *Handler) manifestPut(w http.ResponseWriter, r *http.Request) {
 
 	mediaType := manifestMediaType(r)
 	repoPath := rr.fullPath
-	scanEnqueued := false
+	var scanEnqueued bool
 
-	// Single writer tx: insert manifest + tag upsert + ref deltas + FTS + scan.
 	err = h.db.WriteTx(ctx, func(tx *sql.Tx) error {
-		if err := h.manifests.Insert(ctx, tx, rr.repo.ID, mfDigest, mediaType, body); err != nil {
+		enq, err := h.writeManifestWithRefcounts(
+			ctx, tx, rr.repo.ID, repoPath, reference, mfDigest, mediaType, body,
+			refs, isIndex, rr.repo.AutoScan,
+		)
+		if err != nil {
 			return err
 		}
-
-		// IncRef refs for the new manifest (ref-delta baseline).
-		if err := h.incRefs(ctx, tx, rr.repo.ID, refs, isIndex); err != nil {
-			return err
-		}
-
-		// Tag overwrite ref delta (Pitfall 1).
-		if !isDigestRef(reference) {
-			priorDigest, err := h.tags.Upsert(ctx, tx, rr.repo.ID, reference, mfDigest)
-			if err != nil {
-				return err
-			}
-			if priorDigest != "" && priorDigest != mfDigest {
-				// Decrement refs on the prior manifest's referenced blobs /
-				// child manifests. Look up prior manifest body to extract them.
-				// Use tx-scoped read to avoid Reader-pool vs. writer contention.
-				priorManifest, err := h.manifests.GetByDigestTx(ctx, tx, rr.repo.ID, priorDigest)
-				if err != nil {
-					return err
-				}
-				if priorManifest != nil {
-					priorRefs, priorIsIndex, perr := manifestRefs(priorManifest.Body)
-					if perr != nil {
-						// Tolerate unparseable prior body — we still want the
-						// overwrite to proceed, just won't attempt refcount delta.
-						priorRefs = nil
-					}
-					if err := h.decRefs(ctx, tx, rr.repo.ID, priorRefs, priorIsIndex); err != nil {
-						return err
-					}
-				}
-			}
-		}
-
-		// FTS5 artifact index (D-40). Use reference as version; repo path as name.
-		// Strip prior row for this digest to avoid duplicates on overwrite.
-		if err := metadata.IndexArtifactDelete(ctx, tx, rr.repo.ID, mfDigest); err != nil {
-			return err
-		}
-		if err := metadata.IndexArtifact(ctx, tx, rr.repo.ID, repoPath, reference, mfDigest); err != nil {
-			return err
-		}
-
-		// Auto-scan enqueue.
-		if rr.repo.AutoScan && h.scans != nil {
-			if _, err := h.scans.Enqueue(ctx, tx, rr.repo.ID, "docker", mfDigest); err != nil {
-				return err
-			}
-			scanEnqueued = true
-		}
-
+		scanEnqueued = enq
 		return nil
 	})
 	if err != nil {
@@ -545,6 +498,92 @@ func (h *Handler) manifestDelete(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	w.WriteHeader(http.StatusAccepted)
+}
+
+// writeManifestWithRefcounts runs the manifest-insert writer-tx body used by
+// both the OCI /v2 manifestPut handler and the REST pull-external / promote
+// paths. It expects to be invoked inside an open WriteTx callback.
+//
+// Parameters:
+//   - repoID: destination repo.
+//   - repoPath: "<project>/<type>/<repo>" for FTS + audit.
+//   - reference: either a tag name (to point at mfDigest) or a digest string
+//     (reference == mfDigest). Digest references skip tag upsert.
+//   - mfDigest: sha256:<hex> of body (MUST equal computeMfDigest(body) — caller
+//     is responsible for validation).
+//   - mediaType: Content-Type stored with the manifest.
+//   - body: raw manifest bytes (byte-identical roundtrip per Pitfall 5).
+//   - refs: parsed refs (layers+config for image manifests, child manifests
+//     for indexes). Caller is responsible for calling manifestRefs(body).
+//   - isIndex: true when body is an image index / manifest list.
+//   - autoScan: when true AND h.scans is wired, enqueues a pending scan row
+//     in the same tx. Returns scanEnqueued=true so caller can kick the pool
+//     after commit.
+//
+// Behaviour matches the 02-07 manifestPut tx body:
+//  1. Insert manifest row (idempotent; errors if bytes differ at same digest).
+//  2. IncRef every ref (blobs for manifests, manifests for indexes).
+//  3. Tag overwrite ref-delta: upsert tag; if prior digest existed and differs,
+//     decrement refs on the prior manifest's refs (Pitfall 1).
+//  4. FTS artifact index: delete-then-insert by (repo_id, digest).
+//  5. Optional auto-scan enqueue.
+func (h *Handler) writeManifestWithRefcounts(
+	ctx context.Context,
+	tx *sql.Tx,
+	repoID int64,
+	repoPath string,
+	reference string,
+	mfDigest string,
+	mediaType string,
+	body []byte,
+	refs []string,
+	isIndex bool,
+	autoScan bool,
+) (scanEnqueued bool, err error) {
+	if err := h.manifests.Insert(ctx, tx, repoID, mfDigest, mediaType, body); err != nil {
+		return false, err
+	}
+	if err := h.incRefs(ctx, tx, repoID, refs, isIndex); err != nil {
+		return false, err
+	}
+	if reference != "" && !isDigestRef(reference) {
+		priorDigest, err := h.tags.Upsert(ctx, tx, repoID, reference, mfDigest)
+		if err != nil {
+			return false, err
+		}
+		if priorDigest != "" && priorDigest != mfDigest {
+			priorManifest, err := h.manifests.GetByDigestTx(ctx, tx, repoID, priorDigest)
+			if err != nil {
+				return false, err
+			}
+			if priorManifest != nil {
+				priorRefs, priorIsIndex, perr := manifestRefs(priorManifest.Body)
+				if perr != nil {
+					priorRefs = nil
+				}
+				if err := h.decRefs(ctx, tx, repoID, priorRefs, priorIsIndex); err != nil {
+					return false, err
+				}
+			}
+		}
+	}
+	if err := metadata.IndexArtifactDelete(ctx, tx, repoID, mfDigest); err != nil {
+		return false, err
+	}
+	ftsVersion := reference
+	if ftsVersion == "" {
+		ftsVersion = mfDigest
+	}
+	if err := metadata.IndexArtifact(ctx, tx, repoID, repoPath, ftsVersion, mfDigest); err != nil {
+		return false, err
+	}
+	if autoScan && h.scans != nil {
+		if _, err := h.scans.Enqueue(ctx, tx, repoID, "docker", mfDigest); err != nil {
+			return false, err
+		}
+		scanEnqueued = true
+	}
+	return scanEnqueued, nil
 }
 
 // emitManifestAudit mirrors emitAudit (blobs.go) but uses "manifest" as the

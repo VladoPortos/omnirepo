@@ -32,12 +32,20 @@ type DB struct {
 const readerPoolSize = 8
 
 // Open returns a DB handle backed by the SQLite file (or memory DSN) at path.
-// It applies the D-09 pragma list on both pools and verifies the sqlite build
-// supports FTS5 and JSON1. It also transparently appends ?_txlock=immediate to
-// the DSN so modernc.org/sqlite upgrades every sql.Tx to BEGIN IMMEDIATE (see
-// tx.go for the documentation of this extension).
+//
+// Pragmas are appended to the DSN via modernc.org/sqlite's `_pragma=` DSN
+// extension so EVERY connection the reader and writer pools hand out gets the
+// D-09 pragma list at open time — not just the first one. modernc.org/sqlite
+// does not share pragma state across connections, and the previous strategy
+// (apply pragmas to one conn per pool) left the other 7 reader connections
+// with driver defaults (foreign_keys=OFF, busy_timeout=0). WR-01 fixed.
+//
+// Also transparently appends ?_txlock=immediate so every sql.Tx is promoted
+// to BEGIN IMMEDIATE (see tx.go) — pitfall P2 mitigation.
+//
+// Compile-option probes (FTS5 + JSON1) run once against a writer connection.
 func Open(path string) (*DB, error) {
-	dsn := ensureImmediateTxlock(path)
+	dsn := ensureDSN(path)
 
 	reader, err := sql.Open("sqlite", dsn)
 	if err != nil {
@@ -57,22 +65,10 @@ func Open(path string) (*DB, error) {
 
 	ctx := context.Background()
 
-	// Apply pragmas on one writer conn first so journal_mode=WAL is switched
-	// before any other connection reads the journal header.
-	if err := applyOnConn(ctx, writer, applyPragmas); err != nil {
-		_ = reader.Close()
-		_ = writer.Close()
-		return nil, err
-	}
+	// One-shot compile-option probe (FTS5 + JSON1) on a writer conn. The
+	// pragmas themselves are now carried in the DSN via _pragma=, so they
+	// apply to every connection both pools open.
 	if err := applyOnConn(ctx, writer, checkCompileOptions); err != nil {
-		_ = reader.Close()
-		_ = writer.Close()
-		return nil, err
-	}
-	// Apply pragmas on a reader conn too — foreign_keys, busy_timeout etc
-	// are per-connection. modernc.org/sqlite does not share pragma state
-	// across connections.
-	if err := applyOnConn(ctx, reader, applyPragmas); err != nil {
 		_ = reader.Close()
 		_ = writer.Close()
 		return nil, err
@@ -101,7 +97,7 @@ func (db *DB) Close() error {
 	return first
 }
 
-// Path returns the DSN the DB was opened with (before ensureImmediateTxlock).
+// Path returns the DSN the DB was opened with (before ensureDSN).
 func (db *DB) Path() string { return db.path }
 
 // applyOnConn grabs one connection from pool, runs fn, releases.
@@ -114,23 +110,37 @@ func applyOnConn(ctx context.Context, pool *sql.DB, fn func(context.Context, *sq
 	return fn(ctx, conn)
 }
 
-// ensureImmediateTxlock guarantees the DSN carries `_txlock=immediate`, which
-// is modernc.org/sqlite's documented extension for forcing every sql.BeginTx
-// (and every db.Begin) to open as BEGIN IMMEDIATE instead of the default
-// DEFERRED. This is the cornerstone of pitfall P2's mitigation: without it,
-// two concurrent writers trying to promote a deferred tx to a reserved lock
-// deadlock into SQLITE_BUSY.
+// ensureDSN guarantees the DSN carries:
+//
+//  1. `_txlock=immediate` — modernc.org/sqlite's documented extension for
+//     forcing every sql.BeginTx / db.Begin to open as BEGIN IMMEDIATE instead
+//     of DEFERRED. Pitfall P2 cornerstone.
+//  2. The D-09 PRAGMA list via `_pragma=...` — every new connection on both
+//     pools inherits foreign_keys=ON, busy_timeout=5000, journal_mode=WAL,
+//     synchronous=NORMAL, cache_size=-65536, temp_store=MEMORY.
 //
 // Accepts both bare paths ("/tmp/a.db") and DSNs with existing query strings
-// ("file:/tmp/a.db?cache=shared"). Idempotent.
-func ensureImmediateTxlock(path string) string {
-	const key = "_txlock=immediate"
-	if strings.Contains(path, key) {
+// ("file:/tmp/a.db?cache=shared"). Idempotent for each parameter: already-
+// present `_txlock=immediate` or `_pragma=` values are preserved.
+func ensureDSN(path string) string {
+	const txlock = "_txlock=immediate"
+	params := make([]string, 0, len(pragmaDSNValues)+1)
+	if !strings.Contains(path, txlock) {
+		params = append(params, txlock)
+	}
+	for _, p := range pragmaDSNValues {
+		v := "_pragma=" + p
+		// Idempotency: avoid duplicating if caller already passed it.
+		if !strings.Contains(path, v) {
+			params = append(params, v)
+		}
+	}
+	if len(params) == 0 {
 		return path
 	}
-	// If path already has query string delimiter, append with &.
+	sep := "?"
 	if strings.Contains(path, "?") {
-		return path + "&" + key
+		sep = "&"
 	}
-	return path + "?" + key
+	return path + sep + strings.Join(params, "&")
 }

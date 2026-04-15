@@ -48,6 +48,62 @@ func TestOpenAppliesPragmas(t *testing.T) {
 	}
 }
 
+// TestAllReaderConnectionsHavePragmas is the WR-01 regression gate: every
+// connection the reader pool hands out (not just the first one) must carry
+// the D-09 pragma list. Previously applyPragmas ran against a single conn
+// from the pool and connections 2..N opened with driver defaults
+// (foreign_keys=OFF, busy_timeout=0). The DSN `_pragma=` mechanism fixes it.
+func TestAllReaderConnectionsHavePragmas(t *testing.T) {
+	t.Parallel()
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	db, err := metadata.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	ctx := context.Background()
+	// Grab and HOLD every reader conn simultaneously; the pool will open a
+	// fresh underlying connection for each. Then probe pragmas on each one
+	// before releasing. If any of them was opened with defaults, the assert
+	// fires.
+	const want = 8
+	conns := make([]*sql.Conn, 0, want)
+	defer func() {
+		for _, c := range conns {
+			_ = c.Close()
+		}
+	}()
+	for i := 0; i < want; i++ {
+		c, err := db.Reader.Conn(ctx)
+		if err != nil {
+			t.Fatalf("reader conn %d: %v", i, err)
+		}
+		conns = append(conns, c)
+	}
+
+	checks := []struct {
+		pragma string
+		want   string
+	}{
+		{"foreign_keys", "1"},
+		{"busy_timeout", "5000"},
+		{"cache_size", "-65536"},
+		{"temp_store", "2"},
+	}
+	for i, c := range conns {
+		for _, ch := range checks {
+			var got string
+			if err := c.QueryRowContext(ctx, "PRAGMA "+ch.pragma).Scan(&got); err != nil {
+				t.Fatalf("conn %d pragma %s: %v", i, ch.pragma, err)
+			}
+			if !strings.EqualFold(got, ch.want) {
+				t.Errorf("reader conn %d pragma %s: got %q want %q", i, ch.pragma, got, ch.want)
+			}
+		}
+	}
+}
+
 func TestWriterPoolIsOne(t *testing.T) {
 	t.Parallel()
 	dbPath := filepath.Join(t.TempDir(), "test.db")

@@ -6,41 +6,26 @@ import (
 	"fmt"
 )
 
-// pragmaStmts is the D-09 pragma list applied to every SQLite connection the
-// reader and writer pools hand out. Order matters: journal_mode must be set
-// before any write occurs.
-var pragmaStmts = []string{
-	"PRAGMA journal_mode=WAL",
-	"PRAGMA synchronous=NORMAL",
-	"PRAGMA foreign_keys=ON",
-	"PRAGMA busy_timeout=5000",
-	"PRAGMA cache_size=-65536",
-	"PRAGMA temp_store=MEMORY",
-}
-
-// applyPragmas executes the D-09 pragma list on the given connection. The
-// journal_mode statement returns a row; the rest are no-result statements but
-// modernc.org/sqlite happily accepts them via ExecContext. We run everything
-// as queries and discard the rows so PRAGMA journal_mode=WAL's result doesn't
-// break.
-func applyPragmas(ctx context.Context, conn *sql.Conn) error {
-	for _, stmt := range pragmaStmts {
-		rows, err := conn.QueryContext(ctx, stmt)
-		if err != nil {
-			return fmt.Errorf("metadata: apply %s: %w", stmt, err)
-		}
-		// Drain + close to release the connection.
-		for rows.Next() {
-		}
-		if err := rows.Err(); err != nil {
-			_ = rows.Close()
-			return fmt.Errorf("metadata: %s: %w", stmt, err)
-		}
-		if err := rows.Close(); err != nil {
-			return fmt.Errorf("metadata: %s close: %w", stmt, err)
-		}
-	}
-	return nil
+// pragmaDSNValues is the D-09 pragma list carried into every connection via
+// modernc.org/sqlite's `_pragma=<stmt>` DSN extension. Each entry becomes one
+// `_pragma=<entry>` query-string parameter on the DSN (see ensureDSN in
+// db.go), so every connection both pools open gets these pragmas applied
+// before the first statement runs.
+//
+// Format note: modernc.org/sqlite expects function-call syntax inside
+// _pragma (e.g. `foreign_keys(on)`), not `PRAGMA foreign_keys=ON` statement
+// form. The driver runs each as `PRAGMA <value>;` under the hood.
+//
+// Order matters: journal_mode must be set before any write occurs, but in the
+// DSN path the driver applies the list once at connection open, before any
+// user statement runs, so the ordering is implicitly correct.
+var pragmaDSNValues = []string{
+	"journal_mode(WAL)",
+	"synchronous(NORMAL)",
+	"foreign_keys(ON)",
+	"busy_timeout(5000)",
+	"cache_size(-65536)",
+	"temp_store(MEMORY)",
 }
 
 // checkCompileOptions asserts the modernc.org/sqlite build has the features

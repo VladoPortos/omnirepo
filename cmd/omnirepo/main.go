@@ -9,15 +9,19 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
+	"path/filepath"
 
 	"github.com/dxc-internal/omnirepo/internal/app"
 	"github.com/dxc-internal/omnirepo/internal/config"
 	"github.com/dxc-internal/omnirepo/internal/httpx"
+	"github.com/dxc-internal/omnirepo/internal/metadata"
+	"github.com/dxc-internal/omnirepo/internal/metadata/migrations"
 )
 
 // Version is the build version. Overridden at link time via -ldflags "-X main.Version=...".
@@ -96,12 +100,63 @@ func migrate(args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("migrate: subcommand required (up | status)")
 	}
-	switch args[0] {
-	case "up", "status":
-		fmt.Fprintln(os.Stderr, "omnirepo migrate "+args[0]+": not yet implemented (plan 01-02 installs the runner)")
+	sub := args[0]
+	fs := flag.NewFlagSet("migrate "+sub, flag.ExitOnError)
+	var cfgPath string
+	fs.StringVar(&cfgPath, "config", "", "path to YAML config file")
+	_ = fs.Parse(args[1:])
+
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		return fmt.Errorf("migrate: %w", err)
+	}
+	if err := app.EnsureDirs(cfg.DataRoot); err != nil {
+		return fmt.Errorf("migrate: ensure data root: %w", err)
+	}
+	dbPath := filepath.Join(cfg.DataRoot, "db", "omnirepo.sqlite")
+	db, err := metadata.Open(dbPath)
+	if err != nil {
+		return fmt.Errorf("migrate: open db: %w", err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+	switch sub {
+	case "up":
+		applied, err := migrations.Apply(ctx, db.Writer)
+		if err != nil {
+			return fmt.Errorf("migrate up: %w", err)
+		}
+		if len(applied) == 0 {
+			fmt.Println("no migrations to apply")
+			return nil
+		}
+		for _, stem := range applied {
+			fmt.Println("applied:", stem)
+		}
+		return nil
+	case "status":
+		a, p, err := migrations.Status(ctx, db.Reader)
+		if err != nil {
+			return fmt.Errorf("migrate status: %w", err)
+		}
+		if len(a) == 0 {
+			fmt.Println("applied: (none)")
+		} else {
+			for _, s := range a {
+				fmt.Println("applied:", s)
+			}
+		}
+		if len(p) == 0 {
+			fmt.Println("pending: (none)")
+		} else {
+			for _, s := range p {
+				fmt.Println("pending:", s)
+			}
+		}
 		return nil
 	default:
-		return fmt.Errorf("migrate: unknown subcommand %q", args[0])
+		return fmt.Errorf("migrate: unknown subcommand %q", sub)
 	}
 }
 

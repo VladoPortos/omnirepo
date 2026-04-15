@@ -88,37 +88,71 @@ func (w *Writer) WriteJSON(v any) error {
 	return nil
 }
 
-// rotate closes the current file, shifts .N -> .N+1, moves the base file to
-// .1, and opens a fresh base. Caller must hold w.mu.
+// rotate shifts history files, moves the base file to .1, and opens a fresh
+// base. Caller must hold w.mu.
+//
+// WR-05 crash-safety: the NEW base file is opened to a temp path FIRST so a
+// failure anywhere in the shift/rename sequence leaves w.f pointing at the
+// still-valid OLD file handle. Only after the new file is successfully in
+// place does rotate swap w.f and close the old one. On any error the old
+// file stays active and the writer is never stuck in a "file already
+// closed" state.
 func (w *Writer) rotate() error {
-	if err := w.f.Close(); err != nil {
+	// 1. Open the NEW base file to a temp path first. Failure here leaves
+	// w.f (the old file) untouched.
+	tmpNew := w.path + ".rotating"
+	// Pre-clean any leftover from a previous crashed rotate.
+	_ = os.Remove(tmpNew)
+	newF, err := os.OpenFile(tmpNew, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o640)
+	if err != nil {
 		return err
 	}
-	// Drop oldest, if present.
+
+	// 2. Best-effort shift of history files (.N -> .N+1).
 	if w.keep > 0 {
 		_ = os.Remove(w.path + "." + strconv.Itoa(w.keep))
 	}
-	// Shift .N -> .N+1 for N = keep-1 .. 1
 	for i := w.keep - 1; i >= 1; i-- {
 		from := w.path + "." + strconv.Itoa(i)
 		to := w.path + "." + strconv.Itoa(i+1)
 		_ = os.Rename(from, to) // missing file is fine
 	}
-	// Move current base to .1 (only if keep > 0).
+
+	// 3. Move the current base aside (to .1) or drop it when keep=0.
 	if w.keep > 0 {
 		if err := os.Rename(w.path, w.path+".1"); err != nil && !os.IsNotExist(err) {
+			// Rollback: drop the fresh-new file and leave the old w.f
+			// active (it is still open for writes).
+			_ = newF.Close()
+			_ = os.Remove(tmpNew)
 			return err
 		}
 	} else {
-		// keep=0: truncate current by removing.
+		// keep=0: remove the old base so the rename below can take its place.
 		_ = os.Remove(w.path)
 	}
-	f, err := os.OpenFile(w.path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o640)
-	if err != nil {
+
+	// 4. Promote the new file into place.
+	if err := os.Rename(tmpNew, w.path); err != nil {
+		// Very unlikely: we own the parent dir. If it happens, try to
+		// restore the base from .1 so audit keeps working.
+		_ = newF.Close()
+		_ = os.Remove(tmpNew)
+		if w.keep > 0 {
+			_ = os.Rename(w.path+".1", w.path)
+		}
 		return err
 	}
-	w.f = f
+
+	// 5. Swap pointer, close old FD. Old writes already queued on oldF
+	// flush naturally when we close it; any concurrent WriteJSON caller is
+	// blocked on w.mu so no write races the swap.
+	oldF := w.f
+	w.f = newF
 	w.currentSz = 0
+	if oldF != nil {
+		_ = oldF.Close()
+	}
 	return nil
 }
 

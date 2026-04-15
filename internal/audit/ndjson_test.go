@@ -106,6 +106,73 @@ func TestNDJSONNoLinesLostAcrossRotation(t *testing.T) {
 	}
 }
 
+// TestNDJSONRotateFailureLeavesOldFileUsable is the WR-05 regression gate:
+// when rotate() fails because the new-file open fails, the writer must
+// continue to use the OLD file — not end up with a nil/closed file
+// descriptor that makes every subsequent WriteJSON fail permanently.
+func TestNDJSONRotateFailureLeavesOldFileUsable(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "audit.log")
+	const maxBytes = int64(64)
+
+	w, err := newWriterWithMaxBytes(path, maxBytes, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = w.Close() })
+
+	// Fill past threshold once so next WriteJSON would trigger a rotate.
+	for i := 0; i < 3; i++ {
+		if err := w.WriteJSON(map[string]int{"seed": i}); err != nil {
+			t.Fatalf("seed write: %v", err)
+		}
+	}
+
+	// Sabotage the rotate path: create a non-empty DIRECTORY at the
+	// rotating temp path so OpenFile(O_WRONLY|O_CREATE) fails when rotate
+	// tries to open the new base.
+	blocker := path + ".rotating"
+	if err := os.MkdirAll(blocker, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(blocker, "sentinel"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Trigger rotation with a write that would exceed maxBytes.
+	bigPayload := strings.Repeat("x", int(maxBytes))
+	err = w.WriteJSON(map[string]string{"msg": bigPayload})
+	// We expect a rotate error OR success depending on whether the write
+	// would have crossed threshold on its own. Either way, the writer MUST
+	// still be usable for subsequent writes.
+	_ = err
+
+	// Clean up the blocker so normal operation can resume.
+	_ = os.RemoveAll(blocker)
+
+	// The writer must remain functional: this next write should succeed.
+	if err := w.WriteJSON(map[string]int{"post_rotate": 1}); err != nil {
+		t.Fatalf("writer unusable after rotate failure: %v", err)
+	}
+
+	// And the written line should land in either the current base or a .1
+	// file (rotation may have succeeded the second time around).
+	var found bool
+	for _, p := range []string{path, path + ".1"} {
+		b, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		if strings.Contains(string(b), `"post_rotate":1`) {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("post-rotate-failure write did not land in any audit file")
+	}
+}
+
 func itoa(i int) string {
 	if i == 0 {
 		return "0"

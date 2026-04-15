@@ -21,13 +21,13 @@ type testEnv struct {
 	Deps     middleware.Deps
 
 	// Seeded fixtures.
-	AliceID          int64  // normal user, password=swordfish
-	AlicePwPlain     string // swordfish
-	CarolID          int64  // MCP user, password=please-change
-	CarolPwPlain     string
-	AliceAPIKey      auth.APIKey // user key belonging to Alice
-	AliceSessionTok  string      // plaintext session cookie value for Alice
-	AliceSessionID   int64
+	AliceID         int64  // normal user, password=swordfish
+	AlicePwPlain    string // swordfish
+	CarolID         int64  // MCP user, password=please-change
+	CarolPwPlain    string
+	AliceAPIKey     auth.APIKey // user key belonging to Alice
+	AliceSessionTok string      // plaintext session cookie value for Alice
+	AliceSessionID  int64
 }
 
 func newEnv(t *testing.T) *testEnv {

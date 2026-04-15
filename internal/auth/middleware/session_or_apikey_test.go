@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/dxc-internal/omnirepo/internal/auth"
 	"github.com/dxc-internal/omnirepo/internal/auth/middleware"
@@ -129,7 +130,7 @@ func TestMCPUserPassesMiddlewareButCanDenies(t *testing.T) {
 		t.Fatalf("gen session: %v", err)
 	}
 	if _, err := e.Sessions.Create(context.Background(), e.CarolID, s.Prefix, s.SHA256,
-		e.Deps.Clock(), e.Deps.Clock().Add(24*3600*1_000_000_000)); err != nil {
+		time.Now().UTC(), time.Now().Add(24*time.Hour).UTC()); err != nil {
 		t.Fatalf("seed carol session: %v", err)
 	}
 	var capturedActor auth.Actor
@@ -164,7 +165,7 @@ func TestRequireCanReturns403PasswordChangeRequired(t *testing.T) {
 		t.Fatalf("gen: %v", err)
 	}
 	if _, err := e.Sessions.Create(context.Background(), e.CarolID, s.Prefix, s.SHA256,
-		e.Deps.Clock(), e.Deps.Clock().Add(24*3600*1_000_000_000)); err != nil {
+		time.Now().UTC(), time.Now().Add(24*time.Hour).UTC()); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	// Chain: SessionOrAPIKey → RequireCan(ActionCreateRepo) → okHandler

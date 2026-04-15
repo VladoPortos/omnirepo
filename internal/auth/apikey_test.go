@@ -81,11 +81,11 @@ func TestParseAPIKey_Valid(t *testing.T) {
 func TestParseAPIKey_Invalid(t *testing.T) {
 	cases := []string{
 		"",
-		"omr_x_abcdefghijklmnopqrstuvwxyz01",                                           // bad kind
-		"omr_u_tooshort",                                                               // wrong length
-		"omr_u_abcdefghijklmnopqrstuvwxyz0!",                                           // invalid char
-		"omr_u_abcdefghijklmnopqrstuvwxyz0",                                            // 27 chars
-		"prefix_omr_u_abcdefghijklmnopqrstuvwxyz01",                                    // leading junk
+		"omr_x_abcdefghijklmnopqrstuvwxyz01", // bad kind
+		"omr_u_tooshort",                     // wrong length
+		"omr_u_abcdefghijklmnopqrstuvwxyz0!", // invalid char
+		"omr_u_abcdefghijklmnopqrstuvwxyz0",  // 27 chars
+		"prefix_omr_u_abcdefghijklmnopqrstuvwxyz01", // leading junk
 	}
 	for _, c := range cases {
 		_, _, _, err := auth.ParseAPIKey(c)

@@ -15,16 +15,16 @@ var ErrNotFound = errors.New("metadata: not found")
 
 // User mirrors the users table shape (see migrations/001_initial.up.sql).
 type User struct {
-	ID                  int64
-	Login               string
-	Email               string
-	AvatarSeed          string
-	PasswordHash        string
-	IsSuperAdmin        bool
-	MustChangePassword  bool
-	PasswordChangedAt   *time.Time
-	CreatedAt           time.Time
-	DeletedAt           *time.Time
+	ID                 int64
+	Login              string
+	Email              string
+	AvatarSeed         string
+	PasswordHash       string
+	IsSuperAdmin       bool
+	MustChangePassword bool
+	PasswordChangedAt  *time.Time
+	CreatedAt          time.Time
+	DeletedAt          *time.Time
 }
 
 // UsersRepo owns CRUD on users. All writes go through DB.WriteTx so they

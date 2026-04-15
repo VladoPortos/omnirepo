@@ -72,7 +72,7 @@ func TestNDJSONNoLinesLostAcrossRotation(t *testing.T) {
 	for i := 1; i <= keep; i++ {
 		paths = append(paths, path+"."+itoa(i))
 	}
-	var seen []int
+	highest := -1
 	for _, p := range paths {
 		f, err := os.Open(p)
 		if err != nil {
@@ -88,16 +88,21 @@ func TestNDJSONNoLinesLostAcrossRotation(t *testing.T) {
 			if err := json.Unmarshal([]byte(line), &m); err != nil {
 				t.Fatalf("bad line in %s: %v", p, err)
 			}
-			seen = append(seen, m.I)
+			if m.I > highest {
+				highest = m.I
+			}
 			total++
 		}
 		_ = f.Close()
 	}
 
-	// With keep=5 we may drop oldest entries past the cap. Verify continuity:
-	// seen values should form a contiguous suffix of [0..entries).
 	if total == 0 {
 		t.Fatal("no lines seen anywhere")
+	}
+	// Highest index seen must be the last entry written (entries-1) — proves
+	// the active file was not truncated on rotation.
+	if highest != entries-1 {
+		t.Fatalf("highest index = %d, want %d", highest, entries-1)
 	}
 }
 

@@ -29,7 +29,9 @@ func New(d Deps) chi.Router {
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Recoverer)
 	r.Use(StructuredLogger(d.Config))
+	r.Use(AuditEnter)
 	r.Use(MaintenanceMode())
+	r.Use(AuditExit)
 	return r
 }
 

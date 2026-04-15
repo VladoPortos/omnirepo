@@ -26,6 +26,10 @@ func TestRecordWritesOneDBRowAndOneNDJSONLine(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
+	// Seed a real user so the audit_log FK to users(id) holds.
+	if _, err := db.Writer.ExecContext(ctx, `INSERT INTO users(id, login, email, password_hash) VALUES (7, 'u7', 'u7@x', 'x')`); err != nil {
+		t.Fatal(err)
+	}
 	uid := int64(7)
 	ev := audit.Event{
 		ActorUserID: &uid,
@@ -116,7 +120,7 @@ func (h *warnCountHandler) Handle(_ context.Context, r slog.Record) error {
 	return nil
 }
 func (h *warnCountHandler) WithAttrs(_ []slog.Attr) slog.Handler { return h }
-func (h *warnCountHandler) WithGroup(_ string) slog.Handler       { return h }
+func (h *warnCountHandler) WithGroup(_ string) slog.Handler      { return h }
 
 func TestRecordBestEffortOnNDJSONFailure(t *testing.T) {
 	if runtime.GOOS == "windows" {

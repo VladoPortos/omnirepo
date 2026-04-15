@@ -78,6 +78,26 @@ func (r *SessionsRepo) TouchLastSeen(ctx context.Context, id int64, t time.Time)
 	})
 }
 
+// SlideExpiry extends sessions.expires_at (and bumps last_seen_at) to
+// newExpires for session id. Callers compute newExpires as
+// min(now + session_ttl, issued_at + hard_cap) — see D-07 (12h sliding,
+// 7d hard cap). The UPDATE is a no-op if newExpires is not strictly later
+// than the existing expires_at, so two concurrent touches cannot walk the
+// cap backwards.
+func (r *SessionsRepo) SlideExpiry(ctx context.Context, id int64, seenAt, newExpires time.Time) error {
+	return r.db.WriteTx(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `
+			UPDATE sessions
+			SET last_seen_at=?, expires_at=?
+			WHERE id=? AND expires_at < ?
+		`, seenAt.UTC(), newExpires.UTC(), id, newExpires.UTC())
+		if err != nil {
+			return fmt.Errorf("sessions: slide expiry %d: %w", id, err)
+		}
+		return nil
+	})
+}
+
 // Delete removes the session row.
 func (r *SessionsRepo) Delete(ctx context.Context, id int64) error {
 	return r.db.WriteTx(ctx, func(tx *sql.Tx) error {

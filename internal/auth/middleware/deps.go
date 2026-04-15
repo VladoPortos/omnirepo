@@ -30,6 +30,29 @@ type Deps struct {
 	Sessions *metadata.SessionsRepo
 	APIKeys  *metadata.APIKeysRepo
 	Clock    func() time.Time // default time.Now; injectable for tests
+
+	// SessionTTL is the D-07 sliding window (default 12h). SessionHardTTL
+	// is the absolute cap from issuance (default 7d). Middleware extends
+	// sessions.expires_at to min(now+TTL, issued_at+HardTTL) on every
+	// successful session auth.
+	SessionTTL     time.Duration
+	SessionHardTTL time.Duration
+}
+
+// sessionTTL returns d.SessionTTL or 12h when unset.
+func (d Deps) sessionTTL() time.Duration {
+	if d.SessionTTL <= 0 {
+		return 12 * time.Hour
+	}
+	return d.SessionTTL
+}
+
+// sessionHardTTL returns d.SessionHardTTL or 7d when unset.
+func (d Deps) sessionHardTTL() time.Duration {
+	if d.SessionHardTTL <= 0 {
+		return 7 * 24 * time.Hour
+	}
+	return d.SessionHardTTL
 }
 
 // clock returns d.Clock() or time.Now() when d.Clock is nil.

@@ -41,8 +41,14 @@ type Deps struct {
 	// Clock is used for session/token issuance. Defaults to time.Now().UTC.
 	Clock func() time.Time
 
-	// SessionTTL controls session cookie lifetime. Zero → 12h default.
+	// SessionTTL controls the session sliding-window lifetime (D-07).
+	// Zero → 12h default.
 	SessionTTL time.Duration
+
+	// SessionHardTTL is the absolute cap from issuance beyond which a
+	// session is rejected regardless of recent activity (D-07: 7d).
+	// Zero → 7d default.
+	SessionHardTTL time.Duration
 }
 
 func (d Deps) clock() time.Time {
@@ -59,6 +65,13 @@ func (d Deps) sessionTTL() time.Duration {
 	return d.SessionTTL
 }
 
+func (d Deps) sessionHardTTL() time.Duration {
+	if d.SessionHardTTL == 0 {
+		return 7 * 24 * time.Hour
+	}
+	return d.SessionHardTTL
+}
+
 // Mount installs every D-36 endpoint onto r under the /api/v1 prefix. Handlers
 // that mutate state are wrapped in RequireCan (or RequireCanWith, for project-
 // scoped actions) AFTER SessionOrAPIKey has populated the actor on ctx.
@@ -68,10 +81,12 @@ func (d Deps) sessionTTL() time.Duration {
 // router so they bypass the api middleware chain.
 func Mount(r chi.Router, d Deps) {
 	midDeps := authmw.Deps{
-		Users:    d.Users,
-		Sessions: d.Sessions,
-		APIKeys:  d.APIKeys,
-		Clock:    d.Clock,
+		Users:          d.Users,
+		Sessions:       d.Sessions,
+		APIKeys:        d.APIKeys,
+		Clock:          d.Clock,
+		SessionTTL:     d.sessionTTL(),
+		SessionHardTTL: d.sessionHardTTL(),
 	}
 
 	r.Route("/api/v1", func(r chi.Router) {

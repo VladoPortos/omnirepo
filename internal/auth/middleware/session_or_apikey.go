@@ -119,7 +119,15 @@ func authenticateAPIKey(ctx context.Context, d Deps, bearer string) (auth.Actor,
 }
 
 // authenticateSession loads a session row by (prefix, sha256), loads the
-// user, bumps last_seen_at, and returns an Actor.
+// user, enforces the D-07 hard cap (issued_at + 7d) and slides expires_at
+// forward to min(now + session_ttl, issued_at + hard_cap), then returns an
+// Actor.
+//
+// Hard-cap enforcement: FindByPrefixSha filters WHERE expires_at > NOW which
+// catches "natural" 12h-idle expiry. But a still-active session that has
+// been touched every 11h for a week must also be rejected once now >
+// issued_at + 7d. We check that here explicitly — past the cap, the session
+// is invalid even if expires_at in the row is still in the future.
 func authenticateSession(ctx context.Context, d Deps, token string) (auth.Actor, bool) {
 	prefix, ok := auth.SessionPrefix(token)
 	if !ok {
@@ -133,11 +141,24 @@ func authenticateSession(ctx context.Context, d Deps, token string) (auth.Actor,
 	if !auth.EqualSHA256(row.TokenSHA256, sha) {
 		return auth.Actor{}, false
 	}
+	now := d.clock()
+	hardCap := row.IssuedAt.Add(d.sessionHardTTL())
+	if !now.Before(hardCap) {
+		// Past hard cap — reject regardless of expires_at.
+		return auth.Actor{}, false
+	}
 	u, err := d.Users.FindByID(ctx, row.UserID)
 	if err != nil {
 		return auth.Actor{}, false
 	}
-	_ = d.Sessions.TouchLastSeen(ctx, row.ID, d.clock())
+	// Slide expires_at forward up to min(now + TTL, issued_at + hard_cap).
+	// Never push expires_at past the cap.
+	sliding := now.Add(d.sessionTTL())
+	newExpires := sliding
+	if newExpires.After(hardCap) {
+		newExpires = hardCap
+	}
+	_ = d.Sessions.SlideExpiry(ctx, row.ID, now, newExpires)
 	return auth.Actor{
 		ID:                 u.ID,
 		Login:              u.Login,

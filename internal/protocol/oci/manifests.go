@@ -258,16 +258,18 @@ func (h *Handler) incRefs(ctx context.Context, tx *sql.Tx, repoID int64, refs []
 }
 
 // decRefs mirrors incRefs for DELETE / tag-overwrite paths.
+//
+// WR-05: a previous iteration silently swallowed ErrRefCountUnderflow and
+// kept going. That masks real bugs — if DecRef returns underflow, the
+// caller's bookkeeping is inconsistent (manifest references more refs than
+// the refcount table records), which is exactly the class of silent data
+// corruption that orphans or double-deletes blobs. Fail the tx instead so
+// the operation is retried with fresh state or the problem surfaces to
+// operators.
 func (h *Handler) decRefs(ctx context.Context, tx *sql.Tx, repoID int64, refs []string, isIndex bool) error {
 	if isIndex {
 		for _, d := range refs {
 			if err := h.manifests.DecRef(ctx, tx, repoID, d); err != nil {
-				// Tolerate refcount-zero on prior refs: the schema constraint
-				// was likely rewritten by a prior GC / wipe; don't block the
-				// current operation.
-				if errors.Is(err, metadata.ErrRefCountUnderflow) {
-					continue
-				}
 				return err
 			}
 		}
@@ -275,9 +277,6 @@ func (h *Handler) decRefs(ctx context.Context, tx *sql.Tx, repoID int64, refs []
 	}
 	for _, d := range refs {
 		if err := h.blobs.DecRef(ctx, tx, d); err != nil {
-			if errors.Is(err, metadata.ErrRefCountUnderflow) {
-				continue
-			}
 			return err
 		}
 	}

@@ -43,8 +43,10 @@ jobs:
         run: make grep-cdn
 
       - name: SQLite contention bench
-        env:
-          BENCH_DURATION: 5s
+        # D-42 acceptance bar: 30s duration, 16 workers, zero SQLITE_BUSY.
+        # The Makefile default is BENCH_DURATION=30s; we inherit it here
+        # rather than shortening in CI (WR-07). Adds ~25s to the pipeline,
+        # which is acceptable for a foundation P2 mitigation gate.
         run: make bench-sqlite
 
       - name: go-git v6 spike

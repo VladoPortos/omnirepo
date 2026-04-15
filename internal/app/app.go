@@ -19,6 +19,7 @@ import (
 	"github.com/dxc-internal/omnirepo/internal/config"
 	omrcrypto "github.com/dxc-internal/omnirepo/internal/crypto"
 	"github.com/dxc-internal/omnirepo/internal/httpx"
+	"github.com/dxc-internal/omnirepo/internal/jobs"
 	"github.com/dxc-internal/omnirepo/internal/metadata"
 	"github.com/dxc-internal/omnirepo/internal/metadata/migrations"
 	"github.com/dxc-internal/omnirepo/internal/storage"
@@ -173,6 +174,28 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 	}
 	upstreamCreds := metadata.NewUpstreamCredsRepo(db, aead)
 
+	// 5c. Boot recovery (Phase 02-04 D-19, SYNC-03). Re-pend any row
+	// stuck in 'running' from a previous boot. MUST run before the pools
+	// start so it cannot race with in-flight leases.
+	recovery, err := jobs.RecoverStuckJobs(ctx, db)
+	if err != nil {
+		return fmt.Errorf("app.Run: jobs boot recovery: %w", err)
+	}
+	slog.InfoContext(ctx, "jobs.boot_recovered",
+		"sync", recovery.SyncRecovered, "scans", recovery.ScansRecovered)
+
+	// 5d. Job pools (D-14, D-16). Handler maps start empty in this plan
+	// (02-04); downstream plans 02-09 / 02-10 / 02-12 register
+	// concrete handlers before app.Run is called. Pool constructors
+	// accept the empty map — unknown-kind rows get marked 'failed' per
+	// Pool.handle so the queue is never blocked by poison jobs.
+	syncHandlers := jobs.Handlers{}
+	scanHandlers := jobs.Handlers{}
+	syncPool := jobs.NewSyncPool(db, metadata.NewSyncJobsRepo(db), syncHandlers, cfg.Jobs)
+	scanPool := jobs.NewScanPool(db, metadata.NewScansRepo(db), scanHandlers, cfg.Jobs)
+	go syncPool.Run(ctx)
+	go scanPool.Run(ctx)
+
 	// 6. Router with global middleware + system routes + API.
 	router := httpx.New(httpx.Deps{Config: cfg})
 	router.Get("/healthz", httpx.Healthz())
@@ -254,7 +277,22 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 		return err
 	}
 
-	// Graceful shutdown with a short deadline.
+	// Graceful shutdown (D-20). Drain pools in PARALLEL with their own
+	// grace deadline (cfg.Jobs.ShutdownGraceSeconds, default 30s) so
+	// running sync + scan handlers get a full grace window each rather
+	// than fighting over a shared timer. Run pool drain before HTTP
+	// shutdown so in-flight enqueue requests don't outlast their pool.
+	poolGrace := time.Duration(cfg.Jobs.ShutdownGraceSeconds) * time.Second
+	if poolGrace <= 0 {
+		poolGrace = 30 * time.Second
+	}
+	shutdownCtx := context.Background()
+	var poolWG sync.WaitGroup
+	poolWG.Add(2)
+	go func() { defer poolWG.Done(); syncPool.Shutdown(shutdownCtx, poolGrace) }()
+	go func() { defer poolWG.Done(); scanPool.Shutdown(shutdownCtx, poolGrace) }()
+	poolWG.Wait()
+
 	shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = httpSrv.Shutdown(shutCtx)

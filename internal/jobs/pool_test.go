@@ -309,6 +309,57 @@ func TestPool_ShutdownFastHandlerExitsCleanly(t *testing.T) {
 	}
 }
 
+// TestPool_PanicHandlerDoesNotWedgePool asserts CR-02: a handler panic is
+// recovered inside handle(), converted into a job-level failure, and the
+// worker goroutine survives to process subsequent jobs. Before the fix the
+// panic would unwind the worker; after workerCount panics the dispatcher
+// would block forever trying to send into p.workers.
+func TestPool_PanicHandlerDoesNotWedgePool(t *testing.T) {
+	t.Parallel()
+	db := sqlitetest.New(t)
+	repo := metadata.NewSyncJobsRepo(db)
+
+	var processed int64
+	handler := func(ctx context.Context, j *jobs.JobView) error {
+		atomic.AddInt64(&processed, 1)
+		if atomic.LoadInt64(&processed) <= 2 {
+			// Two panics in a two-worker pool would historically wedge every
+			// worker; the recover() guard turns them into MarkFailed rows.
+			panic("boom")
+		}
+		return nil
+	}
+
+	cfg := testCfg(2)
+	cfg.PollInterval = 20 * time.Millisecond
+	p := jobs.NewSyncPool(db, repo, jobs.Handlers{"k": handler}, cfg)
+
+	// Seed 4 jobs: 2 will panic, the remaining 2 must still be processed by
+	// the surviving workers. If the recover() is removed, this test hangs
+	// until the deadline and fails.
+	enqueueN(t, db, repo, "k", 4)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go p.Run(ctx)
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		// Kick old panic rows back to runnable so they get re-leased and
+		// eventually succeed, proving end-to-end pool health.
+		_, _ = db.Writer.Exec(`UPDATE sync_jobs SET next_run_at=CURRENT_TIMESTAMP WHERE status='pending'`)
+		if atomic.LoadInt64(&processed) >= 4 {
+			break
+		}
+		time.Sleep(30 * time.Millisecond)
+	}
+	if got := atomic.LoadInt64(&processed); got < 4 {
+		t.Fatalf("processed=%d want >= 4 (pool is wedged — recover() missing?)", got)
+	}
+
+	p.Shutdown(ctx, 500*time.Millisecond)
+}
+
 // TestPool_ScanPoolAdapter proves NewScanPool drives the scans repo.
 func TestPool_ScanPoolAdapter(t *testing.T) {
 	t.Parallel()

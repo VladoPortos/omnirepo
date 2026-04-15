@@ -186,13 +186,31 @@ func (p *Pool) worker(ctx context.Context) {
 }
 
 // handle dispatches one job to its handler and records the outcome.
+//
+// Handler panics are converted into a terminal-style retry via markFailed
+// (CR-02). Without this guard a panicking handler would tear down the worker
+// goroutine (via runtime unwinding through workerWG.Done's defer) and after
+// workerCount panics the dispatcher's `select { case p.workers <- j: }` would
+// block forever because no receiver remains — wedging the pool until
+// shutdown. scan_pool runs two workers by default so two panics are enough
+// to kill scanning entirely; sync_pool suffers the same class of bug.
 func (p *Pool) handle(ctx context.Context, j *JobView) {
 	h, ok := p.handlers[j.Kind]
 	if !ok {
 		p.markFailed(ctx, j, fmt.Errorf("no handler for kind %q", j.Kind))
 		return
 	}
-	err := h(ctx, j)
+	var err error
+	func() {
+		defer func() {
+			if rv := recover(); rv != nil {
+				slog.Error("jobs.handler.panic",
+					"pool", p.name, "id", j.ID, "kind", j.Kind, "panic", rv)
+				err = fmt.Errorf("handler panic: %v", rv)
+			}
+		}()
+		err = h(ctx, j)
+	}()
 	if err == nil {
 		if derr := p.db.WriteTx(ctx, func(tx *sql.Tx) error {
 			return p.repo.MarkDone(ctx, tx, j.ID)

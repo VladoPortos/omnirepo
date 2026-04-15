@@ -16,8 +16,9 @@ import (
 // Any change here MUST bump the hash format version (the "v=19" literal) so
 // VerifyPassword can refuse or re-derive mismatched encodings.
 const (
-	argonTime    = uint32(3)
-	argonMemory  = uint32(64 * 1024) // KiB → 64 MiB
+	argonTime = uint32(3)
+	// argonMemory is 65536 KiB = 64 MiB (D-16).
+	argonMemory  = uint32(65536)
 	argonThreads = uint8(4)
 	saltLen      = 16
 	keyLen       = 32

@@ -30,6 +30,12 @@ const (
 	// returned via these endpoints — Lookup happens only server-side at
 	// pull-external time.
 	ActionManageUpstreamCreds Action = "upstream_cred.manage"
+
+	// Phase 02-05: repo read (D-32, D-33, REPO-09). The only action an
+	// anonymous actor may ever be allowed — and only when the target repo's
+	// PublicRead is true. Authenticated actors reach it via project
+	// membership (or super-admin bypass).
+	ActionRepoRead Action = "repo.read"
 )
 
 // AllActions enumerates every Action constant in the package. Downstream
@@ -52,15 +58,22 @@ var AllActions = []Action{
 	ActionUploadTLSCert,
 	ActionApplyBootstrap,
 	ActionManageUpstreamCreds,
+	ActionRepoRead,
 }
 
 // Target is the object the actor is operating on.
 // Kind is one of "project" | "repo" | "user" | "global" | "" (login/logout).
+//
+// PublicRead is only meaningful when Kind == "repo"; it mirrors
+// repos.public_read at the time the caller built the Target and feeds the
+// anonymous-read branch of Can (D-33). Every non-repo target should leave it
+// at its zero value (false) and anonymous actors will be denied uniformly.
 type Target struct {
-	Kind      string
-	ProjectID int64
-	UserID    int64
-	RepoID    int64
+	Kind       string
+	ProjectID  int64
+	UserID     int64
+	RepoID     int64
+	PublicRead bool
 }
 
 // Reason strings returned by Can when it denies. These double as audit-log
@@ -71,6 +84,8 @@ const (
 	ReasonNotAProjectMember      = "not_a_project_member"
 	ReasonNotSelf                = "not_self"
 	ReasonUnknownAction          = "unknown_action"
+	ReasonRequiresAuth           = "requires_auth"
+	ReasonAnonymousPublicRead    = "anonymous_public_read"
 )
 
 // membershipCtxKey is the unexported ctx key for stashing a membership set.
@@ -127,6 +142,19 @@ func isMemberOfProject(ctx context.Context, projectID int64) bool {
 // reads the membership set out of ctx (see WithProjectMembership). Handlers
 // populate it before dispatching.
 func Can(ctx context.Context, actor Actor, action Action, target Target) (bool, string) {
+	// 0. Anonymous-actor short-circuit (D-33, REPO-09). Must precede the
+	// must_change_password check because anonymous actors have no password
+	// to change; the MCP gate is undefined for them. Only repo.read on a
+	// target flagged PublicRead is ever allowed; every other action
+	// returns "requires_auth" so the chi middleware can 401 and trigger
+	// the Bearer challenge.
+	if actor.Kind == ActorKindAnonymous {
+		if action == ActionRepoRead && target.Kind == "repo" && target.PublicRead {
+			return true, ReasonAnonymousPublicRead
+		}
+		return false, ReasonRequiresAuth
+	}
+
 	// 1. MustChangePassword short-circuit (P5 mitigation).
 	if actor.MustChangePassword {
 		switch action {
@@ -163,6 +191,20 @@ func Can(ctx context.Context, actor Actor, action Action, target Target) (bool, 
 	case ActionCreateRepo, ActionDeleteRepo,
 		ActionAddProjectMember, ActionRemoveProjectMember,
 		ActionManageUpstreamCreds:
+		if target.ProjectID != 0 && isMemberOfProject(ctx, target.ProjectID) {
+			return true, ""
+		}
+		return false, ReasonNotAProjectMember
+
+	case ActionRepoRead:
+		// Authenticated project members may always read their repos.
+		// Anonymous actors are already handled at the top of Can (step 0).
+		// A repo target with PublicRead=true is also readable by any
+		// authenticated actor (whether they're a member or not) — the
+		// flag is a superset permission, not a restriction.
+		if target.PublicRead {
+			return true, ""
+		}
 		if target.ProjectID != 0 && isMemberOfProject(ctx, target.ProjectID) {
 			return true, ""
 		}

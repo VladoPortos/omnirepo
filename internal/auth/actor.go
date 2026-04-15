@@ -17,8 +17,9 @@ import "context"
 type ActorKind string
 
 const (
-	ActorKindUser   ActorKind = "user"
-	ActorKindAPIKey ActorKind = "api_key"
+	ActorKindUser      ActorKind = "user"
+	ActorKindAPIKey    ActorKind = "api_key"
+	ActorKindAnonymous ActorKind = "anonymous"
 )
 
 // OwnerKind is the owner class of an API key (D-17): either a user or a

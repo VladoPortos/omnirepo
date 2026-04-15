@@ -51,3 +51,28 @@ jobs:
 
       - name: go-git v6 spike
         run: go test -mod=vendor -tags=spike ./internal/protocol/git/spike/... -count=1
+
+  # Phase 2 D-42 gate: OCI Distribution conformance suite driven by a real
+  # crane client against the running binary. Runs as a dedicated job so a
+  # missing/unstable crane doesn't gate the fast feedback loop of the
+  # build-test job above, but the job itself is required for merge.
+  conformance-oci:
+    runs-on: ubuntu-24.04
+    needs: build-test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+
+      - name: Install crane (pinned v0.21.5)
+        run: |
+          go install github.com/google/go-containerregistry/cmd/crane@v0.21.5
+          mkdir -p test/conformance/bin
+          cp "$(go env GOPATH)/bin/crane" test/conformance/bin/crane
+          chmod +x test/conformance/bin/crane
+
+      - name: Run OCI conformance suite
+        run: make conformance-oci

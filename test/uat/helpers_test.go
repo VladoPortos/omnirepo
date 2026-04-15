@@ -36,6 +36,7 @@ type uatFixture struct {
 	adminPassword string
 	project       string
 	repo          string
+	port          int
 	cancel        context.CancelFunc
 	doneCh        chan error
 	httpClient    *http.Client
@@ -57,6 +58,11 @@ type bootOpts struct {
 	RepoType string
 	// BlockOnSeverity is applied to the seeded repo if non-empty.
 	BlockOnSeverity string
+	// BindAll binds listeners on 0.0.0.0 instead of 127.0.0.1 so
+	// external-to-this-host clients (notably the docker daemon which
+	// runs in its own network namespace under Docker Desktop/WSL2) can
+	// reach the server.
+	BindAll bool
 }
 
 func bootApp(t *testing.T, opts bootOpts) *uatFixture {
@@ -120,11 +126,15 @@ func bootApp(t *testing.T, opts bootOpts) *uatFixture {
 		cfg.Trivy.CachePath = filepath.Join(dataRoot, "trivy-cache")
 	}
 
-	httpLn, err := net.Listen("tcp", "127.0.0.1:0")
+	bindAddr := "127.0.0.1"
+	if opts.BindAll {
+		bindAddr = "0.0.0.0"
+	}
+	httpLn, err := net.Listen("tcp", bindAddr+":0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	httpsLn, err := net.Listen("tcp", "127.0.0.1:0")
+	httpsLn, err := net.Listen("tcp", bindAddr+":0")
 	if err != nil {
 		_ = httpLn.Close()
 		t.Fatal(err)
@@ -162,6 +172,7 @@ func bootApp(t *testing.T, opts bootOpts) *uatFixture {
 		adminPassword: adminPassword,
 		project:       opts.Project,
 		repo:          opts.Repo,
+		port:          httpAddr.Port,
 		cancel:        cancel,
 		doneCh:        done,
 		httpClient:    &http.Client{Timeout: 30 * time.Second},
@@ -188,6 +199,41 @@ func (f *uatFixture) refRepo(repo, tag string) string {
 
 // baseURL returns the plain-HTTP base URL for the fixture.
 func (f *uatFixture) baseURL() string { return "http://" + f.host }
+
+// dockerReachableHost returns "<ip>:<port>" on an interface reachable from
+// the docker daemon. Under Docker Desktop + WSL2, dockerd lives in a
+// separate network namespace and cannot reach the WSL user-distro's
+// 127.0.0.1; it CAN reach the WSL eth0 IP when the server binds on
+// 0.0.0.0. This helper probes the first non-loopback IPv4 interface.
+// Falls back to f.host when no such interface is found. The caller must
+// have booted with BindAll=true for this to be meaningful.
+func (f *uatFixture) dockerReachableHost(t *testing.T) string {
+	t.Helper()
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return f.host
+	}
+	for _, iface := range ifaces {
+		if iface.Flags&net.FlagLoopback != 0 || iface.Flags&net.FlagUp == 0 {
+			continue
+		}
+		addrs, _ := iface.Addrs()
+		for _, a := range addrs {
+			var ip net.IP
+			switch v := a.(type) {
+			case *net.IPNet:
+				ip = v.IP
+			case *net.IPAddr:
+				ip = v.IP
+			}
+			if ip == nil || ip.To4() == nil {
+				continue
+			}
+			return fmt.Sprintf("%s:%d", ip.String(), f.port)
+		}
+	}
+	return f.host
+}
 
 func waitHealthy(t *testing.T, url string, timeout time.Duration) {
 	t.Helper()

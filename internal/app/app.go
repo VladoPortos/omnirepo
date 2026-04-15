@@ -442,6 +442,7 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 		Projects: metadata.NewProjectsRepo(db),
 		Files:    metadata.NewRawFilesRepo(db),
 		Scans:    metadata.NewScansRepo(db),
+		Members:  metadata.NewMembersRepo(db),
 		Path:     storage.NewPathStore(repoRoot),
 		Trash:    storage.NewTrash(filepath.Join(cfg.DataRoot, "trash")),
 		Audit:    auditLogger,

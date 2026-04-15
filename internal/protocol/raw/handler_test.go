@@ -99,6 +99,7 @@ func newRawFixture(t *testing.T) *rawFixture {
 		Projects:    projects,
 		Files:       files,
 		Scans:       scans,
+		Members:     metadata.NewMembersRepo(db),
 		Path:        pathStore,
 		Trash:       trash,
 		Audit:       auditLogger,
@@ -507,6 +508,49 @@ func TestRawAuditEvents_PutAndDeleteRecorded(t *testing.T) {
 	}
 	if n != 2 {
 		t.Fatalf("expected 2 raw.{put,delete} audit rows, got %d", n)
+	}
+}
+
+// TestRawGet_CrossProjectPrivateBlocked is the CR-01 regression. Before
+// the fix, any authenticated user (even one who is NOT a member of the
+// owning project) could GET a private RAW repo's bytes. The fix routes
+// the read check through auth.Can(ActionRepoRead), which requires project
+// membership when PublicRead=false.
+func TestRawGet_CrossProjectPrivateBlocked(t *testing.T) {
+	f := newRawFixture(t)
+	// Create a private repo owned by "owner" project; f.userID is a member.
+	f.seedRepo("owner", "secrets", false, false)
+
+	// PUT a file as the member.
+	body := []byte("top secret")
+	resp := f.put(t, "/owner/raw/secrets/secret.txt", body, true)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("PUT: %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	// Create a second authenticated user that is NOT a member of "owner".
+	outsiderLogin := "outsider"
+	outsiderPW := "outsider-password-123456"
+	hash, err := auth.HashPassword(outsiderPW)
+	if err != nil {
+		t.Fatalf("hash: %v", err)
+	}
+	if _, err := f.users.Create(context.Background(), outsiderLogin, "o@example.com",
+		hash, false, false); err != nil {
+		t.Fatalf("create outsider: %v", err)
+	}
+
+	req, _ := http.NewRequest(http.MethodGet, f.srv.URL+"/owner/raw/secrets/secret.txt", nil)
+	req.Header.Set("Authorization", f.basicAuth(outsiderLogin, outsiderPW))
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		got, _ := io.ReadAll(resp.Body)
+		t.Fatalf("cross-project private GET: status=%d body=%s (want 403)", resp.StatusCode, got)
 	}
 }
 

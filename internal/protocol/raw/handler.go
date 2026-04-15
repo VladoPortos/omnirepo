@@ -42,6 +42,10 @@ type Deps struct {
 	Projects *metadata.ProjectsRepo
 	Files    *metadata.RawFilesRepo
 	Scans    *metadata.ScansRepo
+	// Members resolves project membership for auth.Can on repo.read
+	// (CR-01). Nil in legacy call sites falls back to a conservative deny
+	// on private repos for non-super-admin users.
+	Members *metadata.MembersRepo
 	Path     storage.PathStore
 	Trash    storage.Trash
 	Audit    audit.Logger
@@ -69,6 +73,7 @@ type Handler struct {
 	projects     *metadata.ProjectsRepo
 	files        *metadata.RawFilesRepo
 	scans        *metadata.ScansRepo
+	members      *metadata.MembersRepo
 	pathStore    storage.PathStore
 	trash        storage.Trash
 	auditLogger  audit.Logger
@@ -95,6 +100,7 @@ func New(d Deps) *Handler {
 		projects:     d.Projects,
 		files:        d.Files,
 		scans:        d.Scans,
+		members:      d.Members,
 		pathStore:    d.Path,
 		trash:        d.Trash,
 		auditLogger:  d.Audit,

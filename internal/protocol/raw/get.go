@@ -11,6 +11,7 @@ import (
 
 	"github.com/dxc-internal/omnirepo/internal/audit"
 	"github.com/dxc-internal/omnirepo/internal/auth"
+	"github.com/dxc-internal/omnirepo/internal/metadata"
 )
 
 // get serves GET /<project>/raw/<repo>/<path...>.
@@ -158,21 +159,34 @@ func (h *Handler) contentTypeFor(absPath, relPath string) string {
 }
 
 // actorCanRead returns true when the actor (already in ctx) is allowed to
-// read repo. Anonymous actors are allowed iff repo.PublicRead. Authenticated
-// actors are always allowed (any user can read any repo at the protocol
-// layer in v1; project membership controls writes only — D-33's authenticated
-// non-member can still read public-read repos and members can read private
-// ones; here we match auth.Can(ActionRepoRead) precisely).
-func (h *Handler) actorCanRead(r *http.Request, repo any) bool {
+// read repo. Delegates to auth.Can(ActionRepoRead) so project membership is
+// enforced for private repos (CR-01).
+//
+// Before the CR-01 fix this function unconditionally returned true for any
+// authenticated actor, which leaked private RAW repo contents to cross-project
+// API keys and to any logged-in user. The fix mirrors oci.canOnRepo exactly.
+func (h *Handler) actorCanRead(r *http.Request, repo *metadata.Repo) bool {
 	a, ok := auth.ActorFromContext(r.Context())
 	if !ok {
 		return false
 	}
-	// Anonymous: AnonymousReadOK only attaches anon when public_read=true,
-	// so reaching here implies the gate already passed.
-	if a.Kind == auth.ActorKindAnonymous {
-		return true
+	ctx := r.Context()
+	// User actors: resolve project membership so auth.Can can consult it.
+	if a.Kind == auth.ActorKindUser && h.members != nil && a.ID != 0 {
+		ids, err := h.members.ListProjectIDsForUser(ctx, a.ID)
+		if err == nil {
+			ctx = auth.WithProjectMembership(ctx, ids)
+		}
 	}
-	// Authenticated user / API key: allowed.
-	return true
+	// Project-scoped API keys: membership is their scope.
+	if a.Kind == auth.ActorKindAPIKey && a.ProjectScope != nil {
+		ctx = auth.WithProjectMembership(ctx, []int64{*a.ProjectScope})
+	}
+	allowed, _ := auth.Can(ctx, a, auth.ActionRepoRead, auth.Target{
+		Kind:       "repo",
+		ProjectID:  repo.ProjectID,
+		RepoID:     repo.ID,
+		PublicRead: repo.PublicRead,
+	})
+	return allowed
 }

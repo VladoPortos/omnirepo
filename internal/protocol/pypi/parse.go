@@ -54,6 +54,14 @@ func (f *File) MarshalCoreMetadata() string {
 // Filename is parsed per PEP 427: NAME-VERSION-PYTHON_TAG-ABI_TAG-PLATFORM_TAG.whl.
 // The NAME segment is Normalize()'d.
 func ParseWheel(wheelPath string) (*File, error) {
+	return ParseWheelAs(wheelPath, path.Base(wheelPath))
+}
+
+// ParseWheelAs is like ParseWheel but uses the supplied canonical
+// filename (instead of path.Base) for PEP 427 parsing. Callers staging
+// uploads under a tmp path use this so the parser sees the original
+// client-supplied filename.
+func ParseWheelAs(wheelPath, canonicalFilename string) (*File, error) {
 	if wheelPath == "" {
 		return nil, errors.New("pypi: empty wheel path")
 	}
@@ -84,10 +92,15 @@ func ParseWheel(wheelPath string) (*File, error) {
 		return nil, fmt.Errorf("pypi: parse METADATA: %w", err)
 	}
 
-	base := path.Base(wheelPath)
+	base := canonicalFilename
 	name, version, err := parseWheelFilename(base)
 	if err != nil {
-		return nil, err
+		// Filename parse failed: rely on METADATA Name/Version.
+		name = firstString(meta["Name"])
+		version = firstString(meta["Version"])
+		if name == "" || version == "" {
+			return nil, errors.New("pypi: wheel METADATA missing Name/Version and filename unparseable")
+		}
 	}
 	// Prefer metadata's Name/Version when present; fall back to filename.
 	if m := firstString(meta["Name"]); m != "" {
@@ -113,26 +126,44 @@ func ParseWheel(wheelPath string) (*File, error) {
 // reads the top-level PKG-INFO, parses its RFC 822 headers, and returns a
 // populated *File with Kind="sdist".
 func ParseSdist(sdistPath string) (*File, error) {
+	return ParseSdistAs(sdistPath, path.Base(sdistPath))
+}
+
+// ParseSdistAs is like ParseSdist but uses the supplied canonical
+// filename for sdist filename parsing.
+func ParseSdistAs(sdistPath, canonicalFilename string) (*File, error) {
 	if sdistPath == "" {
 		return nil, errors.New("pypi: empty sdist path")
 	}
-	base := path.Base(sdistPath)
-	name, version, err := parseSdistFilename(base)
-	if err != nil {
-		return nil, err
-	}
+	base := canonicalFilename
+	name, version, perr := parseSdistFilename(base)
 
-	var meta map[string]any
+	var (
+		meta map[string]any
+		err  error
+	)
 	switch {
 	case strings.HasSuffix(base, ".tar.gz") || strings.HasSuffix(base, ".tgz"):
 		meta, err = readSdistPKGINFOFromTarGz(sdistPath)
 	case strings.HasSuffix(base, ".zip"):
 		meta, err = readSdistPKGINFOFromZip(sdistPath)
 	default:
-		return nil, fmt.Errorf("pypi: unsupported sdist extension: %s", base)
+		// Fall back to autodetect by trying tar.gz first, then zip.
+		meta, err = readSdistPKGINFOFromTarGz(sdistPath)
+		if err != nil {
+			meta, err = readSdistPKGINFOFromZip(sdistPath)
+		}
 	}
 	if err != nil {
 		return nil, err
+	}
+	if perr != nil {
+		// Filename was unparseable: use metadata-derived name/version.
+		name = firstString(meta["Name"])
+		version = firstString(meta["Version"])
+		if name == "" || version == "" {
+			return nil, errors.New("pypi: sdist PKG-INFO missing Name/Version and filename unparseable")
+		}
 	}
 	if m := firstString(meta["Name"]); m != "" {
 		name = m

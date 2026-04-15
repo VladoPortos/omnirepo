@@ -461,13 +461,24 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 	// coalescer registry. wireHelm constructs the coalescer registry (with
 	// the helm.RegenFor factory, stubbed in Plan 03-02 Task 1 and filled in
 	// by Task 2) and mounts the /{project}/helm/{repo}/... routes.
+	sharedLocks := storage.NewLocks()
 	helmRegistry := helmDeps{
 		cfg:         cfg,
 		db:          db,
 		auditLogger: auditLogger,
-		locks:       storage.NewLocks(),
+		locks:       sharedLocks,
 	}.wireHelm(router)
 	defer shutdownHelmRegistry(context.Background(), helmRegistry)
+
+	// 6e. Phase 03 Plan 03: PyPI handler + per-repo regen coalescer
+	// registry. Mirrors the Helm wiring pattern.
+	pypiRegistry := pypiDeps{
+		cfg:         cfg,
+		db:          db,
+		auditLogger: auditLogger,
+		locks:       sharedLocks,
+	}.wirePyPI(router)
+	defer shutdownPyPIRegistry(context.Background(), pypiRegistry)
 
 	// 7. Listeners.
 	httpLn := opts.HTTPListener

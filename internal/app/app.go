@@ -24,6 +24,7 @@ import (
 	"github.com/dxc-internal/omnirepo/internal/metadata"
 	"github.com/dxc-internal/omnirepo/internal/metadata/migrations"
 	"github.com/dxc-internal/omnirepo/internal/protocol/oci"
+	"github.com/dxc-internal/omnirepo/internal/protocol/raw"
 	"github.com/dxc-internal/omnirepo/internal/storage"
 	omrtls "github.com/dxc-internal/omnirepo/internal/tls"
 )
@@ -288,6 +289,26 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 		JWTTTL:     jwtTTL,
 	})
 	ociHandler.Mount(router)
+
+	// 6c. RAW pass-through handler (Phase 02-08, D-27..D-31). Mounted on
+	// the root router because the URL path includes the project slug —
+	// no /api/v1 prefix.
+	repoRoot := filepath.Join(cfg.DataRoot, "repos")
+	rawHandler := raw.New(raw.Deps{
+		DB:       db,
+		Users:    metadata.NewUsersRepo(db),
+		APIKeys:  metadata.NewAPIKeysRepo(db),
+		Sessions: metadata.NewSessionsRepo(db),
+		Repos:    metadata.NewReposRepo(db),
+		Projects: metadata.NewProjectsRepo(db),
+		Files:    metadata.NewRawFilesRepo(db),
+		Scans:    metadata.NewScansRepo(db),
+		Path:     storage.NewPathStore(repoRoot),
+		Trash:    storage.NewTrash(filepath.Join(cfg.DataRoot, "trash")),
+		Audit:    auditLogger,
+		RepoRoot: repoRoot,
+	})
+	rawHandler.Mount(router)
 
 	// 7. Listeners.
 	httpLn := opts.HTTPListener

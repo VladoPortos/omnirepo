@@ -43,4 +43,12 @@ const (
 	EvtUpstreamCredUpdated EventKind = "upstream_cred.updated"
 	EvtUpstreamCredDeleted EventKind = "upstream_cred.deleted"
 	EvtUpstreamCredUsed    EventKind = "upstream_cred.used"
+
+	// Phase 2 Plan 08 — RAW handler (D-27..D-31). raw.put / raw.delete are
+	// emitted by the handler in this plan; raw.get.blocked is reserved for
+	// the severity gate hook that 02-09 will wire in (declared here for a
+	// single enumeration point).
+	EvtRawPut        EventKind = "raw.put"
+	EvtRawDelete     EventKind = "raw.delete"
+	EvtRawGetBlocked EventKind = "raw.get.blocked"
 )

@@ -1,6 +1,7 @@
 package migrations_test
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"path/filepath"
@@ -211,6 +212,96 @@ func TestS3BucketsGloballyUnique(t *testing.T) {
 	_, err := db.Writer.ExecContext(ctx, "INSERT INTO s3_buckets(name,project_id) VALUES ('shared',1)")
 	if err == nil || !strings.Contains(err.Error(), "UNIQUE") {
 		t.Fatalf("expected UNIQUE violation, got %v", err)
+	}
+}
+
+func TestPhase2MigrationsApply(t *testing.T) {
+	t.Parallel()
+	db := openFreshDB(t)
+	applyReal(t, db)
+	want := []string{
+		"sync_jobs", "scans", "vulnerabilities",
+		"docker_blobs", "docker_manifests", "docker_tags", "blob_upload_sessions",
+		"upstream_creds",
+	}
+	for _, table := range want {
+		var name string
+		err := db.Reader.QueryRow(
+			`SELECT name FROM sqlite_master WHERE type='table' AND name=?`, table,
+		).Scan(&name)
+		if err != nil {
+			t.Fatalf("table %s missing: %v", table, err)
+		}
+	}
+	// schema_migrations advanced to 004.
+	for _, stem := range []string{"002_jobs", "003_oci", "004_upstream_creds"} {
+		var n int
+		if err := db.Reader.QueryRow(
+			`SELECT COUNT(*) FROM schema_migrations WHERE name=?`, stem,
+		).Scan(&n); err != nil {
+			t.Fatalf("query %s: %v", stem, err)
+		}
+		if n != 1 {
+			t.Fatalf("schema_migrations count for %s = %d, want 1", stem, n)
+		}
+	}
+}
+
+func TestSyncJobsLeaseReturning(t *testing.T) {
+	t.Parallel()
+	db := openFreshDB(t)
+	applyReal(t, db)
+	ctx := context.Background()
+	if _, err := db.Writer.ExecContext(ctx,
+		`INSERT INTO sync_jobs(kind, status) VALUES('test','pending')`,
+	); err != nil {
+		t.Fatal(err)
+	}
+	var id int64
+	err := db.Writer.QueryRowContext(ctx, `
+		UPDATE sync_jobs
+		SET status='running'
+		WHERE id = (SELECT id FROM sync_jobs WHERE status='pending' LIMIT 1)
+		RETURNING id
+	`).Scan(&id)
+	if err != nil {
+		t.Fatalf("RETURNING: %v", err)
+	}
+	if id == 0 {
+		t.Fatal("no id returned from RETURNING")
+	}
+}
+
+func TestManifestBodyByteIdentical(t *testing.T) {
+	t.Parallel()
+	db := openFreshDB(t)
+	applyReal(t, db)
+	ctx := context.Background()
+	// Seed project + repo so docker_manifests FK is satisfied.
+	if _, err := db.Writer.ExecContext(ctx, `INSERT INTO projects(name) VALUES ('p1')`); err != nil {
+		t.Fatalf("project: %v", err)
+	}
+	if _, err := db.Writer.ExecContext(ctx,
+		`INSERT INTO repos(project_id,type,name) VALUES (1,'docker','r1')`,
+	); err != nil {
+		t.Fatalf("repo: %v", err)
+	}
+	// Body includes a trailing newline and CR byte that JSON re-encoding would drop.
+	body := []byte("{\"schemaVersion\":2,\"mediaType\":\"x\",\"trailing\":\"\\n\"}\r\n")
+	if _, err := db.Writer.ExecContext(ctx, `
+		INSERT INTO docker_manifests(repo_id, digest, media_type, body, size_bytes)
+		VALUES (?, ?, ?, ?, ?)
+	`, 1, "sha256:abc", "application/vnd.oci.image.manifest.v1+json", body, len(body)); err != nil {
+		t.Fatalf("insert manifest: %v", err)
+	}
+	var got []byte
+	if err := db.Reader.QueryRow(
+		`SELECT body FROM docker_manifests WHERE repo_id=1 AND digest=?`, "sha256:abc",
+	).Scan(&got); err != nil {
+		t.Fatalf("select body: %v", err)
+	}
+	if !bytes.Equal(got, body) {
+		t.Fatalf("body not byte-identical:\n got=%q\nwant=%q", got, body)
 	}
 }
 

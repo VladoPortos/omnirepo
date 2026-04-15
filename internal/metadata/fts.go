@@ -82,6 +82,102 @@ func IndexVulnerability(ctx context.Context, tx *sql.Tx, cveID, pkg, summary str
 	return nil
 }
 
+// -- Phase 3 Plan 01 (D-27): per-protocol FTS5 helpers. Each insert/delete
+// -- runs inline in the caller's writer tx so a search executed after
+// -- tx.Commit() reflects the change immediately. Tables live in migration
+// -- 014_protocol_fts.up.sql and share the shape
+// -- (repo_id UNINDEXED, name, version, arch_or_runtime, summary).
+
+// IndexRPM inserts a row into rpm_fts. Caller runs IndexRPMDelete first if
+// the underlying package is being updated in place (composite delete key).
+func IndexRPM(ctx context.Context, tx *sql.Tx, repoID int64, name, version, archOrRuntime, summary string) error {
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO rpm_fts(repo_id, name, version, arch_or_runtime, summary)
+		VALUES (?, ?, ?, ?, ?)
+	`, repoID, name, version, archOrRuntime, summary); err != nil {
+		return fmt.Errorf("fts: insert rpm_fts: %w", err)
+	}
+	return nil
+}
+
+// IndexRPMDelete removes the rpm_fts row(s) keyed by
+// (repo_id, name, version, arch_or_runtime).
+func IndexRPMDelete(ctx context.Context, tx *sql.Tx, repoID int64, name, version, archOrRuntime string) error {
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM rpm_fts WHERE repo_id=? AND name=? AND version=? AND arch_or_runtime=?
+	`, repoID, name, version, archOrRuntime); err != nil {
+		return fmt.Errorf("fts: delete rpm_fts: %w", err)
+	}
+	return nil
+}
+
+// IndexDEB inserts a row into deb_fts.
+func IndexDEB(ctx context.Context, tx *sql.Tx, repoID int64, name, version, archOrRuntime, summary string) error {
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO deb_fts(repo_id, name, version, arch_or_runtime, summary)
+		VALUES (?, ?, ?, ?, ?)
+	`, repoID, name, version, archOrRuntime, summary); err != nil {
+		return fmt.Errorf("fts: insert deb_fts: %w", err)
+	}
+	return nil
+}
+
+// IndexDEBDelete removes the deb_fts row(s) keyed by
+// (repo_id, name, version, arch_or_runtime).
+func IndexDEBDelete(ctx context.Context, tx *sql.Tx, repoID int64, name, version, archOrRuntime string) error {
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM deb_fts WHERE repo_id=? AND name=? AND version=? AND arch_or_runtime=?
+	`, repoID, name, version, archOrRuntime); err != nil {
+		return fmt.Errorf("fts: delete deb_fts: %w", err)
+	}
+	return nil
+}
+
+// IndexPyPI inserts a row into pypi_fts. archOrRuntime carries the
+// requires-python string (or wheel tag) the UI wants to surface.
+func IndexPyPI(ctx context.Context, tx *sql.Tx, repoID int64, name, version, archOrRuntime, summary string) error {
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO pypi_fts(repo_id, name, version, arch_or_runtime, summary)
+		VALUES (?, ?, ?, ?, ?)
+	`, repoID, name, version, archOrRuntime, summary); err != nil {
+		return fmt.Errorf("fts: insert pypi_fts: %w", err)
+	}
+	return nil
+}
+
+// IndexPyPIDelete removes the pypi_fts row(s) keyed by
+// (repo_id, name, version, arch_or_runtime).
+func IndexPyPIDelete(ctx context.Context, tx *sql.Tx, repoID int64, name, version, archOrRuntime string) error {
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM pypi_fts WHERE repo_id=? AND name=? AND version=? AND arch_or_runtime=?
+	`, repoID, name, version, archOrRuntime); err != nil {
+		return fmt.Errorf("fts: delete pypi_fts: %w", err)
+	}
+	return nil
+}
+
+// IndexHelm inserts a row into helm_fts. archOrRuntime carries appVersion.
+func IndexHelm(ctx context.Context, tx *sql.Tx, repoID int64, name, version, archOrRuntime, summary string) error {
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO helm_fts(repo_id, name, version, arch_or_runtime, summary)
+		VALUES (?, ?, ?, ?, ?)
+	`, repoID, name, version, archOrRuntime, summary); err != nil {
+		return fmt.Errorf("fts: insert helm_fts: %w", err)
+	}
+	return nil
+}
+
+// IndexHelmDelete removes the helm_fts row(s) keyed by
+// (repo_id, name, version, arch_or_runtime).
+func IndexHelmDelete(ctx context.Context, tx *sql.Tx, repoID int64, name, version, archOrRuntime string) error {
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM helm_fts WHERE repo_id=? AND name=? AND version=? AND arch_or_runtime=?
+	`, repoID, name, version, archOrRuntime); err != nil {
+		return fmt.Errorf("fts: delete helm_fts: %w", err)
+	}
+	return nil
+}
+
 // DeleteVulnerabilitiesByScan removes vulnerabilities rows for scanID and
 // also removes cves_fts rows for CVEs that become orphaned (no other
 // vulnerabilities row in any scan references them). Runs as a single

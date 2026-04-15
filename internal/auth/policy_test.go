@@ -138,8 +138,9 @@ func TestUnknownActionDenied(t *testing.T) {
 
 func TestAllActionsSliceMatchesConstants(t *testing.T) {
 	// Sanity check: every Action constant appears in AllActions. The sum of
-	// these constants should equal len(AllActions).
-	want := 20
+	// these constants should equal len(AllActions). Phase 3 Plan 01 adds
+	// four package-upload actions (RPM/DEB/PyPI/Helm).
+	want := 24
 	if len(auth.AllActions) != want {
 		t.Fatalf("AllActions length: %d, want %d", len(auth.AllActions), want)
 	}
@@ -149,5 +150,37 @@ func TestAllActionsSliceMatchesConstants(t *testing.T) {
 			t.Errorf("AllActions duplicate %q", a)
 		}
 		seen[a] = struct{}{}
+	}
+}
+
+func TestPackageUploadActionsMemberOnly(t *testing.T) {
+	// Phase 3 Plan 01: RPM/DEB/PyPI/Helm uploads follow the same project-
+	// membership gate as ActionCreateRepo. Non-member is denied
+	// ReasonNotAProjectMember; member is allowed; anonymous is rejected
+	// ReasonRequiresAuth.
+	member := auth.Actor{ID: 10, Kind: auth.ActorKindUser}
+	outsider := auth.Actor{ID: 11, Kind: auth.ActorKindUser}
+	anon := auth.Actor{Kind: auth.ActorKindAnonymous}
+	ctxMember := auth.WithProjectMembership(context.Background(), []int64{42})
+	ctxOutsider := auth.WithProjectMembership(context.Background(), []int64{99})
+
+	for _, action := range []auth.Action{
+		auth.ActionRPMUpload,
+		auth.ActionDEBUpload,
+		auth.ActionPyPIUpload,
+		auth.ActionHelmUpload,
+	} {
+		ok, reason := auth.Can(ctxMember, member, action, auth.Target{Kind: "repo", ProjectID: 42})
+		if !ok {
+			t.Errorf("%s: member denied (%q), want allow", action, reason)
+		}
+		ok, reason = auth.Can(ctxOutsider, outsider, action, auth.Target{Kind: "repo", ProjectID: 42})
+		if ok || reason != auth.ReasonNotAProjectMember {
+			t.Errorf("%s: outsider ok=%v reason=%q, want false/%s", action, ok, reason, auth.ReasonNotAProjectMember)
+		}
+		ok, reason = auth.Can(context.Background(), anon, action, auth.Target{Kind: "repo", ProjectID: 42})
+		if ok || reason != auth.ReasonRequiresAuth {
+			t.Errorf("%s: anon ok=%v reason=%q, want false/%s", action, ok, reason, auth.ReasonRequiresAuth)
+		}
 	}
 }

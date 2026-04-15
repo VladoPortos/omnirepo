@@ -42,6 +42,36 @@ type Config struct {
 	GC        GC              `koanf:"gc"`
 	AirGap    AirGapConfig    `koanf:"air_gap"`
 	Log       LogConfig       `koanf:"log"`
+	Regen     RegenConfig     `koanf:"regen"`
+	Sync      SyncConfig      `koanf:"sync"`
+	Signing   SigningConfig   `koanf:"signing"`
+}
+
+// RegenConfig tunes the per-repo metadata regeneration coalescer (D-35,
+// Phase 03 Plan 01). DebounceMs is how long Kick() calls are collapsed
+// into one regen invocation; MaxWaitMs is the absolute ceiling from the
+// first Kick so continuous writes cannot starve the regen goroutine.
+type RegenConfig struct {
+	DebounceMs int `koanf:"debounce_ms"`
+	MaxWaitMs  int `koanf:"max_wait_ms"`
+}
+
+// SyncConfig tunes the per-sync-job upstream worker pool (Phase 03 pull-
+// external plans). MaxParallelDownloadsPerJob bounds concurrent blob
+// fetches inside a single sync_jobs row. UpstreamHTTPTimeout is the
+// per-request deadline for any call the sync worker makes to an
+// upstream registry.
+type SyncConfig struct {
+	MaxParallelDownloadsPerJob int           `koanf:"max_parallel_downloads_per_job"`
+	UpstreamHTTPTimeout        time.Duration `koanf:"upstream_http_timeout"`
+}
+
+// SigningConfig tunes the per-repo OpenPGP signing key generation
+// (Phase 03 Plan 01, D-01). GPGKeyBits is the RSA key size handed to
+// internal/crypto/pgpsign.GenerateRepoKey. 4096 is the air-gap default
+// per D-35; operators can reduce for test installs.
+type SigningConfig struct {
+	GPGKeyBits int `koanf:"gpg_key_bits"`
 }
 
 // Trivy holds subprocess driver paths (D-44). Runtime air-gap is enforced in
@@ -173,6 +203,17 @@ func Defaults() Config {
 			Format:          "json",
 			AuditMaxSizeMiB: 100,
 			AuditKeep:       10,
+		},
+		Regen: RegenConfig{
+			DebounceMs: 2000,
+			MaxWaitMs:  30000,
+		},
+		Sync: SyncConfig{
+			MaxParallelDownloadsPerJob: 4,
+			UpstreamHTTPTimeout:        60 * time.Second,
+		},
+		Signing: SigningConfig{
+			GPGKeyBits: 4096,
 		},
 	}
 }

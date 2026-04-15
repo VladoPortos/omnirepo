@@ -95,4 +95,23 @@ const (
 	// sessions_pruned}.
 	EvtGCTriggered EventKind = "gc.triggered"
 	EvtGCRun       EventKind = "gc.run"
+
+	// Phase 3 Plan 01 — package-repo protocols (RPM/APT/PyPI/Helm) and
+	// their signing keys + metadata regen. Constants are declared here so
+	// downstream plans (03-02..03-07) have a single enumeration point;
+	// the concrete emissions happen in those plans' handlers and sync-job
+	// runners. TestEveryStateChangingActionEmitsEvent covers the emit path.
+	EvtSigningKeyCreated   EventKind = "signing_key.created"
+	EvtSigningKeyRotated   EventKind = "signing_key.rotated"
+	EvtSigningKeyUsed      EventKind = "signing_key.used"
+	EvtRPMUpload           EventKind = "rpm.upload"
+	EvtRPMDelete           EventKind = "rpm.delete"
+	EvtDEBUpload           EventKind = "deb.upload"
+	EvtDEBDelete           EventKind = "deb.delete"
+	EvtPyPIUpload          EventKind = "pypi.upload"
+	EvtPyPIDelete          EventKind = "pypi.delete"
+	EvtHelmUpload          EventKind = "helm.upload"
+	EvtHelmDelete          EventKind = "helm.delete"
+	EvtRepoMetadataRegen   EventKind = "repo.metadata.regen"
+	EvtRepoMetadataFailed  EventKind = "repo.metadata.failed"
 )

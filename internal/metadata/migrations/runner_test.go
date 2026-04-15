@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"io/fs"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -302,6 +303,101 @@ func TestManifestBodyByteIdentical(t *testing.T) {
 	}
 	if !bytes.Equal(got, body) {
 		t.Fatalf("body not byte-identical:\n got=%q\nwant=%q", got, body)
+	}
+}
+
+// Phase 3 Plan 01 — Migrations 008..015.
+
+func TestPhase3MigrationsForwardAndDown(t *testing.T) {
+	t.Parallel()
+	db := openFreshDB(t)
+	ctx := context.Background()
+	applyReal(t, db)
+
+	// Forward: every table exists and each migration is recorded.
+	forward := []struct {
+		stem  string
+		table string
+	}{
+		{"008_signing_keys", "signing_keys"},
+		{"009_apt_suites", "apt_suites"},
+		{"010_rpm_packages", "rpm_packages"},
+		{"011_deb_packages", "deb_packages"},
+		{"012_pypi_files", "pypi_files"},
+		{"013_helm_charts", "helm_charts"},
+		{"014_protocol_fts", "rpm_fts"}, // one of four virtual tables
+	}
+	for _, tc := range forward {
+		var name string
+		if err := db.Reader.QueryRow(
+			`SELECT name FROM sqlite_master WHERE name=?`, tc.table,
+		).Scan(&name); err != nil {
+			t.Fatalf("table/vtab %s missing after forward apply: %v", tc.table, err)
+		}
+		var n int
+		if err := db.Reader.QueryRow(
+			`SELECT COUNT(*) FROM schema_migrations WHERE name=?`, tc.stem,
+		).Scan(&n); err != nil || n != 1 {
+			t.Fatalf("schema_migrations %s: n=%d err=%v", tc.stem, n, err)
+		}
+	}
+	// 015 adds two columns to repos.
+	for _, col := range []string{"metadata_state", "last_regen_error"} {
+		var n int
+		if err := db.Reader.QueryRow(
+			`SELECT COUNT(*) FROM pragma_table_info('repos') WHERE name=?`, col,
+		).Scan(&n); err != nil || n != 1 {
+			t.Fatalf("column repos.%s missing after 015: n=%d err=%v", col, n, err)
+		}
+	}
+	var stem015 int
+	if err := db.Reader.QueryRow(
+		`SELECT COUNT(*) FROM schema_migrations WHERE name='015_repo_metadata_state'`,
+	).Scan(&stem015); err != nil || stem015 != 1 {
+		t.Fatalf("schema_migrations 015_repo_metadata_state: n=%d err=%v", stem015, err)
+	}
+
+	// Reverse: apply each .down.sql in reverse order (015 first) and verify
+	// the schema is scrubbed. The runner itself has no revert-path (D-11
+	// says down scripts exist for audit only), so we exec them directly.
+	downOrder := []string{
+		"015_repo_metadata_state.down.sql",
+		"014_protocol_fts.down.sql",
+		"013_helm_charts.down.sql",
+		"012_pypi_files.down.sql",
+		"011_deb_packages.down.sql",
+		"010_rpm_packages.down.sql",
+		"009_apt_suites.down.sql",
+		"008_signing_keys.down.sql",
+	}
+	for _, f := range downOrder {
+		b, err := fs.ReadFile(migrations.FS, f)
+		if err != nil {
+			t.Fatalf("read %s: %v", f, err)
+		}
+		if _, err := db.Writer.ExecContext(ctx, string(b)); err != nil {
+			t.Fatalf("exec %s: %v", f, err)
+		}
+	}
+	// Every phase-3 table must now be gone.
+	for _, tab := range []string{
+		"signing_keys", "apt_suites", "rpm_packages", "deb_packages",
+		"pypi_files", "helm_charts", "rpm_fts", "deb_fts", "pypi_fts", "helm_fts",
+	} {
+		var n int
+		_ = db.Reader.QueryRow(
+			`SELECT COUNT(*) FROM sqlite_master WHERE name=?`, tab,
+		).Scan(&n)
+		if n != 0 {
+			t.Fatalf("%s still present after down: n=%d", tab, n)
+		}
+	}
+	// metadata_state column must be gone.
+	var cnt int
+	if err := db.Reader.QueryRow(
+		`SELECT COUNT(*) FROM pragma_table_info('repos') WHERE name='metadata_state'`,
+	).Scan(&cnt); err != nil || cnt != 0 {
+		t.Fatalf("repos.metadata_state still present after 015 down: cnt=%d err=%v", cnt, err)
 	}
 }
 

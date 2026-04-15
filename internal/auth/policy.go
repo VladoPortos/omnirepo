@@ -44,6 +44,16 @@ const (
 	// ActionUploadTLSCert / ActionApplyBootstrap (super-admin returns above
 	// in step 2; everyone else gets ReasonSuperAdminRequired).
 	ActionTriggerGC Action = "gc.trigger"
+
+	// Phase 03 Plan 01 — per-protocol package uploads (D-34). These collapse
+	// to the same member-or-super-admin branch as ActionRepoRead/Write: a
+	// caller may upload RPM/APT/PyPI/Helm artifacts only if they're a member
+	// of the target repo's project (or super-admin). Anonymous callers are
+	// rejected at the top of Can via ReasonRequiresAuth.
+	ActionRPMUpload  Action = "rpm.upload"
+	ActionDEBUpload  Action = "deb.upload"
+	ActionPyPIUpload Action = "pypi.upload"
+	ActionHelmUpload Action = "helm.upload"
 )
 
 // AllActions enumerates every Action constant in the package. Downstream
@@ -70,6 +80,10 @@ var AllActions = []Action{
 	ActionManageUpstreamCreds,
 	ActionRepoRead,
 	ActionTriggerGC,
+	ActionRPMUpload,
+	ActionDEBUpload,
+	ActionPyPIUpload,
+	ActionHelmUpload,
 }
 
 // Target is the object the actor is operating on.
@@ -203,7 +217,9 @@ func Can(ctx context.Context, actor Actor, action Action, target Target) (bool, 
 	case ActionCreateRepo, ActionDeleteRepo,
 		ActionUpdateRepo, ActionWipeRepo,
 		ActionAddProjectMember, ActionRemoveProjectMember,
-		ActionManageUpstreamCreds:
+		ActionManageUpstreamCreds,
+		ActionRPMUpload, ActionDEBUpload,
+		ActionPyPIUpload, ActionHelmUpload:
 		if target.ProjectID != 0 && isMemberOfProject(ctx, target.ProjectID) {
 			return true, ""
 		}

@@ -221,3 +221,51 @@ func TestTrivyEnvOverride(t *testing.T) {
 		t.Errorf("Trivy.CachePath = %q, want /z", cfg.Trivy.CachePath)
 	}
 }
+
+// Phase 3 Plan 01 — new Regen / Sync / Signing config sections (D-35).
+
+func TestRegenSyncSigningDefaults(t *testing.T) {
+	d := config.Defaults()
+	if d.Regen.DebounceMs != 2000 {
+		t.Errorf("Regen.DebounceMs = %d, want 2000", d.Regen.DebounceMs)
+	}
+	if d.Regen.MaxWaitMs != 30000 {
+		t.Errorf("Regen.MaxWaitMs = %d, want 30000", d.Regen.MaxWaitMs)
+	}
+	if d.Sync.MaxParallelDownloadsPerJob != 4 {
+		t.Errorf("Sync.MaxParallelDownloadsPerJob = %d, want 4", d.Sync.MaxParallelDownloadsPerJob)
+	}
+	if d.Sync.UpstreamHTTPTimeout != 60*time.Second {
+		t.Errorf("Sync.UpstreamHTTPTimeout = %s, want 60s", d.Sync.UpstreamHTTPTimeout)
+	}
+	if d.Signing.GPGKeyBits != 4096 {
+		t.Errorf("Signing.GPGKeyBits = %d, want 4096", d.Signing.GPGKeyBits)
+	}
+}
+
+func TestRegenSyncSigningEnvOverride(t *testing.T) {
+	t.Setenv("OMNIREPO_REGEN__DEBOUNCE_MS", "500")
+	t.Setenv("OMNIREPO_REGEN__MAX_WAIT_MS", "10000")
+	t.Setenv("OMNIREPO_SYNC__MAX_PARALLEL_DOWNLOADS_PER_JOB", "8")
+	t.Setenv("OMNIREPO_SYNC__UPSTREAM_HTTP_TIMEOUT", "30s")
+	t.Setenv("OMNIREPO_SIGNING__GPG_KEY_BITS", "2048")
+	cfg, err := config.Load("")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Regen.DebounceMs != 500 {
+		t.Errorf("Regen.DebounceMs = %d, want 500", cfg.Regen.DebounceMs)
+	}
+	if cfg.Regen.MaxWaitMs != 10000 {
+		t.Errorf("Regen.MaxWaitMs = %d, want 10000", cfg.Regen.MaxWaitMs)
+	}
+	if cfg.Sync.MaxParallelDownloadsPerJob != 8 {
+		t.Errorf("Sync.MaxParallelDownloadsPerJob = %d, want 8", cfg.Sync.MaxParallelDownloadsPerJob)
+	}
+	if cfg.Sync.UpstreamHTTPTimeout != 30*time.Second {
+		t.Errorf("Sync.UpstreamHTTPTimeout = %s, want 30s", cfg.Sync.UpstreamHTTPTimeout)
+	}
+	if cfg.Signing.GPGKeyBits != 2048 {
+		t.Errorf("Signing.GPGKeyBits = %d, want 2048", cfg.Signing.GPGKeyBits)
+	}
+}

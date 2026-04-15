@@ -185,3 +185,119 @@ func TestFTS_DeleteVulnerabilitiesByScan_CascadesFTSOnOrphansOnly(t *testing.T) 
 		t.Fatalf("vulnerabilities rows for scan1 remain: %d", n)
 	}
 }
+
+// Phase 3 Plan 01 (D-27): per-protocol FTS5 round-trips.
+
+func TestIndexRPM(t *testing.T) {
+	t.Parallel()
+	db := sqlitetest.New(t)
+	ctx := context.Background()
+	if err := db.WriteTx(ctx, func(tx *sql.Tx) error {
+		return metadata.IndexRPM(ctx, tx, 11, "nginx", "1.25.0", "x86_64", "web server")
+	}); err != nil {
+		t.Fatalf("insert rpm_fts: %v", err)
+	}
+	var repoID int64
+	if err := db.Reader.QueryRow(
+		`SELECT repo_id FROM rpm_fts WHERE rpm_fts MATCH ?`, "nginx",
+	).Scan(&repoID); err != nil {
+		t.Fatalf("match rpm_fts: %v", err)
+	}
+	if repoID != 11 {
+		t.Fatalf("rpm_fts repo_id=%d want 11", repoID)
+	}
+	if err := db.WriteTx(ctx, func(tx *sql.Tx) error {
+		return metadata.IndexRPMDelete(ctx, tx, 11, "nginx", "1.25.0", "x86_64")
+	}); err != nil {
+		t.Fatalf("delete rpm_fts: %v", err)
+	}
+	var n int
+	_ = db.Reader.QueryRow(`SELECT COUNT(*) FROM rpm_fts`).Scan(&n)
+	if n != 0 {
+		t.Fatalf("rpm_fts count after delete=%d want 0", n)
+	}
+}
+
+func TestIndexDEB(t *testing.T) {
+	t.Parallel()
+	db := sqlitetest.New(t)
+	ctx := context.Background()
+	if err := db.WriteTx(ctx, func(tx *sql.Tx) error {
+		return metadata.IndexDEB(ctx, tx, 12, "curl", "7.88", "amd64", "transfer tool")
+	}); err != nil {
+		t.Fatalf("insert deb_fts: %v", err)
+	}
+	var repoID int64
+	if err := db.Reader.QueryRow(
+		`SELECT repo_id FROM deb_fts WHERE deb_fts MATCH ?`, "curl",
+	).Scan(&repoID); err != nil {
+		t.Fatalf("match deb_fts: %v", err)
+	}
+	if repoID != 12 {
+		t.Fatalf("deb_fts repo_id=%d want 12", repoID)
+	}
+	_ = db.WriteTx(ctx, func(tx *sql.Tx) error {
+		return metadata.IndexDEBDelete(ctx, tx, 12, "curl", "7.88", "amd64")
+	})
+	var n int
+	_ = db.Reader.QueryRow(`SELECT COUNT(*) FROM deb_fts`).Scan(&n)
+	if n != 0 {
+		t.Fatalf("deb_fts count after delete=%d want 0", n)
+	}
+}
+
+func TestIndexPyPI(t *testing.T) {
+	t.Parallel()
+	db := sqlitetest.New(t)
+	ctx := context.Background()
+	if err := db.WriteTx(ctx, func(tx *sql.Tx) error {
+		return metadata.IndexPyPI(ctx, tx, 13, "requests", "2.32.0", ">=3.8", "http client")
+	}); err != nil {
+		t.Fatalf("insert pypi_fts: %v", err)
+	}
+	var repoID int64
+	if err := db.Reader.QueryRow(
+		`SELECT repo_id FROM pypi_fts WHERE pypi_fts MATCH ?`, "requests",
+	).Scan(&repoID); err != nil {
+		t.Fatalf("match pypi_fts: %v", err)
+	}
+	if repoID != 13 {
+		t.Fatalf("pypi_fts repo_id=%d want 13", repoID)
+	}
+	_ = db.WriteTx(ctx, func(tx *sql.Tx) error {
+		return metadata.IndexPyPIDelete(ctx, tx, 13, "requests", "2.32.0", ">=3.8")
+	})
+	var n int
+	_ = db.Reader.QueryRow(`SELECT COUNT(*) FROM pypi_fts`).Scan(&n)
+	if n != 0 {
+		t.Fatalf("pypi_fts count after delete=%d want 0", n)
+	}
+}
+
+func TestIndexHelm(t *testing.T) {
+	t.Parallel()
+	db := sqlitetest.New(t)
+	ctx := context.Background()
+	if err := db.WriteTx(ctx, func(tx *sql.Tx) error {
+		return metadata.IndexHelm(ctx, tx, 14, "nginx-ingress", "4.9.0", "1.10.0", "ingress controller")
+	}); err != nil {
+		t.Fatalf("insert helm_fts: %v", err)
+	}
+	var repoID int64
+	if err := db.Reader.QueryRow(
+		`SELECT repo_id FROM helm_fts WHERE helm_fts MATCH ?`, "ingress",
+	).Scan(&repoID); err != nil {
+		t.Fatalf("match helm_fts: %v", err)
+	}
+	if repoID != 14 {
+		t.Fatalf("helm_fts repo_id=%d want 14", repoID)
+	}
+	_ = db.WriteTx(ctx, func(tx *sql.Tx) error {
+		return metadata.IndexHelmDelete(ctx, tx, 14, "nginx-ingress", "4.9.0", "1.10.0")
+	})
+	var n int
+	_ = db.Reader.QueryRow(`SELECT COUNT(*) FROM helm_fts`).Scan(&n)
+	if n != 0 {
+		t.Fatalf("helm_fts count after delete=%d want 0", n)
+	}
+}

@@ -49,6 +49,40 @@ var AllPhase2GCEventKinds = []audit.EventKind{
 	audit.EvtGCRun,
 }
 
+// AllPhase3EventKinds enumerates the Phase 3 Plan 01 additions — package-
+// repo uploads, signing-key lifecycle, and repo-metadata regen events.
+var AllPhase3EventKinds = []audit.EventKind{
+	audit.EvtSigningKeyCreated,
+	audit.EvtSigningKeyRotated,
+	audit.EvtSigningKeyUsed,
+	audit.EvtRPMUpload,
+	audit.EvtRPMDelete,
+	audit.EvtDEBUpload,
+	audit.EvtDEBDelete,
+	audit.EvtPyPIUpload,
+	audit.EvtPyPIDelete,
+	audit.EvtHelmUpload,
+	audit.EvtHelmDelete,
+	audit.EvtRepoMetadataRegen,
+	audit.EvtRepoMetadataFailed,
+}
+
+func TestPhase3EventKindsDistinctAndCount(t *testing.T) {
+	if got, want := len(AllPhase3EventKinds), 13; got != want {
+		t.Fatalf("Phase3 EventKind count = %d, want %d", got, want)
+	}
+	seen := make(map[audit.EventKind]struct{}, len(AllPhase3EventKinds))
+	for _, k := range AllPhase3EventKinds {
+		if k == "" {
+			t.Fatalf("empty Phase3 EventKind in enumeration")
+		}
+		if _, dup := seen[k]; dup {
+			t.Fatalf("duplicate Phase3 EventKind: %q", k)
+		}
+		seen[k] = struct{}{}
+	}
+}
+
 func TestAllEventKindsDistinctAndCount(t *testing.T) {
 	if got := len(AllPhase1EventKinds); got != 23 {
 		t.Fatalf("EventKind count = %d, want 23", got)

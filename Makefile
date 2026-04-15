@@ -1,5 +1,7 @@
 GO ?= go
 DATA_ROOT ?= /var/lib/omnirepo
+BENCH_DURATION ?= 30s
+BENCH_WORKERS ?= 16
 
 .PHONY: dev build test test-airgap bench-sqlite vendor lint seed grep-cdn
 
@@ -17,7 +19,7 @@ test-airgap:
 	$(GO) test -mod=vendor ./test/airgap/...
 
 bench-sqlite:
-	$(GO) run -mod=vendor ./cmd/bench/sqlite
+	$(GO) run -mod=vendor ./cmd/bench/sqlite --duration=$(BENCH_DURATION) --workers=$(BENCH_WORKERS)
 
 vendor:
 	$(GO) mod tidy

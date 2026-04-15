@@ -23,7 +23,7 @@ func TestOpenAppliesPragmas(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	checks := []struct {
 		pragma string
@@ -55,7 +55,7 @@ func TestWriterPoolIsOne(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	if got := db.Writer.Stats().MaxOpenConnections; got != 1 {
 		t.Errorf("Writer.MaxOpenConnections = %d, want 1", got)
 	}
@@ -68,7 +68,7 @@ func TestReaderPoolIsEight(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	if got := db.Reader.Stats().MaxOpenConnections; got != 8 {
 		t.Errorf("Reader.MaxOpenConnections = %d, want 8", got)
 	}
@@ -83,7 +83,7 @@ func TestWriteTxSerializesConcurrentWriters(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	ctx := context.Background()
 	if err := db.WriteTx(ctx, func(tx *sql.Tx) error {
@@ -137,7 +137,7 @@ func TestWriteTxUsesImmediate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	ctx := context.Background()
 	if err := db.WriteTx(ctx, func(tx *sql.Tx) error {
@@ -197,7 +197,7 @@ func TestWriteTxRollbackOnError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	ctx := context.Background()
 	if err := db.WriteTx(ctx, func(tx *sql.Tx) error {

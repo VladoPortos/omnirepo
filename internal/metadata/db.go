@@ -110,7 +110,7 @@ func applyOnConn(ctx context.Context, pool *sql.DB, fn func(context.Context, *sq
 	if err != nil {
 		return fmt.Errorf("metadata: conn: %w", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	return fn(ctx, conn)
 }
 

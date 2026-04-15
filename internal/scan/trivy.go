@@ -39,6 +39,13 @@ func (t *trivyRunner) baseFlags() []string {
 		"--db-repository", "file://" + t.dbPath,
 		"--offline-scan",
 		"--skip-db-update",
+		// Java DB is a separate OCI artifact Trivy auto-fetches on first
+		// Java analyzer hit. The air-gap invariant requires we never
+		// touch the network; --skip-java-db-update is the sibling of
+		// --skip-db-update for that database.
+		"--skip-java-db-update",
+		// VEX repo is similarly fetched on first hit; same rule applies.
+		"--skip-vex-repo-update",
 		"--format", "json",
 	}
 }
@@ -75,6 +82,8 @@ func (t *trivyRunner) SBOM(ctx context.Context, dir string, format SBOMFormat, o
 		"--db-repository", "file://" + t.dbPath,
 		"--offline-scan",
 		"--skip-db-update",
+		"--skip-java-db-update",
+		"--skip-vex-repo-update",
 		"--format", string(format),
 		"--output", outPath,
 	}

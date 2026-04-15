@@ -3,6 +3,7 @@ package jobs
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"time"
 
 	"github.com/dxc-internal/omnirepo/internal/metadata"
@@ -103,15 +104,27 @@ func (a *scansAdapter) LeaseOne(ctx context.Context, leaseID string) (*JobView, 
 }
 
 func (a *scansAdapter) MarkDone(ctx context.Context, tx *sql.Tx, id int64) error {
-	// Scans.MarkDone requires summary/sbom/dbversion; the generic Pool
-	// path only hits here when a handler returned nil and didn't populate
-	// those fields itself. That's a misuse — scan handlers are
-	// responsible for calling ScansRepo.MarkDone directly (inside their
-	// own writer tx) with the summary. The pool's generic MarkDone path
-	// is still safe: we record an empty summary + empty paths so the row
-	// flips to 'done' without data loss beyond what the handler chose
-	// not to supply. Phase 02-09 handler will bypass this generic path.
-	return a.r.MarkDone(ctx, tx, id, "{}", "", "")
+	// Scans.MarkDone requires summary/sbom/dbversion; the Phase 02-09
+	// scan handler ALWAYS calls ScansRepo.MarkDone directly inside its
+	// own writer tx, populating severity_summary_json + sbom_path +
+	// trivy_db_version. The pool's generic success path then calls
+	// here as a terminal fallback — but writing "{}" unconditionally
+	// would clobber the handler's populated row (02-14 bug).
+	//
+	// Check status='running' before overwriting: if the row has
+	// already flipped to 'done' by the handler, this is a no-op.
+	res, err := tx.ExecContext(ctx, `
+		UPDATE scans
+		SET status='done', updated_at=CURRENT_TIMESTAMP
+		WHERE id=? AND status='running'
+	`, id)
+	if err != nil {
+		return fmt.Errorf("scans: generic mark_done %d: %w", id, err)
+	}
+	// RowsAffected==0 means the handler already marked it done; that's
+	// the happy path for Phase 02-09. Either way, success.
+	_ = res
+	return nil
 }
 
 func (a *scansAdapter) MarkFailed(ctx context.Context, tx *sql.Tx, id int64, errStr string, nextRunAt time.Time) error {

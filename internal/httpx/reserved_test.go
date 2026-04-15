@@ -1,6 +1,7 @@
 package httpx_test
 
 import (
+	"net/http"
 	"testing"
 
 	"github.com/dxc-internal/omnirepo/internal/httpx"
@@ -68,4 +69,4 @@ func TestMountReservedAcceptsNonReserved(t *testing.T) {
 
 type emptyHandler struct{}
 
-func (emptyHandler) ServeHTTP(_ interface{ Header() }, _ interface{}) {}
+func (emptyHandler) ServeHTTP(_ http.ResponseWriter, _ *http.Request) {}

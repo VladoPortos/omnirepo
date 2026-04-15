@@ -95,6 +95,29 @@ func (r *BlobUploadSessionsRepo) Delete(ctx context.Context, tx *sql.Tx, uuid st
 	return nil
 }
 
+// PruneExpiredReturning deletes every row with expires_at < now and
+// returns the uuids of the removed rows. Used by the Phase 02-12 GC
+// handler (D-38 step 5) so the caller can also remove the per-uuid
+// tmp upload file at <DataRoot>/tmp/uploads/<uuid>.
+func (r *BlobUploadSessionsRepo) PruneExpiredReturning(ctx context.Context, tx *sql.Tx, now time.Time) ([]string, error) {
+	rows, err := tx.QueryContext(ctx,
+		`DELETE FROM blob_upload_sessions WHERE expires_at < ? RETURNING uuid`, now.UTC(),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("blob_upload_sessions: prune returning: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []string
+	for rows.Next() {
+		var u string
+		if err := rows.Scan(&u); err != nil {
+			return nil, fmt.Errorf("blob_upload_sessions: prune scan: %w", err)
+		}
+		out = append(out, u)
+	}
+	return out, rows.Err()
+}
+
 // PruneExpired deletes every row with expires_at < now, returning the
 // count removed.
 func (r *BlobUploadSessionsRepo) PruneExpired(ctx context.Context, tx *sql.Tx, now time.Time) (int, error) {

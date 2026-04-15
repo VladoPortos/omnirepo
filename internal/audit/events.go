@@ -86,4 +86,13 @@ const (
 	EvtScanFinished    EventKind = "scan.finished"
 	EvtScanFailed      EventKind = "scan.failed"
 	EvtScanGateBlocked EventKind = "scan.gate.blocked"
+
+	// Phase 2 Plan 12 — admin-triggered GC (D-37, D-38, OPS-06, SCAN-12).
+	// gc.triggered is emitted by the REST endpoint at enqueue time
+	// (super-admin actor recorded). gc.run is emitted by the GC sync-pool
+	// handler after the run completes; details_json carries the GCReport
+	// summary {blobs_deleted, bytes_freed, trash_entries_deleted,
+	// sessions_pruned}.
+	EvtGCTriggered EventKind = "gc.triggered"
+	EvtGCRun       EventKind = "gc.run"
 )

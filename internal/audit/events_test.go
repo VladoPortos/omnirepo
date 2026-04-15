@@ -43,6 +43,12 @@ var AllPhase2ScanEventKinds = []audit.EventKind{
 	audit.EvtScanGateBlocked,
 }
 
+// AllPhase2GCEventKinds enumerates the Phase 02-12 admin GC event kinds.
+var AllPhase2GCEventKinds = []audit.EventKind{
+	audit.EvtGCTriggered,
+	audit.EvtGCRun,
+}
+
 func TestAllEventKindsDistinctAndCount(t *testing.T) {
 	if got := len(AllPhase1EventKinds); got != 23 {
 		t.Fatalf("EventKind count = %d, want 23", got)

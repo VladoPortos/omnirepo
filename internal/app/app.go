@@ -358,6 +358,33 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 		metadata.NewSyncJobsRepo(db), syncPool.Kick)
 	promoteREST := oci.NewPromoteREST(ociHandler)
 
+	// 6b.3. Plan 02-12: super-admin GC handler. Registers on the sync
+	// pool under jobs.GCJobKind. The corresponding REST endpoint (POST
+	// /api/v1/admin/gc) is mounted via api.Mount below by passing GCDeps.
+	gcQuiescence := time.Duration(cfg.GC.BlobQuiescenceSeconds) * time.Second
+	if gcQuiescence <= 0 {
+		gcQuiescence = time.Hour
+	}
+	gcRetention := time.Duration(cfg.GC.TrashRetentionDays) * 24 * time.Hour
+	if gcRetention <= 0 {
+		gcRetention = 7 * 24 * time.Hour
+	}
+	gcHandler := jobs.NewGCHandler(jobs.GCHandler{
+		DB:             db,
+		Blobs:          metadata.NewDockerBlobsRepo(db),
+		BlobUploads:    metadata.NewBlobUploadsRepo(db),
+		Sessions:       metadata.NewBlobUploadSessionsRepo(db),
+		CAS:            ociCAS,
+		Trash:          storage.NewTrash(filepath.Join(cfg.DataRoot, "trash")),
+		Audit:          auditLogger,
+		DataRoot:       cfg.DataRoot,
+		Quiescence:     gcQuiescence,
+		TrashRetention: gcRetention,
+	})
+	syncHandlers[jobs.GCJobKind] = func(c context.Context, j *jobs.JobView) error {
+		return gcHandler.Handle(c, j.ID)
+	}
+
 	// 6c. Admin + user REST at /api/v1. Mounted AFTER ociHandler so the
 	// OCIActions bundle can reference handlers that depend on it.
 	api.Mount(router, api.Deps{
@@ -387,6 +414,11 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 		OCIActions: &api.OCIActionsDeps{
 			PullExternal: pullExternalREST,
 			Promote:      promoteREST,
+		},
+		// Plan 02-12: super-admin GC trigger.
+		GCDeps: &api.GCDeps{
+			SyncJobs: metadata.NewSyncJobsRepo(db),
+			SyncKick: syncPool.Kick,
 		},
 	})
 

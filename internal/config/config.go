@@ -39,6 +39,7 @@ type Config struct {
 	Trivy     Trivy           `koanf:"trivy"`
 	Jobs      Jobs            `koanf:"jobs"`
 	Docker    Docker          `koanf:"docker"`
+	GC        GC              `koanf:"gc"`
 	AirGap    AirGapConfig    `koanf:"air_gap"`
 	Log       LogConfig       `koanf:"log"`
 }
@@ -60,6 +61,18 @@ type Jobs struct {
 	ScanWorkers          int           `koanf:"scan_workers"`
 	PollInterval         time.Duration `koanf:"poll_interval"`
 	ShutdownGraceSeconds int           `koanf:"shutdown_grace_seconds"`
+}
+
+// GC carries the Phase 02-12 garbage-collection knobs (D-44):
+//   - TrashRetentionDays: trash entries older than this are hard-deleted.
+//     Default 7.
+//   - BlobQuiescenceSeconds: docker_blobs rows with ref_count==0 must have
+//     been untouched for at least this long before they're eligible for
+//     sweep. Default 3600 (1 hour) — covers the longest realistic chunked
+//     upload window per D-03.
+type GC struct {
+	TrashRetentionDays    int `koanf:"trash_retention_days"`
+	BlobQuiescenceSeconds int `koanf:"blob_quiescence_seconds"`
 }
 
 // Docker carries the Phase 02-05 OCI/Docker knobs:
@@ -147,6 +160,10 @@ func Defaults() Config {
 		Docker: Docker{
 			JWTTTLSeconds:           3600,
 			UploadSessionTTLSeconds: 3600,
+		},
+		GC: GC{
+			TrashRetentionDays:    7,
+			BlobQuiescenceSeconds: 3600,
 		},
 		AirGap: AirGapConfig{
 			AllowExternalActions: true,

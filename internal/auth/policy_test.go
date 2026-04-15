@@ -139,7 +139,7 @@ func TestUnknownActionDenied(t *testing.T) {
 func TestAllActionsSliceMatchesConstants(t *testing.T) {
 	// Sanity check: every Action constant appears in AllActions. The sum of
 	// these constants should equal len(AllActions).
-	want := 19
+	want := 20
 	if len(auth.AllActions) != want {
 		t.Fatalf("AllActions length: %d, want %d", len(auth.AllActions), want)
 	}

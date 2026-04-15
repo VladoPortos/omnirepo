@@ -48,6 +48,10 @@ type Deps struct {
 	// nil-safe — when nil, the two endpoints are not mounted.
 	OCIActions *OCIActionsDeps
 
+	// GCDeps is the Plan 02-12 admin GC trigger dependency bundle.
+	// nil-safe — when nil, /api/v1/admin/gc is not mounted.
+	GCDeps *GCDeps
+
 	// Clock is used for session/token issuance. Defaults to time.Now().UTC.
 	Clock func() time.Time
 
@@ -175,6 +179,10 @@ func Mount(r chi.Router, d Deps) {
 			// PromoteREST handlers re-check membership inline (same pattern
 			// as upstream-creds) so they can return distinct 401/403/404.
 			RegisterOCIActionsRoutes(r, d.OCIActions)
+
+			// Phase 02-12: super-admin garbage collection trigger
+			// (D-37, OPS-06). RequireCan(ActionTriggerGC) gate inside.
+			d.mountAdminGC(r)
 		})
 	})
 }

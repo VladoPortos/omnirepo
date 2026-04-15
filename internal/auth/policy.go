@@ -38,6 +38,12 @@ const (
 	// PublicRead is true. Authenticated actors reach it via project
 	// membership (or super-admin bypass).
 	ActionRepoRead Action = "repo.read"
+
+	// Phase 02-12: admin-triggered garbage collection (D-37, OPS-06).
+	// Super-admin only — falls into the same per-action table branch as
+	// ActionUploadTLSCert / ActionApplyBootstrap (super-admin returns above
+	// in step 2; everyone else gets ReasonSuperAdminRequired).
+	ActionTriggerGC Action = "gc.trigger"
 )
 
 // AllActions enumerates every Action constant in the package. Downstream
@@ -63,6 +69,7 @@ var AllActions = []Action{
 	ActionApplyBootstrap,
 	ActionManageUpstreamCreds,
 	ActionRepoRead,
+	ActionTriggerGC,
 }
 
 // Target is the object the actor is operating on.
@@ -188,7 +195,8 @@ func Can(ctx context.Context, actor Actor, action Action, target Target) (bool, 
 
 	case ActionCreateUser, ActionDeleteUser,
 		ActionCreateProject, ActionDeleteProject,
-		ActionUploadTLSCert, ActionApplyBootstrap:
+		ActionUploadTLSCert, ActionApplyBootstrap,
+		ActionTriggerGC:
 		// Only super-admins; we already returned above if actor was one.
 		return false, ReasonSuperAdminRequired
 

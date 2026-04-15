@@ -47,6 +47,38 @@ func (r *BlobUploadsRepo) Complete(ctx context.Context, digest string) error {
 	})
 }
 
+// Active returns the digests of every in-flight blob_uploads row whose
+// expires_at is still in the future. Used by the Phase 02-12 GC handler
+// (D-38 step 1) to snapshot the exclusion set BEFORE iterating GC
+// candidates — this is the SCAN-12 race-proof guarantee: any digest the
+// PUT path has already registered cannot be deleted by the same GC run.
+//
+// The reader pool is fine here: the GC handler tolerates the minor
+// snapshot staleness within the same run because the OCI PUT path
+// registers its digest BEFORE cas.PutFromPath (see 02-06 SUMMARY), so a
+// digest visible on disk at GC time is guaranteed visible in
+// blob_uploads at the moment the snapshot is taken (or it was already
+// promoted to docker_blobs and is protected by ref_count or quiescence
+// instead).
+func (r *BlobUploadsRepo) Active(ctx context.Context) ([]string, error) {
+	rows, err := r.db.Reader.QueryContext(ctx, `
+		SELECT digest FROM blob_uploads WHERE expires_at >= ?
+	`, time.Now().UTC())
+	if err != nil {
+		return nil, fmt.Errorf("blob_uploads: active: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []string
+	for rows.Next() {
+		var d string
+		if err := rows.Scan(&d); err != nil {
+			return nil, fmt.Errorf("blob_uploads: active scan: %w", err)
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
 // PruneExpired deletes every row with expires_at < now. Returns the number of
 // rows removed.
 func (r *BlobUploadsRepo) PruneExpired(ctx context.Context, now time.Time) (int, error) {

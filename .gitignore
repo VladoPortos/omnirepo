@@ -1,4 +1,10 @@
 bin/
+# Vendored conformance binaries (see test/conformance/bin/README.md). We
+# track the directory (.gitkeep) and its README but not the binaries.
+!test/conformance/bin/
+test/conformance/bin/*
+!test/conformance/bin/.gitkeep
+!test/conformance/bin/README.md
 *.test
 *.out
 .idea/

@@ -35,6 +35,14 @@ var AllPhase1EventKinds = []audit.EventKind{
 	audit.EvtUpstreamCredUsed,
 }
 
+// AllPhase2ScanEventKinds enumerates the Phase 02-09 scan event kinds.
+var AllPhase2ScanEventKinds = []audit.EventKind{
+	audit.EvtScanStarted,
+	audit.EvtScanFinished,
+	audit.EvtScanFailed,
+	audit.EvtScanGateBlocked,
+}
+
 func TestAllEventKindsDistinctAndCount(t *testing.T) {
 	if got := len(AllPhase1EventKinds); got != 23 {
 		t.Fatalf("EventKind count = %d, want 23", got)

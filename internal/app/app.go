@@ -25,6 +25,7 @@ import (
 	"github.com/dxc-internal/omnirepo/internal/metadata/migrations"
 	"github.com/dxc-internal/omnirepo/internal/protocol/oci"
 	"github.com/dxc-internal/omnirepo/internal/protocol/raw"
+	"github.com/dxc-internal/omnirepo/internal/scan"
 	"github.com/dxc-internal/omnirepo/internal/storage"
 	omrtls "github.com/dxc-internal/omnirepo/internal/tls"
 )
@@ -233,15 +234,51 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 	slog.InfoContext(ctx, "jobs.boot_recovered",
 		"sync", recovery.SyncRecovered, "scans", recovery.ScansRecovered)
 
-	// 5d. Job pools (D-14, D-16). Handler maps start empty in this plan
-	// (02-04); downstream plans 02-09 / 02-10 / 02-12 register
-	// concrete handlers before app.Run is called. Pool constructors
-	// accept the empty map — unknown-kind rows get marked 'failed' per
-	// Pool.handle so the queue is never blocked by poison jobs.
+	// 5d. Job pools (D-14, D-16). The scan pool's handler map is populated
+	// below (Plan 02-09 wiring) BEFORE the pool's dispatcher goroutine
+	// starts, so map-mutation under read concurrency is impossible. The
+	// sync pool stays empty until 02-10 (pull-external) / 02-12 (gc) wire
+	// concrete handlers.
 	syncHandlers := jobs.Handlers{}
 	scanHandlers := jobs.Handlers{}
 	syncPool := jobs.NewSyncPool(db, metadata.NewSyncJobsRepo(db), syncHandlers, cfg.Jobs)
 	scanPool := jobs.NewScanPool(db, metadata.NewScansRepo(db), scanHandlers, cfg.Jobs)
+
+	// 5e. Scan handler (Plan 02-09). Wires the FakeRunner-compatible
+	// scan.Runner (production = trivyRunner via cfg.Trivy) to the
+	// scan pool so docker + raw artifacts get scanned + SBOM'd + the
+	// severity cache invalidated post-commit.
+	blobRoot := filepath.Join(cfg.DataRoot, "blobs")
+	ociCAS := storage.NewCAS(blobRoot)
+	severityCache := scan.NewSeverityCache(cfg.Scan.SeverityCacheTTL)
+	scanRunner := scan.NewTrivyRunner(cfg.Trivy)
+	scanHandler, err := scan.NewHandler(scan.HandlerDeps{
+		DB:        db,
+		Runner:    scanRunner,
+		Scans:     metadata.NewScansRepo(db),
+		Vulns:     metadata.NewVulnerabilitiesRepo(db),
+		Manifests: metadata.NewDockerManifestsRepo(db),
+		RawFiles:  metadata.NewRawFilesRepo(db),
+		Repos:     metadata.NewReposRepo(db),
+		Projects:  metadata.NewProjectsRepo(db),
+		CAS:       ociCAS,
+		Audit:     auditLogger,
+		Cache:     severityCache,
+		DataRoot:  cfg.DataRoot,
+	})
+	if err != nil {
+		return fmt.Errorf("app.Run: scan handler: %w", err)
+	}
+	// One handler covers both kinds; Pool dispatches by JobView.Kind which
+	// for scans rows is ArtifactKind.
+	scanHandlers["docker"] = func(c context.Context, j *jobs.JobView) error {
+		return scanHandler.Handle(c, &metadata.Scan{
+			ID: j.ID, RepoID: j.RepoID, ArtifactKind: j.Kind,
+			ArtifactID: j.Payload, Attempts: j.Attempts, LeaseID: j.LeaseID,
+		})
+	}
+	scanHandlers["raw"] = scanHandlers["docker"]
+
 	go syncPool.Run(ctx)
 	go scanPool.Run(ctx)
 
@@ -278,8 +315,7 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 	if jwtTTL <= 0 {
 		jwtTTL = time.Hour
 	}
-	blobRoot := filepath.Join(cfg.DataRoot, "blobs")
-	ociCAS := storage.NewCAS(blobRoot)
+	// blobRoot + ociCAS already constructed in step 5e (scan handler wiring).
 	ociHandler := oci.New(oci.Deps{
 		DB:          db,
 		Users:       metadata.NewUsersRepo(db),

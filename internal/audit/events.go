@@ -68,4 +68,13 @@ const (
 	EvtOCIManifestUploaded EventKind = "oci.manifest.uploaded"
 	EvtOCIManifestDeleted  EventKind = "oci.manifest.deleted"
 	EvtOCITagDeleted       EventKind = "oci.tag.deleted"
+
+	// Phase 2 Plan 09 — scan pipeline (D-23..D-26, SCAN-03..08).
+	// Emitted by the scan handler (started/finished/failed) and by the
+	// severity gate middleware (gate.blocked) on a 403 deny. Best-effort:
+	// audit failure never masks scan completion.
+	EvtScanStarted     EventKind = "scan.started"
+	EvtScanFinished    EventKind = "scan.finished"
+	EvtScanFailed      EventKind = "scan.failed"
+	EvtScanGateBlocked EventKind = "scan.gate.blocked"
 )

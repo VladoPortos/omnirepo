@@ -94,8 +94,9 @@ type AuthConfig struct {
 }
 
 type ScanConfig struct {
-	AutoScanDefault bool `koanf:"auto_scan_default"`
-	DBWarnAgeDays   int  `koanf:"db_warn_age_days"`
+	AutoScanDefault   bool          `koanf:"auto_scan_default"`
+	DBWarnAgeDays     int           `koanf:"db_warn_age_days"`
+	SeverityCacheTTL  time.Duration `koanf:"severity_cache_ttl"`
 }
 
 type AirGapConfig struct {
@@ -128,8 +129,9 @@ func Defaults() Config {
 			SigV4Skew:    15 * time.Minute,
 		},
 		Scan: ScanConfig{
-			AutoScanDefault: true,
-			DBWarnAgeDays:   7,
+			AutoScanDefault:  true,
+			DBWarnAgeDays:    7,
+			SeverityCacheTTL: 30 * time.Second,
 		},
 		Trivy: Trivy{
 			BinaryPath: "/usr/local/bin/trivy",

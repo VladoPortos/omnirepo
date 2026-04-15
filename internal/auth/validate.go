@@ -1,0 +1,43 @@
+package auth
+
+import (
+	"fmt"
+	"regexp"
+
+	"github.com/dxc-internal/omnirepo/internal/httpx"
+)
+
+// ProjectNameRegex is the D-26 project-name slug: must start with [a-z0-9],
+// then up to 62 more chars from [a-z0-9._-]. Total length ≤ 63.
+var ProjectNameRegex = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,62}$`)
+
+// LoginRegex is the login-name slug: case-insensitive start char, then up to
+// 62 more chars from [a-zA-Z0-9._-]. Logins may contain uppercase; project
+// names may not.
+var LoginRegex = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,62}$`)
+
+// ProjectNameValid returns nil when name is a legal OmniRepo project slug
+// (matches ProjectNameRegex) AND does NOT collide with any reserved top-level
+// route prefix (FOUND-10). The reserved set lives in internal/httpx so router
+// and validator share one source of truth.
+func ProjectNameValid(name string) error {
+	if !ProjectNameRegex.MatchString(name) {
+		return fmt.Errorf("invalid project name %q: must match %s", name, ProjectNameRegex.String())
+	}
+	if httpx.IsReserved(name) {
+		return fmt.Errorf("invalid project name %q: reserved prefix", name)
+	}
+	return nil
+}
+
+// LoginValid returns nil when login matches LoginRegex. Reserved-prefix
+// rejection does not apply to logins — they never appear as top-level URL
+// segments. Reserved names ARE still rejected downstream by project create
+// endpoints when a login's personal project would collide, but that's a
+// handler concern.
+func LoginValid(login string) error {
+	if !LoginRegex.MatchString(login) {
+		return fmt.Errorf("invalid login %q: must match %s", login, LoginRegex.String())
+	}
+	return nil
+}

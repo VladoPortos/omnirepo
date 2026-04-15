@@ -51,4 +51,14 @@ const (
 	EvtRawPut        EventKind = "raw.put"
 	EvtRawDelete     EventKind = "raw.delete"
 	EvtRawGetBlocked EventKind = "raw.get.blocked"
+
+	// Phase 2 Plan 06 — OCI blob state-changing actions (D-03).
+	// Emitted by the /v2/<name>/blobs/... handlers as best-effort
+	// records alongside the writer tx that mutates docker_blobs /
+	// blob_upload_sessions / blob_uploads (audit.Record is invoked
+	// outside the tx so a transient NDJSON failure never masks a
+	// successful upload).
+	EvtOCIBlobUploaded EventKind = "oci.blob.uploaded"
+	EvtOCIBlobMounted  EventKind = "oci.blob.mounted"
+	EvtOCIBlobDeleted  EventKind = "oci.blob.deleted"
 )

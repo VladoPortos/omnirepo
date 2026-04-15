@@ -4,15 +4,18 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/dxc-internal/omnirepo/internal/audit"
 	"github.com/dxc-internal/omnirepo/internal/auth"
 	authmw "github.com/dxc-internal/omnirepo/internal/auth/middleware"
 	"github.com/dxc-internal/omnirepo/internal/httpx"
 	"github.com/dxc-internal/omnirepo/internal/metadata"
+	"github.com/dxc-internal/omnirepo/internal/storage"
 )
 
 // Deps bundles the subsystems the /v2 handler needs. Fields that downstream
@@ -20,14 +23,29 @@ import (
 // declared here as placeholders so their Mount wiring can land without
 // churning this constructor's shape.
 type Deps struct {
-	DB         *metadata.DB
-	Users      *metadata.UsersRepo
-	APIKeys    *metadata.APIKeysRepo
-	Repos      *metadata.ReposRepo
-	Projects   *metadata.ProjectsRepo
-	Sessions   *metadata.SessionsRepo // for BasicOrAPIKey middleware
-	HMACSecret []byte                 // 32 random bytes (D-06)
-	JWTTTL     time.Duration          // default 3600s
+	DB       *metadata.DB
+	Users    *metadata.UsersRepo
+	APIKeys  *metadata.APIKeysRepo
+	Repos    *metadata.ReposRepo
+	Projects *metadata.ProjectsRepo
+	Sessions *metadata.SessionsRepo // for BasicOrAPIKey middleware
+	Members  *metadata.MembersRepo  // for resolving project membership on /v2 actions
+
+	// Phase 02-06 dependencies. Plan 02-05 declared placeholder fields so
+	// this constructor shape does not have to change between plans;
+	// making them concrete here keeps the Handler struct the single
+	// source of truth for every wiring concern.
+	CAS          storage.CAS                      // blob content-addressed store
+	Blobs        *metadata.DockerBlobsRepo        // docker_blobs refcount table
+	BlobUploads  *metadata.BlobUploadsRepo        // blob_uploads GC-exclusion set
+	Sess         *metadata.BlobUploadSessionsRepo // blob_upload_sessions
+	Audit        audit.Logger                     // audit logger (best-effort)
+	DataRoot     string                           // /var/lib/omnirepo (tmp uploads live under it)
+	ChunkMaxBytes   int64 // per-chunk cap; default 64 MiB
+	SessionMaxBytes int64 // per-session cap; default 10 GiB
+
+	HMACSecret []byte        // 32 random bytes (D-06)
+	JWTTTL     time.Duration // default 3600s
 }
 
 // Handler serves /v2. Its public API is just New + Mount; everything else
@@ -40,8 +58,19 @@ type Handler struct {
 	repos      *metadata.ReposRepo
 	projects   *metadata.ProjectsRepo
 	sessions   *metadata.SessionsRepo
+	members    *metadata.MembersRepo
 	hmacSecret []byte
 	jwtTTL     time.Duration
+
+	// Blob wiring (02-06).
+	cas             storage.CAS
+	blobs           *metadata.DockerBlobsRepo
+	blobUploads     *metadata.BlobUploadsRepo
+	sess            *metadata.BlobUploadSessionsRepo
+	auditLogger     audit.Logger
+	dataRoot        string
+	chunkMaxBytes   int64
+	sessionMaxBytes int64
 }
 
 // New constructs a Handler from deps.
@@ -50,16 +79,40 @@ func New(d Deps) *Handler {
 	if ttl <= 0 {
 		ttl = time.Hour
 	}
-	return &Handler{
-		db:         d.DB,
-		users:      d.Users,
-		apiKeys:    d.APIKeys,
-		repos:      d.Repos,
-		projects:   d.Projects,
-		sessions:   d.Sessions,
-		hmacSecret: d.HMACSecret,
-		jwtTTL:     ttl,
+	chunk := d.ChunkMaxBytes
+	if chunk <= 0 {
+		chunk = 64 << 20 // 64 MiB
 	}
+	sess := d.SessionMaxBytes
+	if sess <= 0 {
+		sess = 10 << 30 // 10 GiB
+	}
+	return &Handler{
+		db:              d.DB,
+		users:           d.Users,
+		apiKeys:         d.APIKeys,
+		repos:           d.Repos,
+		projects:        d.Projects,
+		sessions:        d.Sessions,
+		members:         d.Members,
+		hmacSecret:      d.HMACSecret,
+		jwtTTL:          ttl,
+		cas:             d.CAS,
+		blobs:           d.Blobs,
+		blobUploads:     d.BlobUploads,
+		sess:            d.Sess,
+		auditLogger:     d.Audit,
+		dataRoot:        d.DataRoot,
+		chunkMaxBytes:   chunk,
+		sessionMaxBytes: sess,
+	}
+}
+
+// uploadTmpPath returns the tmp file path for a given blob upload session
+// UUID. Lives under <dataRoot>/tmp/uploads/<uuid> so it sits on the same
+// filesystem as the CAS tree and os.Rename between them is atomic.
+func (h *Handler) uploadTmpPath(uuid string) string {
+	return filepath.Join(h.dataRoot, "tmp", "uploads", uuid)
 }
 
 // Mount registers the /v2 subrouter on parent. Layout (plan 02-05):
@@ -89,9 +142,29 @@ func (h *Handler) Mount(parent chi.Router) {
 		r.Group(func(r chi.Router) {
 			r.Use(httpx.AnonymousReadOK(h.lookupRepoPublicRead, h.extractRepoFromV2URL, attachAnonymous))
 			r.Use(h.VerifyBearer)
-			// Placeholder so the subrouter is not empty; 02-06/02-07
-			// will register real /_catalog + /<name>/... routes.
+
+			// /_catalog placeholder stays until 02-07 replaces it with
+			// the real project-scoped catalog listing.
 			r.Get("/_catalog", h.notImplementedYet)
+
+			// Blob routes (02-06). The name parameter is a full
+			// <project>/<type>/<repo> triple per the 02-05 URL
+			// convention; the handlers validate it into that triple
+			// and resolve the repo via FindByTriple.
+			//
+			// chi's {name:[^{}]+} would match any non-brace run, but
+			// it does not greedily consume past the next static
+			// segment. To route URLs like
+			//     /v2/<project>/<type>/<repo>/blobs/uploads/<uuid>
+			// we use three typed params project/type/repo and let the
+			// handlers re-assemble them.
+			r.Post("/{project}/{type}/{repo}/blobs/uploads/", h.blobPostDispatch)
+			r.Patch("/{project}/{type}/{repo}/blobs/uploads/{uuid}", h.blobUploadPatch)
+			r.Put("/{project}/{type}/{repo}/blobs/uploads/{uuid}", h.blobUploadPut)
+			r.Get("/{project}/{type}/{repo}/blobs/uploads/{uuid}", h.blobUploadStatus)
+			r.Get("/{project}/{type}/{repo}/blobs/{digest}", h.blobGet)
+			r.Head("/{project}/{type}/{repo}/blobs/{digest}", h.blobHead)
+			r.Delete("/{project}/{type}/{repo}/blobs/{digest}", h.blobDelete)
 		})
 	})
 }

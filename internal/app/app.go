@@ -278,15 +278,24 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 	if jwtTTL <= 0 {
 		jwtTTL = time.Hour
 	}
+	blobRoot := filepath.Join(cfg.DataRoot, "blobs")
+	ociCAS := storage.NewCAS(blobRoot)
 	ociHandler := oci.New(oci.Deps{
-		DB:         db,
-		Users:      metadata.NewUsersRepo(db),
-		APIKeys:    metadata.NewAPIKeysRepo(db),
-		Repos:      metadata.NewReposRepo(db),
-		Projects:   metadata.NewProjectsRepo(db),
-		Sessions:   metadata.NewSessionsRepo(db),
-		HMACSecret: dockerJWTSecret,
-		JWTTTL:     jwtTTL,
+		DB:          db,
+		Users:       metadata.NewUsersRepo(db),
+		APIKeys:     metadata.NewAPIKeysRepo(db),
+		Repos:       metadata.NewReposRepo(db),
+		Projects:    metadata.NewProjectsRepo(db),
+		Sessions:    metadata.NewSessionsRepo(db),
+		Members:     metadata.NewMembersRepo(db),
+		CAS:         ociCAS,
+		Blobs:       metadata.NewDockerBlobsRepo(db),
+		BlobUploads: metadata.NewBlobUploadsRepo(db),
+		Sess:        metadata.NewBlobUploadSessionsRepo(db),
+		Audit:       auditLogger,
+		DataRoot:    cfg.DataRoot,
+		HMACSecret:  dockerJWTSecret,
+		JWTTTL:      jwtTTL,
 	})
 	ociHandler.Mount(router)
 

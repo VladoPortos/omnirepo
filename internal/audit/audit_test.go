@@ -209,6 +209,9 @@ func TestEveryStateChangingActionEmitsEvent(t *testing.T) {
 		audit.EvtUpstreamCredUpdated,
 		audit.EvtUpstreamCredDeleted,
 		audit.EvtUpstreamCredUsed,
+		audit.EvtOCIBlobUploaded,
+		audit.EvtOCIBlobMounted,
+		audit.EvtOCIBlobDeleted,
 	}
 	for _, k := range kinds {
 		if err := l.Record(ctx, audit.Event{Kind: k, Outcome: "ok"}); err != nil {

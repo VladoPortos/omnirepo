@@ -47,6 +47,18 @@ import (
 // sha256HexLen is 64 hex chars for a sha256:<hex> digest.
 const sha256HexLen = 64
 
+// isUploadUUID reports whether s is a syntactically valid UUID. Defense in
+// depth (WR-02): chi's {uuid} regex defaults to a greedy [^/]+ match, so
+// callers that interpolate the URL param into filesystem paths must reject
+// malformed values explicitly before touching the session table or disk.
+// sess.Lookup also defends (an attacker cannot forge a session row), but
+// rejecting early surfaces a clean BLOB_UPLOAD_INVALID instead of relying
+// on downstream layers to notice.
+func isUploadUUID(s string) bool {
+	_, err := uuid.Parse(s)
+	return err == nil
+}
+
 // resolvedRepo bundles what every blob handler needs after resolving the
 // URL-encoded (project, type, repo) triple.
 type resolvedRepo struct {
@@ -226,6 +238,11 @@ func (h *Handler) blobUploadPatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u := chi.URLParam(r, "uuid")
+	if !isUploadUUID(u) {
+		writeOCIErr(w, http.StatusBadRequest, ErrCodeBlobUploadInvalid,
+			errors.New("malformed upload uuid"))
+		return
+	}
 	sess, err := h.sess.Lookup(r.Context(), u)
 	if err != nil {
 		writeOCIErr(w, http.StatusInternalServerError, ErrCodeUnknown, err)
@@ -289,6 +306,11 @@ func (h *Handler) blobUploadPut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u := chi.URLParam(r, "uuid")
+	if !isUploadUUID(u) {
+		writeOCIErr(w, http.StatusBadRequest, ErrCodeBlobUploadInvalid,
+			errors.New("malformed upload uuid"))
+		return
+	}
 	sess, err := h.sess.Lookup(r.Context(), u)
 	if err != nil {
 		writeOCIErr(w, http.StatusInternalServerError, ErrCodeUnknown, err)
@@ -491,6 +513,11 @@ func (h *Handler) blobUploadStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u := chi.URLParam(r, "uuid")
+	if !isUploadUUID(u) {
+		writeOCIErr(w, http.StatusBadRequest, ErrCodeBlobUploadInvalid,
+			errors.New("malformed upload uuid"))
+		return
+	}
 	sess, err := h.sess.Lookup(r.Context(), u)
 	if err != nil {
 		writeOCIErr(w, http.StatusInternalServerError, ErrCodeUnknown, err)

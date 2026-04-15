@@ -21,6 +21,9 @@ const (
 	ErrCodeNameInvalid      = "NAME_INVALID"
 	ErrCodeSizeInvalid      = "SIZE_INVALID"
 	ErrCodeTagInvalid       = "TAG_INVALID"
+	// ErrCodeBlobUploadInvalid is returned when a client-supplied upload
+	// session identifier is malformed (e.g., not a UUID; WR-02).
+	ErrCodeBlobUploadInvalid = "BLOB_UPLOAD_INVALID"
 )
 
 // ociError mirrors the spec envelope.

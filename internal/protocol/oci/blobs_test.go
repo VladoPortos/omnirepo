@@ -922,3 +922,70 @@ func containsStr(s []string, want string) bool {
 	}
 	return false
 }
+
+// TestBlobUpload_MalformedUUIDRejected is the WR-02 regression. chi's default
+// {uuid} regex is a greedy [^/]+ match, so without the isUploadUUID check any
+// non-UUID string (including traversal-flavored payloads) gets interpolated
+// into filesystem paths. The handler must reject malformed UUIDs with 400
+// BLOB_UPLOAD_INVALID before touching sess.Lookup or the tmp path.
+func TestBlobUpload_MalformedUUIDRejected(t *testing.T) {
+	f := newBlobFixture(t)
+
+	// Sanity: a real POST yields a valid UUID Location.
+	postReq, _ := http.NewRequest("POST", f.srv.URL+"/v2/"+f.repoPath+"/blobs/uploads/", nil)
+	postResp, err := http.DefaultClient.Do(f.authed(postReq))
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	postResp.Body.Close()
+
+	// Traversal-flavored strings that survive chi's URL normalization land
+	// as the {uuid} chi param — not a UUID, must be rejected.
+	malformed := []string{
+		"not-a-uuid",
+		"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee-toolong",
+		"xx",
+		"%2E%2E", // encoded ".." — chi leaves as-is in a single segment
+	}
+	for _, bad := range malformed {
+		url := f.srv.URL + "/v2/" + f.repoPath + "/blobs/uploads/" + bad
+
+		// PATCH
+		patchReq, _ := http.NewRequest("PATCH", url, bytes.NewReader([]byte("x")))
+		patchResp, err := http.DefaultClient.Do(f.authed(patchReq))
+		if err != nil {
+			t.Fatalf("PATCH %q: %v", bad, err)
+		}
+		body, _ := io.ReadAll(patchResp.Body)
+		patchResp.Body.Close()
+		if patchResp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("PATCH %q status=%d want 400 body=%s", bad, patchResp.StatusCode, body)
+		}
+		if !strings.Contains(string(body), "BLOB_UPLOAD_INVALID") {
+			t.Fatalf("PATCH %q body missing BLOB_UPLOAD_INVALID: %s", bad, body)
+		}
+
+		// PUT
+		putReq, _ := http.NewRequest("PUT", url+"?digest=sha256:"+strings.Repeat("a", 64), nil)
+		putResp, err := http.DefaultClient.Do(f.authed(putReq))
+		if err != nil {
+			t.Fatalf("PUT %q: %v", bad, err)
+		}
+		body, _ = io.ReadAll(putResp.Body)
+		putResp.Body.Close()
+		if putResp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("PUT %q status=%d want 400 body=%s", bad, putResp.StatusCode, body)
+		}
+
+		// GET status
+		getReq, _ := http.NewRequest("GET", url, nil)
+		getResp, err := http.DefaultClient.Do(f.authed(getReq))
+		if err != nil {
+			t.Fatalf("GET %q: %v", bad, err)
+		}
+		getResp.Body.Close()
+		if getResp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("GET status %q status=%d want 400", bad, getResp.StatusCode)
+		}
+	}
+}

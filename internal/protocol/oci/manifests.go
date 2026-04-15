@@ -443,7 +443,16 @@ func (h *Handler) manifestDelete(w http.ResponseWriter, r *http.Request) {
 			fmt.Errorf("manifest %s not found", targetDigest))
 		return
 	}
-	refs, isIndex, _ := manifestRefs(m.Body)
+	// WR-04: a parse failure here used to be swallowed, leaving refs=nil
+	// and dropping the ref-decrement step entirely — orphaning blobs so GC
+	// could never reclaim them. Fail the DELETE with MANIFEST_INVALID so
+	// the caller knows the stored body is broken and must be manually
+	// remediated rather than silently leaking bytes.
+	refs, isIndex, refsErr := manifestRefs(m.Body)
+	if refsErr != nil {
+		writeOCIErr(w, http.StatusBadRequest, ErrCodeManifestInvalid, refsErr)
+		return
+	}
 
 	err = h.db.WriteTx(ctx, func(tx *sql.Tx) error {
 		if tagForm {

@@ -121,10 +121,18 @@ func (h *Handler) tagDelete(w http.ResponseWriter, r *http.Request) {
 		writeOCIErr(w, http.StatusInternalServerError, ErrCodeUnknown, err)
 		return
 	}
+	// WR-04: same class as manifestDelete. A malformed stored body must
+	// fail the DELETE with MANIFEST_INVALID so ref-counts stay consistent
+	// rather than silently skipping the decrement step.
 	var refs []string
 	var isIndex bool
 	if m != nil {
-		refs, isIndex, _ = manifestRefs(m.Body)
+		var refsErr error
+		refs, isIndex, refsErr = manifestRefs(m.Body)
+		if refsErr != nil {
+			writeOCIErr(w, http.StatusBadRequest, ErrCodeManifestInvalid, refsErr)
+			return
+		}
 	}
 
 	err = h.db.WriteTx(ctx, func(tx *sql.Tx) error {

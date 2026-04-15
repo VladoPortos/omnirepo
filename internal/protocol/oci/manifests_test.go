@@ -457,6 +457,42 @@ func TestManifestPutEmitsAuditEvent(t *testing.T) {
 	}
 }
 
+// TestManifestDelete_MalformedBodyRejected is the WR-04 regression. If a
+// manifest's stored body has become unparseable (corruption, migration bug),
+// the previous code silently ignored the parse error, ran zero ref
+// decrements, and deleted the manifest row — orphaning blobs with inflated
+// ref_counts that GC could never reclaim. The fix must return
+// MANIFEST_INVALID and leave the row intact.
+func TestManifestDelete_MalformedBodyRejected(t *testing.T) {
+	f := newManifestFixture(t, false)
+	// Seed a manifest row with malformed body bytes directly via the repo.
+	// We skip the PUT path because that would reject the bad JSON upfront.
+	garbage := []byte("this is not json at all {{{")
+	sum := sha256.Sum256(garbage)
+	digest := "sha256:" + hex.EncodeToString(sum[:])
+	if err := f.db.WriteTx(context.Background(), func(tx *sql.Tx) error {
+		return f.manifests.Insert(context.Background(), tx, f.repoID, digest,
+			oci.MediaTypeOCIManifest, garbage)
+	}); err != nil {
+		t.Fatalf("seed malformed manifest: %v", err)
+	}
+
+	resp := f.deleteManifest(digest)
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("delete malformed: status=%d want 400 body=%s", resp.StatusCode, body)
+	}
+	if !strings.Contains(string(body), "MANIFEST_INVALID") {
+		t.Fatalf("body missing MANIFEST_INVALID: %s", body)
+	}
+	// Row MUST still be there — the DELETE aborted before tx open.
+	m, err := f.manifests.GetByDigest(context.Background(), f.repoID, digest)
+	if err != nil || m == nil {
+		t.Fatalf("manifest row gone after failed delete (err=%v m=%+v) — silent loss!", err, m)
+	}
+}
+
 // TestManifestPutDigestRefMismatch : URL digest != body sha256 → 400.
 func TestManifestPutDigestRefMismatch(t *testing.T) {
 	f := newManifestFixture(t, false)

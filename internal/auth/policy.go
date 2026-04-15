@@ -22,6 +22,8 @@ const (
 	ActionRemoveProjectMember Action = "project.member.remove"
 	ActionCreateRepo          Action = "repo.create"
 	ActionDeleteRepo          Action = "repo.delete"
+	ActionUpdateRepo          Action = "repo.update"
+	ActionWipeRepo            Action = "repo.wipe"
 	ActionUploadTLSCert       Action = "tls.upload"
 	ActionApplyBootstrap      Action = "bootstrap.apply"
 
@@ -55,6 +57,8 @@ var AllActions = []Action{
 	ActionRemoveProjectMember,
 	ActionCreateRepo,
 	ActionDeleteRepo,
+	ActionUpdateRepo,
+	ActionWipeRepo,
 	ActionUploadTLSCert,
 	ActionApplyBootstrap,
 	ActionManageUpstreamCreds,
@@ -189,6 +193,7 @@ func Can(ctx context.Context, actor Actor, action Action, target Target) (bool, 
 		return false, ReasonSuperAdminRequired
 
 	case ActionCreateRepo, ActionDeleteRepo,
+		ActionUpdateRepo, ActionWipeRepo,
 		ActionAddProjectMember, ActionRemoveProjectMember,
 		ActionManageUpstreamCreds:
 		if target.ProjectID != 0 && isMemberOfProject(ctx, target.ProjectID) {

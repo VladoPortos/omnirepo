@@ -144,6 +144,11 @@ func Mount(r chi.Router, d Deps) {
 				Post("/projects/{name}/repos", d.handleCreateRepo)
 			r.With(authmw.RequireCanWith(auth.ActionDeleteRepo, d.resolveProjectTargetFromURL)).
 				Delete("/projects/{name}/repos/{type}/{repo}", d.handleDeleteRepo)
+			// Phase 02-11: PATCH settings + POST /wipe (REPO-05, REPO-07, D-34, D-35).
+			r.With(authmw.RequireCanWith(auth.ActionUpdateRepo, d.resolveProjectTargetFromURL)).
+				Patch("/projects/{name}/repos/{type}/{repo}", d.handlePatchRepo)
+			r.With(authmw.RequireCanWith(auth.ActionWipeRepo, d.resolveProjectTargetFromURL)).
+				Post("/projects/{name}/repos/{type}/{repo}/wipe", d.handleWipeRepo)
 
 			// Phase 02-02: upstream creds CRUD. Handlers re-check project
 			// membership inline (ActionManageUpstreamCreds) so route-level

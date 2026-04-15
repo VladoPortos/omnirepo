@@ -3,8 +3,10 @@ package app
 import (
 	"context"
 	stdtls "crypto/tls"
+	"encoding/base64"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -15,12 +17,61 @@ import (
 	"github.com/dxc-internal/omnirepo/internal/api"
 	"github.com/dxc-internal/omnirepo/internal/audit"
 	"github.com/dxc-internal/omnirepo/internal/config"
+	omrcrypto "github.com/dxc-internal/omnirepo/internal/crypto"
 	"github.com/dxc-internal/omnirepo/internal/httpx"
 	"github.com/dxc-internal/omnirepo/internal/metadata"
 	"github.com/dxc-internal/omnirepo/internal/metadata/migrations"
 	"github.com/dxc-internal/omnirepo/internal/storage"
 	omrtls "github.com/dxc-internal/omnirepo/internal/tls"
 )
+
+// upstreamCredsAEADKeySetting is the settings-table key under which the
+// per-install AES-GCM-256 master key is stored, base64-encoded. Generated
+// on first boot; reused forever after.
+const upstreamCredsAEADKeySetting = "upstream_creds_aead_key"
+
+// BootEnsureAEADKey materializes the per-install upstream_creds AES-GCM key
+// on first boot. Subsequent boots load the existing key. The key bytes never
+// appear in logs — only length is logged.
+//
+// Exported so tests can drive the same boot path without calling the full
+// Run orchestrator.
+func BootEnsureAEADKey(ctx context.Context, db *metadata.DB, settings *metadata.SettingsRepo) (*omrcrypto.AEAD, error) {
+	existing, err := settings.Get(ctx, upstreamCredsAEADKeySetting)
+	if err == nil && existing != "" {
+		raw, derr := base64.StdEncoding.DecodeString(existing)
+		if derr != nil {
+			return nil, fmt.Errorf("app: decode existing aead key: %w", derr)
+		}
+		if len(raw) != omrcrypto.KeySize {
+			return nil, fmt.Errorf("app: existing aead key wrong size: got %d bytes", len(raw))
+		}
+		a, nerr := omrcrypto.New(raw)
+		if nerr != nil {
+			return nil, fmt.Errorf("app: construct aead from existing key: %w", nerr)
+		}
+		slog.InfoContext(ctx, "aead.key.loaded", "len", len(raw))
+		return a, nil
+	}
+	if err != nil && !errors.Is(err, metadata.ErrNotFound) {
+		return nil, fmt.Errorf("app: load aead key: %w", err)
+	}
+
+	key, err := omrcrypto.GenerateKey()
+	if err != nil {
+		return nil, fmt.Errorf("app: generate aead key: %w", err)
+	}
+	encoded := base64.StdEncoding.EncodeToString(key)
+	if err := settings.Set(ctx, upstreamCredsAEADKeySetting, encoded); err != nil {
+		return nil, fmt.Errorf("app: persist aead key: %w", err)
+	}
+	a, err := omrcrypto.New(key)
+	if err != nil {
+		return nil, fmt.Errorf("app: construct aead from generated key: %w", err)
+	}
+	slog.InfoContext(ctx, "aead.key.generated", "len", len(key))
+	return a, nil
+}
 
 // RunOptions tunes how Run binds its listeners. The zero value uses the
 // ports from cfg.Server directly. Tests use HTTPListener/HTTPSListener to
@@ -110,6 +161,13 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 	auditLogger, err := audit.New(db, auditPath, cfg.Log.AuditMaxSizeMiB, cfg.Log.AuditKeep)
 	if err != nil {
 		return fmt.Errorf("app.Run: audit: %w", err)
+	}
+
+	// 5b. Upstream-creds AEAD master key (Phase 02-02 D-10). Auto-generated
+	// on first boot; loaded thereafter. The actual AEAD handle is consumed
+	// by UpstreamCredsRepo when Phase 02-10 wires pull-external.
+	if _, err := BootEnsureAEADKey(ctx, db, metadata.NewSettingsRepo(db)); err != nil {
+		return fmt.Errorf("app.Run: aead key: %w", err)
 	}
 
 	// 6. Router with global middleware + system routes + API.

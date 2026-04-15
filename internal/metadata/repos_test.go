@@ -227,9 +227,10 @@ func TestReposRepo_WipeDocker_SharedBlobsSurvive(t *testing.T) {
 		if err := blobs.UpsertZeroRef(ctx, tx, r1only, 200); err != nil {
 			return err
 		}
-		// Manifest M1 in r1 references both blobs (two incs on shared+r1only).
-		body := []byte(`{"m":1}`)
-		if err := manis.Insert(ctx, tx, r1id, "sha256:m1", "application/vnd.oci.image.manifest.v1+json", body); err != nil {
+		// Manifest M1 in r1 references both blobs (body embeds both digests
+		// so WipeDocker's extractor can rediscover them).
+		body1 := []byte(`{"schemaVersion":2,"config":{"digest":"` + shared + `"},"layers":[{"digest":"` + r1only + `"}]}`)
+		if err := manis.Insert(ctx, tx, r1id, "sha256:m1", "application/vnd.oci.image.manifest.v1+json", body1); err != nil {
 			return err
 		}
 		if err := blobs.IncRef(ctx, tx, shared); err != nil {
@@ -243,7 +244,8 @@ func TestReposRepo_WipeDocker_SharedBlobsSurvive(t *testing.T) {
 			return err
 		}
 		// Manifest M2 in r2 references shared only.
-		if err := manis.Insert(ctx, tx, r2id, "sha256:m2", "application/vnd.oci.image.manifest.v1+json", []byte(`{"m":2}`)); err != nil {
+		body2 := []byte(`{"schemaVersion":2,"config":{"digest":"` + shared + `"},"layers":[]}`)
+		if err := manis.Insert(ctx, tx, r2id, "sha256:m2", "application/vnd.oci.image.manifest.v1+json", body2); err != nil {
 			return err
 		}
 		if err := blobs.IncRef(ctx, tx, shared); err != nil {

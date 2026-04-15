@@ -19,5 +19,4 @@ import (
 	_ "github.com/knadh/koanf/providers/file"
 	_ "github.com/knadh/koanf/providers/structs"
 	_ "github.com/knadh/koanf/v2"
-	_ "modernc.org/sqlite"
 )

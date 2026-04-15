@@ -389,9 +389,17 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 	// 6c. Admin + user REST at /api/v1. Mounted AFTER ociHandler so the
 	// OCIActions bundle can reference handlers that depend on it.
 	signingKeysRepo := metadata.NewSigningKeysRepo(db, aead)
+	aptSuitesRepo := metadata.NewAptSuitesRepo(db)
+	// Composed repo-create hook: RPM (signing key for type ∈ {rpm, deb}) +
+	// DEB (default apt_suites matrix for type = deb). Both run inside the
+	// same writer tx as the repos INSERT so a failure in either rolls back
+	// the repo row (T-03-05 atomicity).
 	rpmRepoCreateHook := func(ctx context.Context, tx *sql.Tx, repoID int64, repoType, projectName, repoName string) (map[string]any, error) {
 		fp, err := CreateRPMRepoHook(ctx, tx, repoID, repoType, projectName, repoName, signingKeysRepo, cfg.Signing.GPGKeyBits, nil)
 		if err != nil {
+			return nil, err
+		}
+		if err := CreateDEBRepoHook(ctx, tx, repoID, repoType, aptSuitesRepo); err != nil {
 			return nil, err
 		}
 		if fp == "" {
@@ -506,6 +514,19 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 		locks:       sharedLocks,
 	}.wireRPM(router)
 	defer shutdownRPMRegistry(context.Background(), rpmRegistry)
+
+	// 6g. Phase 03 Plan 05: DEB handler + per-repo regen coalescer registry.
+	// Shares signingKeysRepo + sharedLocks with RPM so the repo-create hook
+	// composition (RPM signing-key + DEB apt_suites matrix) stays consistent
+	// with what the handlers/regen factories read.
+	debRegistry := debDeps{
+		cfg:         cfg,
+		db:          db,
+		auditLogger: auditLogger,
+		signingKeys: signingKeysRepo,
+		locks:       sharedLocks,
+	}.wireDEB(router)
+	defer shutdownDEBRegistry(context.Background(), debRegistry)
 
 	// 7. Listeners.
 	httpLn := opts.HTTPListener

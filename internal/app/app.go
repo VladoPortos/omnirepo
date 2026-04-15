@@ -457,6 +457,18 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 	})
 	rawHandler.Mount(router)
 
+	// 6d. Phase 03 Plan 02: Helm chart-repository handler + per-repo regen
+	// coalescer registry. wireHelm constructs the coalescer registry (with
+	// the helm.RegenFor factory, stubbed in Plan 03-02 Task 1 and filled in
+	// by Task 2) and mounts the /{project}/helm/{repo}/... routes.
+	helmRegistry := helmDeps{
+		cfg:         cfg,
+		db:          db,
+		auditLogger: auditLogger,
+		locks:       storage.NewLocks(),
+	}.wireHelm(router)
+	defer shutdownHelmRegistry(context.Background(), helmRegistry)
+
 	// 7. Listeners.
 	httpLn := opts.HTTPListener
 	if httpLn == nil {

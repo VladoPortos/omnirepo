@@ -1,0 +1,122 @@
+package helm
+
+import (
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+
+	"github.com/dxc-internal/omnirepo/internal/audit"
+)
+
+// getIndex serves GET /<project>/helm/<repo>/index.yaml. The file is written
+// to disk by the regen coalescer (regen.go) via atomic rename; this handler
+// serves the current on-disk bytes lock-free.
+func (h *Handler) getIndex(w http.ResponseWriter, r *http.Request) {
+	res, ok := h.resolveRepo(w, r, false)
+	if !ok {
+		return
+	}
+	if !h.actorCanRead(r, res.repo) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+
+	abs := filepath.Join(h.repoRoot, res.project.Name, "helm", res.repo.Name, "index.yaml")
+	info, err := os.Stat(abs)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			// Serve an empty Helm index so `helm repo add` succeeds against
+			// a fresh repo with no charts yet. Matches the helm SDK's
+			// NewIndexFile output shape.
+			empty := "apiVersion: v1\nentries: {}\n"
+			w.Header().Set("Content-Type", "application/yaml")
+			w.Header().Set("Content-Length", strconv.Itoa(len(empty)))
+			w.WriteHeader(http.StatusOK)
+			_, _ = io.WriteString(w, empty)
+			return
+		}
+		http.Error(w, fmt.Sprintf("stat: %v", err), http.StatusInternalServerError)
+		return
+	}
+	f, err := os.Open(abs)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("open: %v", err), http.StatusInternalServerError)
+		return
+	}
+	defer func() { _ = f.Close() }()
+	w.Header().Set("Content-Type", "application/yaml")
+	w.Header().Set("Content-Length", strconv.FormatInt(info.Size(), 10))
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.Copy(w, f)
+}
+
+// get serves GET /<project>/helm/<repo>/charts/<filename>. Chart .tgz files
+// pass through the severity gate; .prov files and index files do not (they
+// carry no executable content).
+func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
+	res, ok := h.resolveRepo(w, r, true)
+	if !ok {
+		return
+	}
+	if !h.actorCanRead(r, res.repo) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+
+	abs := filepath.Join(h.repoRoot, filepath.FromSlash(
+		storageKeyFor(res.project.Name, res.repo.Name, res.filename),
+	))
+	info, err := os.Stat(abs)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, fmt.Sprintf("stat: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Severity gate: chart archives only (T-03-02-04 scope).
+	if h.severityGate != nil && isChartArchive(res.filename) {
+		blocked, severity, scanID := h.severityGate(r.Context(), res.repo.ID, "helm", res.filename)
+		if blocked {
+			h.auditEvent(r, audit.EvtHelmUpload, res.filename, "blocked", map[string]any{
+				"severity": severity,
+				"scan_id":  scanID,
+			})
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(http.StatusForbidden)
+			fmt.Fprintf(w, `{"error":"blocked_by_scan","severity":%q,"scan_id":%d}`, severity, scanID)
+			return
+		}
+	}
+
+	f, err := os.Open(abs)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("open: %v", err), http.StatusInternalServerError)
+		return
+	}
+	defer func() { _ = f.Close() }()
+
+	ct := contentTypeFor(res.filename)
+	w.Header().Set("Content-Type", ct)
+	w.Header().Set("Content-Length", strconv.FormatInt(info.Size(), 10))
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.Copy(w, f)
+}
+
+// contentTypeFor returns the MIME type for a chart or provenance filename.
+func contentTypeFor(filename string) string {
+	if strings.HasSuffix(filename, ".prov") {
+		return "application/pgp-signature"
+	}
+	if strings.HasSuffix(filename, ".tgz") {
+		return "application/gzip"
+	}
+	return "application/octet-stream"
+}

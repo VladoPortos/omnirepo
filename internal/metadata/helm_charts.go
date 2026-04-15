@@ -96,6 +96,12 @@ func (r *HelmChartsRepo) FindByDigest(ctx context.Context, repoID int64, digest 
 	return r.scanOne(ctx, `repo_id=? AND digest=?`, repoID, digest)
 }
 
+// FindByFilename returns the row matching filename inside repoID. Used by the
+// Helm handler's DELETE path (filename is the stable URL key for charts).
+func (r *HelmChartsRepo) FindByFilename(ctx context.Context, repoID int64, filename string) (*HelmChart, error) {
+	return r.scanOne(ctx, `repo_id=? AND filename=?`, repoID, filename)
+}
+
 // ListByRepo returns every chart row for repoID, ordered by name then
 // semver descending (approximated via string DESC; index.yaml regen is
 // the canonical ordering — this is only used for stable listings).

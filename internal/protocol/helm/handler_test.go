@@ -38,6 +38,7 @@ type fixture struct {
 	projects *metadata.ProjectsRepo
 	charts   *metadata.HelmChartsRepo
 	scans    *metadata.ScansRepo
+	auditLog audit.Logger
 	srv      *httptest.Server
 	dataRoot string
 	repoRoot string
@@ -107,6 +108,7 @@ func newFixture(t *testing.T) *fixture {
 		projects: projects,
 		charts:   charts,
 		scans:    scans,
+		auditLog: auditLogger,
 		dataRoot: dataRoot,
 		repoRoot: repoRoot,
 		login:    login,

@@ -1,1 +1,9 @@
+bin/
+*.test
+*.out
+.idea/
+/var/lib/omnirepo/
+coverage.txt
 .planning/
+.playwright-mcp/
+.remember/

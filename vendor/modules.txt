@@ -43,6 +43,9 @@ github.com/ProtonMail/go-crypto/openpgp/x448
 # github.com/blang/semver/v4 v4.0.0
 ## explicit; go 1.14
 github.com/blang/semver/v4
+# github.com/cavaliergopher/rpm v1.3.0
+## explicit; go 1.17
+github.com/cavaliergopher/rpm
 # github.com/chai2010/gettext-go v1.0.2
 ## explicit; go 1.14
 github.com/chai2010/gettext-go

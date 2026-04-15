@@ -36,8 +36,17 @@ type Config struct {
 	Bootstrap BootstrapConfig `koanf:"bootstrap"`
 	Auth      AuthConfig      `koanf:"auth"`
 	Scan      ScanConfig      `koanf:"scan"`
+	Trivy     Trivy           `koanf:"trivy"`
 	AirGap    AirGapConfig    `koanf:"air_gap"`
 	Log       LogConfig       `koanf:"log"`
+}
+
+// Trivy holds subprocess driver paths (D-44). Runtime air-gap is enforced in
+// internal/scan; these are just file locations.
+type Trivy struct {
+	BinaryPath string `koanf:"binary_path"`
+	DBPath     string `koanf:"db_path"`
+	CachePath  string `koanf:"cache_path"`
 }
 
 type ServerConfig struct {
@@ -99,6 +108,11 @@ func Defaults() Config {
 		Scan: ScanConfig{
 			AutoScanDefault: true,
 			DBWarnAgeDays:   7,
+		},
+		Trivy: Trivy{
+			BinaryPath: "/usr/local/bin/trivy",
+			DBPath:     "/var/lib/omnirepo/trivy/db",
+			CachePath:  "/var/lib/omnirepo/trivy/cache",
 		},
 		AirGap: AirGapConfig{
 			AllowExternalActions: true,

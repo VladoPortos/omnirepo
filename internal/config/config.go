@@ -38,6 +38,7 @@ type Config struct {
 	Scan      ScanConfig      `koanf:"scan"`
 	Trivy     Trivy           `koanf:"trivy"`
 	Jobs      Jobs            `koanf:"jobs"`
+	Docker    Docker          `koanf:"docker"`
 	AirGap    AirGapConfig    `koanf:"air_gap"`
 	Log       LogConfig       `koanf:"log"`
 }
@@ -59,6 +60,15 @@ type Jobs struct {
 	ScanWorkers          int           `koanf:"scan_workers"`
 	PollInterval         time.Duration `koanf:"poll_interval"`
 	ShutdownGraceSeconds int           `koanf:"shutdown_grace_seconds"`
+}
+
+// Docker carries the Phase 02-05 OCI/Docker knobs:
+//   - JWTTTLSeconds: /v2/token Bearer lifetime (D-06). Default 3600.
+//   - UploadSessionTTLSeconds: chunked-blob-upload session lifetime used by
+//     Phase 02-06. Default 3600.
+type Docker struct {
+	JWTTTLSeconds           int `koanf:"jwt_ttl_seconds"`
+	UploadSessionTTLSeconds int `koanf:"upload_session_ttl_seconds"`
 }
 
 type ServerConfig struct {
@@ -131,6 +141,10 @@ func Defaults() Config {
 			ScanWorkers:          2,
 			PollInterval:         2 * time.Second,
 			ShutdownGraceSeconds: 30,
+		},
+		Docker: Docker{
+			JWTTTLSeconds:           3600,
+			UploadSessionTTLSeconds: 3600,
 		},
 		AirGap: AirGapConfig{
 			AllowExternalActions: true,

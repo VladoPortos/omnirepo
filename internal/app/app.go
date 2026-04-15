@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	cryptorand "crypto/rand"
 	stdtls "crypto/tls"
 	"encoding/base64"
 	"errors"
@@ -22,6 +23,7 @@ import (
 	"github.com/dxc-internal/omnirepo/internal/jobs"
 	"github.com/dxc-internal/omnirepo/internal/metadata"
 	"github.com/dxc-internal/omnirepo/internal/metadata/migrations"
+	"github.com/dxc-internal/omnirepo/internal/protocol/oci"
 	"github.com/dxc-internal/omnirepo/internal/storage"
 	omrtls "github.com/dxc-internal/omnirepo/internal/tls"
 )
@@ -30,6 +32,16 @@ import (
 // per-install AES-GCM-256 master key is stored, base64-encoded. Generated
 // on first boot; reused forever after.
 const upstreamCredsAEADKeySetting = "upstream_creds_aead_key"
+
+// dockerTokenHMACSecretSetting is the settings-table key for the 32-byte
+// random HMAC secret used to sign /v2/token JWTs (D-06). Stored
+// base64-encoded so the TEXT-valued settings column round-trips safely.
+// Generated on first boot; reused forever after. Never logged.
+const dockerTokenHMACSecretSetting = "docker_token_hmac_secret"
+
+// dockerTokenHMACSecretSize is the required length of the JWT HMAC secret.
+// 32 bytes == 256 bits == HS256 full-strength key.
+const dockerTokenHMACSecretSize = 32
 
 // BootEnsureAEADKey materializes the per-install upstream_creds AES-GCM key
 // on first boot. Subsequent boots load the existing key. The key bytes never
@@ -72,6 +84,42 @@ func BootEnsureAEADKey(ctx context.Context, db *metadata.DB, settings *metadata.
 	}
 	slog.InfoContext(ctx, "aead.key.generated", "len", len(key))
 	return a, nil
+}
+
+// BootEnsureDockerJWTSecret materializes the /v2/token HS256 HMAC secret on
+// first boot. Subsequent boots load the existing secret. The secret bytes
+// never appear in logs — only length is logged. Mirrors BootEnsureAEADKey
+// but uses a separate settings key (D-06): rotating the Docker JWT secret
+// must not invalidate encrypted upstream-creds rows, and vice versa.
+//
+// Exported so tests can drive the same boot path without calling Run.
+func BootEnsureDockerJWTSecret(ctx context.Context, settings *metadata.SettingsRepo) ([]byte, error) {
+	existing, err := settings.Get(ctx, dockerTokenHMACSecretSetting)
+	if err == nil && existing != "" {
+		raw, derr := base64.StdEncoding.DecodeString(existing)
+		if derr != nil {
+			return nil, fmt.Errorf("app: decode existing docker jwt secret: %w", derr)
+		}
+		if len(raw) != dockerTokenHMACSecretSize {
+			return nil, fmt.Errorf("app: existing docker jwt secret wrong size: got %d bytes", len(raw))
+		}
+		slog.InfoContext(ctx, "docker.jwt.secret.loaded", "len", len(raw))
+		return raw, nil
+	}
+	if err != nil && !errors.Is(err, metadata.ErrNotFound) {
+		return nil, fmt.Errorf("app: load docker jwt secret: %w", err)
+	}
+
+	secret := make([]byte, dockerTokenHMACSecretSize)
+	if _, rerr := cryptorand.Read(secret); rerr != nil {
+		return nil, fmt.Errorf("app: generate docker jwt secret: %w", rerr)
+	}
+	encoded := base64.StdEncoding.EncodeToString(secret)
+	if err := settings.Set(ctx, dockerTokenHMACSecretSetting, encoded); err != nil {
+		return nil, fmt.Errorf("app: persist docker jwt secret: %w", err)
+	}
+	slog.InfoContext(ctx, "docker.jwt.secret.generated", "len", len(secret))
+	return secret, nil
 }
 
 // RunOptions tunes how Run binds its listeners. The zero value uses the
@@ -217,6 +265,29 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 		Locks:         storage.NewLocks(),
 		SessionTTL:    cfg.Auth.SessionTTL,
 	})
+
+	// 6b. /v2 OCI registry handler (Phase 02-05). Materialize the HMAC
+	// secret on first boot; subsequent boots reuse the existing secret.
+	// JWT TTL is taken from cfg.Docker.JWTTTLSeconds (default 3600s).
+	dockerJWTSecret, err := BootEnsureDockerJWTSecret(ctx, metadata.NewSettingsRepo(db))
+	if err != nil {
+		return fmt.Errorf("app.Run: docker jwt secret: %w", err)
+	}
+	jwtTTL := time.Duration(cfg.Docker.JWTTTLSeconds) * time.Second
+	if jwtTTL <= 0 {
+		jwtTTL = time.Hour
+	}
+	ociHandler := oci.New(oci.Deps{
+		DB:         db,
+		Users:      metadata.NewUsersRepo(db),
+		APIKeys:    metadata.NewAPIKeysRepo(db),
+		Repos:      metadata.NewReposRepo(db),
+		Projects:   metadata.NewProjectsRepo(db),
+		Sessions:   metadata.NewSessionsRepo(db),
+		HMACSecret: dockerJWTSecret,
+		JWTTTL:     jwtTTL,
+	})
+	ociHandler.Mount(router)
 
 	// 7. Listeners.
 	httpLn := opts.HTTPListener

@@ -104,6 +104,45 @@ func (r *APIKeysRepo) FindByPrefixSha(ctx context.Context, prefix, sha256hex str
 	return &k, nil
 }
 
+// FindByID returns the live (non-revoked) api_keys row with matching id.
+// Returns ErrNotFound on miss or revoked. Used by the /v2 Bearer middleware
+// to re-resolve an Actor from a JWT's claims on every request.
+func (r *APIKeysRepo) FindByID(ctx context.Context, id int64) (*APIKey, error) {
+	row := r.db.Reader.QueryRowContext(ctx, `
+		SELECT id, owner_kind, owner_user_id, owner_project_id, name, token_prefix, token_sha256,
+		       last_used_at, created_at, revoked_at
+		FROM api_keys
+		WHERE id=? AND revoked_at IS NULL
+	`, id)
+	var k APIKey
+	var userID, projectID sql.NullInt64
+	var lastUsed, revoked sql.NullTime
+	if err := row.Scan(&k.ID, &k.OwnerKind, &userID, &projectID, &k.Name, &k.TokenPrefix, &k.TokenSHA256,
+		&lastUsed, &k.CreatedAt, &revoked); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("api_keys: scan by id: %w", err)
+	}
+	if userID.Valid {
+		v := userID.Int64
+		k.OwnerUserID = &v
+	}
+	if projectID.Valid {
+		v := projectID.Int64
+		k.OwnerProjectID = &v
+	}
+	if lastUsed.Valid {
+		t := lastUsed.Time
+		k.LastUsedAt = &t
+	}
+	if revoked.Valid {
+		t := revoked.Time
+		k.RevokedAt = &t
+	}
+	return &k, nil
+}
+
 // TouchLastUsed updates api_keys.last_used_at. Invoked on every successful
 // middleware auth (KEY-08).
 func (r *APIKeysRepo) TouchLastUsed(ctx context.Context, id int64, t time.Time) error {

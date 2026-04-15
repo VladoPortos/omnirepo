@@ -178,6 +178,31 @@ func TestJobsEnvOverride(t *testing.T) {
 	}
 }
 
+func TestDockerDefaults(t *testing.T) {
+	d := config.Defaults()
+	if d.Docker.JWTTTLSeconds != 3600 {
+		t.Errorf("Docker.JWTTTLSeconds = %d, want 3600", d.Docker.JWTTTLSeconds)
+	}
+	if d.Docker.UploadSessionTTLSeconds != 3600 {
+		t.Errorf("Docker.UploadSessionTTLSeconds = %d, want 3600", d.Docker.UploadSessionTTLSeconds)
+	}
+}
+
+func TestDockerEnvOverride(t *testing.T) {
+	t.Setenv("OMNIREPO_DOCKER__JWT_TTL_SECONDS", "900")
+	t.Setenv("OMNIREPO_DOCKER__UPLOAD_SESSION_TTL_SECONDS", "1800")
+	cfg, err := config.Load("")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Docker.JWTTTLSeconds != 900 {
+		t.Errorf("Docker.JWTTTLSeconds = %d, want 900", cfg.Docker.JWTTTLSeconds)
+	}
+	if cfg.Docker.UploadSessionTTLSeconds != 1800 {
+		t.Errorf("Docker.UploadSessionTTLSeconds = %d, want 1800", cfg.Docker.UploadSessionTTLSeconds)
+	}
+}
+
 func TestTrivyEnvOverride(t *testing.T) {
 	t.Setenv("OMNIREPO_TRIVY__BINARY_PATH", "/x")
 	t.Setenv("OMNIREPO_TRIVY__DB_PATH", "/y")

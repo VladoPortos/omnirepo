@@ -3,7 +3,9 @@ DATA_ROOT ?= /var/lib/omnirepo
 BENCH_DURATION ?= 30s
 BENCH_WORKERS ?= 16
 
-.PHONY: dev build test test-airgap bench-sqlite vendor lint seed grep-cdn conformance-oci
+.PHONY: dev build test test-airgap bench-sqlite vendor lint seed grep-cdn \
+	conformance conformance-oci conformance-rpm conformance-deb \
+	conformance-pypi conformance-helm conformance-all
 
 dev:
 	$(GO) run ./cmd/omnirepo serve
@@ -34,8 +36,30 @@ seed:
 	@cp $(FILE) $(DATA_ROOT)/config/bootstrap.json
 	@chmod 0600 $(DATA_ROOT)/config/bootstrap.json
 
+# grep-cdn enforces the air-gap invariant: no external https:// URLs in
+# either the built SPA bundle or the Phase 3 protocol handler packages
+# (D-33). The Perl-style negative-lookahead requires `grep -P`.
+#
+# Allowed hosts (none of which the binary fetches at runtime):
+#   - localhost, 127.0.0.1                    — loopback
+#   - example.com, example.invalid, x.y       — RFC 2606 / test placeholders
+#   - upstream.example                        — package-doc placeholder
+#   - linux.duke.edu                          — XML namespace identifier for
+#                                               RPM repodata (URN, not URL —
+#                                               required by the createrepo_c
+#                                               schema; never dereferenced)
+#   - wiki.debian.org                         — comment-only spec link
 grep-cdn:
-	@grep -rEI 'https?://(?!localhost|127\.0\.0\.1)' web/dist/ 2>/dev/null || true
+	@set -e; \
+	echo "grep-cdn: web/dist/"; \
+	! grep -rPI 'https?://(?!localhost|127\.0\.0\.1|example\.com|example\.invalid)' web/dist/ 2>/dev/null \
+		|| (echo "ERROR: external URL in web/dist/" && exit 1); \
+	echo "grep-cdn: internal/protocol/{rpm,deb,pypi,helm}/"; \
+	! grep -rPI --include='*.go' \
+		'https?://(?!localhost|127\.0\.0\.1|example\.com|example\.invalid|upstream\.example|repo\.example|linux\.duke\.edu|wiki\.debian\.org|x\.y)' \
+		internal/protocol/rpm internal/protocol/deb internal/protocol/pypi internal/protocol/helm 2>/dev/null \
+		|| (echo "ERROR: external https URL leaked into Phase 3 handler code" && exit 1); \
+	echo "grep-cdn: clean"
 
 # conformance-oci runs the OCI Distribution conformance suite. Gated behind
 # the `conformance` build tag so default `make test` never requires crane.
@@ -44,3 +68,29 @@ grep-cdn:
 conformance-oci:
 	@test -x test/conformance/bin/crane || (echo "Missing crane binary at test/conformance/bin/crane; see test/conformance/bin/README.md"; exit 1)
 	$(GO) test -mod=vendor -tags=conformance -count=1 ./test/conformance/docker/...
+
+# Phase 3 DinD conformance gates (D-29..D-31). Each target drives a real
+# protocol client (dnf, apt-get, pip+uv, helm) inside a pinned base image
+# from test/conformance/images.txt against an in-process omnirepo. Tests
+# skip cleanly on hosts without the docker CLI; CI is expected to provide
+# docker so the gate fires.
+conformance-rpm:
+	$(GO) test -mod=vendor -tags=conformance -count=1 -timeout=10m ./test/conformance/rpm/...
+
+conformance-deb:
+	$(GO) test -mod=vendor -tags=conformance -count=1 -timeout=10m ./test/conformance/deb/...
+
+conformance-pypi:
+	$(GO) test -mod=vendor -tags=conformance -count=1 -timeout=10m ./test/conformance/pypi/...
+
+conformance-helm:
+	$(GO) test -mod=vendor -tags=conformance -count=1 -timeout=10m ./test/conformance/helm/...
+
+# conformance-all runs every protocol's conformance suite in one invocation.
+# Used by the CI conformance job (D-31).
+conformance-all:
+	$(GO) test -mod=vendor -tags=conformance -count=1 -timeout=15m ./test/conformance/...
+
+# conformance is an alias of conformance-all for callers that just want
+# "the conformance gate" without thinking about per-protocol granularity.
+conformance: conformance-all

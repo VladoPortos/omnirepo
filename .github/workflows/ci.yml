@@ -76,3 +76,37 @@ jobs:
 
       - name: Run OCI conformance suite
         run: make conformance-oci
+
+  # Phase 3 D-31 gate: DinD client-conformance suites for the four package
+  # protocols. Drives real `dnf` (Rocky 9), `apt-get` (Debian 12),
+  # `pip`+`uv` (python:3.12-alpine), and `helm` (alpine/helm:3.20) clients
+  # against an in-process omnirepo. Required-for-merge on PRs touching
+  # Phase 3 paths. Base image digests are pinned in
+  # test/conformance/images.txt (D-30, T-03-07-01).
+  conformance-phase3:
+    runs-on: ubuntu-24.04
+    needs: build-test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+
+      - name: Pre-pull pinned base images
+        # Read test/conformance/images.txt and `docker pull` each entry at
+        # its pinned sha256 digest. Failure here = supply-chain mismatch.
+        # No untrusted input reaches the shell — the file is checked-in
+        # repo content, gated by code review.
+        run: |
+          set -euo pipefail
+          while IFS= read -r line; do
+            case "$line" in ''|\#*) continue ;; esac
+            image=$(printf '%s\n' "$line" | awk '{print $1}')
+            echo "pulling $image"
+            docker pull "$image"
+          done < test/conformance/images.txt
+
+      - name: Run Phase 3 conformance suites (rpm/deb/pypi/helm)
+        run: make conformance-all

@@ -9,16 +9,18 @@ import (
 // everything the skeleton (plan 02-05) and the downstream 02-06/02-07
 // handlers emit.
 const (
-	ErrCodeUnauthorized  = "UNAUTHORIZED"
-	ErrCodeDenied        = "DENIED"
-	ErrCodeUnsupported   = "UNSUPPORTED"
-	ErrCodeUnknown       = "UNKNOWN"
-	ErrCodeNameUnknown   = "NAME_UNKNOWN"
-	ErrCodeManifestUnk   = "MANIFEST_UNKNOWN"
-	ErrCodeDigestInvalid = "DIGEST_INVALID"
-	ErrCodeBlobUnknown   = "BLOB_UNKNOWN"
-	ErrCodeNameInvalid   = "NAME_INVALID"
-	ErrCodeSizeInvalid   = "SIZE_INVALID"
+	ErrCodeUnauthorized     = "UNAUTHORIZED"
+	ErrCodeDenied           = "DENIED"
+	ErrCodeUnsupported      = "UNSUPPORTED"
+	ErrCodeUnknown          = "UNKNOWN"
+	ErrCodeNameUnknown      = "NAME_UNKNOWN"
+	ErrCodeManifestUnk      = "MANIFEST_UNKNOWN"
+	ErrCodeManifestInvalid  = "MANIFEST_INVALID"
+	ErrCodeDigestInvalid    = "DIGEST_INVALID"
+	ErrCodeBlobUnknown      = "BLOB_UNKNOWN"
+	ErrCodeNameInvalid      = "NAME_INVALID"
+	ErrCodeSizeInvalid      = "SIZE_INVALID"
+	ErrCodeTagInvalid       = "TAG_INVALID"
 )
 
 // ociError mirrors the spec envelope.
@@ -57,6 +59,10 @@ func writeOCIErr(w http.ResponseWriter, status int, code string, err error) {
 		msg = "invalid repository name"
 	case ErrCodeSizeInvalid:
 		msg = "provided length did not match content length"
+	case ErrCodeManifestInvalid:
+		msg = "manifest invalid"
+	case ErrCodeTagInvalid:
+		msg = "manifest tag did not match URI"
 	}
 	detail := ""
 	if err != nil {

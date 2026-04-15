@@ -82,6 +82,26 @@ func (r *DockerManifestsRepo) GetByDigest(ctx context.Context, repoID int64, dig
 	return &m, nil
 }
 
+// GetByDigestTx is GetByDigest but reads via the caller-supplied tx. Use this
+// from inside a WriteTx callback where a Reader-pool read would deadlock on
+// writer lock contention (SQLite serializes reader against in-flight writer
+// tx when the reader pool races a commit). Phase 02-07 manifest PUT uses
+// this to look up the prior manifest body for refcount delta.
+func (r *DockerManifestsRepo) GetByDigestTx(ctx context.Context, tx *sql.Tx, repoID int64, digest string) (*DockerManifest, error) {
+	var m DockerManifest
+	err := tx.QueryRowContext(ctx, `
+		SELECT repo_id, digest, media_type, body, size_bytes, ref_count
+		FROM docker_manifests WHERE repo_id=? AND digest=?
+	`, repoID, digest).Scan(&m.RepoID, &m.Digest, &m.MediaType, &m.Body, &m.SizeBytes, &m.RefCount)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("docker_manifests: get tx: %w", err)
+	}
+	return &m, nil
+}
+
 // IncRef increments ref_count (for index manifests that reference child
 // manifests). Errors if the row is missing.
 func (r *DockerManifestsRepo) IncRef(ctx context.Context, tx *sql.Tx, repoID int64, digest string) error {

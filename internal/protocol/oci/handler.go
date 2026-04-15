@@ -44,9 +44,33 @@ type Deps struct {
 	ChunkMaxBytes   int64 // per-chunk cap; default 64 MiB
 	SessionMaxBytes int64 // per-session cap; default 10 GiB
 
+	// Phase 02-07 dependencies: manifests + tags + catalog + cosign.
+	Manifests *metadata.DockerManifestsRepo
+	Tags      *metadata.DockerTagsRepo
+	// Scans (optional): when non-nil and the target repo has auto_scan=true,
+	// manifestPut enqueues a scan row in the same writer tx.
+	Scans *metadata.ScansRepo
+	// ScanKick (optional): invoked after a scan enqueue tx commits so the
+	// scan pool picks it up without waiting for the next poll. nil → no-op.
+	ScanKick func()
+	// SeverityGate (optional): 02-09 plugs in the block_on_severity check.
+	// When nil, manifestGet is unrestricted. The hook receives the resolved
+	// repo id + manifest digest and returns a non-nil error to block the
+	// response; the manifestGet path then writes a 403 and aborts.
+	SeverityGate SeverityGateFn
+
 	HMACSecret []byte        // 32 random bytes (D-06)
 	JWTTTL     time.Duration // default 3600s
 }
+
+// SeverityGateFn is the block_on_severity hook signature. 02-09 will plug in
+// a real implementation; until then a nil handler field is treated as an
+// always-allow no-op.
+type SeverityGateFn func(ctx context.Context, repoID int64, digest string) error
+
+// ManifestMaxBytes caps manifest body size (T-02-07-03). Pushing >4 MiB
+// manifest JSON yields 413 MANIFEST_INVALID.
+const ManifestMaxBytes int64 = 4 << 20
 
 // Handler serves /v2. Its public API is just New + Mount; everything else
 // stays package-private so downstream plans extend behavior via internal
@@ -71,6 +95,13 @@ type Handler struct {
 	dataRoot        string
 	chunkMaxBytes   int64
 	sessionMaxBytes int64
+
+	// Manifests + tags + catalog wiring (02-07).
+	manifests    *metadata.DockerManifestsRepo
+	tags         *metadata.DockerTagsRepo
+	scans        *metadata.ScansRepo
+	scanKick     func()
+	severityGate SeverityGateFn
 }
 
 // New constructs a Handler from deps.
@@ -105,6 +136,11 @@ func New(d Deps) *Handler {
 		dataRoot:        d.DataRoot,
 		chunkMaxBytes:   chunk,
 		sessionMaxBytes: sess,
+		manifests:       d.Manifests,
+		tags:            d.Tags,
+		scans:           d.Scans,
+		scanKick:        d.ScanKick,
+		severityGate:    d.SeverityGate,
 	}
 }
 
@@ -137,15 +173,17 @@ func (h *Handler) Mount(parent chi.Router) {
 		// Token issue: Basic or API-key creds → identity-only JWT.
 		r.With(authmw.BasicOrAPIKey(midDeps)).Get("/token", h.issueToken)
 
+		// /_catalog is project-scoped but also accessible to anonymous
+		// requesters (who see only public_read=true repos). It sits
+		// OUTSIDE the guarded chain — the handler resolves the actor
+		// itself, defaulting to anonymous when no Bearer is supplied.
+		r.With(h.catalogAuth).Get("/_catalog", h.catalog)
+
 		// Everything else runs under the guarded chain. Plans 02-06 and
 		// 02-07 plug their routes into this subrouter via h.ProtectedGroup.
 		r.Group(func(r chi.Router) {
 			r.Use(httpx.AnonymousReadOK(h.lookupRepoPublicRead, h.extractRepoFromV2URL, attachAnonymous))
 			r.Use(h.VerifyBearer)
-
-			// /_catalog placeholder stays until 02-07 replaces it with
-			// the real project-scoped catalog listing.
-			r.Get("/_catalog", h.notImplementedYet)
 
 			// Blob routes (02-06). The name parameter is a full
 			// <project>/<type>/<repo> triple per the 02-05 URL
@@ -165,6 +203,17 @@ func (h *Handler) Mount(parent chi.Router) {
 			r.Get("/{project}/{type}/{repo}/blobs/{digest}", h.blobGet)
 			r.Head("/{project}/{type}/{repo}/blobs/{digest}", h.blobHead)
 			r.Delete("/{project}/{type}/{repo}/blobs/{digest}", h.blobDelete)
+
+			// Manifest routes (02-07). reference is either a tag or a
+			// digest; handler disambiguates.
+			r.Get("/{project}/{type}/{repo}/manifests/{reference}", h.manifestGet)
+			r.Head("/{project}/{type}/{repo}/manifests/{reference}", h.manifestHead)
+			r.Put("/{project}/{type}/{repo}/manifests/{reference}", h.manifestPut)
+			r.Delete("/{project}/{type}/{repo}/manifests/{reference}", h.manifestDelete)
+
+			// Tag routes (02-07).
+			r.Get("/{project}/{type}/{repo}/tags/list", h.tagsList)
+			r.Delete("/{project}/{type}/{repo}/tags/{tag}", h.tagDelete)
 		})
 	})
 }

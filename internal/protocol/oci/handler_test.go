@@ -201,7 +201,11 @@ func TestTokenIssue_NoAuth_Returns401(t *testing.T) {
 // header the spec mandates.
 func TestProtectedRoute_WWWAuthenticateChallenge(t *testing.T) {
 	f := newOCIFixture(t)
-	resp, err := http.Get(f.srv.URL + "/v2/_catalog")
+	// /v2/_catalog is now partially-public (anonymous sees only public_read
+	// repos). To assert the challenge behavior on a guarded route we hit a
+	// repo-scoped manifest path — anonymous access falls through to the
+	// VerifyBearer middleware which challenges.
+	resp, err := http.Get(f.srv.URL + "/v2/nope/docker/nope/manifests/latest")
 	if err != nil {
 		t.Fatalf("do: %v", err)
 	}
@@ -246,12 +250,14 @@ func TestProtectedRoute_ValidBearer_Passes(t *testing.T) {
 		t.Fatalf("catalog: %v", err)
 	}
 	defer resp2.Body.Close()
-	// Placeholder returns 501; authorization has already succeeded by now.
+	// Plan 02-07 replaced the /v2/_catalog placeholder with a real
+	// project-scoped listing. Authenticated non-super-admin with no
+	// memberships and no public repos visible → 200 with empty list.
 	if resp2.StatusCode == http.StatusUnauthorized {
 		t.Fatalf("valid JWT rejected with 401")
 	}
-	if resp2.StatusCode != http.StatusNotImplemented {
-		t.Fatalf("expected 501 placeholder; got %d", resp2.StatusCode)
+	if resp2.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 catalog; got %d", resp2.StatusCode)
 	}
 }
 

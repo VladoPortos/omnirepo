@@ -61,4 +61,11 @@ const (
 	EvtOCIBlobUploaded EventKind = "oci.blob.uploaded"
 	EvtOCIBlobMounted  EventKind = "oci.blob.mounted"
 	EvtOCIBlobDeleted  EventKind = "oci.blob.deleted"
+
+	// Phase 2 Plan 07 — OCI manifest + tag state-changing actions.
+	// Emitted by /v2/<name>/manifests/<ref> PUT/DELETE and /v2/<name>/tags/<tag>
+	// DELETE. Best-effort after the writer tx commits.
+	EvtOCIManifestUploaded EventKind = "oci.manifest.uploaded"
+	EvtOCIManifestDeleted  EventKind = "oci.manifest.deleted"
+	EvtOCITagDeleted       EventKind = "oci.tag.deleted"
 )

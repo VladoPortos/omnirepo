@@ -19,15 +19,24 @@ import (
 // Downstream clients (docker CLI, crane, podman) parse this header and
 // follow up with a Basic-authed GET to /v2/token.
 func (h *Handler) challenge(w http.ResponseWriter, r *http.Request) {
+	// WR-01 partial fix. Previously we unconditionally honored
+	// X-Forwarded-Proto: https from any client and combined it with r.Host
+	// — so a malicious client could flip the scheme and influence the realm
+	// host that docker / crane / podman use to fetch a token, pointing them
+	// at an attacker-controlled endpoint.
+	//
+	// Until we introduce config.HTTP.ExternalURL + a TrustedProxies allowlist
+	// (WR-01 full fix, deferred — needs a design decision), trust only the
+	// terminating TLS state of THIS listener to decide scheme. An operator
+	// fronting OmniRepo with a reverse proxy that terminates TLS must either
+	// (a) enable the HTTPS listener directly on OmniRepo, or (b) wait for
+	// the ExternalURL config knob.
+	//
+	// r.Host is still client-influenceable in theory, but it defaults to the
+	// server's listen host when the client doesn't send a Host header and
+	// chi does not forward arbitrary values. Revisit with ExternalURL.
 	scheme := "http"
 	if r.TLS != nil {
-		scheme = "https"
-	}
-	// If the request carried an X-Forwarded-Proto, honor it (TLS terminates
-	// at a reverse proxy in some deployments). We never let the client set
-	// an arbitrary realm host — Host comes from the trusted server-side
-	// config via r.Host, which chi normalizes.
-	if xfp := r.Header.Get("X-Forwarded-Proto"); xfp == "https" {
 		scheme = "https"
 	}
 	w.Header().Set("WWW-Authenticate",

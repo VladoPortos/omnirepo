@@ -9,11 +9,13 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-// TestChallengeHeaderUsesXForwardedProto validates that when a TLS-
-// terminating reverse proxy injects X-Forwarded-Proto, the realm scheme
-// reflects that. Important for deployments behind nginx/traefik where
-// r.TLS is nil but the public URL is https.
-func TestChallengeHeaderUsesXForwardedProto(t *testing.T) {
+// TestChallenge_IgnoresXForwardedProto is the WR-01 regression. An
+// untrusted X-Forwarded-Proto: https from any client must NOT be able to
+// flip the challenge realm scheme — that would let a malicious client
+// redirect the docker CLI's follow-up token fetch to an attacker's origin.
+// Until config.HTTP.ExternalURL + TrustedProxies are added (WR-01 full
+// fix), the scheme is driven solely by r.TLS.
+func TestChallenge_IgnoresXForwardedProto(t *testing.T) {
 	f := newOCIFixture(t)
 
 	req, _ := http.NewRequest("GET", f.srv.URL+"/v2/nope/docker/nope/manifests/latest", nil)
@@ -22,8 +24,10 @@ func TestChallengeHeaderUsesXForwardedProto(t *testing.T) {
 	defer resp.Body.Close()
 
 	got := resp.Header.Get("WWW-Authenticate")
-	if !strings.HasPrefix(got, `Bearer realm="https://`) {
-		t.Fatalf("expected https realm; got %q", got)
+	// httptest.NewServer is plaintext, so r.TLS is nil — realm MUST stay
+	// http regardless of the injected X-Forwarded-Proto header.
+	if !strings.HasPrefix(got, `Bearer realm="http://`) {
+		t.Fatalf("XFP must be ignored; got realm %q", got)
 	}
 }
 

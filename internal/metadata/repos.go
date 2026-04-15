@@ -126,6 +126,120 @@ func (r *ReposRepo) ListByProject(ctx context.Context, projectID int64) ([]Repo,
 	return out, rows.Err()
 }
 
+// CatalogScope drives ListDockerCatalog's filter selection.
+type CatalogScope struct {
+	// SuperAdmin: include every docker repo across every project.
+	SuperAdmin bool
+	// UserProjectIDs (optional): only repos in these project ids are included.
+	// nil/empty AND SuperAdmin=false AND Anonymous=false yields zero rows.
+	UserProjectIDs []int64
+	// Anonymous: include only repos with public_read=true.
+	Anonymous bool
+}
+
+// ListDockerCatalog returns "<project>/docker/<repo>" strings for the OCI
+// /v2/_catalog endpoint (D-07), cursor-paginated lexicographically (strictly
+// > after) with limit clamped to [1,1000]. Scoping:
+//
+//   - scope.SuperAdmin → every docker repo
+//   - scope.Anonymous → only repos with public_read=true
+//   - otherwise → docker repos whose project_id ∈ scope.UserProjectIDs
+//     AND (repo.public_read=true OR member). Since members see all their
+//     project's repos regardless of public_read, the query simply filters
+//     by project_id ∈ UserProjectIDs OR public_read=true.
+//
+// Returns a sorted slice — empty (not nil) when no rows match.
+func (r *ReposRepo) ListDockerCatalog(ctx context.Context, scope CatalogScope, limit int, after string) ([]string, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	if limit > 1000 {
+		limit = 1000
+	}
+
+	// Build the query based on scope. Every branch selects
+	// (p.name || '/docker/' || r.name) as the ordered key. SQLite does not
+	// allow SELECT aliases in WHERE, so we inline the expression in both
+	// clauses.
+	const pathExpr = `(p.name || '/docker/' || r.name)`
+	switch {
+	case scope.SuperAdmin:
+		return r.catalogQuery(ctx, `
+			SELECT `+pathExpr+` AS path
+			FROM repos r
+			JOIN projects p ON p.id = r.project_id
+			WHERE r.type = 'docker' AND r.deleted_at IS NULL AND p.deleted_at IS NULL
+			  AND `+pathExpr+` > ?
+			ORDER BY path ASC
+			LIMIT ?
+		`, after, limit)
+
+	case scope.Anonymous:
+		return r.catalogQuery(ctx, `
+			SELECT `+pathExpr+` AS path
+			FROM repos r
+			JOIN projects p ON p.id = r.project_id
+			WHERE r.type = 'docker' AND r.deleted_at IS NULL AND p.deleted_at IS NULL
+			  AND r.public_read = 1
+			  AND `+pathExpr+` > ?
+			ORDER BY path ASC
+			LIMIT ?
+		`, after, limit)
+
+	default:
+		// Authenticated non-super-admin: project membership ∪ public_read.
+		if len(scope.UserProjectIDs) == 0 {
+			// No memberships → only public repos visible.
+			return r.catalogQuery(ctx, `
+				SELECT `+pathExpr+` AS path
+				FROM repos r
+				JOIN projects p ON p.id = r.project_id
+				WHERE r.type = 'docker' AND r.deleted_at IS NULL AND p.deleted_at IS NULL
+				  AND r.public_read = 1
+				  AND `+pathExpr+` > ?
+				ORDER BY path ASC
+				LIMIT ?
+			`, after, limit)
+		}
+		// Build an IN(?,?,...) placeholder list.
+		placeholders := make([]string, len(scope.UserProjectIDs))
+		args := make([]any, 0, len(scope.UserProjectIDs)+2)
+		for i, id := range scope.UserProjectIDs {
+			placeholders[i] = "?"
+			args = append(args, id)
+		}
+		args = append(args, after, limit)
+		q := `
+			SELECT ` + pathExpr + ` AS path
+			FROM repos r
+			JOIN projects p ON p.id = r.project_id
+			WHERE r.type = 'docker' AND r.deleted_at IS NULL AND p.deleted_at IS NULL
+			  AND (r.project_id IN (` + strings.Join(placeholders, ",") + `) OR r.public_read = 1)
+			  AND ` + pathExpr + ` > ?
+			ORDER BY path ASC
+			LIMIT ?
+		`
+		return r.catalogQuery(ctx, q, args...)
+	}
+}
+
+func (r *ReposRepo) catalogQuery(ctx context.Context, q string, args ...any) ([]string, error) {
+	rows, err := r.db.Reader.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("repos: catalog query: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	out := make([]string, 0)
+	for rows.Next() {
+		var s string
+		if err := rows.Scan(&s); err != nil {
+			return nil, fmt.Errorf("repos: catalog scan: %w", err)
+		}
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}
+
 // ListAll returns every live repo across every project.
 func (r *ReposRepo) ListAll(ctx context.Context) ([]Repo, error) {
 	rows, err := r.db.Reader.QueryContext(ctx, `

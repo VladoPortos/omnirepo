@@ -16,7 +16,7 @@ import (
 func TestChallengeHeaderUsesXForwardedProto(t *testing.T) {
 	f := newOCIFixture(t)
 
-	req, _ := http.NewRequest("GET", f.srv.URL+"/v2/_catalog", nil)
+	req, _ := http.NewRequest("GET", f.srv.URL+"/v2/nope/docker/nope/manifests/latest", nil)
 	req.Header.Set("X-Forwarded-Proto", "https")
 	resp, _ := http.DefaultClient.Do(req)
 	defer resp.Body.Close()
@@ -32,7 +32,7 @@ func TestChallengeHeaderUsesXForwardedProto(t *testing.T) {
 func TestVerifyBearer_NoAuthHeader_Challenges(t *testing.T) {
 	f := newOCIFixture(t)
 
-	resp, _ := http.Get(f.srv.URL + "/v2/_catalog")
+	resp, _ := http.Get(f.srv.URL + "/v2/nope/docker/nope/manifests/latest")
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusUnauthorized {
@@ -48,7 +48,7 @@ func TestVerifyBearer_NoAuthHeader_Challenges(t *testing.T) {
 func TestVerifyBearer_MalformedBearer_Challenges(t *testing.T) {
 	f := newOCIFixture(t)
 
-	req, _ := http.NewRequest("GET", f.srv.URL+"/v2/_catalog", nil)
+	req, _ := http.NewRequest("GET", f.srv.URL+"/v2/nope/docker/nope/manifests/latest", nil)
 	req.Header.Set("Authorization", "Bearer not-a-real-jwt")
 	resp, _ := http.DefaultClient.Do(req)
 	defer resp.Body.Close()
@@ -62,7 +62,7 @@ func TestVerifyBearer_MalformedBearer_Challenges(t *testing.T) {
 func TestVerifyBearer_EmptyBearer_Challenges(t *testing.T) {
 	f := newOCIFixture(t)
 
-	req, _ := http.NewRequest("GET", f.srv.URL+"/v2/_catalog", nil)
+	req, _ := http.NewRequest("GET", f.srv.URL+"/v2/nope/docker/nope/manifests/latest", nil)
 	req.Header.Set("Authorization", "Bearer ")
 	resp, _ := http.DefaultClient.Do(req)
 	defer resp.Body.Close()

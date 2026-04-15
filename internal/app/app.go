@@ -296,8 +296,16 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 		DataRoot:    cfg.DataRoot,
 		HMACSecret:  dockerJWTSecret,
 		JWTTTL:      jwtTTL,
+
+		// Plan 02-07 wiring: manifests + tags + auto-scan enqueue.
+		Manifests: metadata.NewDockerManifestsRepo(db),
+		Tags:      metadata.NewDockerTagsRepo(db),
+		Scans:     metadata.NewScansRepo(db),
+		ScanKick:  scanPool.Kick,
+		// SeverityGate is wired by plan 02-09; left nil → no-op.
 	})
 	ociHandler.Mount(router)
+	ociHandler.MountCosign(router)
 
 	// 6c. RAW pass-through handler (Phase 02-08, D-27..D-31). Mounted on
 	// the root router because the URL path includes the project slug —

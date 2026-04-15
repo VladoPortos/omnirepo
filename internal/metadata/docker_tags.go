@@ -82,6 +82,81 @@ func (r *DockerTagsRepo) List(ctx context.Context, repoID int64) ([]string, erro
 	return out, rows.Err()
 }
 
+// ListPaginated returns tag names in repoID strictly greater than `after`
+// (lexicographic), sorted ascending, capped at `limit`. An empty `after`
+// returns the first page. Limit is clamped to [1, 1000].
+func (r *DockerTagsRepo) ListPaginated(ctx context.Context, repoID int64, limit int, after string) ([]string, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	if limit > 1000 {
+		limit = 1000
+	}
+	rows, err := r.db.Reader.QueryContext(ctx, `
+		SELECT tag FROM docker_tags
+		WHERE repo_id = ? AND tag > ?
+		ORDER BY tag ASC
+		LIMIT ?
+	`, repoID, after, limit)
+	if err != nil {
+		return nil, fmt.Errorf("docker_tags: list paginated: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []string
+	for rows.Next() {
+		var t string
+		if err := rows.Scan(&t); err != nil {
+			return nil, fmt.Errorf("docker_tags: scan: %w", err)
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+// ExistsTag returns true if (repoID, tag) has a row. Used by the cosign
+// badge check (D-08): tag "sha256-<hex>.sig" presence → signed=true.
+func (r *DockerTagsRepo) ExistsTag(ctx context.Context, repoID int64, tag string) (bool, error) {
+	var one int
+	err := r.db.Reader.QueryRowContext(ctx, `
+		SELECT 1 FROM docker_tags WHERE repo_id = ? AND tag = ? LIMIT 1
+	`, repoID, tag).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("docker_tags: exists: %w", err)
+	}
+	return true, nil
+}
+
+// CountForDigest returns the number of tag rows in repoID pointing at digest.
+// Used by manifest DELETE to decide whether deleting a single tag reference
+// should cascade into ref_count decrements on the manifest's referenced blobs.
+func (r *DockerTagsRepo) CountForDigest(ctx context.Context, repoID int64, digest string) (int64, error) {
+	var n int64
+	err := r.db.Reader.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM docker_tags WHERE repo_id = ? AND digest = ?
+	`, repoID, digest).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("docker_tags: count: %w", err)
+	}
+	return n, nil
+}
+
+// CountForDigestTx is CountForDigest called through a caller-supplied tx.
+// Required inside WriteTx callbacks where Reader-pool reads race the
+// in-flight writer tx and can deadlock (see GetByDigestTx rationale).
+func (r *DockerTagsRepo) CountForDigestTx(ctx context.Context, tx *sql.Tx, repoID int64, digest string) (int64, error) {
+	var n int64
+	err := tx.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM docker_tags WHERE repo_id = ? AND digest = ?
+	`, repoID, digest).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("docker_tags: count tx: %w", err)
+	}
+	return n, nil
+}
+
 // Delete removes (repo_id, tag), returning the digest it used to point
 // at (or "" if absent). Returning the digest lets the caller DecRef in
 // the same tx.

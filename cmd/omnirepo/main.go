@@ -4,56 +4,76 @@
 //
 //	serve (default)  Start HTTP+HTTPS listeners, bootstrap data root, run the API.
 //	version          Print the build version and exit 0.
-//	migrate up       Apply schema migrations (stub in Phase 1; plan 01-02 lands the runner).
-//	migrate status   Show applied migrations (stub in Phase 1).
+//	migrate up       Apply schema migrations.
+//	migrate status   Show applied migrations.
 package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
-	"log/slog"
-	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 
 	"github.com/dxc-internal/omnirepo/internal/app"
 	"github.com/dxc-internal/omnirepo/internal/config"
-	"github.com/dxc-internal/omnirepo/internal/httpx"
 	"github.com/dxc-internal/omnirepo/internal/metadata"
 	"github.com/dxc-internal/omnirepo/internal/metadata/migrations"
 )
 
 // Version is the build version. Overridden at link time via -ldflags "-X main.Version=...".
-var Version = "0.1.0-phase1-skeleton"
+var Version = "0.1.0-phase1"
+
+// osExit is indirected so tests can inject a panicking shim without actually
+// terminating the test binary. Use runAndExit for the end-to-end wrapper.
+var osExit = os.Exit
 
 func main() {
-	if len(os.Args) < 2 {
-		// Default subcommand is 'serve'.
-		if err := serve(os.Args[1:]); err != nil {
-			exit(err)
+	runAndExit(os.Args[1:])
+}
+
+// runAndExit dispatches a single invocation of the binary. On error it
+// converts the error into an exit code via osExit: *app.ErrBootstrap → 2,
+// everything else → 1. A nil error is a no-op (the subcommand either
+// returned cleanly or blocked until it returned cleanly).
+func runAndExit(args []string) {
+	if len(args) == 0 {
+		if err := serve(nil); err != nil {
+			exitForError(err)
 		}
 		return
 	}
-
-	switch os.Args[1] {
+	switch args[0] {
 	case "serve":
-		if err := serve(os.Args[2:]); err != nil {
-			exit(err)
+		if err := serve(args[1:]); err != nil {
+			exitForError(err)
 		}
 	case "version":
 		fmt.Println(Version)
 	case "migrate":
-		if err := migrate(os.Args[2:]); err != nil {
-			exit(err)
+		if err := migrate(args[1:]); err != nil {
+			exitForError(err)
 		}
 	case "-h", "--help", "help":
 		usage()
 	default:
-		fmt.Fprintf(os.Stderr, "unknown subcommand %q\n\n", os.Args[1])
+		fmt.Fprintf(os.Stderr, "unknown subcommand %q\n\n", args[0])
 		usage()
-		os.Exit(2)
+		osExit(2)
 	}
+}
+
+func exitForError(err error) {
+	fmt.Fprintln(os.Stderr, err.Error())
+	var be *app.ErrBootstrap
+	if errors.As(err, &be) {
+		osExit(2)
+		return
+	}
+	osExit(1)
 }
 
 func usage() {
@@ -80,20 +100,9 @@ func serve(args []string) error {
 		return fmt.Errorf("serve: %w", err)
 	}
 
-	if err := app.EnsureDirs(cfg.DataRoot); err != nil {
-		return fmt.Errorf("serve: ensure data root: %w", err)
-	}
-
-	router := httpx.New(httpx.Deps{Config: cfg})
-
-	slog.Info("phase 1 skeleton: HTTP listener only; TLS + DB open land in plan 05/02",
-		slog.Int("http_port", cfg.Server.HTTPPort),
-		slog.String("data_root", cfg.DataRoot),
-	)
-
-	addr := fmt.Sprintf(":%d", cfg.Server.HTTPPort)
-	srv := &http.Server{Addr: addr, Handler: router}
-	return srv.ListenAndServe()
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
+	return app.Run(ctx, cfg, app.RunOptions{})
 }
 
 func migrate(args []string) error {
@@ -158,9 +167,4 @@ func migrate(args []string) error {
 	default:
 		return fmt.Errorf("migrate: unknown subcommand %q", sub)
 	}
-}
-
-func exit(err error) {
-	fmt.Fprintln(os.Stderr, err.Error())
-	os.Exit(1)
 }

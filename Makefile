@@ -32,6 +32,7 @@ seed:
 	@test -n "$(FILE)" || (echo "FILE=path/to/bootstrap.json required"; exit 2)
 	@mkdir -p $(DATA_ROOT)/config
 	@cp $(FILE) $(DATA_ROOT)/config/bootstrap.json
+	@chmod 0600 $(DATA_ROOT)/config/bootstrap.json
 
 grep-cdn:
 	@grep -rEI 'https?://(?!localhost|127\.0\.0\.1)' web/dist/ 2>/dev/null || true

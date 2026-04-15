@@ -495,6 +495,32 @@ func TestRepoCRUD(t *testing.T) {
 	}
 }
 
+// TestRepoDelete_MissingOnDiskTreeSucceeds is the WR-06 regression gate
+// for the errors.Is(os.ErrNotExist) replacement of the brittle
+// strings.Contains(err.Error(), "no such file") check. A repo that has
+// no on-disk tree yet (freshly-created, never uploaded to) must
+// delete cleanly with no trash_move_failed audit event.
+func TestRepoDelete_MissingOnDiskTreeSucceeds(t *testing.T) {
+	s := newTestServer(t)
+	seedTestUser(t, s.db, "super", "s@x", true, false)
+	cookie, _, _ := s.login(t, "super", "pw-super")
+	s.do(t, "POST", "/api/v1/projects", cookie, api.CreateProjectRequest{Name: "prn"})
+	s.do(t, "POST", "/api/v1/projects/prn/repos", cookie, api.CreateRepoRequest{Name: "r1", Type: "docker"})
+
+	// Do NOT pre-create the on-disk tree; trash.Move will get ENOENT.
+	resp, _ := s.do(t, "DELETE", "/api/v1/projects/prn/repos/docker/r1", cookie, nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("code=%d", resp.StatusCode)
+	}
+	// No trash_move_failed audit (ENOENT is recognized via errors.Is).
+	var n int
+	_ = s.db.Reader.QueryRowContext(context.Background(),
+		`SELECT COUNT(*) FROM audit_log WHERE event_kind='repo.deleted' AND outcome='trash_move_failed'`).Scan(&n)
+	if n != 0 {
+		t.Fatalf("ENOENT on missing tree should not surface as trash_move_failed; got %d rows", n)
+	}
+}
+
 func TestRepoDelete_MovesTreeToTrash(t *testing.T) {
 	s := newTestServer(t)
 	seedTestUser(t, s.db, "super", "s@x", true, false)

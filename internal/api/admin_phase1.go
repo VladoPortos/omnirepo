@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -523,11 +524,30 @@ func (d Deps) handleDeleteRepo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// REPO-06: move on-disk tree to trash/<ts>-repo-<id>/ if it exists.
-	onDisk := filepath.Join(d.DataRoot, "repos", projectName, typ, repoName)
-	if d.Trash != nil {
+	//
+	// WR-06 defense-in-depth: re-validate every URL-sourced segment that
+	// goes into filepath.Join is a legal slug AND that the type is in the
+	// known-good set. chi already blocks raw `/` and the DB lookup
+	// rejects unknown triples, but the on-disk path is security-sensitive
+	// (Trash.Move renames the tree into /var/lib/omnirepo/trash) so we
+	// re-check here rather than trusting upstream invariants.
+	onDiskSafe := true
+	if err := auth.ProjectNameValid(projectName); err != nil {
+		onDiskSafe = false
+	}
+	if _, ok := validRepoTypes[typ]; !ok {
+		onDiskSafe = false
+	}
+	if err := auth.ProjectNameValid(repoName); err != nil {
+		onDiskSafe = false
+	}
+	if onDiskSafe && d.Trash != nil {
+		onDisk := filepath.Join(d.DataRoot, "repos", projectName, typ, repoName)
 		if _, err := d.Trash.Move(r.Context(), onDisk, "repo", rr.ID); err != nil {
-			// Tree may not exist yet for a freshly-created empty repo; that's not a failure.
-			if !errors.Is(err, context.Canceled) && !strings.Contains(err.Error(), "no such file") && !isNoSuchFile(err) {
+			// Tree may not exist for a freshly-created empty repo; that's not a failure.
+			// Use errors.Is(os.ErrNotExist) instead of string-matching — rename
+			// error wrapping via fmt.Errorf(..., %w) preserves the sentinel.
+			if !errors.Is(err, context.Canceled) && !errors.Is(err, os.ErrNotExist) {
 				// Log via audit, do not fail the request — DB row is already soft-deleted.
 				if a, ok := auth.ActorFromContext(r.Context()); ok {
 					uid := a.ID
@@ -601,9 +621,4 @@ func (d Deps) recordAudit(r *http.Request, e audit.Event) {
 		e.UserAgent = r.Header.Get("User-Agent")
 	}
 	_ = d.Audit.Record(r.Context(), e)
-}
-
-// isNoSuchFile returns true for ENOENT-wrapped errors from os.Rename in trash.
-func isNoSuchFile(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "no such file")
 }

@@ -87,6 +87,77 @@ func TestApplyUploadWritesHistoryAndSwapsHolder(t *testing.T) {
 	}
 }
 
+// TestApplyUploadLivePairNeverMismatched is the WR-03 regression gate: after
+// a successful upload, the live cert and key on disk must form a matching
+// pair (public key of cert matches private key). A pre-existing cert+key
+// pair on disk must not be left in a half-updated state if any intermediate
+// step fails — we simulate that by pre-creating a read-only certs/ dir that
+// blocks the stage writes and verify the live files are untouched.
+func TestApplyUploadLivePairNeverMismatched(t *testing.T) {
+	root := t.TempDir()
+	certsDir := filepath.Join(root, "certs")
+	if err := os.MkdirAll(certsDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	// Seed a valid initial live pair (the "OLD" pair).
+	oldCert, oldKey, err := GenerateSelfSigned([]string{"old"}, time.Hour, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(certsDir, "server.crt"), oldCert, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(certsDir, "server.key"), oldKey, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h := NewCertHolder()
+	if err := h.Swap(oldCert, oldKey); err != nil {
+		t.Fatal(err)
+	}
+
+	// Try an upload whose KEY stage write will fail: create a DIRECTORY
+	// named server.key.new in certs/ so os.OpenFile (O_WRONLY|O_CREATE|O_TRUNC)
+	// errors out. The cert stage succeeds, but the key stage fails — previous
+	// implementation would have already renamed the cert on top of the old
+	// cert by then.
+	blockerDir := filepath.Join(certsDir, "server.key.new")
+	if err := os.MkdirAll(blockerDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	// Put a file inside so os.Remove (cleanup of stale stage) fails and the
+	// subsequent OpenFile(O_WRONLY) on the directory also fails.
+	if err := os.WriteFile(filepath.Join(blockerDir, "sentinel"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	newCert, newKey, err := GenerateSelfSigned([]string{"new"}, time.Hour, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = ApplyUpload(context.Background(), newCert, newKey, root, h)
+	if err == nil {
+		t.Fatalf("expected upload failure due to blocked key stage")
+	}
+
+	// Live pair on disk must still be the OLD matched pair (because the
+	// staging step failed BEFORE any rename).
+	gotCrt, err := os.ReadFile(filepath.Join(certsDir, "server.crt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotKey, err := os.ReadFile(filepath.Join(certsDir, "server.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(gotCrt) != string(oldCert) {
+		t.Fatalf("live cert was modified despite key-stage failure")
+	}
+	if string(gotKey) != string(oldKey) {
+		t.Fatalf("live key was modified despite key-stage failure")
+	}
+	// Recover test fixture (remove the blocker dir) so t.TempDir cleanup works.
+	_ = os.RemoveAll(blockerDir)
+}
+
 func TestApplyUploadRejectsMalformedPEM(t *testing.T) {
 	root := t.TempDir()
 	certPEM, keyPEM, _ := GenerateSelfSigned([]string{"h"}, time.Hour, 2048)

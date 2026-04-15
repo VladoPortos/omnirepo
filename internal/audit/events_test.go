@@ -29,11 +29,15 @@ var AllPhase1EventKinds = []audit.EventKind{
 	audit.EvtTLSCertUploaded,
 	audit.EvtBootstrapApplied,
 	audit.EvtMaintenanceToggled,
+	audit.EvtUpstreamCredCreated,
+	audit.EvtUpstreamCredUpdated,
+	audit.EvtUpstreamCredDeleted,
+	audit.EvtUpstreamCredUsed,
 }
 
 func TestAllEventKindsDistinctAndCount(t *testing.T) {
-	if got := len(AllPhase1EventKinds); got != 19 {
-		t.Fatalf("Phase 1 EventKind count = %d, want 19", got)
+	if got := len(AllPhase1EventKinds); got != 23 {
+		t.Fatalf("EventKind count = %d, want 23", got)
 	}
 	seen := make(map[audit.EventKind]struct{}, len(AllPhase1EventKinds))
 	for _, k := range AllPhase1EventKinds {

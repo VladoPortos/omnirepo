@@ -205,6 +205,10 @@ func TestEveryStateChangingActionEmitsEvent(t *testing.T) {
 		audit.EvtTLSCertUploaded,
 		audit.EvtBootstrapApplied,
 		audit.EvtMaintenanceToggled,
+		audit.EvtUpstreamCredCreated,
+		audit.EvtUpstreamCredUpdated,
+		audit.EvtUpstreamCredDeleted,
+		audit.EvtUpstreamCredUsed,
 	}
 	for _, k := range kinds {
 		if err := l.Record(ctx, audit.Event{Kind: k, Outcome: "ok"}); err != nil {

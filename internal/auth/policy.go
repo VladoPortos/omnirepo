@@ -24,6 +24,12 @@ const (
 	ActionDeleteRepo          Action = "repo.delete"
 	ActionUploadTLSCert       Action = "tls.upload"
 	ActionApplyBootstrap      Action = "bootstrap.apply"
+
+	// Phase 02-02: project-scoped upstream credential management (D-11).
+	// Read/list/write all gated by project membership; no secret is ever
+	// returned via these endpoints — Lookup happens only server-side at
+	// pull-external time.
+	ActionManageUpstreamCreds Action = "upstream_cred.manage"
 )
 
 // AllActions enumerates every Action constant in the package. Downstream
@@ -45,6 +51,7 @@ var AllActions = []Action{
 	ActionDeleteRepo,
 	ActionUploadTLSCert,
 	ActionApplyBootstrap,
+	ActionManageUpstreamCreds,
 }
 
 // Target is the object the actor is operating on.
@@ -154,7 +161,8 @@ func Can(ctx context.Context, actor Actor, action Action, target Target) (bool, 
 		return false, ReasonSuperAdminRequired
 
 	case ActionCreateRepo, ActionDeleteRepo,
-		ActionAddProjectMember, ActionRemoveProjectMember:
+		ActionAddProjectMember, ActionRemoveProjectMember,
+		ActionManageUpstreamCreds:
 		if target.ProjectID != 0 && isMemberOfProject(ctx, target.ProjectID) {
 			return true, ""
 		}

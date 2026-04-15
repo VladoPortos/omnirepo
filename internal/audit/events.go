@@ -35,4 +35,12 @@ const (
 	EvtTLSCertUploaded     EventKind = "tls.cert.uploaded"
 	EvtBootstrapApplied    EventKind = "bootstrap.applied"
 	EvtMaintenanceToggled  EventKind = "maintenance.toggled"
+
+	// Phase 2 Plan 02 — upstream credentials (D-13). "used" is emitted by
+	// Phase 02-10 pull-external at the consumer side; declared here for a
+	// single enumeration point.
+	EvtUpstreamCredCreated EventKind = "upstream_cred.created"
+	EvtUpstreamCredUpdated EventKind = "upstream_cred.updated"
+	EvtUpstreamCredDeleted EventKind = "upstream_cred.deleted"
+	EvtUpstreamCredUsed    EventKind = "upstream_cred.used"
 )

@@ -164,31 +164,35 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 	}
 
 	// 5b. Upstream-creds AEAD master key (Phase 02-02 D-10). Auto-generated
-	// on first boot; loaded thereafter. The actual AEAD handle is consumed
-	// by UpstreamCredsRepo when Phase 02-10 wires pull-external.
-	if _, err := BootEnsureAEADKey(ctx, db, metadata.NewSettingsRepo(db)); err != nil {
+	// on first boot; loaded thereafter. The resulting AEAD is passed to the
+	// UpstreamCredsRepo so REST CRUD + pull-external (Phase 02-10) both
+	// share the same per-install key.
+	aead, err := BootEnsureAEADKey(ctx, db, metadata.NewSettingsRepo(db))
+	if err != nil {
 		return fmt.Errorf("app.Run: aead key: %w", err)
 	}
+	upstreamCreds := metadata.NewUpstreamCredsRepo(db, aead)
 
 	// 6. Router with global middleware + system routes + API.
 	router := httpx.New(httpx.Deps{Config: cfg})
 	router.Get("/healthz", httpx.Healthz())
 	router.Get("/readyz", httpx.Readyz(httpx.ReadyzDeps{DB: db, Holder: holder}))
 	api.Mount(router, api.Deps{
-		DB:         db,
-		Users:      metadata.NewUsersRepo(db),
-		Sessions:   metadata.NewSessionsRepo(db),
-		APIKeys:    metadata.NewAPIKeysRepo(db),
-		Projects:   metadata.NewProjectsRepo(db),
-		Members:    metadata.NewMembersRepo(db),
-		Repos:      metadata.NewReposRepo(db),
-		Settings:   metadata.NewSettingsRepo(db),
-		Holder:     holder,
-		DataRoot:   cfg.DataRoot,
-		Audit:      auditLogger,
-		Trash:      storage.NewTrash(filepath.Join(cfg.DataRoot, "trash")),
-		Locks:      storage.NewLocks(),
-		SessionTTL: cfg.Auth.SessionTTL,
+		DB:            db,
+		Users:         metadata.NewUsersRepo(db),
+		Sessions:      metadata.NewSessionsRepo(db),
+		APIKeys:       metadata.NewAPIKeysRepo(db),
+		Projects:      metadata.NewProjectsRepo(db),
+		Members:       metadata.NewMembersRepo(db),
+		Repos:         metadata.NewReposRepo(db),
+		Settings:      metadata.NewSettingsRepo(db),
+		UpstreamCreds: upstreamCreds,
+		Holder:        holder,
+		DataRoot:      cfg.DataRoot,
+		Audit:         auditLogger,
+		Trash:         storage.NewTrash(filepath.Join(cfg.DataRoot, "trash")),
+		Locks:         storage.NewLocks(),
+		SessionTTL:    cfg.Auth.SessionTTL,
 	})
 
 	// 7. Listeners.

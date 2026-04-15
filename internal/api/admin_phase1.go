@@ -30,8 +30,9 @@ type Deps struct {
 	APIKeys  *metadata.APIKeysRepo
 	Projects *metadata.ProjectsRepo
 	Members  *metadata.MembersRepo
-	Repos    *metadata.ReposRepo
-	Settings *metadata.SettingsRepo
+	Repos         *metadata.ReposRepo
+	Settings      *metadata.SettingsRepo
+	UpstreamCreds *metadata.UpstreamCredsRepo
 
 	Holder   *omrtls.CertHolder
 	DataRoot string
@@ -143,6 +144,12 @@ func Mount(r chi.Router, d Deps) {
 				Post("/projects/{name}/repos", d.handleCreateRepo)
 			r.With(authmw.RequireCanWith(auth.ActionDeleteRepo, d.resolveProjectTargetFromURL)).
 				Delete("/projects/{name}/repos/{type}/{repo}", d.handleDeleteRepo)
+
+			// Phase 02-02: upstream creds CRUD. Handlers re-check project
+			// membership inline (ActionManageUpstreamCreds) so route-level
+			// RequireCanWith is not needed here — this lets us return 401
+			// distinct from 403 and 404.
+			d.mountUpstreamCreds(r)
 		})
 	})
 }

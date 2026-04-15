@@ -53,6 +53,12 @@ type Deps struct {
 	// nil-safe — when nil, /api/v1/admin/gc is not mounted.
 	GCDeps *GCDeps
 
+	// SyncDeps is the Plan 03-06 SYNC-05 sync REST endpoint dependency
+	// bundle. nil-safe — when nil, /api/v1/projects/{name}/repos/{type}/{repo}/sync
+	// is not mounted. Pre-populated by app.Run with the
+	// ActorResolver shim that bridges auth.Actor to httpx.SyncActor.
+	SyncDeps *SyncRESTAdapter
+
 	// RepoCreateHook is invoked INSIDE the repo-create writer tx so the
 	// hook's writes (e.g. RPM/DEB signing-key generation, Phase 03 Plan 04
 	// D-02) commit atomically with the repos INSERT. Returns optional
@@ -191,6 +197,11 @@ func Mount(r chi.Router, d Deps) {
 			// Phase 02-12: super-admin garbage collection trigger
 			// (D-37, OPS-06). RequireCan(ActionTriggerGC) gate inside.
 			d.mountAdminGC(r)
+
+			// Phase 03 Plan 06: SYNC-05 sync REST endpoint. Mounted inside
+			// the SessionOrAPIKey subtree so the ActorResolver finds the
+			// actor on ctx; the handler re-checks project membership inline.
+			RegisterSyncRoutes(r, d.SyncDeps)
 		})
 	})
 }

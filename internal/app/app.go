@@ -407,6 +407,46 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 		}
 		return map[string]any{"fingerprint": fp}, nil
 	}
+
+	// Phase 03 Plan 06: SYNC-05 sync handlers + REST. Construct registries
+	// for each protocol BEFORE api.Mount so wireSync can attach a
+	// coalescer.Get(repoID).Kick() factory at the end of every batch.
+	sharedLocks := storage.NewLocks()
+	helmRegistry := helmDeps{
+		cfg: cfg, db: db, auditLogger: auditLogger, locks: sharedLocks,
+	}.wireHelm(router)
+	defer shutdownHelmRegistry(context.Background(), helmRegistry)
+
+	pypiRegistry := pypiDeps{
+		cfg: cfg, db: db, auditLogger: auditLogger, locks: sharedLocks,
+	}.wirePyPI(router)
+	defer shutdownPyPIRegistry(context.Background(), pypiRegistry)
+
+	rpmRegistry := rpmDeps{
+		cfg: cfg, db: db, auditLogger: auditLogger,
+		signingKeys: signingKeysRepo, locks: sharedLocks,
+	}.wireRPM(router)
+	defer shutdownRPMRegistry(context.Background(), rpmRegistry)
+
+	debRegistry := debDeps{
+		cfg: cfg, db: db, auditLogger: auditLogger,
+		signingKeys: signingKeysRepo, locks: sharedLocks,
+	}.wireDEB(router)
+	defer shutdownDEBRegistry(context.Background(), debRegistry)
+
+	syncAdapter := syncDeps{
+		cfg:          cfg,
+		db:           db,
+		auditLogger:  auditLogger,
+		creds:        upstreamCreds,
+		syncPool:     syncPool,
+		syncHandlers: syncHandlers,
+		rpmRegistry:  rpmRegistry,
+		debRegistry:  debRegistry,
+		pypiRegistry: pypiRegistry,
+		helmRegistry: helmRegistry,
+	}.wireSync()
+
 	api.Mount(router, api.Deps{
 		DB:            db,
 		Users:         metadata.NewUsersRepo(db),
@@ -442,6 +482,8 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 			SyncJobs: metadata.NewSyncJobsRepo(db),
 			SyncKick: syncPool.Kick,
 		},
+		// Plan 03-06: SYNC-05 REST endpoint.
+		SyncDeps: syncAdapter,
 	})
 
 	// Start pool dispatchers AFTER all handlers are registered (02-09 scan,
@@ -479,54 +521,9 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 	})
 	rawHandler.Mount(router)
 
-	// 6d. Phase 03 Plan 02: Helm chart-repository handler + per-repo regen
-	// coalescer registry. wireHelm constructs the coalescer registry (with
-	// the helm.RegenFor factory, stubbed in Plan 03-02 Task 1 and filled in
-	// by Task 2) and mounts the /{project}/helm/{repo}/... routes.
-	sharedLocks := storage.NewLocks()
-	helmRegistry := helmDeps{
-		cfg:         cfg,
-		db:          db,
-		auditLogger: auditLogger,
-		locks:       sharedLocks,
-	}.wireHelm(router)
-	defer shutdownHelmRegistry(context.Background(), helmRegistry)
-
-	// 6e. Phase 03 Plan 03: PyPI handler + per-repo regen coalescer
-	// registry. Mirrors the Helm wiring pattern.
-	pypiRegistry := pypiDeps{
-		cfg:         cfg,
-		db:          db,
-		auditLogger: auditLogger,
-		locks:       sharedLocks,
-	}.wirePyPI(router)
-	defer shutdownPyPIRegistry(context.Background(), pypiRegistry)
-
-	// 6f. Phase 03 Plan 04: RPM handler + per-repo regen coalescer registry.
-	// Shares signingKeysRepo with the api.Deps repo-create hook so a
-	// fresh-from-DB Lookup goes through the same instance the hook used to
-	// Insert (cache prefill happens lazily on first /public-key.asc GET).
-	rpmRegistry := rpmDeps{
-		cfg:         cfg,
-		db:          db,
-		auditLogger: auditLogger,
-		signingKeys: signingKeysRepo,
-		locks:       sharedLocks,
-	}.wireRPM(router)
-	defer shutdownRPMRegistry(context.Background(), rpmRegistry)
-
-	// 6g. Phase 03 Plan 05: DEB handler + per-repo regen coalescer registry.
-	// Shares signingKeysRepo + sharedLocks with RPM so the repo-create hook
-	// composition (RPM signing-key + DEB apt_suites matrix) stays consistent
-	// with what the handlers/regen factories read.
-	debRegistry := debDeps{
-		cfg:         cfg,
-		db:          db,
-		auditLogger: auditLogger,
-		signingKeys: signingKeysRepo,
-		locks:       sharedLocks,
-	}.wireDEB(router)
-	defer shutdownDEBRegistry(context.Background(), debRegistry)
+	// Phase 03 protocol handlers + sync wiring already constructed above
+	// (moved before api.Mount so the SyncDeps closure can reference each
+	// per-repo regen registry).
 
 	// 7. Listeners.
 	httpLn := opts.HTTPListener

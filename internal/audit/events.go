@@ -114,4 +114,15 @@ const (
 	EvtHelmDelete          EventKind = "helm.delete"
 	EvtRepoMetadataRegen   EventKind = "repo.metadata.regen"
 	EvtRepoMetadataFailed  EventKind = "repo.metadata.failed"
+
+	// Phase 3 Plan 06 — SYNC-05 sync-from-external (D-18). One per-job
+	// lifecycle event each, plus a coarse heartbeat (every 50 files). The
+	// REST enqueue endpoint emits EvtSyncStarted at the moment the
+	// sync_jobs row is inserted; the worker emits EvtUpstreamCredUsed
+	// (reuse of the existing event) at first upstream contact when
+	// cred_id != null (D-19); progress + finished/failed are worker-side.
+	EvtSyncStarted  EventKind = "sync.started"
+	EvtSyncProgress EventKind = "sync.progress"
+	EvtSyncFinished EventKind = "sync.finished"
+	EvtSyncFailed   EventKind = "sync.failed"
 )

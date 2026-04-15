@@ -302,6 +302,14 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 		Trash:         storage.NewTrash(filepath.Join(cfg.DataRoot, "trash")),
 		Locks:         storage.NewLocks(),
 		SessionTTL:    cfg.Auth.SessionTTL,
+		// Plan 02-09: scan REST endpoints (manual rescan, scan list,
+		// scan get, vulnerabilities, SBOM download).
+		ScanDeps: &api.ScansDeps{
+			Scans:    metadata.NewScansRepo(db),
+			Vulns:    metadata.NewVulnerabilitiesRepo(db),
+			ScanKick: scanPool.Kick,
+			SBOMRoot: filepath.Join(cfg.DataRoot, "sboms"),
+		},
 	})
 
 	// 6b. /v2 OCI registry handler (Phase 02-05). Materialize the HMAC
@@ -338,7 +346,13 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 		Tags:      metadata.NewDockerTagsRepo(db),
 		Scans:     metadata.NewScansRepo(db),
 		ScanKick:  scanPool.Kick,
-		// SeverityGate is wired by plan 02-09; left nil → no-op.
+		// Plan 02-09: block_on_severity gate (D-26, SCAN-07).
+		SeverityGate: oci.NewSeverityGate(
+			metadata.NewReposRepo(db),
+			metadata.NewScansRepo(db),
+			severityCache,
+			auditLogger,
+		),
 	})
 	ociHandler.Mount(router)
 	ociHandler.MountCosign(router)
@@ -360,6 +374,13 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 		Trash:    storage.NewTrash(filepath.Join(cfg.DataRoot, "trash")),
 		Audit:    auditLogger,
 		RepoRoot: repoRoot,
+		// Plan 02-09: block_on_severity gate (D-26, SCAN-07).
+		SeverityGate: raw.NewSeverityGate(
+			metadata.NewReposRepo(db),
+			metadata.NewScansRepo(db),
+			severityCache,
+			auditLogger,
+		),
 	})
 	rawHandler.Mount(router)
 

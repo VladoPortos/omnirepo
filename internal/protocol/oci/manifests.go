@@ -397,10 +397,16 @@ func (h *Handler) manifestGetOrHead(w http.ResponseWriter, r *http.Request, writ
 		return
 	}
 
-	// 02-09 severity gate hook. No-op when nil.
+	// 02-09 severity gate hook. No-op when nil. When the gate returns
+	// *ErrBlockedByScan, write the documented JSON envelope so callers can
+	// parse {error,severity,cve_count,scan_id}; otherwise fall back to the
+	// generic OCI 403 DENIED envelope.
 	if h.severityGate != nil {
 		if err := h.severityGate(ctx, rr.repo.ID, digest); err != nil {
-			// Gate blocked: use 403 with MANIFEST_UNKNOWN-adjacent envelope.
+			if blocked, ok := IsBlockedByScan(err); ok {
+				WriteBlockedResponse(w, blocked)
+				return
+			}
 			writeOCIErr(w, http.StatusForbidden, ErrCodeDenied, err)
 			return
 		}

@@ -40,6 +40,10 @@ type Deps struct {
 	Trash    storage.Trash
 	Locks    storage.Locks
 
+	// ScanDeps is the Plan 02-09 scan REST surface dependency bundle.
+	// nil-safe — when nil, scan endpoints are not mounted.
+	ScanDeps *ScansDeps
+
 	// Clock is used for session/token issuance. Defaults to time.Now().UTC.
 	Clock func() time.Time
 
@@ -155,6 +159,11 @@ func Mount(r chi.Router, d Deps) {
 			// RequireCanWith is not needed here — this lets us return 401
 			// distinct from 403 and 404.
 			d.mountUpstreamCreds(r)
+
+			// Phase 02-09: scan REST endpoints (manual rescan, scan list,
+			// scan detail, vulnerabilities, SBOM download). Mount only when
+			// ScanDeps is wired by app.Run.
+			d.mountScans(r)
 		})
 	})
 }

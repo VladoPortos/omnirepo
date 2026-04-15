@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -124,10 +125,14 @@ func (p *PromoteREST) Handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Resolve src tag → digest.
+	// Resolve src tag → digest. WR-03: never echo raw Go error strings on
+	// 5xx — they can carry file paths, SQL snippets, and internal state.
+	// Log server-side with slog and respond with an empty detail.
 	digest, err := p.h.tags.Resolve(r.Context(), srcRepo.ID, req.SrcTag)
 	if err != nil {
-		writeActionErr(w, http.StatusInternalServerError, "internal", err.Error())
+		slog.ErrorContext(r.Context(), "oci.promote.tags.resolve",
+			"src_repo", srcRepo.ID, "tag", req.SrcTag, "err", err)
+		writeActionErr(w, http.StatusInternalServerError, "internal", "")
 		return
 	}
 	if digest == "" {
@@ -138,7 +143,9 @@ func (p *PromoteREST) Handle(w http.ResponseWriter, r *http.Request) {
 	// Load src manifest (byte-identical body + media type + refs).
 	srcManifest, err := p.h.manifests.GetByDigest(r.Context(), srcRepo.ID, digest)
 	if err != nil {
-		writeActionErr(w, http.StatusInternalServerError, "internal", err.Error())
+		slog.ErrorContext(r.Context(), "oci.promote.manifests.getbydigest",
+			"src_repo", srcRepo.ID, "digest", digest, "err", err)
+		writeActionErr(w, http.StatusInternalServerError, "internal", "")
 		return
 	}
 	if srcManifest == nil {
@@ -149,7 +156,11 @@ func (p *PromoteREST) Handle(w http.ResponseWriter, r *http.Request) {
 	// Parse refs before opening the tx.
 	refs, isIndex, err := manifestRefs(srcManifest.Body)
 	if err != nil {
-		writeActionErr(w, http.StatusInternalServerError, "manifest_parse", err.Error())
+		// Malformed stored body — client-facing 400 with stable code, full
+		// detail only to the log.
+		slog.ErrorContext(r.Context(), "oci.promote.manifest_refs",
+			"digest", digest, "err", err)
+		writeActionErr(w, http.StatusBadRequest, "manifest_invalid", "stored manifest body is malformed")
 		return
 	}
 
@@ -182,10 +193,13 @@ func (p *PromoteREST) Handle(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		// An index promote with missing child refs surfaces here.
 		if errors.Is(err, metadata.ErrManifestDigestConflict) {
+			// Digest conflicts are caller-caused and safe to echo back.
 			writeActionErr(w, http.StatusConflict, "digest_conflict", err.Error())
 			return
 		}
-		writeActionErr(w, http.StatusInternalServerError, "promote_tx", err.Error())
+		slog.ErrorContext(r.Context(), "oci.promote.tx",
+			"dst_repo", dstRepo.ID, "digest", digest, "err", err)
+		writeActionErr(w, http.StatusInternalServerError, "promote_tx", "")
 		return
 	}
 

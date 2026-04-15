@@ -29,6 +29,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -517,6 +518,8 @@ func (p *PullExternalREST) Handle(w http.ResponseWriter, r *http.Request) {
 				writeActionErr(w, http.StatusNotFound, "not_found", "cred")
 				return
 			}
+			slog.ErrorContext(r.Context(), "oci.pull_external.creds.lookup",
+				"project", proj.ID, "cred_id", req.CredID, "err", lerr)
 			writeActionErr(w, http.StatusInternalServerError, "internal", "")
 			return
 		}
@@ -539,6 +542,7 @@ func (p *PullExternalREST) Handle(w http.ResponseWriter, r *http.Request) {
 	}
 	buf, err := json.Marshal(&jobPayload)
 	if err != nil {
+		slog.ErrorContext(r.Context(), "oci.pull_external.marshal", "err", err)
 		writeActionErr(w, http.StatusInternalServerError, "internal", "marshal")
 		return
 	}
@@ -553,6 +557,10 @@ func (p *PullExternalREST) Handle(w http.ResponseWriter, r *http.Request) {
 		return nil
 	})
 	if err != nil {
+		// WR-03: server-side log captures the sql/path detail; client gets a
+		// stable code with empty detail.
+		slog.ErrorContext(r.Context(), "oci.pull_external.enqueue",
+			"repo", rr.ID, "err", err)
 		writeActionErr(w, http.StatusInternalServerError, "internal", "enqueue")
 		return
 	}

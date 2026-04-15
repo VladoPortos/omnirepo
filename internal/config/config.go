@@ -37,6 +37,7 @@ type Config struct {
 	Auth      AuthConfig      `koanf:"auth"`
 	Scan      ScanConfig      `koanf:"scan"`
 	Trivy     Trivy           `koanf:"trivy"`
+	Jobs      Jobs            `koanf:"jobs"`
 	AirGap    AirGapConfig    `koanf:"air_gap"`
 	Log       LogConfig       `koanf:"log"`
 }
@@ -47,6 +48,17 @@ type Trivy struct {
 	BinaryPath string `koanf:"binary_path"`
 	DBPath     string `koanf:"db_path"`
 	CachePath  string `koanf:"cache_path"`
+}
+
+// Jobs tunes the two-pool job runner (D-14..D-20, D-44). SyncWorkers /
+// ScanWorkers are the worker-goroutine counts; PollInterval is the
+// dispatcher's re-poll cadence (kick-channel short-circuits it);
+// ShutdownGraceSeconds is the drain deadline on SIGTERM.
+type Jobs struct {
+	SyncWorkers          int           `koanf:"sync_workers"`
+	ScanWorkers          int           `koanf:"scan_workers"`
+	PollInterval         time.Duration `koanf:"poll_interval"`
+	ShutdownGraceSeconds int           `koanf:"shutdown_grace_seconds"`
 }
 
 type ServerConfig struct {
@@ -113,6 +125,12 @@ func Defaults() Config {
 			BinaryPath: "/usr/local/bin/trivy",
 			DBPath:     "/var/lib/omnirepo/trivy/db",
 			CachePath:  "/var/lib/omnirepo/trivy/cache",
+		},
+		Jobs: Jobs{
+			SyncWorkers:          4,
+			ScanWorkers:          2,
+			PollInterval:         2 * time.Second,
+			ShutdownGraceSeconds: 30,
 		},
 		AirGap: AirGapConfig{
 			AllowExternalActions: true,

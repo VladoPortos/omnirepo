@@ -139,6 +139,45 @@ func TestTrivyDefaults(t *testing.T) {
 	}
 }
 
+func TestJobsDefaults(t *testing.T) {
+	d := config.Defaults()
+	if d.Jobs.SyncWorkers != 4 {
+		t.Errorf("Jobs.SyncWorkers = %d, want 4", d.Jobs.SyncWorkers)
+	}
+	if d.Jobs.ScanWorkers != 2 {
+		t.Errorf("Jobs.ScanWorkers = %d, want 2", d.Jobs.ScanWorkers)
+	}
+	if d.Jobs.PollInterval != 2*time.Second {
+		t.Errorf("Jobs.PollInterval = %s, want 2s", d.Jobs.PollInterval)
+	}
+	if d.Jobs.ShutdownGraceSeconds != 30 {
+		t.Errorf("Jobs.ShutdownGraceSeconds = %d, want 30", d.Jobs.ShutdownGraceSeconds)
+	}
+}
+
+func TestJobsEnvOverride(t *testing.T) {
+	t.Setenv("OMNIREPO_JOBS__SYNC_WORKERS", "8")
+	t.Setenv("OMNIREPO_JOBS__SCAN_WORKERS", "3")
+	t.Setenv("OMNIREPO_JOBS__POLL_INTERVAL", "500ms")
+	t.Setenv("OMNIREPO_JOBS__SHUTDOWN_GRACE_SECONDS", "15")
+	cfg, err := config.Load("")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Jobs.SyncWorkers != 8 {
+		t.Errorf("Jobs.SyncWorkers = %d, want 8", cfg.Jobs.SyncWorkers)
+	}
+	if cfg.Jobs.ScanWorkers != 3 {
+		t.Errorf("Jobs.ScanWorkers = %d, want 3", cfg.Jobs.ScanWorkers)
+	}
+	if cfg.Jobs.PollInterval != 500*time.Millisecond {
+		t.Errorf("Jobs.PollInterval = %s, want 500ms", cfg.Jobs.PollInterval)
+	}
+	if cfg.Jobs.ShutdownGraceSeconds != 15 {
+		t.Errorf("Jobs.ShutdownGraceSeconds = %d, want 15", cfg.Jobs.ShutdownGraceSeconds)
+	}
+}
+
 func TestTrivyEnvOverride(t *testing.T) {
 	t.Setenv("OMNIREPO_TRIVY__BINARY_PATH", "/x")
 	t.Setenv("OMNIREPO_TRIVY__DB_PATH", "/y")

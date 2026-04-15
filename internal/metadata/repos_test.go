@@ -402,3 +402,85 @@ func TestReposRepo_OptionalArgsHonored(t *testing.T) {
 		t.Fatalf("optional args not honored: %+v", got)
 	}
 }
+
+// Phase 03 Plan 01 (D-12): metadata_state helpers.
+
+func TestReposMetadataStateRoundTrip(t *testing.T) {
+	t.Parallel()
+	db := sqlitetest.New(t)
+	ctx := context.Background()
+	pid := seedProject(t, db, "p-md")
+	r := metadata.NewReposRepo(db)
+	id, err := r.Create(ctx, pid, "rpm", "r-md", "", nil, nil, nil)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	state, lastErr, err := r.GetMetadataState(ctx, id)
+	if err != nil {
+		t.Fatalf("get initial: %v", err)
+	}
+	if state != metadata.MetadataStateClean {
+		t.Fatalf("initial state=%q want clean", state)
+	}
+	if lastErr != "" {
+		t.Fatalf("initial lastErr=%q want empty", lastErr)
+	}
+	if err := db.WriteTx(ctx, func(tx *sql.Tx) error {
+		if err := r.SetMetadataState(ctx, tx, id, metadata.MetadataStateDirty); err != nil {
+			return err
+		}
+		return r.SetLastRegenError(ctx, tx, id, "boom")
+	}); err != nil {
+		t.Fatalf("set dirty+err: %v", err)
+	}
+	state, lastErr, _ = r.GetMetadataState(ctx, id)
+	if state != metadata.MetadataStateDirty || lastErr != "boom" {
+		t.Fatalf("after set: state=%q lastErr=%q", state, lastErr)
+	}
+	if err := db.WriteTx(ctx, func(tx *sql.Tx) error {
+		return r.SetMetadataState(ctx, tx, id, metadata.MetadataStateRegenerating)
+	}); err != nil {
+		t.Fatalf("set regenerating: %v", err)
+	}
+	state, _, _ = r.GetMetadataState(ctx, id)
+	if state != metadata.MetadataStateRegenerating {
+		t.Fatalf("state=%q want regenerating", state)
+	}
+	if err := db.WriteTx(ctx, func(tx *sql.Tx) error {
+		if err := r.SetMetadataState(ctx, tx, id, metadata.MetadataStateClean); err != nil {
+			return err
+		}
+		return r.SetLastRegenError(ctx, tx, id, "")
+	}); err != nil {
+		t.Fatalf("set clean: %v", err)
+	}
+	state, lastErr, _ = r.GetMetadataState(ctx, id)
+	if state != metadata.MetadataStateClean || lastErr != "" {
+		t.Fatalf("after success: state=%q lastErr=%q", state, lastErr)
+	}
+}
+
+func TestReposMetadataStateCheckConstraint(t *testing.T) {
+	t.Parallel()
+	db := sqlitetest.New(t)
+	ctx := context.Background()
+	pid := seedProject(t, db, "p-chk")
+	r := metadata.NewReposRepo(db)
+	id, _ := r.Create(ctx, pid, "rpm", "r-chk", "", nil, nil, nil)
+	err := db.WriteTx(ctx, func(tx *sql.Tx) error {
+		return r.SetMetadataState(ctx, tx, id, "bogus")
+	})
+	if err == nil || !strings.Contains(err.Error(), "CHECK") {
+		t.Fatalf("expected CHECK violation, got %v", err)
+	}
+}
+
+func TestReposMetadataStateMissing(t *testing.T) {
+	t.Parallel()
+	db := sqlitetest.New(t)
+	r := metadata.NewReposRepo(db)
+	_, _, err := r.GetMetadataState(context.Background(), 9999)
+	if !errors.Is(err, metadata.ErrNotFound) {
+		t.Fatalf("want ErrNotFound, got %v", err)
+	}
+}

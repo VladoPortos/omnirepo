@@ -514,6 +514,55 @@ func (r *ReposRepo) WipeRaw(ctx context.Context, tx *sql.Tx, repoID int64) (int6
 	return int64(len(files)), bytesFreed, nil
 }
 
+// Phase 03 Plan 01 (D-12): metadata_state helpers. The regen goroutine
+// transitions clean -> dirty on each package write, clean/dirty ->
+// regenerating when it starts, and regenerating -> clean (or dirty +
+// last_regen_error) on completion.
+
+// Valid values for repos.metadata_state.
+const (
+	MetadataStateClean        = "clean"
+	MetadataStateDirty        = "dirty"
+	MetadataStateRegenerating = "regenerating"
+)
+
+// SetMetadataState updates the metadata_state column. The DDL CHECK
+// constraint is the authority — passing an unknown state yields a DB
+// error, not a silent default. Runs inside the caller's tx.
+func (r *ReposRepo) SetMetadataState(ctx context.Context, tx *sql.Tx, repoID int64, state string) error {
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE repos SET metadata_state=? WHERE id=?`, state, repoID,
+	); err != nil {
+		return fmt.Errorf("repos: set metadata_state (repo=%d state=%s): %w", repoID, state, err)
+	}
+	return nil
+}
+
+// SetLastRegenError updates the last_regen_error column. Empty string
+// clears the prior error (call after a successful regen).
+func (r *ReposRepo) SetLastRegenError(ctx context.Context, tx *sql.Tx, repoID int64, errStr string) error {
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE repos SET last_regen_error=? WHERE id=?`, errStr, repoID,
+	); err != nil {
+		return fmt.Errorf("repos: set last_regen_error (repo=%d): %w", repoID, err)
+	}
+	return nil
+}
+
+// GetMetadataState returns the (state, last_regen_error) pair for repoID.
+func (r *ReposRepo) GetMetadataState(ctx context.Context, repoID int64) (state, lastErr string, err error) {
+	row := r.db.Reader.QueryRowContext(ctx,
+		`SELECT metadata_state, last_regen_error FROM repos WHERE id=?`, repoID,
+	)
+	if err = row.Scan(&state, &lastErr); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", "", ErrNotFound
+		}
+		return "", "", fmt.Errorf("repos: get metadata_state (repo=%d): %w", repoID, err)
+	}
+	return state, lastErr, nil
+}
+
 // extractDigests walks a manifest body and returns every "sha256:..." string
 // value appearing under a "digest" key. Tolerant to manifest-list / image-
 // index / single-manifest shapes because it traverses any JSON structure.

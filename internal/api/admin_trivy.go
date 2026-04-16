@@ -127,6 +127,8 @@ func (d Deps) handleTrivyDBUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() { _ = os.RemoveAll(tmpDir) }() // cleanup on failure
 
+	const maxTotalExtracted = 2 << 30 // 2 GiB cumulative extraction limit
+
 	tr := tar.NewReader(gzr)
 	var totalSize int64
 	for {
@@ -169,13 +171,17 @@ func (d Deps) handleTrivyDBUpload(w http.ResponseWriter, r *http.Request) {
 				writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
 				return
 			}
-			n, copyErr := io.Copy(out, tr)
+			n, copyErr := io.Copy(out, io.LimitReader(tr, maxTotalExtracted-totalSize+1))
 			_ = out.Close()
 			if copyErr != nil {
 				writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
 				return
 			}
 			totalSize += n
+			if totalSize > maxTotalExtracted {
+				writeJSONError(w, http.StatusUnprocessableEntity, ErrValidationFailed, "extracted size exceeds 2 GiB limit")
+				return
+			}
 		}
 	}
 

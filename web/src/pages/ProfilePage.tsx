@@ -618,6 +618,7 @@ function MyProjectsSection() {
                 key={p.id}
                 variant="ghost"
                 className="w-full justify-start"
+                nativeButton={false}
                 render={<Link to={`/projects/${p.name}`} />}
               >
                 <FolderKanban className="mr-2 size-4" />

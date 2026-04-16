@@ -125,7 +125,7 @@ export function SearchPage() {
       <h1 className="text-[28px] font-semibold leading-tight">Search</h1>
 
       {/* Search input */}
-      <div className="relative max-w-2xl">
+      <div className="relative">
         <SearchIcon className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
         <Input
           value={query}
@@ -178,7 +178,7 @@ export function SearchPage() {
       </div>
 
       {/* Results */}
-      <div className="max-w-3xl space-y-2">
+      <div className="space-y-2">
         {showLoading && hasQuery && (
           <div className="space-y-2">
             {Array.from({ length: 5 }).map((_, i) => (

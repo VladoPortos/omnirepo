@@ -8,14 +8,6 @@ import { useParams, useNavigate, Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { Plus, Users, Activity, FolderGit2 } from 'lucide-react';
 import { toast } from 'sonner';
-import {
-  Breadcrumb,
-  BreadcrumbList,
-  BreadcrumbItem,
-  BreadcrumbLink,
-  BreadcrumbSeparator,
-  BreadcrumbPage,
-} from '@/components/ui/breadcrumb';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -142,7 +134,7 @@ export function ProjectDetailPage() {
         <p className="mt-2 text-sm text-muted-foreground">
           The project &quot;{name}&quot; does not exist or you lack access.
         </p>
-        <Button className="mt-4" render={<Link to="/projects" />}>
+        <Button className="mt-4" nativeButton={false} render={<Link to="/projects" />}>
           Back to Projects
         </Button>
       </div>
@@ -153,21 +145,6 @@ export function ProjectDetailPage() {
 
   return (
     <div className="space-y-6">
-      {/* Breadcrumb */}
-      <Breadcrumb>
-        <BreadcrumbList>
-          <BreadcrumbItem>
-            <BreadcrumbLink render={<Link to="/projects" />}>
-              Projects
-            </BreadcrumbLink>
-          </BreadcrumbItem>
-          <BreadcrumbSeparator />
-          <BreadcrumbItem>
-            <BreadcrumbPage>{project.name}</BreadcrumbPage>
-          </BreadcrumbItem>
-        </BreadcrumbList>
-      </Breadcrumb>
-
       {/* Title */}
       <div>
         <h1 className="text-[28px] font-semibold leading-tight">
@@ -185,7 +162,7 @@ export function ProjectDetailPage() {
         value={activeTab}
         onValueChange={(val) => setActiveTab(val as string)}
       >
-        <TabsList variant="line" className="w-full overflow-x-auto">
+        <TabsList variant="line" className="w-full overflow-x-auto overflow-y-hidden pb-1.5">
           {ALL_TABS.map((tab) => (
             <TabsTrigger key={tab} value={tab}>
               {tab === 'overview'
@@ -211,7 +188,7 @@ export function ProjectDetailPage() {
                     <Users className="size-4 text-muted-foreground" />
                     <CardTitle>Members</CardTitle>
                   </div>
-                  <Button variant="outline" size="sm" render={<Link to="/admin/users" />}>
+                  <Button variant="outline" size="sm" nativeButton={false} render={<Link to="/admin/users" />}>
                     Add Member
                   </Button>
                 </div>

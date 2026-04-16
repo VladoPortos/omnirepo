@@ -32,7 +32,7 @@ import { Switch } from '@/components/ui/switch';
 import { Avatar, AvatarImage, AvatarFallback } from '@/components/ui/avatar';
 import { toast } from 'sonner';
 import { formatDate } from '@/lib/format';
-import { Plus, Pencil, Trash2, ShieldCheck } from 'lucide-react';
+import { Plus, Pencil, Trash2, ShieldCheck, Copy, RefreshCw } from 'lucide-react';
 import { createAvatar } from '@dicebear/core';
 import { initials } from '@dicebear/collection';
 
@@ -60,7 +60,7 @@ function useAdminCreateUser() {
 function useAdminUpdateUser() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ login, data }: { login: string; data: UserUpdate & { must_change_password?: boolean } }) =>
+    mutationFn: ({ login, data }: { login: string; data: UserUpdate & { must_change_password?: boolean; new_password?: string } }) =>
       api.patch<User>(`/admin/users/${login}`, data),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['admin', 'users'] }),
   });
@@ -114,6 +114,16 @@ export default function UsersPage() {
   const [editEmail, setEditEmail] = useState('');
   const [editSuperAdmin, setEditSuperAdmin] = useState(false);
   const [editForceReset, setEditForceReset] = useState(false);
+  const [editTempPassword, setEditTempPassword] = useState('');
+
+  const generatePassword = useCallback(() => {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    const arr = new Uint8Array(16);
+    crypto.getRandomValues(arr);
+    const pw = Array.from(arr, (b) => chars[b % chars.length]).join('');
+    setEditTempPassword(pw);
+    return pw;
+  }, []);
 
   const handleCreate = useCallback(async () => {
     try {
@@ -141,6 +151,7 @@ export default function UsersPage() {
           email: editEmail || undefined,
           is_super_admin: editSuperAdmin,
           must_change_password: editForceReset || undefined,
+          ...(editForceReset && editTempPassword ? { new_password: editTempPassword } : {}),
         },
       });
       setEditUser(null);
@@ -148,7 +159,7 @@ export default function UsersPage() {
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to update user');
     }
-  }, [editUser, editEmail, editSuperAdmin, editForceReset, updateMutation]);
+  }, [editUser, editEmail, editSuperAdmin, editForceReset, editTempPassword, updateMutation]);
 
   const handleDelete = useCallback(async () => {
     if (!deleteUser) return;
@@ -165,6 +176,7 @@ export default function UsersPage() {
     setEditEmail(user.email);
     setEditSuperAdmin(user.is_super_admin);
     setEditForceReset(false);
+    setEditTempPassword('');
     setEditUser(user);
   }, []);
 
@@ -343,9 +355,52 @@ export default function UsersPage() {
               <Switch
                 id="edit-reset"
                 checked={editForceReset}
-                onCheckedChange={setEditForceReset}
+                onCheckedChange={(checked) => {
+                  setEditForceReset(checked);
+                  if (checked && !editTempPassword) generatePassword();
+                  if (!checked) setEditTempPassword('');
+                }}
               />
             </div>
+            {editForceReset && (
+              <div className="space-y-2 rounded-md border border-border bg-muted/30 p-3">
+                <Label htmlFor="edit-temp-pw" className="text-xs">
+                  Temporary Password
+                </Label>
+                <p className="text-xs text-muted-foreground">
+                  The user must log in with this password and will be prompted to change it immediately.
+                </p>
+                <div className="flex gap-2">
+                  <Input
+                    id="edit-temp-pw"
+                    value={editTempPassword}
+                    onChange={(e) => setEditTempPassword(e.target.value)}
+                    className="font-mono text-sm"
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="icon"
+                    onClick={() => {
+                      navigator.clipboard.writeText(editTempPassword);
+                      toast.success('Password copied to clipboard');
+                    }}
+                    title="Copy to clipboard"
+                  >
+                    <Copy className="size-4" />
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="icon"
+                    onClick={generatePassword}
+                    title="Generate new password"
+                  >
+                    <RefreshCw className="size-4" />
+                  </Button>
+                </div>
+              </div>
+            )}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setEditUser(null)}>

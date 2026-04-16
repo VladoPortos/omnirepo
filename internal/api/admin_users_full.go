@@ -147,6 +147,7 @@ func (d Deps) handlePatchUser(w http.ResponseWriter, r *http.Request) {
 		Email              *string `json:"email"`
 		IsSuperAdmin       *bool   `json:"is_super_admin"`
 		MustChangePassword *bool   `json:"must_change_password"`
+		NewPassword        *string `json:"new_password"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8192)).Decode(&patch); err != nil {
 		writeJSONError(w, http.StatusBadRequest, ErrValidationFailed, "invalid JSON")
@@ -178,6 +179,22 @@ func (d Deps) handlePatchUser(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		changes["must_change_password"] = *patch.MustChangePassword
+	}
+
+	if patch.NewPassword != nil && *patch.NewPassword != "" {
+		hash, err := auth.HashPassword(*patch.NewPassword)
+		if err != nil {
+			writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+			return
+		}
+		if err := d.Users.UpdatePasswordHash(r.Context(), u.ID, hash); err != nil {
+			writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+			return
+		}
+		if patch.MustChangePassword != nil && *patch.MustChangePassword {
+			_ = d.Users.SetMustChangePassword(r.Context(), u.ID, true)
+		}
+		changes["password"] = "reset"
 	}
 
 	if len(changes) > 0 {

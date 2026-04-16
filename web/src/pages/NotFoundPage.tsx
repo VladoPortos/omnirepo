@@ -14,7 +14,7 @@ export function NotFoundPage() {
       <p className="text-muted-foreground mb-6 max-w-md">
         The page you're looking for doesn't exist or has been moved.
       </p>
-      <Button render={<Link to="/" />}>Go to Dashboard</Button>
+      <Button nativeButton={false} render={<Link to="/" />}>Go to Dashboard</Button>
     </div>
   );
 }

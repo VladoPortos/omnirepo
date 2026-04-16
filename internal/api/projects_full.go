@@ -212,7 +212,7 @@ func (d Deps) handleProjectActivity(w http.ResponseWriter, r *http.Request) {
 	// could leak audit data from other projects.
 	rows, err := d.DB.Reader.QueryContext(r.Context(), `
 		SELECT id, event_kind, actor_user_id, target_kind, target_id,
-		       outcome, details_json, ip, user_agent, created_at
+		       outcome, details_json, ip, user_agent, occurred_at
 		FROM audit_log
 		WHERE (target_kind='project' AND target_id=?)
 		   OR (target_kind IN ('repo','member') AND target_id LIKE ? ESCAPE '\')

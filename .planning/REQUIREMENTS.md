@@ -194,10 +194,10 @@
 
 ### REST API (API)
 
-- [ ] **API-01**: REST API served at `/api/v1/...`; OpenAPI 3.1 spec hand-written and committed at `internal/api/openapi.yaml`; `oapi-codegen/v2` generates Go types only (chi routes are hand-written)
+- [x] **API-01**: REST API served at `/api/v1/...`; OpenAPI 3.1 spec hand-written and committed at `internal/api/openapi.yaml`; `oapi-codegen/v2` generates Go types only (chi routes are hand-written)
 - [ ] **API-02**: Swagger UI bundled (no CDN) and served at `/api/docs`
 - [ ] **API-03**: Every endpoint requires authentication except `/api/v1/auth/login`, `/healthz`, `/readyz`
-- [ ] **API-04**: List endpoints paginate via `?limit=&cursor=` (cursor-based)
+- [x] **API-04**: List endpoints paginate via `?limit=&cursor=` (cursor-based)
 - [ ] **API-05**: Upload endpoints stream the request body to disk; configurable max size; over-cap requests return `413`
 - [ ] **API-06**: Endpoints exist (at minimum) for: auth (login, logout, change-password), projects (CRUD), members (add, remove), repos (CRUD per type), uploads (multipart per type), repo wipe, sync, Docker pull-external, Docker promote, scans (start, get, list, SBOM download), search, audit, profile, own API keys, admin users, admin TLS upload, admin Trivy DB upload + pull, admin GC, admin maintenance, admin trash + restore
 
@@ -205,8 +205,8 @@
 
 - [ ] **SRCH-01**: System maintains FTS5 virtual tables: `repos_fts(name, description_md, project_name)`, `artifacts_fts(repo_id, artifact_name, version, tags)`, `cves_fts(cve_id, package, title, description)`
 - [ ] **SRCH-02**: FTS rows are inserted/updated/deleted in the same transaction as the underlying entity (no out-of-band reindex)
-- [ ] **SRCH-03**: `GET /api/v1/search?q=&kind=&severity=&project=` returns ranked results across repos, artifacts, and CVEs with type and severity filters
-- [ ] **SRCH-04**: Search supports filename, image tag, checksum exact match, CVE ID, and partial-prefix queries
+- [x] **SRCH-03**: `GET /api/v1/search?q=&kind=&severity=&project=` returns ranked results across repos, artifacts, and CVEs with type and severity filters
+- [x] **SRCH-04**: Search supports filename, image tag, checksum exact match, CVE ID, and partial-prefix queries
 
 ### Web UI (UI)
 
@@ -431,16 +431,16 @@ Deferred to future release. Tracked but not in current roadmap.
 | OPS-07 | Phase 5 | Pending |
 | OPS-08 | Phase 1 | Complete |
 | OPS-09 | Phase 5 | Pending |
-| API-01 | Phase 5 | Pending |
+| API-01 | Phase 5 | Complete |
 | API-02 | Phase 5 | Pending |
 | API-03 | Phase 5 | Pending |
-| API-04 | Phase 5 | Pending |
+| API-04 | Phase 5 | Complete |
 | API-05 | Phase 5 | Pending |
 | API-06 | Phase 5 | Pending |
 | SRCH-01 | Phase 2 | Pending |
 | SRCH-02 | Phase 3 | Pending |
-| SRCH-03 | Phase 5 | Pending |
-| SRCH-04 | Phase 5 | Pending |
+| SRCH-03 | Phase 5 | Complete |
+| SRCH-04 | Phase 5 | Complete |
 | UI-01 | Phase 5 | Pending |
 | UI-02 | Phase 5 | Pending |
 | UI-03 | Phase 5 | Pending |

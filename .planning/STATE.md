@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Ready to plan
-last_updated: "2026-04-16T07:19:32.634Z"
+status: Ready to execute
+last_updated: "2026-04-16T09:32:52.204Z"
 progress:
   total_phases: 5
   completed_phases: 4
-  total_plans: 40
-  completed_plans: 40
-  percent: 100
+  total_plans: 52
+  completed_plans: 41
+  percent: 79
 ---
 
 # STATE: OmniRepo
@@ -24,8 +24,8 @@ progress:
 
 ## Current Position
 
-Phase: 5
-Plan: Not started
+Phase: 05 (rest-api-web-ui-production-dockerfile) — EXECUTING
+Plan: 2 of 12
 
 - **Phase**: 1 — Foundation
 - **Plan**: none yet (planning not started)
@@ -66,6 +66,7 @@ Plan: Not started
 | Phase 04-s3-git P11 | 13m | 1 tasks | 5 files |
 | Phase 04-s3-git P12 | 4m | 1 tasks | 4 files |
 | Phase 04-s3-git P13 | 10m | 2 tasks | 9 files |
+| Phase 05-rest-api-web-ui-production-dockerfile P01 | 13m | 2 tasks | 14 files |
 
 ## Accumulated Context
 
@@ -138,6 +139,9 @@ Version-drift corrections to apply at first commit (from `.planning/research/SUM
 - [Phase 04-s3-git]: Clock-skew test uses hand-rolled SigV4 (aws-sdk-go-v2 has no NowFunc); bucket provisioning via direct DB insert (S3 CreateBucket admin-gated)
 - [Phase 04-s3-git]: Git DinD conformance: conformance-git + test-git-conformance alias; 10 MiB cap for oversize test; alpine/git:2.43.0 pinned image
 - [Phase 04-s3-git]: TEST-07 hard gate: child-process VmRSS bench at 50ms with peak_rss < 3x repo_bytes; gitgen uses git CLI with fixed env for deterministic byte-identical packs
+- [Phase 05]: ErrorResponse excluded from OpenAPI spec to avoid pointer-field conflicts with existing errors.go
+- [Phase 05]: FTS5 UNION ALL arms use subquery wrapping for per-arm LIMIT in SQLite compound selects
+- [Phase 05]: oapi-codegen v2.6.0 types-only generation with required fields for concrete Go types
 
 ### Todos
 

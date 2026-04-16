@@ -148,7 +148,7 @@ Plans:
 **Plans**: 12 plans
 
 Plans:
-- [ ] 05-01-PLAN.md — OpenAPI 3.1 spec + oapi-codegen types + cursor pagination + FTS5 UNION search + migration 020
+- [x] 05-01-PLAN.md — OpenAPI 3.1 spec + oapi-codegen types + cursor pagination + FTS5 UNION search + migration 020
 - [ ] 05-02-PLAN.md — Frontend scaffold: Vite 8 + React 19 + Tailwind 4 + shadcn/ui + fonts + embed.go + Swagger UI assets
 - [ ] 05-03-PLAN.md — Admin API endpoints: audit, maintenance, trash, Trivy DB, users full CRUD, TLS history, settings
 - [ ] 05-04-PLAN.md — API endpoints: search, profile, API keys, projects list, repos list, git browse, dashboard, SPA handler, dev proxy

@@ -117,7 +117,7 @@ Plans:
 
 Plans:
 - [x] 04-01-PLAN.md — Wave 0 probes: gitkit Go 1.25 compile, gofakes3 MultipartBackend surface, AWS SigV4 test vectors vendored, conformance images pinned
-- [x] 04-02-PLAN.md — Migrations 016–019 (s3_access_keys, git_extensions, s3_objects, s3_multipart) + typed repos
+- [x] 04-02-PLAN.md — Migrations 016-019 (s3_access_keys, git_extensions, s3_objects, s3_multipart) + typed repos
 - [x] 04-03-PLAN.md — Config schema extension (server.git_backend, repos.git.max_push_bytes, external_hostnames) + reserved-prefix verify
 - [x] 04-04-PLAN.md — SigV4 verifier: canonical/errors + Verify + STREAMING chunked parser
 - [x] 04-05-PLAN.md — S3 access-key service (AEAD lookup) + admin REST /api/v1/projects/{name}/s3-access-keys + auth.Can ActionS3Bucket{Read,Write,Admin}
@@ -128,7 +128,7 @@ Plans:
 - [x] 04-10-PLAN.md — Post-ReceivePack refs walker (git_refs sync) + bare-repo lifecycle hooks (OnRepoCreate/OnRepoDelete)
 - [x] 04-11-PLAN.md — S3 conformance via aws-sdk-go-v2 (positive + negative matrix) + CI job
 - [x] 04-12-PLAN.md — Git conformance via real git CLI (gogit + gitkit parameterized) + oversize-push gate + CI job
-- [x] 04-13-PLAN.md — Memory bench (TEST-07 hard gate: peak_rss < 3× repo_bytes) + air-gap extension (/s3 + /git routes)
+- [x] 04-13-PLAN.md — Memory bench (TEST-07 hard gate: peak_rss < 3x repo_bytes) + air-gap extension (/s3 + /git routes)
 
 ### Phase 5: REST API + Web UI + Production Dockerfile
 
@@ -140,12 +140,26 @@ Plans:
 
 **Success Criteria** (what must be TRUE):
   1. `docker run -v omnirepo-data:/var/lib/omnirepo ghcr.io/.../omnirepo:v1` from the multi-stage image (linux/amd64 + linux/arm64, non-root UID 1000, baked Trivy DB seeded from `/opt/trivy-db/` on first boot) comes up to a working SPA at `https://localhost:8443/`, with the full air-gap Playwright suite green under `--network=none`.
-  2. A first-time bootstrapped user completes login → forced password change → dashboard → create project → create one repo of each type (rpm/deb/pypi/docker/helm/git/raw/s3-bucket) → upload an artifact via dropzone → view scan results → copy the "use this repo" snippet → log out, entirely through Playwright E2E against the real binary; dark mode is the default theme.
+  2. A first-time bootstrapped user completes login -> forced password change -> dashboard -> create project -> create one repo of each type (rpm/deb/pypi/docker/helm/git/raw/s3-bucket) -> upload an artifact via dropzone -> view scan results -> copy the "use this repo" snippet -> log out, entirely through Playwright E2E against the real binary; dark mode is the default theme.
   3. Super-admin admin pages: users CRUD, full filterable audit log, TLS cert upload (hot swap), Trivy DB upload + online-pull (with clear error on offline), Trivy DB status widget showing version/age/source, maintenance mode toggle returning `503` on writes while allowing reads, GC trigger, trash viewer with restore — all functional via UI and mirrored REST endpoints at `/api/v1/admin/...`.
   4. `/api/v1/...` serves hand-written chi routes typed from `oapi-codegen/v2` against a committed OpenAPI 3.1 spec; Swagger UI at `/api/docs` renders entirely from bundled assets; every endpoint except `auth/login`, `/healthz`, `/readyz` requires auth; list endpoints paginate via `?limit=&cursor=`.
   5. `GET /api/v1/search?q=&kind=&severity=&project=` returns ranked results across repos, artifacts, and CVEs (filename, image tag, checksum exact match, CVE ID, prefix match) from FTS5, and the search screen renders them with type+severity filters linking back to source entities; grep gate `grep -rEI 'https?://(?!localhost|127\.0\.0\.1)' web/dist/` returns only self-references.
 
-**Plans**: TBD
+**Plans**: 12 plans
+
+Plans:
+- [ ] 05-01-PLAN.md — OpenAPI 3.1 spec + oapi-codegen types + cursor pagination + FTS5 UNION search + migration 020
+- [ ] 05-02-PLAN.md — Frontend scaffold: Vite 8 + React 19 + Tailwind 4 + shadcn/ui + fonts + embed.go + Swagger UI assets
+- [ ] 05-03-PLAN.md — Admin API endpoints: audit, maintenance, trash, Trivy DB, users full CRUD, TLS history, settings
+- [ ] 05-04-PLAN.md — API endpoints: search, profile, API keys, projects list, repos list, git browse, dashboard, SPA handler, dev proxy
+- [ ] 05-05-PLAN.md — SPA shell: router, API client, auth flow (login + forced password change), sidebar, theme toggle, maintenance banner
+- [ ] 05-06-PLAN.md — Dashboard + Projects pages + shared components (DataTable, Dropzone, SnippetPanel, badges, formatters)
+- [ ] 05-07-PLAN.md — Repo detail pages: Docker, RPM, APT, PyPI, Helm, RAW, S3 + scan summary + markdown editor
+- [ ] 05-08-PLAN.md — Git repo detail: file tree, syntax highlighting (Shiki), commit log, diff viewer, blame, branch comparison
+- [ ] 05-09-PLAN.md — Admin pages: Users, Audit, TLS, Trivy DB, GC, Trash, Maintenance
+- [ ] 05-10-PLAN.md — Search page + Profile page (API keys, S3 keys, password change, delete account)
+- [ ] 05-11-PLAN.md — Production 4-stage Dockerfile + Makefile targets + first-boot Trivy DB seed + SPA/dev proxy wiring
+- [ ] 05-12-PLAN.md — Playwright E2E suite + API integration tests + bench target + air-gap gates
 **UI hint**: yes
 
 ## Progress
@@ -156,7 +170,7 @@ Plans:
 | 2. OCI + RAW + Scan Pipeline | 13/13 | Complete   | 2026-04-15 |
 | 3. Package Repos (RPM + APT + PyPI + Helm) | 2/7 | In Progress|  |
 | 4. S3 + Git | 6/13 | In Progress|  |
-| 5. REST API + Web UI + Production Dockerfile | 0/0 | Not started | - |
+| 5. REST API + Web UI + Production Dockerfile | 0/12 | Not started | - |
 
 ## Coverage Summary
 

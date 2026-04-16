@@ -43,6 +43,9 @@ func SyncActorBridge(r *http.Request) httpx.SyncActor {
 		out.UserID = a.ID
 	case auth.ActorKindAPIKey:
 		out.APIKeyID = a.APIKeyID
+		if a.ProjectScope != nil {
+			out.ProjectID = *a.ProjectScope
+		}
 	}
 	return out
 }

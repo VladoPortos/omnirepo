@@ -86,6 +86,14 @@ func (h *Handler) head(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if h.severityGate != nil {
+		blocked, _, _ := h.severityGate(r.Context(), res.repo.ID, "raw", res.relPath)
+		if blocked {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+	}
+
 	storageKey := storageKeyFor(res.project.Name, res.repo.Name, res.relPath)
 	absPath := filepath.Join(h.repoRoot, filepath.FromSlash(storageKey))
 

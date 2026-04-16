@@ -467,8 +467,10 @@ func (d Deps) handleCreateProject(w http.ResponseWriter, r *http.Request) {
 	if a, ok := auth.ActorFromContext(r.Context()); ok {
 		uid := a.ID
 		d.recordAudit(r, audit.Event{Kind: audit.EvtProjectCreated, ActorUserID: &uid, TargetKind: "project", TargetID: req.Name})
-		// Creator becomes first member.
-		_ = d.Members.Add(r.Context(), id, a.ID)
+		if err := d.Members.Add(r.Context(), id, a.ID); err != nil {
+			writeJSONError(w, http.StatusInternalServerError, ErrInternal, "project created but membership failed")
+			return
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"id": id, "name": req.Name})
 }

@@ -205,11 +205,22 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 		if err != nil {
 			return fmt.Errorf("app.Run: first-boot self-signed: %w", err)
 		}
-		if err := os.WriteFile(certPath, certPEM, 0o644); err != nil {
-			return fmt.Errorf("app.Run: write cert: %w", err)
+		tmpCert := certPath + ".tmp"
+		tmpKey := keyPath + ".tmp"
+		if err := os.WriteFile(tmpCert, certPEM, 0o644); err != nil {
+			return fmt.Errorf("app.Run: write cert tmp: %w", err)
 		}
-		if err := os.WriteFile(keyPath, keyPEM, 0o600); err != nil {
-			return fmt.Errorf("app.Run: write key: %w", err)
+		if err := os.WriteFile(tmpKey, keyPEM, 0o600); err != nil {
+			_ = os.Remove(tmpCert)
+			return fmt.Errorf("app.Run: write key tmp: %w", err)
+		}
+		if err := os.Rename(tmpKey, keyPath); err != nil {
+			_ = os.Remove(tmpCert)
+			_ = os.Remove(tmpKey)
+			return fmt.Errorf("app.Run: rename key: %w", err)
+		}
+		if err := os.Rename(tmpCert, certPath); err != nil {
+			return fmt.Errorf("app.Run: rename cert: %w", err)
 		}
 		if err := holder.Swap(certPEM, keyPEM); err != nil {
 			return fmt.Errorf("app.Run: initial holder swap: %w", err)

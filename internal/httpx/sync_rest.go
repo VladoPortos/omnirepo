@@ -34,6 +34,7 @@ type SyncActor struct {
 	Authenticated bool
 	UserID        int64 // 0 when not a user actor
 	APIKeyID      int64 // 0 when not an API-key actor
+	ProjectID     int64 // project scope for project-owned API keys
 }
 
 // SyncMembershipChecker reports whether actor (UserID) is a member of
@@ -109,15 +110,21 @@ func (d SyncRESTDeps) handleSync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Authorization: project member can write to the repo.
-	if d.Members != nil && actor.UserID != 0 {
-		isMember, mErr := d.Members.IsMember(r.Context(), proj.ID, actor.UserID)
-		if mErr != nil {
-			slog.ErrorContext(r.Context(), "sync.rest.member_check", "err", mErr)
-			writeJSONErr(w, http.StatusInternalServerError, "internal", "")
-			return
+	// Authorization: project member (or project-scoped API key) can write.
+	if d.Members != nil {
+		authorized := false
+		if actor.UserID != 0 {
+			isMember, mErr := d.Members.IsMember(r.Context(), proj.ID, actor.UserID)
+			if mErr != nil {
+				slog.ErrorContext(r.Context(), "sync.rest.member_check", "err", mErr)
+				writeJSONErr(w, http.StatusInternalServerError, "internal", "")
+				return
+			}
+			authorized = isMember
+		} else if actor.APIKeyID != 0 && actor.ProjectID != 0 {
+			authorized = actor.ProjectID == proj.ID
 		}
-		if !isMember {
+		if !authorized {
 			writeJSONErr(w, http.StatusForbidden, "forbidden", "not a project member")
 			return
 		}

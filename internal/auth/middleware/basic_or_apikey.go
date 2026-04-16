@@ -85,10 +85,12 @@ func BasicOrAPIKey(d Deps) func(http.Handler) http.Handler {
 // argon2id, and returns an Actor on success.
 func authenticatePassword(ctx context.Context, d Deps, login, password string) (auth.Actor, bool) {
 	if err := auth.LoginValid(login); err != nil {
+		auth.VerifyFixedCost(password)
 		return auth.Actor{}, false
 	}
 	u, err := d.Users.FindByLogin(ctx, login)
 	if err != nil {
+		auth.VerifyFixedCost(password)
 		return auth.Actor{}, false
 	}
 	ok, err := auth.VerifyPassword(u.PasswordHash, password)

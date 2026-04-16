@@ -40,12 +40,16 @@ func (h *Handler) signToken(actor auth.Actor) (string, time.Time, time.Time, err
 	}
 	iat := time.Now().UTC()
 	exp := iat.Add(h.jwtTTL)
+	actorID := actor.ID
+	if actor.Kind == auth.ActorKindAPIKey {
+		actorID = actor.APIKeyID
+	}
 	claims := identityClaims{
-		ActorID: actor.ID,
+		ActorID: actorID,
 		Kind:    string(actor.Kind),
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    "omnirepo",
-			Subject:   strconv.FormatInt(actor.ID, 10),
+			Subject:   strconv.FormatInt(actorID, 10),
 			IssuedAt:  jwt.NewNumericDate(iat),
 			ExpiresAt: jwt.NewNumericDate(exp),
 		},

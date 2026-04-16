@@ -241,6 +241,10 @@ func (d Deps) handleListArtifactScans(w http.ResponseWriter, r *http.Request) {
 		}
 		out = append(out, s)
 	}
+	if err := rows.Err(); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+		return
+	}
 	writeJSON(w, http.StatusOK, out)
 }
 
@@ -331,6 +335,10 @@ func (d Deps) handleListScanVulns(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		out = append(out, v)
+	}
+	if err := rows.Err(); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+		return
 	}
 	writeJSON(w, http.StatusOK, out)
 }

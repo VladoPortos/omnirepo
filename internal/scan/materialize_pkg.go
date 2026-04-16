@@ -24,6 +24,7 @@ package scan
 import (
 	"archive/tar"
 	"archive/zip"
+	"bufio"
 	"bytes"
 	"compress/gzip"
 	"context"
@@ -36,6 +37,8 @@ import (
 	"strings"
 
 	arlib "github.com/blakesmith/ar"
+	"github.com/cavaliergopher/cpio"
+	"github.com/cavaliergopher/rpm"
 	"github.com/ulikunitz/xz"
 )
 
@@ -160,8 +163,11 @@ func (h *Handler) materializePackage(ctx context.Context, dstDir, kind string, r
 	case "deb":
 		_ = extractDeb(rawCopy, extracted)
 	case "rpm":
-		// cpio extraction isn't wired yet (F-4 follow-up). Trivy will
-		// see only the raw .rpm; scan completes with zero findings.
+		// S-1: extract the RPM payload so Trivy's language / OS-package
+		// analyzers see the real file list. Extraction failures are
+		// non-fatal — the raw .rpm remains in place and Trivy falls back
+		// to its RPM-header analyzer.
+		_ = extractRPM(rawCopy, extracted)
 	}
 	return dstDir, nil
 }
@@ -182,10 +188,18 @@ func extractTarGz(srcPath, dstDir string) error {
 }
 
 // extractWheel unzips a Python wheel (.whl is a zip archive) into dstDir.
-// Additionally writes a minimal `requirements.txt` so Trivy's language
-// scanner detects the package-under-scan as an installed Python dependency
-// and matches it against the vuln DB (F-4: otherwise bare-METADATA wheels
-// surface zero findings even for known-vulnerable versions).
+// Additionally writes a `requirements.txt` so Trivy's language scanner
+// detects the package-under-scan and its transitive deps as installed
+// Python dependencies (F-4 / S-2: otherwise bare-METADATA wheels surface
+// zero findings even for known-vulnerable versions, and transitive deps
+// never got represented at all).
+//
+// Requirements built from two sources:
+//  1. the wheel filename itself: `<name>-<version>-...whl` → `name==version`
+//  2. the wheel's `*.dist-info/METADATA` file: every `Requires-Dist:`
+//     header → normalized pip-syntax line. Environment markers
+//     (`; python_version >= "3"`) are stripped — we want Trivy to see
+//     every dep regardless of runtime conditionals.
 func extractWheel(srcPath, dstDir, wheelFilename string) error {
 	zr, err := zip.OpenReader(srcPath)
 	if err != nil {
@@ -197,17 +211,123 @@ func extractWheel(srcPath, dstDir, wheelFilename string) error {
 			return err
 		}
 	}
-	// Synthesize requirements.txt from the wheel filename:
-	//   <name>-<version>-<python>-<abi>-<platform>.whl
-	// Trivy's python/pip analyzer reads `name==version` lines.
+
+	var lines []string
+	// 1. Package under scan from the filename.
 	base := strings.TrimSuffix(wheelFilename, ".whl")
 	parts := strings.Split(base, "-")
 	if len(parts) >= 2 {
-		name, version := parts[0], parts[1]
-		req := fmt.Sprintf("%s==%s\n", name, version)
-		_ = os.WriteFile(filepath.Join(dstDir, "requirements.txt"), []byte(req), 0o640)
+		lines = append(lines, fmt.Sprintf("%s==%s", parts[0], parts[1]))
+	}
+	// 2. Transitive deps from METADATA.
+	lines = append(lines, requirementsFromMetadata(dstDir)...)
+	if len(lines) > 0 {
+		body := strings.Join(lines, "\n") + "\n"
+		_ = os.WriteFile(filepath.Join(dstDir, "requirements.txt"), []byte(body), 0o640)
 	}
 	return nil
+}
+
+// requirementsFromMetadata walks dstDir looking for the wheel's
+// `*.dist-info/METADATA` file and returns one normalized pip-compatible
+// requirement line per `Requires-Dist` header. Best-effort: any parse
+// failure returns an empty slice, NOT an error.
+func requirementsFromMetadata(dstDir string) []string {
+	var metaPath string
+	_ = filepath.Walk(dstDir, func(p string, info os.FileInfo, err error) error {
+		if err != nil || info == nil {
+			return nil
+		}
+		if info.IsDir() {
+			return nil
+		}
+		if strings.HasSuffix(filepath.Dir(p), ".dist-info") && filepath.Base(p) == "METADATA" {
+			metaPath = p
+			return filepath.SkipAll
+		}
+		return nil
+	})
+	if metaPath == "" {
+		return nil
+	}
+	body, err := os.ReadFile(metaPath)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, raw := range strings.Split(string(body), "\n") {
+		// METADATA headers end at the first blank line (RFC 822-ish);
+		// once we see one, the body of the file follows (README etc.)
+		// and has no Requires-Dist of interest.
+		if strings.TrimSpace(raw) == "" {
+			break
+		}
+		line, ok := strings.CutPrefix(raw, "Requires-Dist:")
+		if !ok {
+			continue
+		}
+		if norm := normalizeRequiresDist(line); norm != "" {
+			out = append(out, norm)
+		}
+	}
+	return out
+}
+
+// normalizeRequiresDist converts one PEP 508 Requires-Dist value into a
+// pip-friendly line: drops environment markers, strips wrapping parens
+// around the version spec, collapses whitespace. Returns an empty string
+// when the input is blank after trimming.
+//
+// Examples:
+//
+//	"requests (>=2.25.0)"                       → "requests>=2.25.0"
+//	"urllib3<2"                                 → "urllib3<2"
+//	"idna (>=2.5,<4); python_version >= \"3\""  → "idna>=2.5,<4"
+//	"pytest[testing] (>=6)"                     → "pytest>=6"
+func normalizeRequiresDist(s string) string {
+	// Drop the environment marker first — everything after the semicolon
+	// is matcher syntax for runtime Python, useless to Trivy.
+	if i := strings.IndexByte(s, ';'); i >= 0 {
+		s = s[:i]
+	}
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	// Separate the package identifier from any version spec. The
+	// identifier starts with [A-Za-z0-9_.-] and may carry a [extras]
+	// block right after.
+	i := 0
+	for i < len(s) {
+		c := s[i]
+		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+			c == '_' || c == '.' || c == '-' {
+			i++
+			continue
+		}
+		break
+	}
+	name := s[:i]
+	rest := s[i:]
+	// Strip optional extras [foo,bar].
+	rest = strings.TrimLeft(rest, " \t")
+	if strings.HasPrefix(rest, "[") {
+		if end := strings.IndexByte(rest, ']'); end >= 0 {
+			rest = rest[end+1:]
+		}
+	}
+	// Strip surrounding parens on the version spec.
+	rest = strings.TrimSpace(rest)
+	rest = strings.TrimPrefix(rest, "(")
+	rest = strings.TrimSuffix(rest, ")")
+	rest = strings.TrimSpace(rest)
+	// Remove whitespace inside the version spec so Trivy's strict parser
+	// handles it: "requests >= 2.0" → "requests>=2.0".
+	rest = strings.ReplaceAll(rest, " ", "")
+	if name == "" {
+		return ""
+	}
+	return name + rest
 }
 
 // extractDeb unpacks a Debian .deb (which is an ar archive of
@@ -308,6 +428,103 @@ func extractTarInto(tr *tar.Reader, dstDir string) error {
 			}
 		default:
 			// Symlinks, hardlinks, devices: skip.
+		}
+	}
+}
+
+// extractRPM unpacks the payload of an RPM package into dstDir. RPM files
+// are: [lead][signature-header][main-header][compressed-cpio-archive].
+// rpm.Read(r) consumes the first three; PayloadCompression() names the
+// compressor (xz / gzip / zstd — we handle xz and gzip, which cover every
+// RPM we've seen in the field as of 2026). The cpio archive is then walked
+// entry by entry with github.com/cavaliergopher/cpio.
+//
+// Walkthrough gotcha: cpio paths inside RPMs are rooted at "./" (e.g.
+// "./usr/bin/curl"). strip the leading "./" before applying the zip-slip
+// guard so clean paths don't silently get rejected.
+func extractRPM(srcPath, dstDir string) error {
+	f, err := os.Open(srcPath)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = f.Close() }()
+
+	br := bufio.NewReader(f)
+	pkg, err := rpm.Read(br)
+	if err != nil {
+		return fmt.Errorf("rpm header: %w", err)
+	}
+
+	var payload io.Reader = br
+	switch comp := pkg.PayloadCompression(); comp {
+	case "xz":
+		xr, xerr := xz.NewReader(br)
+		if xerr != nil {
+			return fmt.Errorf("rpm xz: %w", xerr)
+		}
+		payload = xr
+	case "gzip":
+		gz, gerr := gzip.NewReader(br)
+		if gerr != nil {
+			return fmt.Errorf("rpm gzip: %w", gerr)
+		}
+		defer func() { _ = gz.Close() }()
+		payload = gz
+	case "", "none":
+		// Uncompressed cpio — accepted by the cpio reader as-is.
+	default:
+		return fmt.Errorf("rpm payload compression %q not supported", comp)
+	}
+
+	// PayloadFormat is typically "cpio"; RPMs using "drpm" (delta RPM) have
+	// a fundamentally different format and show up as uploads rarely. We
+	// treat anything other than cpio as a no-op rather than corrupting
+	// dstDir.
+	if fmtName := pkg.PayloadFormat(); fmtName != "" && fmtName != "cpio" {
+		return fmt.Errorf("rpm payload format %q not supported", fmtName)
+	}
+
+	cr := cpio.NewReader(payload)
+	for {
+		hdr, cerr := cr.Next()
+		if cerr == io.EOF {
+			return nil
+		}
+		if cerr != nil {
+			return cerr
+		}
+		clean := filepath.Clean(strings.TrimPrefix(hdr.Name, "./"))
+		if clean == "" || clean == "." || strings.HasPrefix(clean, "..") || filepath.IsAbs(clean) {
+			continue
+		}
+		target := filepath.Join(dstDir, clean)
+		if !strings.HasPrefix(target, dstDir+string(filepath.Separator)) && target != dstDir {
+			continue
+		}
+		mode := hdr.Mode
+		switch {
+		case mode.IsDir():
+			if err := os.MkdirAll(target, 0o750); err != nil {
+				return err
+			}
+		case mode.IsRegular():
+			if err := os.MkdirAll(filepath.Dir(target), 0o750); err != nil {
+				return err
+			}
+			out, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o640)
+			if err != nil {
+				return err
+			}
+			if _, err := io.Copy(out, cr); err != nil {
+				_ = out.Close()
+				return err
+			}
+			if err := out.Close(); err != nil {
+				return err
+			}
+		default:
+			// Symlinks / devices / hardlinks: skipped. Trivy scans only
+			// regular files anyway.
 		}
 	}
 }

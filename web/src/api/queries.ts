@@ -39,7 +39,38 @@ import type {
   S3Key,
   S3KeyCreate,
   S3KeyCreateResponse,
+  Scan,
+  ScanStatus,
 } from './types';
+
+// -- Repo-level scans list (populates the Scan Results tab on every repo page) --
+
+export function useRepoScans(
+  projectName: string,
+  repoType: string,
+  repoName: string,
+  opts?: { status?: ScanStatus; limit?: number },
+) {
+  return useQuery({
+    queryKey: ['repo-scans', projectName, repoType, repoName, opts?.status ?? '', opts?.limit ?? 100],
+    queryFn: () => {
+      const params: Record<string, string> = {};
+      if (opts?.status) params.status = opts.status;
+      if (opts?.limit != null) params.limit = String(opts.limit);
+      return api.get<Scan[]>(
+        `/projects/${projectName}/repos/${repoType}/${repoName}/scans`,
+        params,
+      );
+    },
+    // Scans progress; keep data fresh while a user watches the tab.
+    staleTime: 5_000,
+    refetchInterval: (query) => {
+      const data = query.state.data as Scan[] | undefined;
+      if (!data) return false;
+      return data.some((s) => s.status === 'pending' || s.status === 'running') ? 3_000 : false;
+    },
+  });
+}
 
 // -- Repo content (listing artifacts uploaded to a repo) --
 

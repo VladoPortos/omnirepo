@@ -386,24 +386,6 @@ func (h *Handler) failScan(ctx context.Context, scan *metadata.Scan, herr error)
 	return errors.New(sanitized)
 }
 
-// MarkNotImplemented is the termination path for artifact kinds we accept
-// but don't yet know how to scan (rpm, deb, pypi, helm as of F-4). Marks
-// the scans row permanently failed with `reason`, emits a scan.failed
-// audit record, and returns nil so the pool stops retrying.
-func (h *Handler) MarkNotImplemented(ctx context.Context, scanID int64, reason string) error {
-	if derr := h.deps.DB.WriteTx(ctx, func(tx *sql.Tx) error {
-		return h.deps.Scans.MarkPermanentlyFailed(ctx, tx, scanID, reason)
-	}); derr != nil {
-		slog.ErrorContext(ctx, "scan.not_implemented.markfailed_err",
-			"scan_id", scanID, "err", derr)
-		return derr
-	}
-	h.emitScanAudit(ctx, audit.EvtScanFailed, scanID, "permanent", map[string]any{
-		"reason": reason,
-	})
-	return nil
-}
-
 // permFailScan marks the scan permanently failed (no retry) for over-cap
 // findings or unknown artifact kinds.
 func (h *Handler) permFailScan(ctx context.Context, scan *metadata.Scan, herr error) error {

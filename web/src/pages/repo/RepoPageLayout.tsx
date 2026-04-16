@@ -23,6 +23,7 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog';
 import { SnippetPanel } from '@/components/common/SnippetPanel';
+import { RepoScanResults } from '@/components/common/RepoScanResults';
 import { usePatchRepo, useDeleteRepo } from '@/api/queries';
 import { formatBytes } from '@/lib/format';
 import { ApiError } from '@/api/client';
@@ -115,9 +116,11 @@ export function RepoPageLayout({ repo, children, scanContent }: RepoPageLayoutPr
 
         <TabsContent value="scan">
           {scanContent ?? (
-            <p className="py-8 text-center text-sm text-muted-foreground">
-              Scan results will be displayed here.
-            </p>
+            <RepoScanResults
+              projectName={projectName!}
+              repoType={repo.type}
+              repoName={repo.name}
+            />
           )}
         </TabsContent>
 

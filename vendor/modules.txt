@@ -40,8 +40,6 @@ github.com/ProtonMail/go-crypto/openpgp/packet
 github.com/ProtonMail/go-crypto/openpgp/s2k
 github.com/ProtonMail/go-crypto/openpgp/x25519
 github.com/ProtonMail/go-crypto/openpgp/x448
-# github.com/apapsch/go-jsonmerge/v2 v2.0.0
-## explicit; go 1.12
 # github.com/aws/aws-sdk-go-v2 v1.41.5
 ## explicit; go 1.24
 github.com/aws/aws-sdk-go-v2/aws
@@ -179,6 +177,9 @@ github.com/blakesmith/ar
 # github.com/blang/semver/v4 v4.0.0
 ## explicit; go 1.14
 github.com/blang/semver/v4
+# github.com/cavaliergopher/cpio v1.0.1
+## explicit; go 1.17
+github.com/cavaliergopher/cpio
 # github.com/cavaliergopher/rpm v1.3.0
 ## explicit; go 1.17
 github.com/cavaliergopher/rpm

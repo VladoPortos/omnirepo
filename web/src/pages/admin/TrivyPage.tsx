@@ -21,7 +21,7 @@ import { Database, Upload, Globe, AlertTriangle, Clock, Loader2 } from 'lucide-r
 function useTrivyDBStatus() {
   return useQuery({
     queryKey: ['admin', 'trivy', 'status'],
-    queryFn: () => api.get<TrivyDBStatus>('/admin/trivy/db'),
+    queryFn: () => api.get<TrivyDBStatus>('/admin/trivy/db/status'),
     staleTime: 30_000,
   });
 }
@@ -36,7 +36,13 @@ interface TrivyDBHistoryEntry {
 function useTrivyDBHistory() {
   return useQuery({
     queryKey: ['admin', 'trivy', 'history'],
-    queryFn: () => api.get<{ items: TrivyDBHistoryEntry[] }>('/admin/trivy/db/history'),
+    queryFn: async () => {
+      try {
+        return await api.get<{ items: TrivyDBHistoryEntry[] }>('/admin/trivy/db/history');
+      } catch {
+        return { items: [] };
+      }
+    },
     staleTime: 30_000,
   });
 }

@@ -413,7 +413,13 @@ export function useRevokeAPIKey() {
 export function useS3Keys() {
   return useQuery({
     queryKey: ['me', 's3-keys'],
-    queryFn: () => api.get<{ items: S3Key[] }>('/me/s3-keys'),
+    queryFn: async () => {
+      try {
+        return await api.get<{ items: S3Key[] }>('/me/s3-keys');
+      } catch {
+        return { items: [] };
+      }
+    },
     staleTime: 30_000,
   });
 }

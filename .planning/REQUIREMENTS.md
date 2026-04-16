@@ -215,13 +215,13 @@
 - [x] **UI-03**: Dev mode (`OMNIREPO_DEV=1`) reverse-proxies non-API requests to a Vite dev server on `:5173` for HMR
 - [x] **UI-04**: All UI assets bundled: `lucide-react` SVG icons, `@dicebear/core` avatars, `swagger-ui-dist`, self-hosted Inter and JetBrains Mono `.woff2`; zero external CDN references at runtime
 - [x] **UI-05**: Login screen + forced-password-change screen; offline-friendly error states
-- [ ] **UI-06**: Dashboard shows total + free storage, recent audit events, recent high-severity scan findings
-- [ ] **UI-07**: Projects list and project detail (members, repos grouped by type, add repo, invite/remove user)
+- [x] **UI-06**: Dashboard shows total + free storage, recent audit events, recent high-severity scan findings
+- [x] **UI-07**: Projects list and project detail (members, repos grouped by type, add repo, invite/remove user)
 - [ ] **UI-08**: Per-type repo detail screens (file browser + upload dropzone, README markdown editor + preview, scan results filter, SBOM download, size/count stats, sync-from-URL form, wipe contents, soft delete, public-read toggle, scan-severity gate, Docker-only: pull external + promote tag + cosign badge)
 - [ ] **UI-09**: Global search screen with type and severity filters; results link to source entities
 - [ ] **UI-10**: Profile screen (edit email, change password, manage own API keys with one-time reveal, manage own S3 keys)
 - [ ] **UI-11**: Admin screens (super-admin only): users CRUD, full audit log with filters, TLS cert upload, Trivy DB status + upload + online-pull, maintenance mode toggle, GC trigger, trash viewer with restore
-- [ ] **UI-12**: Every repo detail screen includes a copy-to-clipboard "use this repo" snippet (e.g. `helm repo add`, `pip install --index-url`, `docker login`, `aws --endpoint-url`, `git clone`)
+- [x] **UI-12**: Every repo detail screen includes a copy-to-clipboard "use this repo" snippet (e.g. `helm repo add`, `pip install --index-url`, `docker login`, `aws --endpoint-url`, `git clone`)
 - [x] **UI-13**: Dark mode default; light theme available via toggle
 
 ### Build & Air-Gap Invariants (AIR)
@@ -446,13 +446,13 @@ Deferred to future release. Tracked but not in current roadmap.
 | UI-03 | Phase 5 | Complete |
 | UI-04 | Phase 5 | Complete |
 | UI-05 | Phase 5 | Complete |
-| UI-06 | Phase 5 | Pending |
-| UI-07 | Phase 5 | Pending |
+| UI-06 | Phase 5 | Complete |
+| UI-07 | Phase 5 | Complete |
 | UI-08 | Phase 5 | Pending |
 | UI-09 | Phase 5 | Pending |
 | UI-10 | Phase 5 | Pending |
 | UI-11 | Phase 5 | Pending |
-| UI-12 | Phase 5 | Pending |
+| UI-12 | Phase 5 | Complete |
 | UI-13 | Phase 5 | Complete |
 | AIR-01 | Phase 5 | Pending |
 | AIR-02 | Phase 5 | Pending |

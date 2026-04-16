@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Ready to execute
-last_updated: "2026-04-16T10:22:28.885Z"
+last_updated: "2026-04-16T10:33:41.127Z"
 progress:
   total_phases: 5
   completed_phases: 4
   total_plans: 52
-  completed_plans: 45
-  percent: 87
+  completed_plans: 46
+  percent: 88
 ---
 
 # STATE: OmniRepo
@@ -25,7 +25,7 @@ progress:
 ## Current Position
 
 Phase: 05 (rest-api-web-ui-production-dockerfile) — EXECUTING
-Plan: 6 of 12
+Plan: 7 of 12
 
 - **Phase**: 1 — Foundation
 - **Plan**: none yet (planning not started)
@@ -71,6 +71,7 @@ Plan: 6 of 12
 | Phase 05 P03 | 11m | 2 tasks | 21 files |
 | Phase 05 P04 | 12m | 2 tasks | 19 files |
 | Phase 05 P05 | 6m | 2 tasks | 39 files |
+| Phase 05 P06 | 8m | 2 tasks | 38 files |
 
 ## Accumulated Context
 
@@ -153,6 +154,7 @@ Version-drift corrections to apply at first commit (from `.planning/research/SUM
 - [Phase 05]: Git browse uses go-git v6 PlainOpen for read-only tree/blob/commit walking (no subprocess)
 - [Phase 05]: SPA handler serves only from embedded dist/ FS; dev proxy to Vite on :5173 when OMNIREPO_DEV=1
 - [Phase 05]: framer-motion upgraded 12.7.4->12.38.0 for motion-dom compat; admin page stubs for lazy loading
+- [Phase 05]: base-ui Button uses render prop for Link composition (not asChild); framer-motion ease needs 'as const'; common components in web/src/components/common/
 
 ### Todos
 

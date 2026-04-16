@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Ready to execute
-last_updated: "2026-04-16T10:47:13.311Z"
+last_updated: "2026-04-16T11:00:59.913Z"
 progress:
   total_phases: 5
   completed_phases: 4
   total_plans: 52
-  completed_plans: 47
-  percent: 90
+  completed_plans: 48
+  percent: 92
 ---
 
 # STATE: OmniRepo
@@ -25,7 +25,7 @@ progress:
 ## Current Position
 
 Phase: 05 (rest-api-web-ui-production-dockerfile) — EXECUTING
-Plan: 8 of 12
+Plan: 9 of 12
 
 - **Phase**: 1 — Foundation
 - **Plan**: none yet (planning not started)
@@ -73,6 +73,7 @@ Plan: 8 of 12
 | Phase 05 P05 | 6m | 2 tasks | 39 files |
 | Phase 05 P06 | 8m | 2 tasks | 38 files |
 | Phase 05 P07 | 9m | 2 tasks | 14 files |
+| Phase 05 P08 | 10m | 2 tasks | 16 files |
 
 ## Accumulated Context
 
@@ -158,6 +159,8 @@ Version-drift corrections to apply at first commit (from `.planning/research/SUM
 - [Phase 05]: base-ui Button uses render prop for Link composition (not asChild); framer-motion ease needs 'as const'; common components in web/src/components/common/
 - [Phase 05]: RepoPageLayout extracts shared breadcrumb/tabs/settings for all repo types
 - [Phase 05]: PyPI/Helm use grouped expandable table pattern; RAW/S3 share prefix navigation pattern
+- [Phase 05]: Shiki core with on-demand language loading to avoid bundling all grammars
+- [Phase 05]: DOMPurify sanitization of Shiki output as defense-in-depth (T-05-08-01)
 
 ### Todos
 

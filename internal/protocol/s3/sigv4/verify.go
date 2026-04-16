@@ -162,6 +162,13 @@ func Verify(r *http.Request, lookup SecretLookup, skew time.Duration) (*VerifyRe
 	}
 
 	// ---- canonical request + sts + signing ----
+	// Go's HTTP server strips the Host header from r.Header and stores it in
+	// r.Host. Inject it so canonicalHeaders can find "host" in the signed-
+	// headers set. This is safe even when r.Header already has "Host" (the
+	// sigv4 unit tests set it explicitly) — Set overwrites.
+	if r.Host != "" && r.Header.Get("Host") == "" {
+		r.Header.Set("Host", r.Host)
+	}
 	canonReq := canonicalRequest(r.Method, r.URL.EscapedPath(), r.URL.RawQuery,
 		r.Header, parsed.SignedHeaders, bodyHash)
 	sts := stringToSign(amzDate, parsed.Scope, canonReq)

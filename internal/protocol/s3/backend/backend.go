@@ -177,6 +177,23 @@ func (b *Backend) findBucketID(ctx context.Context, name string) (int64, bool, e
 	return id, true, nil
 }
 
+// FindBucketProjectID returns the project_id for the named bucket. Returns
+// (0, false, nil) when the bucket does not exist or is soft-deleted. This is
+// the public entry point that Plan 07 middleware uses for auth.Can dispatch.
+func (b *Backend) FindBucketProjectID(ctx context.Context, name string) (int64, bool, error) {
+	var projectID int64
+	err := b.DB.Reader.QueryRowContext(ctx,
+		`SELECT project_id FROM s3_buckets WHERE name=? AND deleted_at IS NULL`, name,
+	).Scan(&projectID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, false, nil
+		}
+		return 0, false, fmt.Errorf("backend: find bucket project: %w", err)
+	}
+	return projectID, true, nil
+}
+
 // ListBuckets returns every non-deleted bucket. (List implementation lives in list.go.)
 
 // CreateBucket is the gofakes3.Backend method. Requires DefaultProjectID to

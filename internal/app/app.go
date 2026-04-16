@@ -27,6 +27,9 @@ import (
 	gitpkg "github.com/dxc-internal/omnirepo/internal/protocol/git"
 	"github.com/dxc-internal/omnirepo/internal/protocol/oci"
 	"github.com/dxc-internal/omnirepo/internal/protocol/raw"
+	s3handler "github.com/dxc-internal/omnirepo/internal/protocol/s3"
+	s3backend "github.com/dxc-internal/omnirepo/internal/protocol/s3/backend"
+	s3keys "github.com/dxc-internal/omnirepo/internal/protocol/s3/keys"
 	"github.com/dxc-internal/omnirepo/internal/scan"
 	"github.com/dxc-internal/omnirepo/internal/storage"
 	omrtls "github.com/dxc-internal/omnirepo/internal/tls"
@@ -288,6 +291,12 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 
 	// 6. Router with global middleware + system routes.
 	router := httpx.New(httpx.Deps{Config: cfg})
+
+	// 6a. S3 virtual-host rewrite (Phase 04-07, D-23). MUST be registered
+	// as global middleware BEFORE any routes so chi's route matching sees
+	// the rewritten path (/s3/<bucket>/<key>) for virtual-host requests.
+	router.Use(s3handler.VHostRewrite(cfg.Server.ExternalHostnames))
+
 	router.Get("/healthz", httpx.Healthz())
 	router.Get("/readyz", httpx.Readyz(httpx.ReadyzDeps{DB: db, Holder: holder}))
 
@@ -548,6 +557,19 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 		APIKeys:  metadata.NewAPIKeysRepo(db),
 	})
 	gitHandler.Mount(router)
+
+	// 6e. S3-compatible handler (Phase 04-07). SigV4 → auth.Can → gofakes3.
+	// Uses the same per-install AEAD key as upstream_creds for S3 access-key
+	// secret decryption, and the shared locks for per-bucket serialization.
+	s3Service := s3keys.NewService(metadata.NewS3KeysRepo(db), aead)
+	s3Be := s3backend.New(cfg.DataRoot, db, sharedLocks)
+	s3Deps := &s3handler.Deps{
+		Service:   s3Service,
+		Backend:   s3Be,
+		Skew:      cfg.Auth.SigV4Skew,
+		Hostnames: cfg.Server.ExternalHostnames,
+	}
+	s3Deps.Mount(router)
 
 	// 7. Listeners.
 	httpLn := opts.HTTPListener

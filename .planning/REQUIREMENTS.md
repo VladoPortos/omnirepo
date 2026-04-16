@@ -55,8 +55,8 @@
 
 ### S3 Auth Credentials (S3K)
 
-- [ ] **S3K-01**: User can create dedicated S3 access-key/secret pairs from the profile screen
-- [ ] **S3K-02**: Project members can create dedicated S3 access-key/secret pairs scoped to their projects
+- [x] **S3K-01**: User can create dedicated S3 access-key/secret pairs from the profile screen
+- [x] **S3K-02**: Project members can create dedicated S3 access-key/secret pairs scoped to their projects
 - [x] **S3K-03**: S3 secret is AES-GCM encrypted at rest with a per-install key stored in `settings`; SigV4 verification recomputes HMAC using the decrypted secret
 - [x] **S3K-04**: SigV4 middleware rejects requests with clock skew beyond a configurable window (default 15 minutes), echoing server time in `x-amz-date`-aware error
 - [x] **S3K-05**: Wrong signature returns `403 SignatureDoesNotMatch`; missing credential returns `403 InvalidAccessKeyId`
@@ -106,7 +106,7 @@
 ### Git Protocol (GIT)
 
 - [x] **GIT-01**: Git Smart HTTP served at `/git/<project>/<repo>.git/...` via go-git v6 `backend` package (with sosedoff/gitkit fallback behind a config flag)
-- [ ] **GIT-02**: HTTP Basic auth (login + password OR `<login>:<api-key>` OR `project:<project>:<project-api-key>`) verified before reaching the Git backend
+- [x] **GIT-02**: HTTP Basic auth (login + password OR `<login>:<api-key>` OR `project:<project>:<project-api-key>`) verified before reaching the Git backend
 - [x] **GIT-03**: `info/refs`, `git-upload-pack`, and `git-receive-pack` endpoints implemented
 - [x] **GIT-04**: Bare repos created at `/var/lib/omnirepo/repos/<project>/git/<repo>.git/`
 - [x] **GIT-05**: System enforces a configurable per-repo push size limit (default 500 MB); requests exceeding the cap are rejected with a clear error
@@ -334,8 +334,8 @@ Deferred to future release. Tracked but not in current roadmap.
 | KEY-06 | Phase 1 | Complete |
 | KEY-07 | Phase 1 | Complete |
 | KEY-08 | Phase 1 | Complete |
-| S3K-01 | Phase 4 | Pending |
-| S3K-02 | Phase 4 | Pending |
+| S3K-01 | Phase 4 | Complete |
+| S3K-02 | Phase 4 | Complete |
 | S3K-03 | Phase 4 | Complete |
 | S3K-04 | Phase 4 | Complete |
 | S3K-05 | Phase 4 | Complete |
@@ -370,7 +370,7 @@ Deferred to future release. Tracked but not in current roadmap.
 | S3-05 | Phase 4 | Pending |
 | S3-06 | Phase 4 | Pending |
 | GIT-01 | Phase 4 | Complete |
-| GIT-02 | Phase 4 | Pending |
+| GIT-02 | Phase 4 | Complete |
 | GIT-03 | Phase 4 | Complete |
 | GIT-04 | Phase 4 | Complete |
 | GIT-05 | Phase 4 | Complete |

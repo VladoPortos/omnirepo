@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Ready to execute
-last_updated: "2026-04-16T01:32:39.152Z"
+last_updated: "2026-04-16T02:05:43.674Z"
 progress:
   total_phases: 5
   completed_phases: 3
   total_plans: 40
-  completed_plans: 33
-  percent: 83
+  completed_plans: 35
+  percent: 88
 ---
 
 # STATE: OmniRepo
@@ -25,7 +25,7 @@ progress:
 ## Current Position
 
 Phase: 04 (s3-git) — EXECUTING
-Plan: 7 of 13
+Plan: 9 of 13
 
 - **Phase**: 1 — Foundation
 - **Plan**: none yet (planning not started)
@@ -59,6 +59,8 @@ Plan: 7 of 13
 | Phase 04-s3-git P08 | 18m | 1 tasks | 12 files |
 | Phase 04-s3-git P04 | 20m | 2 tasks | 6 files |
 | Phase 04-s3-git P06 | 35m | 2 tasks | 5 files |
+| Phase 04-s3-git P05 | 5min | 2 tasks | 10 files |
+| Phase 04-s3-git P09 | 12m | 2 tasks | 13 files |
 
 ## Accumulated Context
 
@@ -124,6 +126,8 @@ Version-drift corrections to apply at first commit (from `.planning/research/SUM
 - [Phase 04-s3-git]: SigV4 verifier landed: hand-rolled canonical-request/HMAC-chain/constant-time-compare + STREAMING chunked parser (64 MiB per-chunk cap); all 5 aws4_testsuite vectors byte-exact + 14 behavioral tests green
 - [Phase 04-s3-git]: Plan 06 landed: gofakes3.Backend + MultipartBackend on storage.WriteAndRename with known-vector multipart ETag + 24h orphan GC
 - [Phase 04-s3-git]: gofakes3 CreateBucket gated by Backend.DefaultProjectID=0 in production; REST uses CreateBucketForProject(name, projectID)
+- [Phase 04-s3-git]: Added ActionManageS3Keys (new action) + ActorKindS3Key for project-scoped S3 auth dispatch; shown-once secret in POST only
+- [Phase 04-s3-git]: Plan 09: HTTP Basic auth project: variant uses login='project', pw='<projname>:<key>' — Go's BasicAuth splits on first colon; capturingReader+bufferingWriter pattern for MaxBytesError capture in pushcap middleware
 
 ### Todos
 

@@ -34,9 +34,7 @@ const cardVariants = {
 export function DashboardPage() {
   const { data, isLoading } = useDashboard();
 
-  const findings = data?.scan_findings_summary as
-    | Record<string, number>
-    | undefined;
+  const findings = data?.scan_findings;
 
   return (
     <div className="space-y-6">
@@ -73,8 +71,8 @@ export function DashboardPage() {
                 </div>
               ) : (
                 <StorageGauge
-                  used={data?.storage_used ?? 0}
-                  total={data?.storage_total ?? 1}
+                  used={data?.storage_used_bytes ?? 0}
+                  total={data?.storage_total_bytes ?? 1}
                 />
               )}
             </CardContent>
@@ -155,15 +153,23 @@ export function DashboardPage() {
                 <Skeleton className="h-8 w-32" />
               ) : findings ? (
                 <div className="flex flex-wrap gap-2">
-                  {Object.entries(findings).map(([sev, count]) => (
-                    <span key={sev} className="flex items-center gap-1.5">
-                      <SeverityBadge severity={sev} />
+                  {findings.critical > 0 && (
+                    <span className="flex items-center gap-1.5">
+                      <SeverityBadge severity="critical" />
                       <span className="text-sm font-medium tabular-nums">
-                        {count}
+                        {findings.critical}
                       </span>
                     </span>
-                  ))}
-                  {Object.keys(findings).length === 0 && (
+                  )}
+                  {findings.high > 0 && (
+                    <span className="flex items-center gap-1.5">
+                      <SeverityBadge severity="high" />
+                      <span className="text-sm font-medium tabular-nums">
+                        {findings.high}
+                      </span>
+                    </span>
+                  )}
+                  {findings.critical === 0 && findings.high === 0 && (
                     <p className="text-sm text-muted-foreground">No findings</p>
                   )}
                 </div>
@@ -203,13 +209,12 @@ export function DashboardPage() {
                     className="flex items-start gap-3 text-sm"
                   >
                     <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
-                      {formatDate(event.timestamp)}
+                      {formatDate(event.created_at)}
                     </span>
                     <span className="flex-1">
-                      <span className="font-medium">{event.actor}</span>{' '}
                       {event.action}{' '}
                       <span className="text-muted-foreground">
-                        {event.target_kind}/{event.target_id}
+                        {event.target_id}
                       </span>
                     </span>
                   </div>

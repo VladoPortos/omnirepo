@@ -359,13 +359,25 @@ export type SettingsPatch = Record<string, string>;
 
 // -- Dashboard --
 
+export interface DashboardScanFindings {
+  critical: number;
+  high: number;
+}
+
+export interface DashboardActivityItem {
+  id: number;
+  action: string;
+  target_id: string;
+  created_at: string;
+}
+
 export interface DashboardResponse {
-  storage_used: number;
-  storage_total: number;
+  storage_used_bytes: number;
+  storage_total_bytes: number;
   repo_count: number;
   user_count: number;
-  scan_findings_summary: Record<string, unknown>;
-  recent_activity: AuditEvent[];
+  scan_findings: DashboardScanFindings;
+  recent_activity: DashboardActivityItem[];
 }
 
 // -- Git --

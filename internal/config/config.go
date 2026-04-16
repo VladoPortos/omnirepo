@@ -208,7 +208,10 @@ func Defaults() Config {
 		Trivy: Trivy{
 			BinaryPath: "/usr/local/bin/trivy",
 			DBPath:     "/var/lib/omnirepo/trivy/db",
-			CachePath:  "/var/lib/omnirepo/trivy/cache",
+			// Trivy resolves its DB at <--cache-dir>/db/. CachePath must be
+			// the parent of DBPath so the layout admin_trivy writes aligns
+			// with what the runner reads. See TestTrivyDefaults_CachePathContainsDBSubdir.
+			CachePath: "/var/lib/omnirepo/trivy",
 		},
 		Jobs: Jobs{
 			SyncWorkers:          4,

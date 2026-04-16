@@ -134,8 +134,25 @@ func TestTrivyDefaults(t *testing.T) {
 	if d.Trivy.DBPath != "/var/lib/omnirepo/trivy/db" {
 		t.Errorf("Trivy.DBPath = %q, want /var/lib/omnirepo/trivy/db", d.Trivy.DBPath)
 	}
-	if d.Trivy.CachePath != "/var/lib/omnirepo/trivy/cache" {
-		t.Errorf("Trivy.CachePath = %q, want /var/lib/omnirepo/trivy/cache", d.Trivy.CachePath)
+	// P-2: Trivy resolves its DB at <--cache-dir>/db/. The default CachePath
+	// MUST therefore be the parent directory of DBPath so the two align.
+	// Prior default was /var/lib/omnirepo/trivy/cache which put Trivy's
+	// --cache-dir next to the DB instead of above it, causing every fresh
+	// install to fail with "DB error: --skip-db-update cannot be specified
+	// on the first run" until an operator noticed.
+	if d.Trivy.CachePath != "/var/lib/omnirepo/trivy" {
+		t.Errorf("Trivy.CachePath = %q, want /var/lib/omnirepo/trivy", d.Trivy.CachePath)
+	}
+}
+
+// TestTrivyDefaults_CachePathContainsDBSubdir locks the Trivy layout
+// invariant: db_path must equal <cache_path>/db. If defaults ever drift,
+// every fresh install silently scans with no DB. (P-2.)
+func TestTrivyDefaults_CachePathContainsDBSubdir(t *testing.T) {
+	d := config.Defaults()
+	want := filepath.Join(d.Trivy.CachePath, "db")
+	if d.Trivy.DBPath != want {
+		t.Fatalf("Trivy.DBPath = %q, want %q (== <CachePath>/db)", d.Trivy.DBPath, want)
 	}
 }
 

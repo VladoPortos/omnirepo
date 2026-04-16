@@ -28,7 +28,6 @@ var dataRootDirs = []struct {
 	{"trash", 0o750},
 	{"trivy", 0o750},
 	{"trivy/db", 0o750},
-	{"trivy/cache", 0o750},
 	{"sboms", 0o750},
 	{"logs", 0o750},
 	{"tmp", 0o750},

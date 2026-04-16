@@ -135,11 +135,25 @@ func (h *Handler) Handle(ctx context.Context, scan *metadata.Scan) error {
 	defer func() { _ = os.RemoveAll(tmp) }()
 
 	var (
-		result Result
-		err    error
+		result    Result
+		err       error
+		skipScan  bool
+		skipReason string
 	)
 	switch scan.ArtifactKind {
 	case "docker":
+		// P-1: classify before materializing so we never hand Trivy a body
+		// it can't scan (attestation manifests, indexes, empty layers).
+		scannable, reason, classifyErr := h.classifyDocker(ctx, scan.RepoID, scan.ArtifactID)
+		if classifyErr != nil {
+			return h.failScan(ctx, scan, fmt.Errorf("classify docker: %w", classifyErr))
+		}
+		if !scannable {
+			skipScan = true
+			skipReason = reason
+			result = emptyResult()
+			break
+		}
 		if err = h.materializeDocker(ctx, tmp, scan.RepoID, scan.ArtifactID); err != nil {
 			return h.failScan(ctx, scan, fmt.Errorf("materialize docker: %w", err))
 		}
@@ -178,8 +192,10 @@ func (h *Handler) Handle(ctx context.Context, scan *metadata.Scan) error {
 	}
 
 	// SBOM (docker scans only). Failure is warn-only — does not fail the scan.
+	// Skipped scans (attestation manifests, indexes) have nothing on-disk for
+	// Trivy to SBOM either; bypass the whole block.
 	sbomPath := ""
-	if scan.ArtifactKind == "docker" {
+	if scan.ArtifactKind == "docker" && !skipScan {
 		sbomPath = filepath.Join(h.deps.DataRoot, "sboms", fmt.Sprintf("%d.json", scan.ID))
 		if err := os.MkdirAll(filepath.Dir(sbomPath), 0o750); err != nil {
 			slog.WarnContext(ctx, "scan.sbom.mkdir_failed", "scan_id", scan.ID, "err", err)
@@ -231,7 +247,7 @@ func (h *Handler) Handle(ctx context.Context, scan *metadata.Scan) error {
 
 	// AFTER tx commit: invalidate cache, emit finished audit (best-effort).
 	h.deps.Cache.Invalidate(scan.RepoID, scan.ArtifactKind, scan.ArtifactID)
-	h.emitScanAudit(ctx, audit.EvtScanFinished, scan.ID, "ok", map[string]any{
+	details := map[string]any{
 		"repo_id":          scan.RepoID,
 		"artifact_kind":    scan.ArtifactKind,
 		"artifact_id":      scan.ArtifactID,
@@ -240,8 +256,50 @@ func (h *Handler) Handle(ctx context.Context, scan *metadata.Scan) error {
 		"sbom_path":        sbomPath,
 		"trivy_db_version": result.TrivyDBVersion,
 		"duration_ms":      time.Since(startTime).Milliseconds(),
-	})
+	}
+	if skipScan {
+		details["skip_reason"] = skipReason
+		slog.InfoContext(ctx, "scan.docker.skipped",
+			"scan_id", scan.ID, "repo_id", scan.RepoID,
+			"digest", scan.ArtifactID, "reason", skipReason)
+	}
+	h.emitScanAudit(ctx, audit.EvtScanFinished, scan.ID, "ok", details)
 	return nil
+}
+
+// classifyDocker looks up the docker manifest body and delegates to
+// IsScannableManifest. The boolean return mirrors the classifier; the
+// error channel is reserved for DB / missing-manifest failures that
+// should fail the scan outright.
+func (h *Handler) classifyDocker(ctx context.Context, repoID int64, digest string) (scannable bool, reason string, err error) {
+	if h.deps.Manifests == nil {
+		return false, "", errors.New("manifests store not wired")
+	}
+	m, err := h.deps.Manifests.GetByDigest(ctx, repoID, digest)
+	if err != nil {
+		return false, "", fmt.Errorf("manifest lookup: %w", err)
+	}
+	if m == nil {
+		return false, "", fmt.Errorf("manifest %s not found in repo %d", digest, repoID)
+	}
+	ok, r := IsScannableManifest(m.Body)
+	return ok, r, nil
+}
+
+// emptyResult returns a Result that represents a successful "nothing to
+// scan" outcome: zeroed severity counts in every expected bucket, no
+// findings. Used by the docker skip path so summary JSON encodes the same
+// shape that ParseTrivyJSON emits for a zero-finding scan.
+func emptyResult() Result {
+	return Result{
+		Summary: map[string]int{
+			"critical": 0,
+			"high":     0,
+			"medium":   0,
+			"low":      0,
+			"unknown":  0,
+		},
+	}
 }
 
 // materializeDocker loads the manifest body from docker_manifests, parses

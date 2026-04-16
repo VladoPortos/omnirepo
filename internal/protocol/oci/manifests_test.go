@@ -411,10 +411,13 @@ func TestManifestDeleteByDigestDecrementsRefs(t *testing.T) {
 }
 
 // TestAutoScanEnqueuedOnPush: when repo.auto_scan is true, a scans row lands.
+// Needs a rootfs-bearing manifest — P-1 skips enqueue for non-scannable
+// manifests (attestation, index, empty layers).
 func TestAutoScanEnqueuedOnPush(t *testing.T) {
 	f := newManifestFixture(t, true /* autoScan */)
 	cfg := f.seedBlob([]byte("cfg"))
-	body := buildManifest(cfg)
+	layer := f.seedBlob([]byte("layer-bytes"))
+	body := buildManifest(cfg, layer)
 	resp := f.putManifest("v1", body)
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusCreated {
@@ -432,6 +435,46 @@ func TestAutoScanEnqueuedOnPush(t *testing.T) {
 	}
 	if f.kickCount == 0 {
 		t.Fatal("scanKick not invoked")
+	}
+}
+
+// P-1 enqueue-side: attestation manifests must NOT produce a scan row even
+// when the repo has auto_scan on. Pairs with
+// scan.TestHandler_AttestationManifest_SkipsRunnerAndMarksDone, which is
+// the handler-side belt-and-braces defense.
+func TestAutoScanSkipsAttestationManifest(t *testing.T) {
+	f := newManifestFixture(t, true /* autoScan */)
+	cfg := f.seedBlob([]byte("cfg"))
+	attLayer := f.seedBlob([]byte(`{"_type":"in-toto-stub"}`))
+	body, _ := json.Marshal(map[string]any{
+		"schemaVersion": 2,
+		"mediaType":     oci.MediaTypeOCIManifest,
+		"config": map[string]any{
+			"mediaType": "application/vnd.oci.image.config.v1+json",
+			"digest":    cfg,
+			"size":      50,
+		},
+		"layers": []map[string]any{
+			{
+				"mediaType": "application/vnd.in-toto+json",
+				"digest":    attLayer,
+				"size":      100,
+			},
+		},
+	})
+	resp := f.putManifest("v1-attest", body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("put: %d", resp.StatusCode)
+	}
+	var n int
+	if err := f.db.Reader.QueryRowContext(context.Background(),
+		`SELECT COUNT(*) FROM scans WHERE repo_id=? AND artifact_kind='docker'`,
+		f.repoID).Scan(&n); err != nil {
+		t.Fatalf("count scans: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("scan rows=%d; want 0 (attestation must not enqueue)", n)
 	}
 }
 

@@ -37,6 +37,7 @@ import (
 	"github.com/dxc-internal/omnirepo/internal/audit"
 	"github.com/dxc-internal/omnirepo/internal/auth"
 	"github.com/dxc-internal/omnirepo/internal/metadata"
+	"github.com/dxc-internal/omnirepo/internal/scan"
 )
 
 // isDigestRef reports whether the /v2/.../manifests/<reference> URL segment
@@ -586,10 +587,18 @@ func (h *Handler) writeManifestWithRefcounts(
 		return false, err
 	}
 	if autoScan && h.scans != nil {
-		if _, err := h.scans.Enqueue(ctx, tx, repoID, "docker", mfDigest); err != nil {
-			return false, err
+		// P-1: skip enqueue for manifests Trivy can't scan (attestation
+		// manifests, image indexes, empty-layer manifests). This keeps
+		// junk "attestation_manifest" scan rows out of the UI for buildx
+		// pushes, which enqueue one scan per child manifest by default.
+		// The handler has the same skip as defense-in-depth; this side
+		// just prevents the row from ever being created.
+		if ok, _ := scan.IsScannableManifest(body); ok {
+			if _, err := h.scans.Enqueue(ctx, tx, repoID, "docker", mfDigest); err != nil {
+				return false, err
+			}
+			scanEnqueued = true
 		}
-		scanEnqueued = true
 	}
 	return scanEnqueued, nil
 }

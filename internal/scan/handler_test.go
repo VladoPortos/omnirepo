@@ -405,6 +405,102 @@ func TestHandler_TmpCleanupOnRunnerError(t *testing.T) {
 	}
 }
 
+// P-1: A buildx-produced attestation manifest is auto-enqueued for scanning
+// right alongside the platform image manifests. Its only "layer" is a JSON
+// attestation (in-toto / DSSE), which makes Trivy explode with
+// "archive/tar: invalid tar header" when it tries to untar the blob.
+//
+// The handler must detect this shape, skip the runner entirely, and record
+// the scan as done with a zero-findings summary + an audit event noting the
+// skip. The skip MUST NOT invoke Runner.Image (this test leaves the
+// FakeRunner's Image queue empty; a call would return ErrNothingQueued and
+// fail the scan).
+func TestHandler_AttestationManifest_SkipsRunnerAndMarksDone(t *testing.T) {
+	f := newScanFixture(t)
+	ctx := context.Background()
+
+	pid, err := f.projs.Create(ctx, "attestproj", "")
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	rid, err := f.repos.Create(ctx, pid, "docker", "img", "", nil, nil, nil)
+	if err != nil {
+		t.Fatalf("create repo: %v", err)
+	}
+
+	mfBody, _ := json.Marshal(map[string]any{
+		"schemaVersion": 2,
+		"mediaType":     "application/vnd.oci.image.manifest.v1+json",
+		"config": map[string]any{
+			"mediaType": "application/vnd.oci.image.config.v1+json",
+			"digest":    "sha256:aaaa",
+			"size":      167,
+		},
+		"layers": []map[string]any{
+			{
+				"mediaType": "application/vnd.in-toto+json",
+				"digest":    "sha256:bbbb",
+				"size":      4906,
+				"annotations": map[string]any{
+					"in-toto.io/predicate-type": "https://slsa.dev/provenance/v0.2",
+				},
+			},
+		},
+	})
+	sum := sha256.Sum256(mfBody)
+	mfDigest := "sha256:" + hex.EncodeToString(sum[:])
+
+	var sid int64
+	if err := f.db.WriteTx(ctx, func(tx *sql.Tx) error {
+		if err := f.mfs.Insert(ctx, tx, rid, mfDigest, "application/vnd.oci.image.manifest.v1+json", mfBody); err != nil {
+			return err
+		}
+		s, err := f.scans.Enqueue(ctx, tx, rid, "docker", mfDigest)
+		sid = s
+		return err
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	// No runner calls should happen; leave QueueImage and QueueSBOM empty.
+	if err := f.handler.Handle(ctx, f.leasedScan(t, sid)); err != nil {
+		t.Fatalf("Handle: %v (runner must be skipped for attestation)", err)
+	}
+
+	var status, summaryJSON, sbomPath string
+	if err := f.db.Reader.QueryRowContext(ctx,
+		`SELECT status, severity_summary_json, sbom_path FROM scans WHERE id=?`, sid,
+	).Scan(&status, &summaryJSON, &sbomPath); err != nil {
+		t.Fatal(err)
+	}
+	if status != "done" {
+		t.Fatalf("status=%q want done", status)
+	}
+	if sbomPath != "" {
+		t.Fatalf("sbom_path=%q want empty for skipped scan", sbomPath)
+	}
+	var sm map[string]int
+	if err := json.Unmarshal([]byte(summaryJSON), &sm); err != nil {
+		t.Fatalf("parse summary: %v", err)
+	}
+	for _, sev := range []string{"critical", "high", "medium", "low"} {
+		if sm[sev] != 0 {
+			t.Errorf("summary[%s] = %d, want 0 (skipped scan)", sev, sm[sev])
+		}
+	}
+
+	// No vulnerabilities rows.
+	var vulnCount int
+	if err := f.db.Reader.QueryRowContext(ctx,
+		`SELECT count(*) FROM vulnerabilities WHERE scan_id=?`, sid,
+	).Scan(&vulnCount); err != nil {
+		t.Fatal(err)
+	}
+	if vulnCount != 0 {
+		t.Fatalf("vulnerabilities rows = %d, want 0", vulnCount)
+	}
+}
+
 func TestHandler_LastErrorSanitized(t *testing.T) {
 	f := newScanFixture(t)
 	// Construct a handler whose data root is a known string we can match.

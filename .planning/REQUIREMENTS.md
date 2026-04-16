@@ -238,9 +238,9 @@
 
 - [x] **TEST-01**: Unit tests cover every package with real logic using table-driven Go tests and `t.TempDir()`; SQLite-backed tests use the project's reader/writer split helper
 - [ ] **TEST-02**: Per-protocol conformance tests boot the full app on a random port and exercise it with the real client: `crane` (OCI), `aws-sdk-go-v2` (S3), `dnf` (RPM, DinD), `apt-get` (APT, DinD), `pip` and `uv pip` (PyPI), `helm` (Helm), `git` CLI (Git)
-- [ ] **TEST-03**: API tests exercise every REST endpoint against a running server, asserting status code and response schema against the OpenAPI types
-- [ ] **TEST-04**: Playwright end-to-end suite covers login, forced password change, project + repo create, upload, scan view, search, profile API key reveal, admin maintenance toggle, TLS cert upload, GC trigger, trash restore
-- [ ] **TEST-05**: Bench target (`make bench`) measures upload + sync + scan throughput on a representative dataset
+- [x] **TEST-03**: API tests exercise every REST endpoint against a running server, asserting status code and response schema against the OpenAPI types
+- [x] **TEST-04**: Playwright end-to-end suite covers login, forced password change, project + repo create, upload, scan view, search, profile API key reveal, admin maintenance toggle, TLS cert upload, GC trigger, trash restore
+- [x] **TEST-05**: Bench target (`make bench`) measures upload + sync + scan throughput on a representative dataset
 - [x] **TEST-06**: SQLite contention bench: 16 concurrent uploads across protocols, zero `SQLITE_BUSY`
 - [x] **TEST-07**: go-git v6 memory bench: 200 MB synthetic repo clone, RSS < 3× repo size
 - [x] **TEST-08**: Air-gap invariant test (`--network=none`) is part of the standard `make test` matrix
@@ -463,9 +463,9 @@ Deferred to future release. Tracked but not in current roadmap.
 | AIR-07 | Phase 1 | Complete |
 | TEST-01 | Phase 1 | Complete |
 | TEST-02 | Phase 2 | Pending |
-| TEST-03 | Phase 5 | Pending |
-| TEST-04 | Phase 5 | Pending |
-| TEST-05 | Phase 5 | Pending |
+| TEST-03 | Phase 5 | Complete |
+| TEST-04 | Phase 5 | Complete |
+| TEST-05 | Phase 5 | Complete |
 | TEST-06 | Phase 1 | Complete |
 | TEST-07 | Phase 4 | Complete |
 | TEST-08 | Phase 1 | Complete |

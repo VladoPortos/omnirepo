@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Ready to execute
-last_updated: "2026-04-16T11:27:28.241Z"
+status: Phase complete — ready for verification
+last_updated: "2026-04-16T11:40:55.371Z"
 progress:
   total_phases: 5
-  completed_phases: 4
+  completed_phases: 5
   total_plans: 52
-  completed_plans: 51
-  percent: 98
+  completed_plans: 52
+  percent: 100
 ---
 
 # STATE: OmniRepo
@@ -77,6 +77,7 @@ Plan: 12 of 12
 | Phase 05 P09 | 7m | 2 tasks | 7 files |
 | Phase 05 P10 | 4m | 1 tasks | 4 files |
 | Phase 05 P11 | 5min | 2 tasks | 4 files |
+| Phase 05 P12 | 10m | 3 tasks | 15 files |
 
 ## Accumulated Context
 
@@ -168,6 +169,9 @@ Version-drift corrections to apply at first commit (from `.planning/research/SUM
 - [Phase 05]: Client-side multi-filter with server single-filter fallback for search kind/severity chips
 - [Phase 05]: SeedTrivyDB exported for testability; called with hardcoded /opt/trivy-db path from Run
 - [Phase 05]: Duplicate dev target replaced with OMNIREPO_DEV=1 parallel Go+Vite variant
+- [Phase 05]: E2E tests use resilient selectors with fallback patterns for UI elements
+- [Phase 05]: Air-gap test uses Node.js fs module directly instead of shell commands
+- [Phase 05]: API integration tests cover 14 endpoint groups as separate TestAPI_ functions
 
 ### Todos
 

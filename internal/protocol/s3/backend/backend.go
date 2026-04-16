@@ -152,10 +152,9 @@ func validateObjectKey(key string) error {
 	if strings.HasPrefix(key, "/") {
 		return gofakes3.ErrorMessage(gofakes3.ErrInvalidArgument, "key must not start with '/'")
 	}
-	// Reject any segment that is exactly ".." — handles "../", "a/../b", etc.
 	for _, seg := range strings.Split(key, "/") {
-		if seg == ".." {
-			return gofakes3.ErrorMessage(gofakes3.ErrInvalidArgument, "key must not contain '..' segments")
+		if seg == ".." || seg == "." {
+			return gofakes3.ErrorMessage(gofakes3.ErrInvalidArgument, "key must not contain '.' or '..' segments")
 		}
 	}
 	return nil
@@ -221,23 +220,24 @@ func (b *Backend) CreateBucketForProject(name string, projectID int64) error {
 		return errors.New("backend: projectID required")
 	}
 	ctx := context.Background()
-	// Pre-check to surface a clean ErrBucketAlreadyExists rather than a raw
-	// UNIQUE-constraint violation.
-	var existing int64
-	if err := b.DB.Reader.QueryRowContext(ctx,
-		`SELECT id FROM s3_buckets WHERE name=? AND deleted_at IS NULL`, name,
-	).Scan(&existing); err == nil {
-		return gofakes3.ResourceError(gofakes3.ErrBucketAlreadyExists, name)
-	} else if !errors.Is(err, sql.ErrNoRows) {
-		return fmt.Errorf("backend: precheck: %w", err)
-	}
 	if err := b.DB.WriteTx(ctx, func(tx *sql.Tx) error {
+		var existing int64
+		if err := tx.QueryRowContext(ctx,
+			`SELECT id FROM s3_buckets WHERE name=? AND deleted_at IS NULL`, name,
+		).Scan(&existing); err == nil {
+			return gofakes3.ResourceError(gofakes3.ErrBucketAlreadyExists, name)
+		} else if !errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("backend: precheck: %w", err)
+		}
 		_, err := tx.ExecContext(ctx,
 			`INSERT INTO s3_buckets(name, project_id) VALUES (?, ?)`, name, projectID,
 		)
-		return err
+		if err != nil {
+			return fmt.Errorf("backend: insert bucket: %w", err)
+		}
+		return nil
 	}); err != nil {
-		return fmt.Errorf("backend: insert bucket: %w", err)
+		return err
 	}
 	if err := os.MkdirAll(b.bucketRoot(name), 0o750); err != nil {
 		return fmt.Errorf("backend: mkdir bucket root: %w", err)

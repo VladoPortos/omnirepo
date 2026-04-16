@@ -111,6 +111,30 @@ func (b *Backend) CreateMultipartUpload(bucket, object string, meta map[string]s
 // reserved; we use 1 (the bootstrap super-admin, present in every install).
 const multipartInitiatorFallback int64 = 1
 
+// verifyUploadOwnership checks that the upload exists, belongs to the requested
+// bucket, and matches the expected object key. Prevents cross-bucket multipart
+// attacks where a valid upload_id from bucket A is used against bucket B.
+func (b *Backend) verifyUploadOwnership(ctx context.Context, bucket, object, uploadID string) (*metadata.S3MultipartUpload, error) {
+	up, err := b.Multipart.FindUpload(ctx, uploadID)
+	if err != nil {
+		if errors.Is(err, metadata.ErrNotFound) {
+			return nil, gofakes3.ErrNoSuchUpload
+		}
+		return nil, err
+	}
+	if up.Key != object {
+		return nil, gofakes3.ErrNoSuchUpload
+	}
+	bucketID, ok, err := b.findBucketID(ctx, bucket)
+	if err != nil {
+		return nil, err
+	}
+	if !ok || up.BucketID != bucketID {
+		return nil, gofakes3.ErrNoSuchUpload
+	}
+	return up, nil
+}
+
 // UploadPart stages one part under <staging>/<partNumber>.bin and records
 // its md5 + size.
 func (b *Backend) UploadPart(bucket, object string, id gofakes3.UploadID, partNumber int, contentLength int64, input io.Reader) (etag string, err error) {
@@ -122,15 +146,8 @@ func (b *Backend) UploadPart(bucket, object string, id gofakes3.UploadID, partNu
 		return "", gofakes3.ErrorMessage(gofakes3.ErrInvalidPart, "part exceeds 5 GiB maximum")
 	}
 	uploadID := string(id)
-	up, err := b.Multipart.FindUpload(ctx, uploadID)
-	if err != nil {
-		if errors.Is(err, metadata.ErrNotFound) {
-			return "", gofakes3.ErrNoSuchUpload
-		}
+	if _, err := b.verifyUploadOwnership(ctx, bucket, object, uploadID); err != nil {
 		return "", err
-	}
-	if up.Key != object {
-		return "", gofakes3.ErrNoSuchUpload
 	}
 
 	mu := b.bucketLock(bucket)
@@ -174,15 +191,9 @@ func (b *Backend) CompleteMultipartUpload(bucket, object string, id gofakes3.Upl
 	ctx := context.Background()
 	uploadID := string(id)
 
-	up, err := b.Multipart.FindUpload(ctx, uploadID)
+	up, err := b.verifyUploadOwnership(ctx, bucket, object, uploadID)
 	if err != nil {
-		if errors.Is(err, metadata.ErrNotFound) {
-			return "", "", gofakes3.ErrNoSuchUpload
-		}
 		return "", "", err
-	}
-	if up.Key != object {
-		return "", "", gofakes3.ErrNoSuchUpload
 	}
 	bucketID, ok, err := b.findBucketID(ctx, bucket)
 	if err != nil {
@@ -290,19 +301,11 @@ func (b *Backend) CompleteMultipartUpload(bucket, object string, id gofakes3.Upl
 	if err := tmpF.Close(); err != nil {
 		return "", "", fmt.Errorf("backend: close temp: %w", err)
 	}
-	if err := os.Rename(tmpName, dst); err != nil {
-		return "", "", fmt.Errorf("backend: rename: %w", err)
-	}
-	cleanup = false
-	// Parent dir fsync.
-	if pf, err := os.Open(filepath.Dir(dst)); err == nil {
-		_ = pf.Sync()
-		_ = pf.Close()
-	}
 
 	finalETag := fmt.Sprintf("%s-%d", hex.EncodeToString(mergeHasher.Sum(nil)), len(parts))
 
-	// Upsert s3_objects + drop multipart rows inside one writer tx.
+	// DB first, then rename. If the tx fails, the temp file is cleaned up by
+	// the deferred cleanup above — no orphaned objects on disk.
 	if err := b.DB.WriteTx(ctx, func(tx *sql.Tx) error {
 		if _, err := b.Objects.Upsert(ctx, tx, &metadata.S3Object{
 			BucketID:     bucketID,
@@ -311,13 +314,22 @@ func (b *Backend) CompleteMultipartUpload(bucket, object string, id gofakes3.Upl
 			ETag:         finalETag,
 			ContentType:  contentTypeFromMeta(up.MetadataJSON),
 			MetadataJSON: up.MetadataJSON,
-			SHA256:       "multipart:" + finalETag, // we don't recompute sha256 across parts
+			SHA256:       "multipart:" + finalETag,
 		}); err != nil {
 			return err
 		}
 		return b.Multipart.DeleteUpload(ctx, tx, uploadID)
 	}); err != nil {
 		return "", "", fmt.Errorf("backend: commit multipart: %w", err)
+	}
+	// DB committed — now move the file into place.
+	if err := os.Rename(tmpName, dst); err != nil {
+		return "", "", fmt.Errorf("backend: rename: %w", err)
+	}
+	cleanup = false
+	if pf, err := os.Open(filepath.Dir(dst)); err == nil {
+		_ = pf.Sync()
+		_ = pf.Close()
 	}
 	// Clean up staging tree (best-effort).
 	_ = os.RemoveAll(b.multipartStaging(uploadID))
@@ -330,17 +342,13 @@ func (b *Backend) CompleteMultipartUpload(bucket, object string, id gofakes3.Upl
 func (b *Backend) AbortMultipartUpload(bucket, object string, id gofakes3.UploadID) error {
 	ctx := context.Background()
 	uploadID := string(id)
-	up, err := b.Multipart.FindUpload(ctx, uploadID)
+	_, err := b.verifyUploadOwnership(ctx, bucket, object, uploadID)
 	if err != nil {
-		if errors.Is(err, metadata.ErrNotFound) {
-			// Idempotent per D-20: also wipe any stray staging tree.
+		if errors.Is(err, gofakes3.ErrNoSuchUpload) {
 			_ = os.RemoveAll(b.multipartStaging(uploadID))
 			return nil
 		}
 		return err
-	}
-	if up.Key != object {
-		return gofakes3.ErrNoSuchUpload
 	}
 	if err := b.DB.WriteTx(ctx, func(tx *sql.Tx) error {
 		return b.Multipart.DeleteUpload(ctx, tx, uploadID)
@@ -396,15 +404,8 @@ func (b *Backend) ListMultipartUploads(bucket string, marker *gofakes3.UploadLis
 // ListParts returns every part of an upload.
 func (b *Backend) ListParts(bucket, object string, uploadID gofakes3.UploadID, marker int, limit int64) (*gofakes3.ListMultipartUploadPartsResult, error) {
 	ctx := context.Background()
-	up, err := b.Multipart.FindUpload(ctx, string(uploadID))
-	if err != nil {
-		if errors.Is(err, metadata.ErrNotFound) {
-			return nil, gofakes3.ErrNoSuchUpload
-		}
+	if _, err := b.verifyUploadOwnership(ctx, bucket, object, string(uploadID)); err != nil {
 		return nil, err
-	}
-	if up.Key != object {
-		return nil, gofakes3.ErrNoSuchUpload
 	}
 	parts, err := b.Multipart.ListParts(ctx, string(uploadID))
 	if err != nil {

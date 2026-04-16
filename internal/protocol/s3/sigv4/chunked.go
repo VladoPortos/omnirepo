@@ -202,9 +202,10 @@ func swallowOptionalCRLF(r *bufio.Reader) error {
 	return nil
 }
 
-// constEq is a constant-time string equality check.
+// constEq is a constant-time string equality check. Uses ConstantTimeEq for
+// length comparison to avoid leaking length information via timing.
 func constEq(a, b string) bool {
-	if len(a) != len(b) {
+	if subtle.ConstantTimeEq(int32(len(a)), int32(len(b))) == 0 {
 		return false
 	}
 	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1

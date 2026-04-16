@@ -99,11 +99,9 @@ func TestBucketFromPath(t *testing.T) {
 	}
 }
 
-func TestRequireBucketAccess_NoBucket_PassesThrough(t *testing.T) {
-	var called bool
+func TestRequireBucketAccess_NoBucket_Blocked(t *testing.T) {
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		called = true
-		w.WriteHeader(http.StatusOK)
+		t.Fatal("inner handler should NOT be called for root path (ListBuckets blocked)")
 	})
 
 	lookup := BucketProjectLookup(func(ctx context.Context, name string) (int64, bool, error) {
@@ -117,8 +115,8 @@ func TestRequireBucketAccess_NoBucket_PassesThrough(t *testing.T) {
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 
-	if !called {
-		t.Fatal("inner handler not called for root path")
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 for root ListBuckets, got %d", w.Code)
 	}
 }
 

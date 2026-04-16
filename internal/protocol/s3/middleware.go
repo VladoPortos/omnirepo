@@ -95,9 +95,10 @@ func RequireBucketAccess(lookup BucketProjectLookup) func(http.Handler) http.Han
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			bucket := bucketFromPath(r.URL.Path)
 			if bucket == "" {
-				// Root-level request (e.g. ListBuckets). Let gofakes3
-				// handle it — the actor is already authenticated.
-				next.ServeHTTP(w, r)
+				// Root-level request (ListBuckets). S3 keys are
+				// project-scoped so listing all buckets across projects
+				// is a cross-project information disclosure. Block it.
+				writeAccessDenied(w, r)
 				return
 			}
 

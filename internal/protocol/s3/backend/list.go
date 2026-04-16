@@ -6,7 +6,6 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/johannesboyne/gofakes3"
@@ -114,8 +113,6 @@ func (b *Backend) ListBucket(name string, prefix *gofakes3.Prefix, page gofakes3
 				}
 				continue
 			}
-			hash, _ := hexDecodeETag(obj.ETag)
-			_ = hash
 			out.Add(&gofakes3.Content{
 				Key:          obj.Key,
 				LastModified: newContentTime(obj.CreatedAt),
@@ -154,14 +151,5 @@ func (b *Backend) ListBucket(name string, prefix *gofakes3.Prefix, page gofakes3
 		marker = listPage.NextToken
 	}
 
-	_ = strings.Compare // keep import used
 	return out, nil
-}
-
-func hexDecodeETag(etag string) ([]byte, error) {
-	// retained for future use; currently unused in hot path.
-	if etag == "" {
-		return nil, nil
-	}
-	return nil, nil
 }

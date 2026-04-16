@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -86,7 +87,9 @@ func (h *repoHandler) handleInfoRefs(w http.ResponseWriter, r *http.Request) {
 	// ("# service=<svc>\n" + flush) plus the capability/ref advertisement.
 	// Per spike-results.md: the preamble is emitted by AdvertiseRefs itself
 	// when smart=true — the caller MUST NOT pktline-encode it again.
-	_ = transport.AdvertiseRefs(r.Context(), st, w, service, true)
+	if err := transport.AdvertiseRefs(r.Context(), st, w, service, true); err != nil {
+		slog.WarnContext(r.Context(), "gogit.advertise_refs failed", "err", err)
+	}
 }
 
 func (h *repoHandler) handleService(w http.ResponseWriter, r *http.Request, service string) {
@@ -119,9 +122,13 @@ func (h *repoHandler) handleService(w http.ResponseWriter, r *http.Request, serv
 
 	switch service {
 	case transport.UploadPackService:
-		_ = transport.UploadPack(ctx, st, body, wc, &transport.UploadPackRequest{StatelessRPC: true})
+		if err := transport.UploadPack(ctx, st, body, wc, &transport.UploadPackRequest{StatelessRPC: true}); err != nil {
+			slog.WarnContext(ctx, "gogit.upload_pack failed", "err", err)
+		}
 	case transport.ReceivePackService:
-		_ = transport.ReceivePack(ctx, st, body, wc, &transport.ReceivePackRequest{StatelessRPC: true})
+		if err := transport.ReceivePack(ctx, st, body, wc, &transport.ReceivePackRequest{StatelessRPC: true}); err != nil {
+			slog.WarnContext(ctx, "gogit.receive_pack failed", "err", err)
+		}
 	}
 }
 

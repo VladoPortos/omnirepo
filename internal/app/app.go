@@ -632,6 +632,9 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 		}
 	}()
 
+	slog.InfoContext(ctx, "http.listen", "addr", httpLn.Addr().String())
+	slog.InfoContext(ctx, "https.listen", "addr", httpsLn.Addr().String())
+
 	if opts.Ready != nil {
 		close(opts.Ready)
 	}

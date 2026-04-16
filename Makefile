@@ -3,7 +3,8 @@ DATA_ROOT ?= /var/lib/omnirepo
 BENCH_DURATION ?= 30s
 BENCH_WORKERS ?= 16
 
-.PHONY: dev build test test-airgap bench-sqlite vendor lint seed grep-cdn \
+.PHONY: dev build test test-airgap bench-sqlite bench-git-fixture bench-git \
+	vendor lint seed grep-cdn \
 	conformance conformance-oci conformance-rpm conformance-deb \
 	conformance-pypi conformance-helm conformance-s3 conformance-git \
 	test-git-conformance conformance-all
@@ -23,6 +24,20 @@ test-airgap:
 
 bench-sqlite:
 	$(GO) run -mod=vendor ./cmd/bench/sqlite --duration=$(BENCH_DURATION) --workers=$(BENCH_WORKERS)
+
+# TEST-07 gate: deterministic 200 MB bare-repo fixture for the git memory
+# bench. Generated once; cached in .bench/git-fixture/ (gitignored).
+bench-git-fixture:
+	@mkdir -p .bench/git-fixture
+	@test -d .bench/git-fixture/big.git || \
+		$(GO) run -tags=generator -mod=vendor ./test/bench/gitgen -out .bench/git-fixture/big.git -seed 42
+
+# TEST-07 gate: git clone memory benchmark. Launches omnirepo as a child
+# process, clones the 200 MB fixture, samples VmRSS at 50 ms, asserts
+# peak_rss < 3 * repo_bytes for the gogit backend (hard gate). Also runs
+# against gitkit for comparison (not gated). Results in .bench/git-results.json.
+bench-git: bench-git-fixture
+	$(GO) test -tags=bench -mod=vendor -count=1 -timeout=15m -v ./test/bench/git/...
 
 vendor:
 	$(GO) mod tidy

@@ -172,3 +172,31 @@ jobs:
 
       - name: Run Git conformance suite
         run: make conformance-git
+
+  # Phase 4 TEST-07 gate: git clone memory benchmark. Generates a
+  # deterministic 200 MB bare repo, launches omnirepo as a child process,
+  # clones against it while sampling /proc/<pid>/status VmRSS at 50 ms.
+  # Hard gate: peak_rss < 3 * repo_bytes for the gogit backend.
+  # Also runs gitkit for comparison (not gated). JSON artifact archived.
+  bench-git:
+    runs-on: ubuntu-24.04
+    needs: build-test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+
+      - name: Install git
+        run: sudo apt-get update && sudo apt-get install -y git
+
+      - name: Run git memory bench (TEST-07)
+        run: make bench-git
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: git-bench-results
+          path: .bench/git-results.json

@@ -10,6 +10,7 @@ test/conformance/bin/*
 .idea/
 /var/lib/omnirepo/
 coverage.txt
+.bench/
 .planning/
 .playwright-mcp/
 .remember/

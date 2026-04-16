@@ -1,0 +1,395 @@
+//go:build bench
+
+// Package gitbench implements the TEST-07 memory benchmark: a child-process
+// omnirepo serving a 200 MB bare Git repo is cloned while VmRSS is sampled
+// at 50 ms intervals. The hard gate asserts peak_rss < 3 * repo_bytes.
+//
+// Both the gogit and gitkit backends are exercised; only gogit is a hard gate
+// (D-43). Results are written to .bench/git-results.json (D-44).
+package gitbench
+
+import (
+	"context"
+	"crypto/tls"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"testing"
+	"time"
+)
+
+// benchResult is the JSON artifact shape per D-44.
+type benchResult struct {
+	Timestamp    string `json:"timestamp"`
+	GoVersion    string `json:"go_version"`
+	Backend      string `json:"backend"`
+	PeakRSSBytes int64  `json:"peak_rss_bytes"`
+	RepoBytes    int64  `json:"repo_bytes"`
+	Ratio        float64 `json:"ratio"`
+	DurationMs   int64  `json:"duration_ms"`
+}
+
+func TestGitMemoryBench(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("linux-only bench (D-42): /proc/<pid>/status not available")
+	}
+
+	// 1. Build omnirepo binary.
+	binDir := t.TempDir()
+	omnirepoPath := filepath.Join(binDir, "omnirepo")
+	t.Log("building omnirepo binary...")
+	buildCmd := exec.Command("go", "build", "-mod=vendor", "-o", omnirepoPath, "./cmd/omnirepo")
+	buildCmd.Dir = projectRoot(t)
+	buildCmd.Stdout = os.Stderr
+	buildCmd.Stderr = os.Stderr
+	if err := buildCmd.Run(); err != nil {
+		t.Fatalf("go build: %v", err)
+	}
+
+	// 2. Generate the fixture if not already present.
+	fixtureDir := filepath.Join(projectRoot(t), ".bench", "git-fixture")
+	bareRepoPath := filepath.Join(fixtureDir, "big.git")
+	if _, err := os.Stat(bareRepoPath); os.IsNotExist(err) {
+		t.Log("generating 200 MB fixture (first run)...")
+		if err := os.MkdirAll(fixtureDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		genCmd := exec.Command("go", "run", "-tags=generator", "-mod=vendor",
+			"./test/bench/gitgen", "-out", bareRepoPath, "-seed", "42")
+		genCmd.Dir = projectRoot(t)
+		genCmd.Stdout = os.Stderr
+		genCmd.Stderr = os.Stderr
+		if err := genCmd.Run(); err != nil {
+			t.Fatalf("gitgen: %v", err)
+		}
+	}
+
+	repoBytes := duBytes(t, bareRepoPath)
+	t.Logf("fixture repo size: %d bytes (%.1f MB)", repoBytes, float64(repoBytes)/(1024*1024))
+
+	var results []benchResult
+
+	for _, backend := range []string{"gogit", "gitkit"} {
+		t.Run(backend, func(t *testing.T) {
+			result := runBenchForBackend(t, omnirepoPath, bareRepoPath, repoBytes, backend)
+			results = append(results, result)
+		})
+	}
+
+	// Write JSON artifact.
+	writeJSONResults(t, results)
+}
+
+func runBenchForBackend(t *testing.T, omnirepoPath, bareRepoPath string, repoBytes int64, backend string) benchResult {
+	t.Helper()
+
+	dataRoot := t.TempDir()
+	configDir := filepath.Join(dataRoot, "config")
+	if err := os.MkdirAll(configDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+
+	// Bootstrap JSON: create a project + git repo pointing at the fixture.
+	bootstrapJSON := fmt.Sprintf(`{
+		"schema_version": 1,
+		"super_admin": {"login":"admin","email":"admin@example.com","password":"bench-password-12345"},
+		"users": [],
+		"projects": [{"name":"bench","members":[]}],
+		"repos": [{"project":"bench","type":"git","name":"big","public_read":true}],
+		"api_keys": []
+	}`)
+	bsPath := filepath.Join(configDir, "bootstrap.json")
+	if err := os.WriteFile(bsPath, []byte(bootstrapJSON), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Symlink the fixture bare repo into the data root so omnirepo serves it.
+	gitRepoDir := filepath.Join(dataRoot, "repos", "bench", "git")
+	if err := os.MkdirAll(gitRepoDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	linkPath := filepath.Join(gitRepoDir, "big.git")
+	if err := os.Symlink(bareRepoPath, linkPath); err != nil {
+		t.Fatalf("symlink fixture: %v", err)
+	}
+
+	// Write a minimal config YAML.
+	cfgYAML := fmt.Sprintf(`data_root: %s
+bootstrap:
+  path: %s
+server:
+  http_port: 0
+  https_port: 0
+  git_backend: %s
+  external_hostnames: ["localhost"]
+`, dataRoot, bsPath, backend)
+	cfgPath := filepath.Join(configDir, "config.yaml")
+	if err := os.WriteFile(cfgPath, []byte(cfgYAML), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Start omnirepo as a child process.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, omnirepoPath, "serve", "--config", cfgPath)
+	cmd.Env = append(os.Environ(),
+		"OMNIREPO_SERVER_GIT_BACKEND="+backend,
+		"OMNIREPO_DATA_ROOT="+dataRoot,
+		"OMNIREPO_BOOTSTRAP_PATH="+bsPath,
+	)
+
+	// Capture stderr to find the listen port.
+	stderrPipe, err := cmd.StderrPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start omnirepo (%s): %v", backend, err)
+	}
+	defer func() {
+		_ = cmd.Process.Signal(os.Interrupt)
+		_ = cmd.Wait()
+	}()
+
+	pid := cmd.Process.Pid
+	t.Logf("omnirepo pid=%d backend=%s", pid, backend)
+
+	// Read stderr to discover the HTTPS port.
+	httpsPort := discoverPort(t, stderrPipe, 30*time.Second)
+	t.Logf("omnirepo HTTPS port: %d", httpsPort)
+
+	// Wait for the server to be healthy.
+	tlsClient := &http.Client{
+		Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}},
+		Timeout:   10 * time.Second,
+	}
+	healthURL := fmt.Sprintf("https://127.0.0.1:%d/healthz", httpsPort)
+	waitHealthy(t, healthURL, tlsClient, 30*time.Second)
+
+	// Start RSS sampler.
+	samplerCtx, samplerCancel := context.WithCancel(context.Background())
+	defer samplerCancel()
+	rssCh := StartSampler(samplerCtx, pid, 50*time.Millisecond)
+
+	// Run git clone.
+	cloneDst := t.TempDir()
+	cloneURL := fmt.Sprintf("https://127.0.0.1:%d/git/bench/big.git", httpsPort)
+	t.Logf("cloning %s -> %s", cloneURL, cloneDst)
+
+	start := time.Now()
+	cloneCmd := exec.Command("git", "clone", "--config", "http.sslVerify=false", cloneURL, filepath.Join(cloneDst, "clone"))
+	cloneCmd.Stdout = os.Stderr
+	cloneCmd.Stderr = os.Stderr
+	if err := cloneCmd.Run(); err != nil {
+		t.Fatalf("git clone failed: %v", err)
+	}
+	duration := time.Since(start)
+	t.Logf("clone completed in %s", duration)
+
+	// Stop sampler and collect peak.
+	samplerCancel()
+	var peak int64
+	for s := range rssCh {
+		if s.VmRSS > peak {
+			peak = s.VmRSS
+		}
+	}
+
+	ratio := float64(peak) / float64(repoBytes)
+	t.Logf("backend=%s peak_rss=%d repo_bytes=%d ratio=%.2f", backend, peak, repoBytes, ratio)
+
+	// Hard gate for gogit (D-41, D-43).
+	if backend == "gogit" && ratio >= 3.0 {
+		t.Fatalf("TEST-07 HARD GATE FAILED: peak_rss=%d, repo_bytes=%d, ratio=%.2f >= 3.0",
+			peak, repoBytes, ratio)
+	}
+
+	return benchResult{
+		Timestamp:    time.Now().UTC().Format(time.RFC3339),
+		GoVersion:    runtime.Version(),
+		Backend:      backend,
+		PeakRSSBytes: peak,
+		RepoBytes:    repoBytes,
+		Ratio:        ratio,
+		DurationMs:   duration.Milliseconds(),
+	}
+}
+
+// waitHealthy polls the URL until 200 or timeout.
+func waitHealthy(t *testing.T, url string, client *http.Client, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		resp, err := client.Get(url)
+		if err == nil {
+			_ = resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				return
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatalf("%s did not respond 200 within %s", url, timeout)
+}
+
+// discoverPort reads stderr output looking for the HTTPS listen address.
+// Omnirepo logs something like: "https.listen addr=:PORT" or similar.
+func discoverPort(t *testing.T, r io.Reader, timeout time.Duration) int {
+	t.Helper()
+	buf := make([]byte, 0, 16384)
+	tmp := make([]byte, 1024)
+	deadline := time.Now().Add(timeout)
+
+	for time.Now().Before(deadline) {
+		n, err := r.Read(tmp)
+		if n > 0 {
+			buf = append(buf, tmp[:n]...)
+			// Look for port in log output. Common patterns:
+			// "https.listen" "addr=:PORT" or "https_addr" "127.0.0.1:PORT"
+			lines := strings.Split(string(buf), "\n")
+			for _, line := range lines {
+				port := extractHTTPSPort(line)
+				if port > 0 {
+					// Keep draining in background so the pipe doesn't block.
+					go func() {
+						for {
+							_, err := r.Read(tmp)
+							if err != nil {
+								return
+							}
+						}
+					}()
+					return port
+				}
+			}
+		}
+		if err != nil {
+			break
+		}
+	}
+	t.Fatalf("could not discover HTTPS port from stderr within %s; output so far: %s",
+		timeout, string(buf))
+	return 0
+}
+
+// extractHTTPSPort attempts to find the HTTPS port from a slog text log line.
+// Expected format: "... msg=https.listen addr=[::]:PORT" or "addr=0.0.0.0:PORT"
+// or "addr=:PORT" or "addr=127.0.0.1:PORT".
+func extractHTTPSPort(line string) int {
+	lower := strings.ToLower(line)
+	if !strings.Contains(lower, "https.listen") {
+		return 0
+	}
+	// Find "addr=" and extract the port after the last colon.
+	idx := strings.Index(line, "addr=")
+	if idx < 0 {
+		return 0
+	}
+	addrVal := line[idx+5:]
+	// Trim at next space or end.
+	if sp := strings.IndexByte(addrVal, ' '); sp >= 0 {
+		addrVal = addrVal[:sp]
+	}
+	// The port is after the last colon.
+	lastColon := strings.LastIndex(addrVal, ":")
+	if lastColon < 0 {
+		return 0
+	}
+	portStr := addrVal[lastColon+1:]
+	port := 0
+	for _, c := range portStr {
+		if c < '0' || c > '9' {
+			return 0
+		}
+		port = port*10 + int(c-'0')
+	}
+	if port > 0 && port < 65536 {
+		return port
+	}
+	return 0
+}
+
+// duBytes returns the total size in bytes of the directory tree at path,
+// matching `du -sb` behavior.
+func duBytes(t *testing.T, path string) int64 {
+	t.Helper()
+	var total int64
+	err := filepath.Walk(path, func(_ string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() {
+			total += info.Size()
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("du %s: %v", path, err)
+	}
+	return total
+}
+
+// writeJSONResults writes the bench results to .bench/git-results.json.
+// If the file already exists, it reads the existing entries and appends,
+// keeping the last 20 runs.
+func writeJSONResults(t *testing.T, results []benchResult) {
+	t.Helper()
+	outDir := filepath.Join(projectRoot(t), ".bench")
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		t.Fatalf("mkdir .bench: %v", err)
+	}
+	outPath := filepath.Join(outDir, "git-results.json")
+
+	// Read existing entries.
+	var existing []benchResult
+	if data, err := os.ReadFile(outPath); err == nil {
+		_ = json.Unmarshal(data, &existing)
+	}
+
+	// Append new results.
+	existing = append(existing, results...)
+
+	// Truncate to last 20 entries.
+	if len(existing) > 20 {
+		existing = existing[len(existing)-20:]
+	}
+
+	data, err := json.MarshalIndent(existing, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal results: %v", err)
+	}
+	if err := os.WriteFile(outPath, data, 0o644); err != nil {
+		t.Fatalf("write %s: %v", outPath, err)
+	}
+	t.Logf("results written to %s", outPath)
+}
+
+// projectRoot returns the repo root by walking up from the test file.
+func projectRoot(t *testing.T) string {
+	t.Helper()
+	// We know the test lives at test/bench/git/ — walk up 3 levels.
+	dir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// But under `go test`, the working dir is the package dir.
+	// Walk up until we find go.mod.
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			t.Fatal("could not find project root (go.mod)")
+		}
+		dir = parent
+	}
+}

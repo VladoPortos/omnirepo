@@ -158,7 +158,7 @@ Plans:
 - [x] 05-08-PLAN.md — Git repo detail: file tree, syntax highlighting (Shiki), commit log, diff viewer, blame, branch comparison
 - [x] 05-09-PLAN.md — Admin pages: Users, Audit, TLS, Trivy DB, GC, Trash, Maintenance
 - [x] 05-10-PLAN.md — Search page + Profile page (API keys, S3 keys, password change, delete account)
-- [ ] 05-11-PLAN.md — Production 4-stage Dockerfile + Makefile targets + first-boot Trivy DB seed + SPA/dev proxy wiring
+- [x] 05-11-PLAN.md — Production 4-stage Dockerfile + Makefile targets + first-boot Trivy DB seed + SPA/dev proxy wiring
 - [ ] 05-12-PLAN.md — Playwright E2E suite + API integration tests + bench target + air-gap gates
 **UI hint**: yes
 

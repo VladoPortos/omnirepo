@@ -226,9 +226,9 @@
 
 ### Build & Air-Gap Invariants (AIR)
 
-- [ ] **AIR-01**: Multi-stage Dockerfile: stage 1 `node:22-alpine` builds the SPA, stage 2 `golang:1.25-alpine` builds the Go binary with embedded SPA, stage 3 copies Trivy binary from the pinned Trivy image, stage 4 assembles `alpine:3.21` (pinned by digest) with the Go binary, Trivy binary, baked Trivy DB at `/opt/trivy-db/`, optional `git` binary, CA bundle, non-root user UID 1000
-- [ ] **AIR-02**: Image is built for `linux/amd64` and `linux/arm64`
-- [ ] **AIR-03**: First container start seeds `/var/lib/omnirepo/trivy/db/` from `/opt/trivy-db/` if empty
+- [x] **AIR-01**: Multi-stage Dockerfile: stage 1 `node:22-alpine` builds the SPA, stage 2 `golang:1.25-alpine` builds the Go binary with embedded SPA, stage 3 copies Trivy binary from the pinned Trivy image, stage 4 assembles `alpine:3.21` (pinned by digest) with the Go binary, Trivy binary, baked Trivy DB at `/opt/trivy-db/`, optional `git` binary, CA bundle, non-root user UID 1000
+- [x] **AIR-02**: Image is built for `linux/amd64` and `linux/arm64`
+- [x] **AIR-03**: First container start seeds `/var/lib/omnirepo/trivy/db/` from `/opt/trivy-db/` if empty
 - [x] **AIR-04**: Runtime makes zero outbound network calls except when explicitly invoked by the user (sync from external, pull external Docker image, online Trivy DB pull, optional internet-reachability check button)
 - [x] **AIR-05**: CI invariant test boots the container with `--network=none` and exercises the UI via Playwright; failure blocks merge
 - [x] **AIR-06**: Build-time grep gate: `grep -rEI 'https?://(?!localhost|127\.0\.0\.1)' web/dist/` returns only self-references; failure breaks the build
@@ -454,9 +454,9 @@ Deferred to future release. Tracked but not in current roadmap.
 | UI-11 | Phase 5 | Complete |
 | UI-12 | Phase 5 | Complete |
 | UI-13 | Phase 5 | Complete |
-| AIR-01 | Phase 5 | Pending |
-| AIR-02 | Phase 5 | Pending |
-| AIR-03 | Phase 5 | Pending |
+| AIR-01 | Phase 5 | Complete |
+| AIR-02 | Phase 5 | Complete |
+| AIR-03 | Phase 5 | Complete |
 | AIR-04 | Phase 1 | Complete |
 | AIR-05 | Phase 1 | Complete |
 | AIR-06 | Phase 1 | Complete |

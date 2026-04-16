@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Ready to execute
-last_updated: "2026-04-16T11:19:27.075Z"
+last_updated: "2026-04-16T11:27:28.241Z"
 progress:
   total_phases: 5
   completed_phases: 4
   total_plans: 52
-  completed_plans: 50
-  percent: 96
+  completed_plans: 51
+  percent: 98
 ---
 
 # STATE: OmniRepo
@@ -25,7 +25,7 @@ progress:
 ## Current Position
 
 Phase: 05 (rest-api-web-ui-production-dockerfile) — EXECUTING
-Plan: 11 of 12
+Plan: 12 of 12
 
 - **Phase**: 1 — Foundation
 - **Plan**: none yet (planning not started)
@@ -76,6 +76,7 @@ Plan: 11 of 12
 | Phase 05 P08 | 10m | 2 tasks | 16 files |
 | Phase 05 P09 | 7m | 2 tasks | 7 files |
 | Phase 05 P10 | 4m | 1 tasks | 4 files |
+| Phase 05 P11 | 5min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -165,6 +166,8 @@ Version-drift corrections to apply at first commit (from `.planning/research/SUM
 - [Phase 05]: DOMPurify sanitization of Shiki output as defense-in-depth (T-05-08-01)
 - [Phase 05]: DiceBear avatars rendered as data URI images for XSS safety
 - [Phase 05]: Client-side multi-filter with server single-filter fallback for search kind/severity chips
+- [Phase 05]: SeedTrivyDB exported for testability; called with hardcoded /opt/trivy-db path from Run
+- [Phase 05]: Duplicate dev target replaced with OMNIREPO_DEV=1 parallel Go+Vite variant
 
 ### Todos
 

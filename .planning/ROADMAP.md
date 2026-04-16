@@ -154,7 +154,7 @@ Plans:
 - [x] 05-04-PLAN.md — API endpoints: search, profile, API keys, projects list, repos list, git browse, dashboard, SPA handler, dev proxy
 - [x] 05-05-PLAN.md — SPA shell: router, API client, auth flow (login + forced password change), sidebar, theme toggle, maintenance banner
 - [x] 05-06-PLAN.md — Dashboard + Projects pages + shared components (DataTable, Dropzone, SnippetPanel, badges, formatters)
-- [ ] 05-07-PLAN.md — Repo detail pages: Docker, RPM, APT, PyPI, Helm, RAW, S3 + scan summary + markdown editor
+- [x] 05-07-PLAN.md — Repo detail pages: Docker, RPM, APT, PyPI, Helm, RAW, S3 + scan summary + markdown editor
 - [ ] 05-08-PLAN.md — Git repo detail: file tree, syntax highlighting (Shiki), commit log, diff viewer, blame, branch comparison
 - [ ] 05-09-PLAN.md — Admin pages: Users, Audit, TLS, Trivy DB, GC, Trash, Maintenance
 - [ ] 05-10-PLAN.md — Search page + Profile page (API keys, S3 keys, password change, delete account)

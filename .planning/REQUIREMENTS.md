@@ -217,7 +217,7 @@
 - [x] **UI-05**: Login screen + forced-password-change screen; offline-friendly error states
 - [x] **UI-06**: Dashboard shows total + free storage, recent audit events, recent high-severity scan findings
 - [x] **UI-07**: Projects list and project detail (members, repos grouped by type, add repo, invite/remove user)
-- [ ] **UI-08**: Per-type repo detail screens (file browser + upload dropzone, README markdown editor + preview, scan results filter, SBOM download, size/count stats, sync-from-URL form, wipe contents, soft delete, public-read toggle, scan-severity gate, Docker-only: pull external + promote tag + cosign badge)
+- [x] **UI-08**: Per-type repo detail screens (file browser + upload dropzone, README markdown editor + preview, scan results filter, SBOM download, size/count stats, sync-from-URL form, wipe contents, soft delete, public-read toggle, scan-severity gate, Docker-only: pull external + promote tag + cosign badge)
 - [ ] **UI-09**: Global search screen with type and severity filters; results link to source entities
 - [ ] **UI-10**: Profile screen (edit email, change password, manage own API keys with one-time reveal, manage own S3 keys)
 - [ ] **UI-11**: Admin screens (super-admin only): users CRUD, full audit log with filters, TLS cert upload, Trivy DB status + upload + online-pull, maintenance mode toggle, GC trigger, trash viewer with restore
@@ -448,7 +448,7 @@ Deferred to future release. Tracked but not in current roadmap.
 | UI-05 | Phase 5 | Complete |
 | UI-06 | Phase 5 | Complete |
 | UI-07 | Phase 5 | Complete |
-| UI-08 | Phase 5 | Pending |
+| UI-08 | Phase 5 | Complete |
 | UI-09 | Phase 5 | Pending |
 | UI-10 | Phase 5 | Pending |
 | UI-11 | Phase 5 | Pending |

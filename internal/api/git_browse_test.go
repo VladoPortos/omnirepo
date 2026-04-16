@@ -124,7 +124,7 @@ func TestGitBrowse_TreeEndpoint(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("code=%d body=%v", resp.StatusCode, body)
 	}
-	entries, ok := body["entries"].([]any)
+	entries, ok := body["items"].([]any)
 	if !ok || len(entries) == 0 {
 		t.Fatalf("expected tree entries, got %v", body)
 	}
@@ -180,7 +180,7 @@ func TestGitBrowse_CommitsEndpoint(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("code=%d body=%v", resp.StatusCode, body)
 	}
-	commits, ok := body["commits"].([]any)
+	commits, ok := body["items"].([]any)
 	if !ok || len(commits) == 0 {
 		t.Fatalf("expected commits, got %v", body)
 	}

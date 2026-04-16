@@ -373,12 +373,23 @@ export interface DashboardActivityItem {
   created_at: string;
 }
 
+export interface DashboardVulnRow {
+  cve_id: string;
+  severity: string;
+  package: string;
+  project: string;
+  repo: string;
+  repo_type: string;
+}
+
 export interface DashboardResponse {
   storage_used_bytes: number;
   storage_total_bytes: number;
+  project_count: number;
   repo_count: number;
   user_count: number;
   scan_findings: DashboardScanFindings;
+  high_severity: DashboardVulnRow[];
   recent_activity: DashboardActivityItem[];
 }
 

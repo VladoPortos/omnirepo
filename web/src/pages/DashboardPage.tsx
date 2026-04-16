@@ -1,13 +1,14 @@
 /**
  * Dashboard page per D-03.
- * Row 1: Repositories, Users, Scan Findings (3 equal cards).
+ * Row 1: Projects, Repositories, Users, Scan Findings (4 equal-height cards).
  * Row 2: Full-width storage breakdown with progress bar + per-repo list.
- * Row 3: Recent Activity + High-Severity Findings.
+ * Row 3: Recent Activity + High-Severity Findings (with CVE details).
  */
 
 import { Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import {
+  FolderKanban,
   FolderGit2,
   Users,
   ShieldAlert,
@@ -23,7 +24,7 @@ import { Progress } from '@/components/ui/progress';
 import { SeverityBadge } from '@/components/common/SeverityBadge';
 import { useDashboard, useDashboardStorage } from '@/api/queries';
 import { formatBytes, formatDate } from '@/lib/format';
-import type { StorageRepoRow } from '@/api/types';
+import type { StorageRepoRow, DashboardVulnRow } from '@/api/types';
 
 const cardVariants = {
   hidden: { opacity: 0, y: 12 },
@@ -34,7 +35,6 @@ const cardVariants = {
   }),
 };
 
-/** Color map for repo type indicators in the storage breakdown. */
 const repoTypeColor: Record<string, string> = {
   docker: 'bg-blue-500',
   rpm: 'bg-red-500',
@@ -74,69 +74,60 @@ export function DashboardPage() {
         </div>
       </div>
 
-      {/* Row 1: Repositories, Users, Scan Findings */}
-      <div className="grid gap-4 md:grid-cols-3">
-        <motion.div
-          custom={0}
-          initial="hidden"
-          animate="visible"
-          variants={cardVariants}
-        >
-          <Card>
-            <CardHeader>
-              <div className="flex items-center justify-between">
-                <CardTitle className="text-sm font-medium text-muted-foreground">
-                  Repositories
-                </CardTitle>
-                <FolderGit2 className="size-4 text-muted-foreground" />
-              </div>
-            </CardHeader>
-            <CardContent>
-              {isLoading ? (
-                <Skeleton className="h-8 w-16" />
-              ) : (
-                <p className="text-3xl font-bold tabular-nums">
-                  {data?.repo_count ?? 0}
-                </p>
-              )}
-            </CardContent>
-          </Card>
-        </motion.div>
+      {/* Row 1: Projects, Repositories, Users, Scan Findings — uniform height */}
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        {[
+          {
+            title: 'Projects',
+            icon: FolderKanban,
+            value: data?.project_count ?? 0,
+          },
+          {
+            title: 'Repositories',
+            icon: FolderGit2,
+            value: data?.repo_count ?? 0,
+          },
+          {
+            title: 'Users',
+            icon: Users,
+            value: data?.user_count ?? 0,
+          },
+        ].map((card, i) => (
+          <motion.div
+            key={card.title}
+            custom={i}
+            initial="hidden"
+            animate="visible"
+            variants={cardVariants}
+          >
+            <Card className="h-full">
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <CardTitle className="text-sm font-medium text-muted-foreground">
+                    {card.title}
+                  </CardTitle>
+                  <card.icon className="size-4 text-muted-foreground" />
+                </div>
+              </CardHeader>
+              <CardContent>
+                {isLoading ? (
+                  <Skeleton className="h-8 w-16" />
+                ) : (
+                  <p className="text-3xl font-bold tabular-nums">{card.value}</p>
+                )}
+              </CardContent>
+            </Card>
+          </motion.div>
+        ))}
 
+        {/* Scan Findings card — same height via h-full */}
         <motion.div
-          custom={1}
+          custom={3}
           initial="hidden"
           animate="visible"
           variants={cardVariants}
         >
-          <Card>
-            <CardHeader>
-              <div className="flex items-center justify-between">
-                <CardTitle className="text-sm font-medium text-muted-foreground">
-                  Users
-                </CardTitle>
-                <Users className="size-4 text-muted-foreground" />
-              </div>
-            </CardHeader>
-            <CardContent>
-              {isLoading ? (
-                <Skeleton className="h-8 w-16" />
-              ) : (
-                <p className="text-3xl font-bold tabular-nums">
-                  {data?.user_count ?? 0}
-                </p>
-              )}
-            </CardContent>
-          </Card>
-        </motion.div>
-
-        <motion.div
-          custom={2}
-          initial="hidden"
-          animate="visible"
-          variants={cardVariants}
-        >
-          <Card>
+          <Card className="h-full">
             <CardHeader>
               <div className="flex items-center justify-between">
                 <CardTitle className="text-sm font-medium text-muted-foreground">
@@ -148,46 +139,38 @@ export function DashboardPage() {
             <CardContent>
               {isLoading ? (
                 <Skeleton className="h-8 w-32" />
-              ) : totalFindings > 0 ? (
-                <div className="space-y-2">
-                  <p className="text-3xl font-bold tabular-nums">{totalFindings}</p>
-                  <div className="flex flex-wrap gap-2">
-                    {(findings?.critical ?? 0) > 0 && (
-                      <span className="flex items-center gap-1.5">
-                        <SeverityBadge severity="critical" />
-                        <span className="text-sm font-medium tabular-nums">
-                          {findings!.critical}
-                        </span>
-                      </span>
-                    )}
-                    {(findings?.high ?? 0) > 0 && (
-                      <span className="flex items-center gap-1.5">
-                        <SeverityBadge severity="high" />
-                        <span className="text-sm font-medium tabular-nums">
-                          {findings!.high}
-                        </span>
-                      </span>
-                    )}
-                    {(findings?.medium ?? 0) > 0 && (
-                      <span className="flex items-center gap-1.5">
-                        <SeverityBadge severity="medium" />
-                        <span className="text-sm font-medium tabular-nums">
-                          {findings!.medium}
-                        </span>
-                      </span>
-                    )}
-                    {(findings?.low ?? 0) > 0 && (
-                      <span className="flex items-center gap-1.5">
-                        <SeverityBadge severity="low" />
-                        <span className="text-sm font-medium tabular-nums">
-                          {findings!.low}
-                        </span>
-                      </span>
-                    )}
-                  </div>
-                </div>
               ) : (
-                <p className="text-sm text-muted-foreground">No findings</p>
+                <>
+                  <p className="text-3xl font-bold tabular-nums">{totalFindings}</p>
+                  {totalFindings > 0 && (
+                    <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1">
+                      {(findings?.critical ?? 0) > 0 && (
+                        <span className="flex items-center gap-1 text-sm">
+                          <SeverityBadge severity="critical" />
+                          <span className="tabular-nums">{findings!.critical}</span>
+                        </span>
+                      )}
+                      {(findings?.high ?? 0) > 0 && (
+                        <span className="flex items-center gap-1 text-sm">
+                          <SeverityBadge severity="high" />
+                          <span className="tabular-nums">{findings!.high}</span>
+                        </span>
+                      )}
+                      {(findings?.medium ?? 0) > 0 && (
+                        <span className="flex items-center gap-1 text-sm">
+                          <SeverityBadge severity="medium" />
+                          <span className="tabular-nums">{findings!.medium}</span>
+                        </span>
+                      )}
+                      {(findings?.low ?? 0) > 0 && (
+                        <span className="flex items-center gap-1 text-sm">
+                          <SeverityBadge severity="low" />
+                          <span className="tabular-nums">{findings!.low}</span>
+                        </span>
+                      )}
+                    </div>
+                  )}
+                </>
               )}
             </CardContent>
           </Card>
@@ -195,12 +178,7 @@ export function DashboardPage() {
       </div>
 
       {/* Row 2: Full-width storage breakdown */}
-      <motion.div
-        custom={3}
-        initial="hidden"
-        animate="visible"
-        variants={cardVariants}
-      >
+      <motion.div custom={4} initial="hidden" animate="visible" variants={cardVariants}>
         <Card>
           <CardHeader>
             <div className="flex items-center gap-2">
@@ -213,11 +191,6 @@ export function DashboardPage() {
               <div className="space-y-4">
                 <Skeleton className="h-4 w-48" />
                 <Skeleton className="h-3 w-full" />
-                <div className="space-y-2">
-                  {Array.from({ length: 4 }).map((_, i) => (
-                    <Skeleton key={i} className="h-6 w-full" />
-                  ))}
-                </div>
               </div>
             ) : (
               <StorageBreakdown
@@ -230,9 +203,8 @@ export function DashboardPage() {
         </Card>
       </motion.div>
 
-      {/* Row 3: Activity feed + high severity */}
+      {/* Row 3: Activity feed + high severity findings */}
       <div className="grid gap-6 lg:grid-cols-2">
-        {/* Recent Activity */}
         <Card>
           <CardHeader>
             <div className="flex items-center gap-2">
@@ -253,18 +225,13 @@ export function DashboardPage() {
             ) : data?.recent_activity && data.recent_activity.length > 0 ? (
               <div className="max-h-[400px] space-y-3 overflow-y-auto">
                 {data.recent_activity.slice(0, 20).map((event) => (
-                  <div
-                    key={event.id}
-                    className="flex items-start gap-3 text-sm"
-                  >
+                  <div key={event.id} className="flex items-start gap-3 text-sm">
                     <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
                       {formatDate(event.created_at)}
                     </span>
                     <span className="flex-1">
-                      {event.action}{' '}
-                      <span className="text-muted-foreground">
-                        {event.target_id}
-                      </span>
+                      <span className="font-medium">{event.action}</span>{' '}
+                      <span className="text-muted-foreground">{event.target_id}</span>
                     </span>
                   </div>
                 ))}
@@ -275,7 +242,6 @@ export function DashboardPage() {
           </CardContent>
         </Card>
 
-        {/* High-Severity Findings */}
         <Card>
           <CardHeader>
             <div className="flex items-center gap-2">
@@ -290,29 +256,8 @@ export function DashboardPage() {
                   <Skeleton key={i} className="h-6 w-full" />
                 ))}
               </div>
-            ) : findings &&
-              ((findings.critical ?? 0) > 0 || (findings.high ?? 0) > 0) ? (
-              <div className="space-y-2">
-                {(findings.critical ?? 0) > 0 && (
-                  <div className="flex items-center justify-between">
-                    <SeverityBadge severity="critical" />
-                    <span className="text-sm font-medium tabular-nums">
-                      {findings.critical} findings
-                    </span>
-                  </div>
-                )}
-                {(findings.high ?? 0) > 0 && (
-                  <div className="flex items-center justify-between">
-                    <SeverityBadge severity="high" />
-                    <span className="text-sm font-medium tabular-nums">
-                      {findings.high} findings
-                    </span>
-                  </div>
-                )}
-                <p className="mt-2 text-xs text-muted-foreground">
-                  Review affected repositories for remediation details.
-                </p>
-              </div>
+            ) : data?.high_severity && data.high_severity.length > 0 ? (
+              <HighSeverityList items={data.high_severity} />
             ) : (
               <p className="text-sm text-muted-foreground">
                 No critical or high severity findings. Looking good!
@@ -325,7 +270,30 @@ export function DashboardPage() {
   );
 }
 
-/** Full-width storage breakdown with overall progress + per-repo list. */
+function HighSeverityList({ items }: { items: DashboardVulnRow[] }) {
+  return (
+    <div className="max-h-[400px] space-y-2 overflow-y-auto">
+      {items.map((v, i) => (
+        <div key={`${v.cve_id}-${i}`} className="flex items-start gap-2 text-sm">
+          <SeverityBadge severity={v.severity.toLowerCase()} className="mt-0.5 shrink-0" />
+          <div className="min-w-0 flex-1">
+            <span className="font-mono font-medium">{v.cve_id}</span>
+            <span className="mx-1.5 text-muted-foreground">in</span>
+            <span className="text-muted-foreground">
+              {v.project}/{v.repo}
+            </span>
+            {v.package && (
+              <span className="ml-1.5 text-xs text-muted-foreground">
+                ({v.package})
+              </span>
+            )}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function StorageBreakdown({
   totalBytes,
   usedBytes,
@@ -338,10 +306,10 @@ function StorageBreakdown({
   const percentage = totalBytes > 0 ? Math.min(Math.round((usedBytes / totalBytes) * 100), 100) : 0;
 
   return (
-    <div className="grid gap-6 lg:grid-cols-[300px_1fr]">
+    <div className="grid gap-6 lg:grid-cols-[280px_1fr]">
       {/* Left: Overall gauge */}
       <div className="space-y-3">
-        <div className="flex items-baseline justify-between">
+        <div className="flex items-baseline gap-2">
           <span className="text-3xl font-bold tabular-nums">{formatBytes(usedBytes)}</span>
           <span className="text-sm text-muted-foreground">
             / {totalBytes > 0 ? formatBytes(totalBytes) : 'unknown'}
@@ -350,33 +318,33 @@ function StorageBreakdown({
         <Progress value={percentage}>
           <span className="sr-only">{percentage}% used</span>
         </Progress>
-        <p className="text-xs text-muted-foreground text-right tabular-nums">
-          {percentage}% used
-        </p>
+        <p className="text-xs text-muted-foreground tabular-nums">{percentage}% used</p>
       </div>
 
-      {/* Right: Per-repo breakdown */}
-      <div className="space-y-2">
+      {/* Right: Per-repo breakdown — compact layout */}
+      <div className="space-y-1">
         {repos.length === 0 ? (
           <p className="text-sm text-muted-foreground">No repositories with stored data.</p>
         ) : (
-          <div className="max-h-[300px] space-y-1.5 overflow-y-auto">
+          <div className="max-h-[300px] space-y-1 overflow-y-auto">
             {repos.map((repo) => {
               const repoPercent = usedBytes > 0 ? (repo.size_bytes / usedBytes) * 100 : 0;
               const dotColor = repoTypeColor[repo.type] ?? 'bg-gray-400';
               return (
-                <div key={`${repo.project}/${repo.type}/${repo.name}`} className="flex items-center gap-3 text-sm">
-                  <span className={`inline-block size-2.5 shrink-0 rounded-full ${dotColor}`} />
-                  <span className="min-w-0 flex-1 truncate">
-                    <span className="text-muted-foreground">{repo.project}</span>
-                    {' / '}
-                    <span className="font-medium">{repo.name}</span>
-                    <span className="ml-1.5 text-xs text-muted-foreground">({repo.type})</span>
+                <div
+                  key={`${repo.project}/${repo.type}/${repo.name}`}
+                  className="flex items-center gap-2 text-sm py-0.5"
+                >
+                  <span className={`inline-block size-2 shrink-0 rounded-full ${dotColor}`} />
+                  <span className="min-w-0 truncate text-muted-foreground">
+                    {repo.project} /{' '}
+                    <span className="font-medium text-foreground">{repo.name}</span>
+                    <span className="ml-1 text-xs">({repo.type})</span>
                   </span>
-                  <span className="shrink-0 tabular-nums font-medium">
+                  <span className="ml-auto shrink-0 tabular-nums font-medium text-xs">
                     {formatBytes(repo.size_bytes)}
                   </span>
-                  <div className="hidden sm:block w-24 shrink-0">
+                  <div className="w-16 shrink-0">
                     <div className="h-1.5 w-full rounded-full bg-muted overflow-hidden">
                       <div
                         className={`h-full rounded-full ${dotColor}`}

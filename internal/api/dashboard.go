@@ -25,10 +25,21 @@ func (d Deps) mountDashboard(r chi.Router) {
 type dashboardResponse struct {
 	StorageUsedBytes  int64          `json:"storage_used_bytes"`
 	StorageTotalBytes int64          `json:"storage_total_bytes"`
+	ProjectCount      int64          `json:"project_count"`
 	RepoCount         int64          `json:"repo_count"`
 	UserCount         int64          `json:"user_count"`
 	ScanFindings      scanFindings   `json:"scan_findings"`
+	HighSeverity      []vulnRow      `json:"high_severity"`
 	RecentActivity    []activityRow  `json:"recent_activity"`
+}
+
+type vulnRow struct {
+	CVEID    string `json:"cve_id"`
+	Severity string `json:"severity"`
+	Package  string `json:"package"`
+	Project  string `json:"project"`
+	Repo     string `json:"repo"`
+	RepoType string `json:"repo_type"`
 }
 
 type scanFindings struct {
@@ -118,6 +129,62 @@ func (d Deps) handleDashboard(w http.ResponseWriter, r *http.Request) {
 			vulnArgs...).Scan(&critical, &high, &medium, &low)
 	}
 
+	// Project count.
+	var projectCount int64
+	if scopeClause == "" {
+		_ = d.DB.Reader.QueryRowContext(r.Context(),
+			`SELECT COUNT(*) FROM projects`).Scan(&projectCount)
+	} else {
+		projArgs := make([]any, len(scopeArgs))
+		copy(projArgs, scopeArgs)
+		ph := make([]string, len(scopeArgs))
+		for i := range ph {
+			ph[i] = "?"
+		}
+		_ = d.DB.Reader.QueryRowContext(r.Context(),
+			`SELECT COUNT(*) FROM projects WHERE id IN (`+strings.Join(ph, ",")+`)`, projArgs...).Scan(&projectCount)
+	}
+
+	// High-severity findings: top 20 CRITICAL/HIGH vulnerabilities with repo context.
+	highSev := make([]vulnRow, 0)
+	{
+		var hsSQL string
+		var hsArgs []any
+		if scopeClause == "" {
+			hsSQL = `
+				SELECT v.cve_id, v.severity, v.package_name, p.name, r.name, r.type
+				FROM vulnerabilities v
+				JOIN scans s ON s.id = v.scan_id
+				JOIN repos r ON r.id = s.repo_id
+				JOIN projects p ON p.id = r.project_id
+				WHERE v.severity IN ('CRITICAL','HIGH') AND r.deleted_at IS NULL
+				ORDER BY CASE v.severity WHEN 'CRITICAL' THEN 0 ELSE 1 END, v.id DESC
+				LIMIT 20`
+		} else {
+			hsArgs = make([]any, len(scopeArgs))
+			copy(hsArgs, scopeArgs)
+			hsSQL = `
+				SELECT v.cve_id, v.severity, v.package_name, p.name, r.name, r.type
+				FROM vulnerabilities v
+				JOIN scans s ON s.id = v.scan_id
+				JOIN repos r ON r.id = s.repo_id
+				JOIN projects p ON p.id = r.project_id
+				WHERE v.severity IN ('CRITICAL','HIGH') AND r.deleted_at IS NULL` + strings.Replace(scopeClause, "project_id", "r.project_id", 1) + `
+				ORDER BY CASE v.severity WHEN 'CRITICAL' THEN 0 ELSE 1 END, v.id DESC
+				LIMIT 20`
+		}
+		if hsRowsQ, err := d.DB.Reader.QueryContext(r.Context(), hsSQL, hsArgs...); err == nil {
+			defer func() { _ = hsRowsQ.Close() }()
+			for hsRowsQ.Next() {
+				var v vulnRow
+				if err := hsRowsQ.Scan(&v.CVEID, &v.Severity, &v.Package, &v.Project, &v.Repo, &v.RepoType); err != nil {
+					break
+				}
+				highSev = append(highSev, v)
+			}
+		}
+	}
+
 	// Recent activity: last 20 audit events.
 	var activitySQL string
 	var activityArgs []any
@@ -173,9 +240,11 @@ func (d Deps) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, dashboardResponse{
 		StorageUsedBytes:  storageUsed,
 		StorageTotalBytes: storageTotalBytes,
+		ProjectCount:      projectCount,
 		RepoCount:         repoCount,
 		UserCount:         userCount,
 		ScanFindings:      scanFindings{Critical: critical, High: high, Medium: medium, Low: low},
+		HighSeverity:      highSev,
 		RecentActivity:    activity,
 	})
 }

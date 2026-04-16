@@ -33,6 +33,7 @@ import (
 	"github.com/dxc-internal/omnirepo/internal/scan"
 	"github.com/dxc-internal/omnirepo/internal/storage"
 	omrtls "github.com/dxc-internal/omnirepo/internal/tls"
+	"github.com/dxc-internal/omnirepo/web"
 )
 
 // upstreamCredsAEADKeySetting is the settings-table key under which the
@@ -154,6 +155,12 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 	// 1. Data-root layout.
 	if err := EnsureDirs(cfg.DataRoot); err != nil {
 		return fmt.Errorf("app.Run: ensure dirs: %w", err)
+	}
+
+	// 1b. Trivy DB first-boot seed (D-42). Copies baked DB from Docker
+	// image to data volume on first boot; no-op outside Docker.
+	if err := SeedTrivyDB(ctx, cfg.DataRoot, "/opt/trivy-db"); err != nil {
+		return fmt.Errorf("app.Run: trivy db seed: %w", err)
 	}
 
 	// 2. Metadata DB + migrations.
@@ -614,6 +621,16 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 	}
 	s3Deps.Mount(router)
 
+	// 6f. SPA / dev-proxy NotFound handler (UI-02, UI-03). Mounted AFTER
+	// all API and protocol routes so unknown paths serve the SPA shell.
+	if httpx.IsDevMode() {
+		router.NotFound(httpx.DevProxy().ServeHTTP)
+		slog.InfoContext(ctx, "spa.mode", "handler", "dev-proxy", "target", "http://localhost:5173")
+	} else {
+		router.NotFound(httpx.SPAHandler(web.DistFS))
+		slog.InfoContext(ctx, "spa.mode", "handler", "embedded")
+	}
+
 	// 7. Listeners.
 	httpLn := opts.HTTPListener
 	if httpLn == nil {
@@ -697,5 +714,53 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 	_ = httpSrv.Shutdown(shutCtx)
 	_ = httpsSrv.Shutdown(shutCtx)
 	wg.Wait()
+	return nil
+}
+
+// SeedTrivyDB copies the baked Trivy DB from bakedDir to dataRoot/trivy/db/
+// on first boot. Subsequent boots skip the copy when the target directory
+// already contains files. Outside Docker (no bakedDir) this is a silent no-op.
+//
+// Exported so tests can exercise the seeding logic with a custom bakedDir.
+func SeedTrivyDB(ctx context.Context, dataRoot, bakedDir string) error {
+	dbDir := filepath.Join(dataRoot, "trivy", "db")
+
+	// Not in Docker — skip silently.
+	if _, err := os.Stat(bakedDir); os.IsNotExist(err) {
+		return nil
+	}
+
+	// Already seeded — skip.
+	entries, err := os.ReadDir(dbDir)
+	if err == nil && len(entries) > 0 {
+		slog.InfoContext(ctx, "trivy.db.seed.skipped", "reason", "already_present", "dir", dbDir)
+		return nil
+	}
+
+	// Ensure target dir exists.
+	if err := os.MkdirAll(dbDir, 0755); err != nil {
+		return fmt.Errorf("trivy db seed: mkdir %s: %w", dbDir, err)
+	}
+
+	// Copy all files from baked to target.
+	srcEntries, err := os.ReadDir(bakedDir)
+	if err != nil {
+		return fmt.Errorf("trivy db seed: read %s: %w", bakedDir, err)
+	}
+	for _, e := range srcEntries {
+		if e.IsDir() {
+			continue
+		}
+		src := filepath.Join(bakedDir, e.Name())
+		dst := filepath.Join(dbDir, e.Name())
+		data, err := os.ReadFile(src)
+		if err != nil {
+			return fmt.Errorf("trivy db seed: read %s: %w", src, err)
+		}
+		if err := os.WriteFile(dst, data, 0644); err != nil {
+			return fmt.Errorf("trivy db seed: write %s: %w", dst, err)
+		}
+	}
+	slog.InfoContext(ctx, "trivy.db.seeded", "from", bakedDir, "to", dbDir, "files", len(srcEntries))
 	return nil
 }

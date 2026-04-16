@@ -7,10 +7,8 @@ BENCH_WORKERS ?= 16
 	vendor lint seed grep-cdn \
 	conformance conformance-oci conformance-rpm conformance-deb \
 	conformance-pypi conformance-helm conformance-s3 conformance-git \
-	test-git-conformance conformance-all
-
-dev:
-	$(GO) run ./cmd/omnirepo serve
+	test-git-conformance conformance-all \
+	frontend build-all docker e2e bench
 
 build:
 	$(GO) build -mod=vendor -o bin/omnirepo ./cmd/omnirepo
@@ -122,3 +120,28 @@ conformance-all:
 # conformance is an alias of conformance-all for callers that just want
 # "the conformance gate" without thinking about per-protocol granularity.
 conformance: conformance-all
+
+# Frontend build (npm ci + vite build)
+frontend:
+	cd web && npm ci --no-audit --no-fund && npm run build
+
+# Full build: frontend + Go binary
+build-all: frontend build
+
+# Docker image build with version injection
+docker:
+	docker build --build-arg VERSION=$$(git describe --tags --always --dirty 2>/dev/null || echo dev) -t omnirepo:dev .
+
+# Dev mode: run Go + Vite dev servers in parallel
+dev:
+	@echo "Starting Go server + Vite dev server..."
+	@OMNIREPO_DEV=1 $(GO) run ./cmd/omnirepo serve &
+	@cd web && npm run dev
+
+# Playwright E2E tests
+e2e:
+	cd web && npx playwright test
+
+# Bench target (TEST-05): run all benchmarks
+bench: bench-sqlite bench-git
+	@echo "All benchmarks complete"

@@ -16,6 +16,7 @@ import (
 
 	"github.com/dxc-internal/omnirepo/internal/audit"
 	"github.com/dxc-internal/omnirepo/internal/auth"
+	omrcrypto "github.com/dxc-internal/omnirepo/internal/crypto"
 	authmw "github.com/dxc-internal/omnirepo/internal/auth/middleware"
 	"github.com/dxc-internal/omnirepo/internal/metadata"
 	"github.com/dxc-internal/omnirepo/internal/storage"
@@ -34,6 +35,11 @@ type Deps struct {
 	Repos         *metadata.ReposRepo
 	Settings      *metadata.SettingsRepo
 	UpstreamCreds *metadata.UpstreamCredsRepo
+
+	// Phase 04-05: S3 access-key CRUD. nil-safe — when nil, the routes
+	// are not mounted.
+	S3Keys *metadata.S3KeysRepo
+	S3AEAD *omrcrypto.AEAD
 
 	Holder   *omrtls.CertHolder
 	DataRoot string
@@ -181,6 +187,12 @@ func Mount(r chi.Router, d Deps) {
 			// RequireCanWith is not needed here — this lets us return 401
 			// distinct from 403 and 404.
 			d.mountUpstreamCreds(r)
+
+			// Phase 04-05: S3 access-key CRUD (create/list/revoke).
+			// Handlers re-check project membership inline
+			// (ActionManageS3Keys) so route-level RequireCanWith is not
+			// needed — same pattern as upstream_creds.
+			d.mountS3Keys(r)
 
 			// Phase 02-09: scan REST endpoints (manual rescan, scan list,
 			// scan detail, vulnerabilities, SBOM download). Mount only when

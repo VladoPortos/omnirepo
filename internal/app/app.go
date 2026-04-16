@@ -457,6 +457,10 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 		Repos:         metadata.NewReposRepo(db),
 		Settings:      metadata.NewSettingsRepo(db),
 		UpstreamCreds: upstreamCreds,
+		// Phase 04-05: S3 access-key CRUD. Reuses the same per-install
+		// AEAD master key as upstream_creds.
+		S3Keys: metadata.NewS3KeysRepo(db),
+		S3AEAD: aead,
 		Holder:        holder,
 		DataRoot:      cfg.DataRoot,
 		Audit:         auditLogger,

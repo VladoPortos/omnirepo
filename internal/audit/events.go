@@ -125,4 +125,10 @@ const (
 	EvtSyncProgress EventKind = "sync.progress"
 	EvtSyncFinished EventKind = "sync.finished"
 	EvtSyncFailed   EventKind = "sync.failed"
+
+	// Phase 4 Plan 05 — S3 access-key management (D-02, T-04-05-06).
+	// "create" carries {project, id, label, access_key_id} — never the
+	// plaintext secret. "revoke" carries {project, id, access_key_id}.
+	EvtS3AccessKeyCreated EventKind = "s3.access-key.create"
+	EvtS3AccessKeyRevoked EventKind = "s3.access-key.revoke"
 )

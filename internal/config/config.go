@@ -45,6 +45,24 @@ type Config struct {
 	Regen     RegenConfig     `koanf:"regen"`
 	Sync      SyncConfig      `koanf:"sync"`
 	Signing   SigningConfig   `koanf:"signing"`
+	Repos     ReposConfig     `koanf:"repos"`
+}
+
+// ReposConfig carries per-protocol repo knobs that are not tied to a single
+// repo row in the DB. Phase 4 Plan 03 introduces `repos.git.max_push_bytes`
+// as the server-wide fallback used when a row has NULL in
+// repos.git_max_push_bytes.
+type ReposConfig struct {
+	Git GitReposConfig `koanf:"git"`
+}
+
+// GitReposConfig is the Phase 4 Plan 03 git repo knob set.
+//   - MaxPushBytes: per-install default cap on a single Smart-HTTP push in
+//     bytes (D-35). 0 → apply 500 MiB default at load time; negative is a
+//     validation error. Per-repo override lives in repos.git_max_push_bytes
+//     (migration 017_git_extensions).
+type GitReposConfig struct {
+	MaxPushBytes int64 `koanf:"max_push_bytes"`
 }
 
 // RegenConfig tunes the per-repo metadata regeneration coalescer (D-35,
@@ -119,6 +137,11 @@ type ServerConfig struct {
 	HTTPSPort         int      `koanf:"https_port"`
 	Hostname          string   `koanf:"hostname"`
 	ExternalHostnames []string `koanf:"external_hostnames"`
+	// GitBackend selects the Git Smart-HTTP backend implementation.
+	// Phase 4 Plan 03 / D-26: "gogit" (pure Go, go-git v6) is the default;
+	// "gitkit" shells out to the `git` binary as the documented fallback.
+	// Validator rejects any other value with a clear error.
+	GitBackend string `koanf:"git_backend"`
 }
 
 type TLSConfig struct {
@@ -164,6 +187,12 @@ func Defaults() Config {
 			HTTPPort:          8080,
 			HTTPSPort:         8443,
 			ExternalHostnames: []string{},
+			GitBackend:        "gogit",
+		},
+		Repos: ReposConfig{
+			Git: GitReposConfig{
+				MaxPushBytes: 524288000, // 500 MiB default per-install git push cap (D-35)
+			},
 		},
 		DataRoot: "/var/lib/omnirepo",
 		Auth: AuthConfig{
@@ -273,7 +302,35 @@ func Load(flagPath string) (Config, error) {
 	if err := k.UnmarshalWithConf("", &cfg, unmarshalConf); err != nil {
 		return Config{}, fmt.Errorf("config: unmarshal: %w", err)
 	}
+	if err := cfg.Validate(); err != nil {
+		return Config{}, err
+	}
 	return cfg, nil
+}
+
+// Validate performs post-unmarshal structural validation and applies
+// fallback defaults for fields whose zero value is a sentinel meaning
+// "inherit default" (e.g. max_push_bytes=0). Returns a typed error for
+// the caller to surface.
+//
+// Phase 4 Plan 03 scope: git_backend allowed values, non-negative
+// max_push_bytes, and the 0 → 500 MiB fallback.
+func (cfg *Config) Validate() error {
+	switch cfg.Server.GitBackend {
+	case "gogit", "gitkit":
+		// ok
+	case "":
+		cfg.Server.GitBackend = "gogit" // apply default if missing after merge
+	default:
+		return fmt.Errorf("config: server.git_backend %q invalid (want gogit|gitkit)", cfg.Server.GitBackend)
+	}
+	if cfg.Repos.Git.MaxPushBytes < 0 {
+		return fmt.Errorf("config: repos.git.max_push_bytes must be >= 0 (got %d)", cfg.Repos.Git.MaxPushBytes)
+	}
+	if cfg.Repos.Git.MaxPushBytes == 0 {
+		cfg.Repos.Git.MaxPushBytes = 524288000 // 500 MiB default (D-35)
+	}
+	return nil
 }
 
 // resolvePath returns the chosen config file path and whether its absence is a

@@ -131,4 +131,9 @@ const (
 	// plaintext secret. "revoke" carries {project, id, access_key_id}.
 	EvtS3AccessKeyCreated EventKind = "s3.access-key.create"
 	EvtS3AccessKeyRevoked EventKind = "s3.access-key.revoke"
+
+	// Phase 4 Plan 10 — Git refs walker (D-37). Emitted by the
+	// post-ReceivePack hook after a successful git_refs sync.
+	// Details: {repo_id, ref_count, project}.
+	EvtGitRefsSynced EventKind = "git.refs.synced"
 )

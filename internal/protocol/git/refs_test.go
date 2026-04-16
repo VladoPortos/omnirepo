@@ -392,9 +392,14 @@ func TestPostReceivePackHook(t *testing.T) {
 	ts := httptest.NewServer(mux)
 	defer ts.Close()
 
-	// Clone, commit, push via the test server.
+	// Init a local repo, commit, then push to the test server.
+	// We avoid `git clone` of the empty bare repo because the default
+	// branch name varies across git versions (master vs main).
 	workDir := filepath.Join(t.TempDir(), "work")
-	runGit(t, t.TempDir(), "clone", ts.URL+"/git/testproj/"+repoName+".git", workDir)
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, workDir, "init", "-b", "main")
 	runGit(t, workDir, "config", "user.email", "t@t.com")
 	runGit(t, workDir, "config", "user.name", "T")
 	if err := os.WriteFile(filepath.Join(workDir, "a"), []byte("a"), 0644); err != nil {
@@ -404,7 +409,8 @@ func TestPostReceivePackHook(t *testing.T) {
 	runGit(t, workDir, "commit", "-m", "init")
 	// Push with credentials.
 	pushURL := strings.Replace(ts.URL, "://", "://admin:password@", 1) + "/git/testproj/" + repoName + ".git"
-	runGit(t, workDir, "push", pushURL, "main")
+	runGit(t, workDir, "remote", "add", "origin", pushURL)
+	runGit(t, workDir, "push", "origin", "main")
 
 	// After the push, the walker should have synced refs.
 	got, err := refsRepo.List(context.Background(), repoID)
@@ -498,7 +504,7 @@ func TestOnRepoCreate(t *testing.T) {
 
 func TestOnRepoDelete(t *testing.T) {
 	db := sqlitetest.New(t)
-	projID := seedProject(t, db)
+	_ = seedProject(t, db)
 	refsRepo := metadata.NewGitRefsRepo(db)
 	dataRoot := t.TempDir()
 
@@ -609,7 +615,10 @@ func TestDispatch_WalkerErrorNonFatal(t *testing.T) {
 	// Push something to the repo — even if the walker fails, the push
 	// itself should succeed (200/204).
 	workDir := filepath.Join(t.TempDir(), "work")
-	runGit(t, t.TempDir(), "clone", ts.URL+"/git/testproj/"+repoName+".git", workDir)
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, workDir, "init", "-b", "main")
 	runGit(t, workDir, "config", "user.email", "t@t.com")
 	runGit(t, workDir, "config", "user.name", "T")
 	if err := os.WriteFile(filepath.Join(workDir, "a"), []byte("a"), 0644); err != nil {
@@ -618,8 +627,9 @@ func TestDispatch_WalkerErrorNonFatal(t *testing.T) {
 	runGit(t, workDir, "add", ".")
 	runGit(t, workDir, "commit", "-m", "init")
 	pushURL := strings.Replace(ts.URL, "://", "://admin:password@", 1) + "/git/testproj/" + repoName + ".git"
+	runGit(t, workDir, "remote", "add", "origin", pushURL)
 	// This push should succeed even if refs DB is in a weird state.
-	runGit(t, workDir, "push", pushURL, "main")
+	runGit(t, workDir, "push", "origin", "main")
 }
 
 // --- Test: OnRepoCreate skips non-git types ---
@@ -669,14 +679,14 @@ func seedUserAndMembership(t *testing.T, db *metadata.DB, projectID int64) {
 	// Since the test server won't actually verify passwords via BasicOrAPIKey
 	// in the simplified test router, we just need the row to exist.
 	_, err := db.Writer.ExecContext(ctx, `
-		INSERT INTO users(login, display_name, password_hash, role, must_reset)
-		VALUES ('admin', 'Admin', '$argon2id$v=19$m=65536,t=3,p=4$c29tZXNhbHQ$somehash', 'super_admin', 0)
+		INSERT INTO users(login, email, password_hash, is_super_admin, must_change_password)
+		VALUES ('admin', 'admin@test.com', '$argon2id$v=19$m=65536,t=3,p=4$c29tZXNhbHQ$somehash', 1, 0)
 	`)
 	if err != nil {
 		t.Fatalf("seed user: %v", err)
 	}
 	_, err = db.Writer.ExecContext(ctx, `
-		INSERT INTO members(project_id, user_id, role) VALUES (?, 1, 'admin')
+		INSERT INTO project_members(project_id, user_id) VALUES (?, 1)
 	`, projectID)
 	if err != nil {
 		t.Fatalf("seed member: %v", err)

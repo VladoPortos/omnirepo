@@ -400,17 +400,31 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 	// OCIActions bundle can reference handlers that depend on it.
 	signingKeysRepo := metadata.NewSigningKeysRepo(db, aead)
 	aptSuitesRepo := metadata.NewAptSuitesRepo(db)
+	gitRefsRepo := metadata.NewGitRefsRepo(db)
 	// Composed repo-create hook: RPM (signing key for type ∈ {rpm, deb}) +
-	// DEB (default apt_suites matrix for type = deb). Both run inside the
-	// same writer tx as the repos INSERT so a failure in either rolls back
-	// the repo row (T-03-05 atomicity).
-	rpmRepoCreateHook := func(ctx context.Context, tx *sql.Tx, repoID int64, repoType, projectName, repoName string) (map[string]any, error) {
+	// DEB (default apt_suites matrix for type = deb) + Git (bare-repo init
+	// + HEAD seed for type = git). All run inside the same writer tx as the
+	// repos INSERT so a failure in any rolls back the repo row.
+	composedRepoCreateHook := func(ctx context.Context, tx *sql.Tx, repoID int64, repoType, projectName, repoName string) (map[string]any, error) {
 		fp, err := CreateRPMRepoHook(ctx, tx, repoID, repoType, projectName, repoName, signingKeysRepo, cfg.Signing.GPGKeyBits, nil)
 		if err != nil {
 			return nil, err
 		}
 		if err := CreateDEBRepoHook(ctx, tx, repoID, repoType, aptSuitesRepo); err != nil {
 			return nil, err
+		}
+		// Phase 4 Plan 10: Git bare-repo lifecycle (D-38).
+		if repoType == "git" {
+			repoPath := filepath.Join(cfg.DataRoot, "repos", projectName, "git", repoName+".git")
+			if err := gitpkg.InitBare(repoPath, "main"); err != nil {
+				return nil, err
+			}
+			seed := []metadata.GitRef{
+				{Name: "HEAD", Target: "refs/heads/main", Type: metadata.GitRefSymbolic},
+			}
+			if err := gitRefsRepo.ReplaceAll(ctx, tx, repoID, seed); err != nil {
+				return nil, err
+			}
 		}
 		if fp == "" {
 			return nil, nil
@@ -478,7 +492,7 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 		Locks:         storage.NewLocks(),
 		SessionTTL:    cfg.Auth.SessionTTL,
 
-		RepoCreateHook: rpmRepoCreateHook,
+		RepoCreateHook: composedRepoCreateHook,
 		// Plan 02-09: scan REST endpoints.
 		ScanDeps: &api.ScansDeps{
 			Scans:    metadata.NewScansRepo(db),
@@ -555,6 +569,8 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 		Users:    metadata.NewUsersRepo(db),
 		Sessions: metadata.NewSessionsRepo(db),
 		APIKeys:  metadata.NewAPIKeysRepo(db),
+		DB:       db,
+		Refs:     gitRefsRepo,
 	})
 	gitHandler.Mount(router)
 

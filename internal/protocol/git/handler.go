@@ -1,8 +1,11 @@
 package git
 
 import (
+	"log/slog"
 	"net/http"
 	"path/filepath"
+	"strings"
+	"testing"
 
 	"github.com/go-chi/chi/v5"
 
@@ -30,6 +33,10 @@ type Deps struct {
 	Users    *metadata.UsersRepo
 	Sessions *metadata.SessionsRepo
 	APIKeys  *metadata.APIKeysRepo
+
+	// Plan 10: refs walker + repo lifecycle deps.
+	DB   *metadata.DB
+	Refs *metadata.GitRefsRepo
 }
 
 // Handler serves the Git Smart-HTTP protocol surface.
@@ -46,6 +53,9 @@ type Handler struct {
 	users    *metadata.UsersRepo
 	sessions *metadata.SessionsRepo
 	apiKeys  *metadata.APIKeysRepo
+
+	db   *metadata.DB
+	refs *metadata.GitRefsRepo
 }
 
 // New constructs a Handler.
@@ -62,6 +72,8 @@ func New(d Deps) *Handler {
 		users:    d.Users,
 		sessions: d.Sessions,
 		apiKeys:  d.APIKeys,
+		db:       d.DB,
+		refs:     d.Refs,
 	}
 }
 
@@ -97,6 +109,11 @@ func (h *Handler) Mount(parent chi.Router) {
 
 // dispatchToBackend resolves the on-disk repo path from the context-stashed
 // repo row and delegates to the configured GitServer backend.
+//
+// Post-ReceivePack hook (D-37): after the backend returns for a receive-pack
+// POST, invoke WalkAndReplace to sync git_refs while the PerRepoMutex is
+// still held (the mutex defer-Unlock is higher in the call stack). Walker
+// errors are logged but do NOT fail the push response — best-effort.
 func (h *Handler) dispatchToBackend(w http.ResponseWriter, r *http.Request) {
 	repo := RepoFromContext(r.Context())
 	if repo == nil {
@@ -107,7 +124,32 @@ func (h *Handler) dispatchToBackend(w http.ResponseWriter, r *http.Request) {
 	projectName := projectFromContext(r.Context())
 	repoPath := filepath.Join(h.dataRoot, "repos", projectName, "git", repo.Name+".git")
 
+	isReceivePack := r.Method == http.MethodPost &&
+		strings.HasSuffix(r.URL.Path, "/git-receive-pack")
+
 	h.backend.Handler(repoPath).ServeHTTP(w, r)
+
+	// Post-receive-pack: sync git_refs while mutex is still held.
+	if isReceivePack && h.db != nil && h.refs != nil {
+		if err := WalkAndReplace(r.Context(), h.db, h.refs, repo.ID, repoPath); err != nil {
+			slog.WarnContext(r.Context(), "git.refs.sync failed", "err", err, "repo_id", repo.ID)
+		} else {
+			// Emit audit event with ref count.
+			refs, _ := h.refs.List(r.Context(), repo.ID)
+			if h.audit != nil {
+				_ = h.audit.Record(r.Context(), audit.Event{
+					Kind:       audit.EvtGitRefsSynced,
+					TargetKind: "repo",
+					TargetID:   repo.Name,
+					Details: map[string]any{
+						"repo_id":   repo.ID,
+						"ref_count": len(refs),
+						"project":   projectName,
+					},
+				})
+			}
+		}
+	}
 }
 
 // SelectBackend returns the GitServer implementation selected by config.
@@ -120,4 +162,20 @@ func SelectBackend(cfg config.Config) GitServer {
 	default:
 		return gogit.New()
 	}
+}
+
+// TestRouter returns a chi.Mux wired with a simplified middleware chain
+// (no auth) for integration tests. The handler routes resolve the repo
+// from URL, apply the per-repo mutex, and dispatch to the backend with
+// the post-receive walker hook. Auth is bypassed: every request is treated
+// as an authenticated super-admin.
+func (h *Handler) TestRouter(t testing.TB) http.Handler {
+	t.Helper()
+	r := chi.NewRouter()
+	r.Route("/git/{project}/{repo}", func(sub chi.Router) {
+		sub.Use(ResolveRepoFromURL(h.projects, h.repos))
+		sub.Use(PerRepoMutex(h.locks))
+		sub.Handle("/*", http.HandlerFunc(h.dispatchToBackend))
+	})
+	return r
 }

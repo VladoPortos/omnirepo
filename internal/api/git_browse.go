@@ -157,7 +157,7 @@ func (d Deps) handleGitRefs(w http.ResponseWriter, r *http.Request) {
 		items = append(items, item)
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{"refs": items})
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
 func (d Deps) handleGitTree(w http.ResponseWriter, r *http.Request) {
@@ -223,7 +223,7 @@ func (d Deps) handleGitTree(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{"entries": entries})
+	writeJSON(w, http.StatusOK, map[string]any{"items": entries})
 }
 
 func (d Deps) handleGitBlob(w http.ResponseWriter, r *http.Request) {
@@ -319,6 +319,8 @@ func (d Deps) handleGitCommits(w http.ResponseWriter, r *http.Request) {
 	}
 
 	pp := ParsePaginationParams(r)
+	cursor := r.URL.Query().Get("cursor")
+
 	iter, err := repo.Log(&gogitpkg.LogOptions{From: *hash})
 	if err != nil {
 		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
@@ -333,10 +335,20 @@ func (d Deps) handleGitCommits(w http.ResponseWriter, r *http.Request) {
 		Message string `json:"message"`
 	}
 
+	// If cursor is set, skip commits until we pass the cursor SHA.
+	pastCursor := cursor == ""
 	items := make([]commitItem, 0, pp.Limit)
-	count := 0
+	var nextCursor string
 	_ = iter.ForEach(func(c *object.Commit) error {
-		if count >= pp.Limit {
+		if !pastCursor {
+			if c.Hash.String() == cursor {
+				pastCursor = true
+			}
+			return nil // skip
+		}
+		if len(items) >= pp.Limit {
+			// We have one extra — use it as the next cursor indicator.
+			nextCursor = c.Hash.String()
 			return fmt.Errorf("stop")
 		}
 		items = append(items, commitItem{
@@ -346,11 +358,10 @@ func (d Deps) handleGitCommits(w http.ResponseWriter, r *http.Request) {
 			Date:    c.Author.When.UTC().Format("2006-01-02T15:04:05Z"),
 			Message: strings.TrimSpace(c.Message),
 		})
-		count++
 		return nil
 	})
 
-	writeJSON(w, http.StatusOK, map[string]any{"commits": items})
+	writeJSON(w, http.StatusOK, map[string]any{"items": items, "next_cursor": nextCursor})
 }
 
 func (d Deps) handleGitCommit(w http.ResponseWriter, r *http.Request) {

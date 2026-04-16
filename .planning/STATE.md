@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Ready to execute
-last_updated: "2026-04-15T20:30:14.702Z"
+last_updated: "2026-04-16T00:44:57.332Z"
 progress:
   total_phases: 5
   completed_phases: 3
-  total_plans: 27
-  completed_plans: 27
-  percent: 100
+  total_plans: 40
+  completed_plans: 28
+  percent: 70
 ---
 
 # STATE: OmniRepo
@@ -24,8 +24,8 @@ progress:
 
 ## Current Position
 
-Phase: 03 (package-repos-rpm-apt-pypi-helm) — EXECUTING
-Plan: 7 of 7
+Phase: 04 (s3-git) — EXECUTING
+Plan: 2 of 13
 
 - **Phase**: 1 — Foundation
 - **Plan**: none yet (planning not started)
@@ -53,6 +53,7 @@ Plan: 7 of 7
 | Phase 03-package-repos-rpm-apt-pypi-helm P05 | 70m | 3 tasks | 16 files |
 | Phase 03 P06 | 75min | 2 tasks | 16 files |
 | Phase 03-package-repos-rpm-apt-pypi-helm P07 | 65min | 2 tasks | 12 files |
+| Phase 04-s3-git P01 | 7m | 3 tasks | 35 files |
 
 ## Accumulated Context
 
@@ -106,6 +107,10 @@ Version-drift corrections to apply at first commit (from `.planning/research/SUM
 - [Phase 03-package-repos-rpm-apt-pypi-helm]: No control_raw column on deb_packages: reconstructControlParagraph emits stored fields in canonical dpkg order for Packages regen.
 - [Phase 03-package-repos-rpm-apt-pypi-helm]: Arch-from-control (D-24): client ?suite=&component= picks the tuple, Architecture comes from the parsed .deb; FindByTuple rejects unknown tuples rather than auto-adding.
 - [Phase 03-package-repos-rpm-apt-pypi-helm]: Phase 3 conformance gates: per-protocol DinD pkgs (//go:build conformance), pinned image digests in test/conformance/images.txt, exec.LookPath('docker') skip-without-docker; airgap test creates rpm/deb repos via REST so signing-key hooks fire; grep-cdn allowlist for legitimate XML namespace URN (linux.duke.edu)
+- [Phase 04-s3-git]: gofakes3 MultipartBackend PRESENT — Plan 06 uses embedded interface directly (no custom multipart handler)
+- [Phase 04-s3-git]: gofakes3 has no v1.0.0 tag upstream — pinned to master pseudo-version v0.0.0-20260208201424-4c385a1f6a73
+- [Phase 04-s3-git]: gitkit v0.4.0 compiles clean on Go 1.25 — Plan 09 fallback unblocked
+- [Phase 04-s3-git]: Probe files named probe_test.go (not _probe_test.go) — Go ignores _-prefixed sources
 
 ### Todos
 

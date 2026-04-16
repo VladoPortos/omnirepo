@@ -8,7 +8,7 @@ BENCH_WORKERS ?= 16
 	conformance conformance-oci conformance-rpm conformance-deb \
 	conformance-pypi conformance-helm conformance-s3 conformance-git \
 	test-git-conformance conformance-all \
-	frontend build-all docker e2e bench
+	frontend build-all docker e2e bench bench-throughput
 
 build:
 	$(GO) build -mod=vendor -o bin/omnirepo ./cmd/omnirepo
@@ -142,6 +142,10 @@ dev:
 e2e:
 	cd web && npx playwright test
 
+# Bench throughput (TEST-05): upload + API throughput benchmarks
+bench-throughput:
+	$(GO) test -tags=bench -mod=vendor -count=1 -timeout=10m -bench=. ./test/bench/throughput/...
+
 # Bench target (TEST-05): run all benchmarks
-bench: bench-sqlite bench-git
+bench: bench-sqlite bench-git bench-throughput
 	@echo "All benchmarks complete"

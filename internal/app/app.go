@@ -24,6 +24,7 @@ import (
 	"github.com/dxc-internal/omnirepo/internal/jobs"
 	"github.com/dxc-internal/omnirepo/internal/metadata"
 	"github.com/dxc-internal/omnirepo/internal/metadata/migrations"
+	gitpkg "github.com/dxc-internal/omnirepo/internal/protocol/git"
 	"github.com/dxc-internal/omnirepo/internal/protocol/oci"
 	"github.com/dxc-internal/omnirepo/internal/protocol/raw"
 	"github.com/dxc-internal/omnirepo/internal/scan"
@@ -528,6 +529,25 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 	// Phase 03 protocol handlers + sync wiring already constructed above
 	// (moved before api.Mount so the SyncDeps closure can reference each
 	// per-repo regen registry).
+
+	// 6d. Git Smart-HTTP handler (Phase 04-09). Backend selection is
+	// config-driven (server.git_backend = "gogit"|"gitkit"; D-26).
+	gitBackend := gitpkg.SelectBackend(cfg)
+	slog.InfoContext(ctx, "git.backend.selected", "name", gitBackend.BackendName())
+	gitHandler := gitpkg.New(gitpkg.Deps{
+		Backend:  gitBackend,
+		Config:   cfg,
+		Locks:    sharedLocks,
+		Repos:    metadata.NewReposRepo(db),
+		Projects: metadata.NewProjectsRepo(db),
+		Members:  metadata.NewMembersRepo(db),
+		Audit:    auditLogger,
+		DataRoot: cfg.DataRoot,
+		Users:    metadata.NewUsersRepo(db),
+		Sessions: metadata.NewSessionsRepo(db),
+		APIKeys:  metadata.NewAPIKeysRepo(db),
+	})
+	gitHandler.Mount(router)
 
 	// 7. Listeners.
 	httpLn := opts.HTTPListener

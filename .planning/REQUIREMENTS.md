@@ -195,7 +195,7 @@
 ### REST API (API)
 
 - [x] **API-01**: REST API served at `/api/v1/...`; OpenAPI 3.1 spec hand-written and committed at `internal/api/openapi.yaml`; `oapi-codegen/v2` generates Go types only (chi routes are hand-written)
-- [ ] **API-02**: Swagger UI bundled (no CDN) and served at `/api/docs`
+- [x] **API-02**: Swagger UI bundled (no CDN) and served at `/api/docs`
 - [ ] **API-03**: Every endpoint requires authentication except `/api/v1/auth/login`, `/healthz`, `/readyz`
 - [x] **API-04**: List endpoints paginate via `?limit=&cursor=` (cursor-based)
 - [ ] **API-05**: Upload endpoints stream the request body to disk; configurable max size; over-cap requests return `413`
@@ -210,10 +210,10 @@
 
 ### Web UI (UI)
 
-- [ ] **UI-01**: SPA built with React 19, TypeScript, Vite 8, Tailwind CSS 4 (CSS-first config), shadcn/ui 4, TanStack Query, React Router 7
-- [ ] **UI-02**: SPA embedded in the Go binary via `//go:embed web/dist/*`; served at `/` with client-side-routing fallback to `index.html`
+- [x] **UI-01**: SPA built with React 19, TypeScript, Vite 8, Tailwind CSS 4 (CSS-first config), shadcn/ui 4, TanStack Query, React Router 7
+- [x] **UI-02**: SPA embedded in the Go binary via `//go:embed web/dist/*`; served at `/` with client-side-routing fallback to `index.html`
 - [ ] **UI-03**: Dev mode (`OMNIREPO_DEV=1`) reverse-proxies non-API requests to a Vite dev server on `:5173` for HMR
-- [ ] **UI-04**: All UI assets bundled: `lucide-react` SVG icons, `@dicebear/core` avatars, `swagger-ui-dist`, self-hosted Inter and JetBrains Mono `.woff2`; zero external CDN references at runtime
+- [x] **UI-04**: All UI assets bundled: `lucide-react` SVG icons, `@dicebear/core` avatars, `swagger-ui-dist`, self-hosted Inter and JetBrains Mono `.woff2`; zero external CDN references at runtime
 - [ ] **UI-05**: Login screen + forced-password-change screen; offline-friendly error states
 - [ ] **UI-06**: Dashboard shows total + free storage, recent audit events, recent high-severity scan findings
 - [ ] **UI-07**: Projects list and project detail (members, repos grouped by type, add repo, invite/remove user)
@@ -222,7 +222,7 @@
 - [ ] **UI-10**: Profile screen (edit email, change password, manage own API keys with one-time reveal, manage own S3 keys)
 - [ ] **UI-11**: Admin screens (super-admin only): users CRUD, full audit log with filters, TLS cert upload, Trivy DB status + upload + online-pull, maintenance mode toggle, GC trigger, trash viewer with restore
 - [ ] **UI-12**: Every repo detail screen includes a copy-to-clipboard "use this repo" snippet (e.g. `helm repo add`, `pip install --index-url`, `docker login`, `aws --endpoint-url`, `git clone`)
-- [ ] **UI-13**: Dark mode default; light theme available via toggle
+- [x] **UI-13**: Dark mode default; light theme available via toggle
 
 ### Build & Air-Gap Invariants (AIR)
 
@@ -432,7 +432,7 @@ Deferred to future release. Tracked but not in current roadmap.
 | OPS-08 | Phase 1 | Complete |
 | OPS-09 | Phase 5 | Pending |
 | API-01 | Phase 5 | Complete |
-| API-02 | Phase 5 | Pending |
+| API-02 | Phase 5 | Complete |
 | API-03 | Phase 5 | Pending |
 | API-04 | Phase 5 | Complete |
 | API-05 | Phase 5 | Pending |
@@ -441,10 +441,10 @@ Deferred to future release. Tracked but not in current roadmap.
 | SRCH-02 | Phase 3 | Pending |
 | SRCH-03 | Phase 5 | Complete |
 | SRCH-04 | Phase 5 | Complete |
-| UI-01 | Phase 5 | Pending |
-| UI-02 | Phase 5 | Pending |
+| UI-01 | Phase 5 | Complete |
+| UI-02 | Phase 5 | Complete |
 | UI-03 | Phase 5 | Pending |
-| UI-04 | Phase 5 | Pending |
+| UI-04 | Phase 5 | Complete |
 | UI-05 | Phase 5 | Pending |
 | UI-06 | Phase 5 | Pending |
 | UI-07 | Phase 5 | Pending |
@@ -453,7 +453,7 @@ Deferred to future release. Tracked but not in current roadmap.
 | UI-10 | Phase 5 | Pending |
 | UI-11 | Phase 5 | Pending |
 | UI-12 | Phase 5 | Pending |
-| UI-13 | Phase 5 | Pending |
+| UI-13 | Phase 5 | Complete |
 | AIR-01 | Phase 5 | Pending |
 | AIR-02 | Phase 5 | Pending |
 | AIR-03 | Phase 5 | Pending |

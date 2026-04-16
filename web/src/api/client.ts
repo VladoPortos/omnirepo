@@ -78,7 +78,6 @@ class ApiClient {
 
       xhr.onload = () => {
         if (xhr.status === 401) {
-          window.location.href = '/login';
           reject(new ApiError(401, 'unauthorized', 'Unauthorized'));
           return;
         }
@@ -101,7 +100,6 @@ class ApiClient {
 
   private async handleResponse<T>(res: Response): Promise<T> {
     if (res.status === 401) {
-      window.location.href = '/login';
       throw new ApiError(401, 'unauthorized', 'Unauthorized');
     }
     if (!res.ok) {

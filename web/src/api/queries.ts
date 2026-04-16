@@ -7,6 +7,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from './client';
 import type {
   MeResponse,
+  MeUpdateRequest,
   LoginRequest,
   LoginResponse,
   ProjectListItem,
@@ -28,6 +29,12 @@ import type {
   GitBlame,
   GitRef,
   GitCompareResponse,
+  APIKey,
+  APIKeyCreate,
+  APIKeyCreateResponse,
+  S3Key,
+  S3KeyCreate,
+  S3KeyCreateResponse,
 } from './types';
 
 // -- Auth / Me --
@@ -341,5 +348,76 @@ export function useGitCompare(
       ),
     enabled: !!projectName && !!repoName && !!base && !!head,
     staleTime: 30_000,
+  });
+}
+
+// -- Profile / Me --
+
+export function useUpdateMe() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: MeUpdateRequest) =>
+      api.patch<MeResponse>('/me', data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['me'] }),
+  });
+}
+
+export function useDeleteAccount() {
+  return useMutation({
+    mutationFn: () => api.del<void>('/me'),
+  });
+}
+
+// -- API Keys --
+
+export function useAPIKeys() {
+  return useQuery({
+    queryKey: ['me', 'api-keys'],
+    queryFn: () => api.get<{ items: APIKey[] }>('/me/api-keys'),
+    staleTime: 30_000,
+  });
+}
+
+export function useCreateAPIKey() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: APIKeyCreate) =>
+      api.post<APIKeyCreateResponse>('/me/api-keys', data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['me', 'api-keys'] }),
+  });
+}
+
+export function useRevokeAPIKey() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) => api.del<void>(`/me/api-keys/${id}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['me', 'api-keys'] }),
+  });
+}
+
+// -- S3 Keys --
+
+export function useS3Keys() {
+  return useQuery({
+    queryKey: ['me', 's3-keys'],
+    queryFn: () => api.get<{ items: S3Key[] }>('/me/s3-keys'),
+    staleTime: 30_000,
+  });
+}
+
+export function useCreateS3Key() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: S3KeyCreate) =>
+      api.post<S3KeyCreateResponse>('/me/s3-keys', data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['me', 's3-keys'] }),
+  });
+}
+
+export function useRevokeS3Key() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) => api.del<void>(`/me/s3-keys/${id}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['me', 's3-keys'] }),
   });
 }

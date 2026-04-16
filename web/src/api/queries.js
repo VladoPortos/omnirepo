@@ -212,3 +212,60 @@ export function useGitCompare(projectName, repoName, base, head) {
         staleTime: 30_000,
     });
 }
+// -- Profile / Me --
+export function useUpdateMe() {
+    const qc = useQueryClient();
+    return useMutation({
+        mutationFn: (data) => api.patch('/me', data),
+        onSuccess: () => qc.invalidateQueries({ queryKey: ['me'] }),
+    });
+}
+export function useDeleteAccount() {
+    return useMutation({
+        mutationFn: () => api.del('/me'),
+    });
+}
+// -- API Keys --
+export function useAPIKeys() {
+    return useQuery({
+        queryKey: ['me', 'api-keys'],
+        queryFn: () => api.get('/me/api-keys'),
+        staleTime: 30_000,
+    });
+}
+export function useCreateAPIKey() {
+    const qc = useQueryClient();
+    return useMutation({
+        mutationFn: (data) => api.post('/me/api-keys', data),
+        onSuccess: () => qc.invalidateQueries({ queryKey: ['me', 'api-keys'] }),
+    });
+}
+export function useRevokeAPIKey() {
+    const qc = useQueryClient();
+    return useMutation({
+        mutationFn: (id) => api.del(`/me/api-keys/${id}`),
+        onSuccess: () => qc.invalidateQueries({ queryKey: ['me', 'api-keys'] }),
+    });
+}
+// -- S3 Keys --
+export function useS3Keys() {
+    return useQuery({
+        queryKey: ['me', 's3-keys'],
+        queryFn: () => api.get('/me/s3-keys'),
+        staleTime: 30_000,
+    });
+}
+export function useCreateS3Key() {
+    const qc = useQueryClient();
+    return useMutation({
+        mutationFn: (data) => api.post('/me/s3-keys', data),
+        onSuccess: () => qc.invalidateQueries({ queryKey: ['me', 's3-keys'] }),
+    });
+}
+export function useRevokeS3Key() {
+    const qc = useQueryClient();
+    return useMutation({
+        mutationFn: (id) => api.del(`/me/s3-keys/${id}`),
+        onSuccess: () => qc.invalidateQueries({ queryKey: ['me', 's3-keys'] }),
+    });
+}

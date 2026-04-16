@@ -13,21 +13,14 @@ import { NotFoundPage } from '@/pages/NotFoundPage';
 import { DashboardPage } from '@/pages/DashboardPage';
 import { ProjectsPage } from '@/pages/ProjectsPage';
 import { ProjectDetailPage } from '@/pages/ProjectDetailPage';
+import { RepoDetailRouter } from '@/pages/repo/RepoDetailRouter';
 import { useAuth } from '@/hooks/useAuth';
 import { Skeleton } from '@/components/ui/skeleton';
-// Placeholder pages for future plans -- renders name only
+import { SearchPage } from '@/pages/SearchPage';
+import { ProfilePage } from '@/pages/ProfilePage';
+// Placeholder for lazy-load error fallbacks
 function PlaceholderPage({ name }) {
     return (_jsxs("div", { children: [_jsx("h1", { className: "text-2xl font-semibold", children: name }), _jsx("p", { className: "text-muted-foreground mt-2", children: "Coming in a future plan." })] }));
-}
-// Eagerly loaded placeholders for pages not yet implemented
-function RepoDetailRouter() {
-    return _jsx(PlaceholderPage, { name: "Repository Detail" });
-}
-function SearchPage() {
-    return _jsx(PlaceholderPage, { name: "Search" });
-}
-function ProfilePage() {
-    return _jsx(PlaceholderPage, { name: "Profile" });
 }
 // Lazy-loaded admin pages per D-37 code splitting
 const AdminUsersPage = lazy(() => import('@/pages/admin/UsersPage').catch(() => ({

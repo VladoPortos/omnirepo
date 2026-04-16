@@ -141,3 +141,34 @@ jobs:
 
       - name: Run S3 conformance suite
         run: make conformance-s3
+
+  # Phase 4 D-46 gate: Git Smart-HTTP conformance via real `git` CLI (DinD).
+  # Drives clone/push/fetch/oversize-push across both gogit and gitkit backends
+  # using alpine/git:2.43 inside a container against an in-process omnirepo.
+  # Covers D-31 project-auth variant and bad-auth rejection.
+  git-conformance:
+    runs-on: ubuntu-24.04
+    needs: build-test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+
+      - name: Pre-pull git-client image
+        run: |
+          set -euo pipefail
+          while IFS= read -r line; do
+            case "$line" in ''|\#*) continue ;; esac
+            case "$line" in git-client=*)
+              image="${line#git-client=}"
+              echo "pulling $image"
+              docker pull "$image"
+              ;;
+            esac
+          done < test/conformance/images.txt
+
+      - name: Run Git conformance suite
+        run: make conformance-git

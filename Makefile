@@ -5,7 +5,8 @@ BENCH_WORKERS ?= 16
 
 .PHONY: dev build test test-airgap bench-sqlite vendor lint seed grep-cdn \
 	conformance conformance-oci conformance-rpm conformance-deb \
-	conformance-pypi conformance-helm conformance-s3 conformance-all
+	conformance-pypi conformance-helm conformance-s3 conformance-git \
+	test-git-conformance conformance-all
 
 dev:
 	$(GO) run ./cmd/omnirepo serve
@@ -88,6 +89,15 @@ conformance-helm:
 
 conformance-s3:
 	$(GO) test -mod=vendor -tags=conformance -count=1 -timeout=5m ./test/conformance/s3/...
+
+# Phase 4 D-46 gate: Git Smart-HTTP conformance via real `git` CLI (DinD).
+# Exercises both gogit and gitkit backends: clone/push/fetch matrix,
+# oversize-push gate, D-31 project-auth variant, bad-auth rejection.
+conformance-git:
+	$(GO) test -mod=vendor -tags=conformance -count=1 -timeout=10m ./test/conformance/git/...
+
+# test-git-conformance is an alias for conformance-git (plan spec name).
+test-git-conformance: conformance-git
 
 # conformance-all runs every protocol's conformance suite in one invocation.
 # Used by the CI conformance job (D-31).

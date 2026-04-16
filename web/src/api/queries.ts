@@ -9,9 +9,11 @@ import type {
   MeResponse,
   LoginRequest,
   LoginResponse,
-  Project,
+  ProjectListItem,
+  ProjectDetail,
   ProjectCreate,
   ProjectCreateResponse,
+  ActivityItem,
   Repo,
   RepoCreate,
   RepoPatch,
@@ -76,7 +78,7 @@ export function useDashboard() {
 export function useProjects() {
   return useQuery({
     queryKey: ['projects'],
-    queryFn: () => api.get<PaginatedResponse<Project>>('/projects'),
+    queryFn: () => api.get<PaginatedResponse<ProjectListItem>>('/projects'),
     staleTime: 30_000,
   });
 }
@@ -84,8 +86,17 @@ export function useProjects() {
 export function useProject(name: string) {
   return useQuery({
     queryKey: ['projects', name],
-    queryFn: () => api.get<Project>(`/projects/${name}`),
+    queryFn: () => api.get<ProjectDetail>(`/projects/${name}`),
     enabled: !!name,
+  });
+}
+
+export function useProjectActivity(name: string) {
+  return useQuery({
+    queryKey: ['projects', name, 'activity'],
+    queryFn: () => api.get<{ items: ActivityItem[] }>(`/projects/${name}/activity`),
+    enabled: !!name,
+    staleTime: 15_000,
   });
 }
 

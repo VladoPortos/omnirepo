@@ -10,22 +10,16 @@ import { AppShell } from '@/components/layout/AppShell';
 import { LoginPage } from '@/pages/LoginPage';
 import { ChangePasswordPage } from '@/pages/ChangePasswordPage';
 import { NotFoundPage } from '@/pages/NotFoundPage';
+import { DashboardPage } from '@/pages/DashboardPage';
+import { ProjectsPage } from '@/pages/ProjectsPage';
+import { ProjectDetailPage } from '@/pages/ProjectDetailPage';
 import { useAuth } from '@/hooks/useAuth';
 import { Skeleton } from '@/components/ui/skeleton';
 // Placeholder pages for future plans -- renders name only
 function PlaceholderPage({ name }) {
     return (_jsxs("div", { children: [_jsx("h1", { className: "text-2xl font-semibold", children: name }), _jsx("p", { className: "text-muted-foreground mt-2", children: "Coming in a future plan." })] }));
 }
-// Eagerly loaded placeholders for main nav
-function DashboardPage() {
-    return _jsx(PlaceholderPage, { name: "Dashboard" });
-}
-function ProjectsPage() {
-    return _jsx(PlaceholderPage, { name: "Projects" });
-}
-function ProjectDetailPage() {
-    return _jsx(PlaceholderPage, { name: "Project Detail" });
-}
+// Eagerly loaded placeholders for pages not yet implemented
 function RepoDetailRouter() {
     return _jsx(PlaceholderPage, { name: "Repository Detail" });
 }

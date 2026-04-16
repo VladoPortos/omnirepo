@@ -10,6 +10,9 @@ import { AppShell } from '@/components/layout/AppShell';
 import { LoginPage } from '@/pages/LoginPage';
 import { ChangePasswordPage } from '@/pages/ChangePasswordPage';
 import { NotFoundPage } from '@/pages/NotFoundPage';
+import { DashboardPage } from '@/pages/DashboardPage';
+import { ProjectsPage } from '@/pages/ProjectsPage';
+import { ProjectDetailPage } from '@/pages/ProjectDetailPage';
 import { useAuth } from '@/hooks/useAuth';
 import { Skeleton } from '@/components/ui/skeleton';
 
@@ -23,16 +26,7 @@ function PlaceholderPage({ name }: { name: string }) {
   );
 }
 
-// Eagerly loaded placeholders for main nav
-function DashboardPage() {
-  return <PlaceholderPage name="Dashboard" />;
-}
-function ProjectsPage() {
-  return <PlaceholderPage name="Projects" />;
-}
-function ProjectDetailPage() {
-  return <PlaceholderPage name="Project Detail" />;
-}
+// Eagerly loaded placeholders for pages not yet implemented
 function RepoDetailRouter() {
   return <PlaceholderPage name="Repository Detail" />;
 }

@@ -82,6 +82,42 @@ export interface Project {
   created_at: string;
 }
 
+export interface ProjectListItem {
+  id: number;
+  name: string;
+  description_md: string;
+  member_count: number;
+  repo_count: number;
+  size_bytes: number;
+  created_at: string;
+}
+
+export interface ProjectMember {
+  user_id: number;
+  login: string;
+  email: string;
+}
+
+export interface ProjectRepo {
+  id: number;
+  type: RepoType;
+  name: string;
+  description_md: string;
+  size_bytes: number;
+  auto_scan: boolean;
+  public_read: boolean;
+  created_at: string;
+}
+
+export interface ProjectDetail {
+  id: number;
+  name: string;
+  description_md: string;
+  created_at: string;
+  members: ProjectMember[];
+  repos: ProjectRepo[];
+}
+
 export interface ProjectCreate {
   name: string;
   description_md?: string;
@@ -90,6 +126,17 @@ export interface ProjectCreate {
 export interface ProjectCreateResponse {
   id: number;
   name: string;
+}
+
+export interface ActivityItem {
+  id: number;
+  action: string;
+  actor_user_id?: number;
+  target_kind: string;
+  target_id: string;
+  outcome?: string;
+  details?: string;
+  created_at: string;
 }
 
 // -- Repo --

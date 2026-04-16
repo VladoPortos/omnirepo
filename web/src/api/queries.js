@@ -60,6 +60,14 @@ export function useProject(name) {
         enabled: !!name,
     });
 }
+export function useProjectActivity(name) {
+    return useQuery({
+        queryKey: ['projects', name, 'activity'],
+        queryFn: () => api.get(`/projects/${name}/activity`),
+        enabled: !!name,
+        staleTime: 15_000,
+    });
+}
 export function useCreateProject() {
     const qc = useQueryClient();
     return useMutation({

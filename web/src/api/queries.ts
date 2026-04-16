@@ -240,7 +240,7 @@ export function useGitRefs(projectName: string, repoName: string) {
     queryKey: ['projects', projectName, 'repos', repoName, 'git', 'refs'],
     queryFn: () =>
       api.get<{ items: GitRef[] }>(
-        `/projects/${projectName}/repos/${repoName}/git/refs`,
+        `/projects/${projectName}/repos/git/${repoName}/refs`,
       ),
     enabled: !!projectName && !!repoName,
     staleTime: 30_000,
@@ -257,7 +257,7 @@ export function useGitTree(
     queryKey: ['projects', projectName, 'repos', repoName, 'git', 'tree', ref, path],
     queryFn: () =>
       api.get<{ items: GitTreeEntry[] }>(
-        `/projects/${projectName}/repos/${repoName}/git/tree/${ref}/${path}`,
+        `/projects/${projectName}/repos/git/${repoName}/tree/${ref}/${path}`,
       ),
     enabled: !!projectName && !!repoName && !!ref,
     staleTime: 30_000,
@@ -274,7 +274,7 @@ export function useGitBlob(
     queryKey: ['projects', projectName, 'repos', repoName, 'git', 'blob', ref, path],
     queryFn: () =>
       api.get<GitFileContent>(
-        `/projects/${projectName}/repos/${repoName}/git/blob/${ref}/${path}`,
+        `/projects/${projectName}/repos/git/${repoName}/blob/${ref}/${path}`,
       ),
     enabled: !!projectName && !!repoName && !!ref && !!path,
     staleTime: 60_000,
@@ -293,7 +293,7 @@ export function useGitCommits(
     queryKey: ['projects', projectName, 'repos', repoName, 'git', 'commits', ref, cursor],
     queryFn: () =>
       api.get<PaginatedResponse<GitCommit>>(
-        `/projects/${projectName}/repos/${repoName}/git/commits/${ref}`,
+        `/projects/${projectName}/repos/git/${repoName}/commits/${ref}`,
         params,
       ),
     enabled: !!projectName && !!repoName && !!ref,
@@ -310,7 +310,7 @@ export function useGitCommitDetail(
     queryKey: ['projects', projectName, 'repos', repoName, 'git', 'commit', sha],
     queryFn: () =>
       api.get<GitDiff>(
-        `/projects/${projectName}/repos/${repoName}/git/commit/${sha}`,
+        `/projects/${projectName}/repos/git/${repoName}/commit/${sha}`,
       ),
     enabled: !!projectName && !!repoName && !!sha,
     staleTime: 120_000,
@@ -327,7 +327,7 @@ export function useGitBlame(
     queryKey: ['projects', projectName, 'repos', repoName, 'git', 'blame', ref, path],
     queryFn: () =>
       api.get<GitBlame>(
-        `/projects/${projectName}/repos/${repoName}/git/blame/${ref}/${path}`,
+        `/projects/${projectName}/repos/git/${repoName}/blame/${ref}/${path}`,
       ),
     enabled: !!projectName && !!repoName && !!ref && !!path,
     staleTime: 60_000,
@@ -344,7 +344,7 @@ export function useGitCompare(
     queryKey: ['projects', projectName, 'repos', repoName, 'git', 'compare', base, head],
     queryFn: () =>
       api.get<GitCompareResponse>(
-        `/projects/${projectName}/repos/${repoName}/git/compare/${base}...${head}`,
+        `/projects/${projectName}/repos/git/${repoName}/compare/${base}...${head}`,
       ),
     enabled: !!projectName && !!repoName && !!base && !!head,
     staleTime: 30_000,

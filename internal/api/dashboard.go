@@ -2,10 +2,12 @@
 //
 // GET /api/v1/dashboard — returns storage stats, repo/user counts, scan
 // findings summary, and recent audit activity.
+// GET /api/v1/dashboard/storage — returns detailed per-repo storage breakdown.
 package api
 
 import (
 	"net/http"
+	"runtime"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -13,9 +15,10 @@ import (
 	"github.com/dxc-internal/omnirepo/internal/auth"
 )
 
-// mountDashboard installs the dashboard endpoint.
+// mountDashboard installs the dashboard endpoints.
 func (d Deps) mountDashboard(r chi.Router) {
 	r.Get("/dashboard", d.handleDashboard)
+	r.Get("/dashboard/storage", d.handleStorageDetail)
 }
 
 // dashboardResponse is the JSON shape returned by GET /dashboard.
@@ -114,7 +117,7 @@ func (d Deps) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	var activityArgs []any
 	if scopeClause == "" {
 		activitySQL = `
-			SELECT id, event_kind, COALESCE(target_id, ''), created_at
+			SELECT id, event_kind, COALESCE(target_id, ''), occurred_at
 			FROM audit_log
 			ORDER BY id DESC
 			LIMIT 20`
@@ -123,7 +126,7 @@ func (d Deps) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		activityArgs = make([]any, len(scopeArgs))
 		copy(activityArgs, scopeArgs)
 		activitySQL = `
-			SELECT a.id, a.event_kind, COALESCE(a.target_id, ''), a.created_at
+			SELECT a.id, a.event_kind, COALESCE(a.target_id, ''), a.occurred_at
 			FROM audit_log a
 			JOIN repos r ON CAST(a.target_id AS INTEGER) = r.id
 			WHERE r.deleted_at IS NULL` + strings.Replace(scopeClause, "project_id", "r.project_id", 1) + `
@@ -145,12 +148,128 @@ func (d Deps) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		_ = rows.Err()
 	}
 
+	// Storage total: try filesystem Statfs first, fall back to settings.
+	storageTotalBytes := statfsTotal(d.DataRoot)
+	if storageTotalBytes == 0 {
+		var totalStr string
+		if err := d.DB.Reader.QueryRowContext(r.Context(),
+			`SELECT value FROM settings WHERE key='storage_total_bytes'`).Scan(&totalStr); err == nil {
+			var n int64
+			for _, c := range totalStr {
+				if c >= '0' && c <= '9' {
+					n = n*10 + int64(c-'0')
+				}
+			}
+			storageTotalBytes = n
+		}
+	}
+
 	writeJSON(w, http.StatusOK, dashboardResponse{
 		StorageUsedBytes:  storageUsed,
-		StorageTotalBytes: 0, // filesystem df not available in pure Go without syscall; 0 = unknown
+		StorageTotalBytes: storageTotalBytes,
 		RepoCount:         repoCount,
 		UserCount:         userCount,
 		ScanFindings:      scanFindings{Critical: critical, High: high},
 		RecentActivity:    activity,
 	})
+}
+
+// storageDetailResponse is the JSON shape for GET /dashboard/storage.
+type storageDetailResponse struct {
+	TotalBytes int64             `json:"total_bytes"`
+	UsedBytes  int64             `json:"used_bytes"`
+	Repos      []storageRepoRow `json:"repos"`
+}
+
+type storageRepoRow struct {
+	Project   string `json:"project"`
+	Name      string `json:"name"`
+	Type      string `json:"type"`
+	SizeBytes int64  `json:"size_bytes"`
+}
+
+func (d Deps) handleStorageDetail(w http.ResponseWriter, r *http.Request) {
+	actor, ok := auth.ActorFromContext(r.Context())
+	if !ok {
+		writeJSONError(w, http.StatusUnauthorized, ErrUnauthenticated, "")
+		return
+	}
+
+	var scopeClause string
+	var scopeArgs []any
+
+	if !actor.IsSuperAdmin {
+		ids, _ := d.Members.ListProjectIDsForUser(r.Context(), actor.ID)
+		if len(ids) == 0 {
+			writeJSON(w, http.StatusOK, storageDetailResponse{Repos: make([]storageRepoRow, 0)})
+			return
+		}
+		placeholders := make([]string, len(ids))
+		for i, id := range ids {
+			placeholders[i] = "?"
+			scopeArgs = append(scopeArgs, id)
+		}
+		scopeClause = " AND r.project_id IN (" + strings.Join(placeholders, ",") + ")"
+	}
+
+	// Used bytes.
+	usedArgs := make([]any, len(scopeArgs))
+	copy(usedArgs, scopeArgs)
+	var usedBytes int64
+	_ = d.DB.Reader.QueryRowContext(r.Context(),
+		`SELECT COALESCE(SUM(r.size_bytes), 0) FROM repos r WHERE r.deleted_at IS NULL`+scopeClause, usedArgs...).Scan(&usedBytes)
+
+	// Total bytes: Statfs or settings fallback.
+	totalBytes := statfsTotal(d.DataRoot)
+	if totalBytes == 0 {
+		var totalStr string
+		if err := d.DB.Reader.QueryRowContext(r.Context(),
+			`SELECT value FROM settings WHERE key='storage_total_bytes'`).Scan(&totalStr); err == nil {
+			var n int64
+			for _, c := range totalStr {
+				if c >= '0' && c <= '9' {
+					n = n*10 + int64(c-'0')
+				}
+			}
+			totalBytes = n
+		}
+	}
+
+	// Per-repo breakdown sorted by size DESC.
+	repoArgs := make([]any, len(scopeArgs))
+	copy(repoArgs, scopeArgs)
+	rows, err := d.DB.Reader.QueryContext(r.Context(), `
+		SELECT p.name, r.name, r.type, r.size_bytes
+		FROM repos r
+		JOIN projects p ON p.id = r.project_id
+		WHERE r.deleted_at IS NULL`+scopeClause+`
+		ORDER BY r.size_bytes DESC
+	`, repoArgs...)
+	repos := make([]storageRepoRow, 0)
+	if err == nil {
+		defer func() { _ = rows.Close() }()
+		for rows.Next() {
+			var rr storageRepoRow
+			if err := rows.Scan(&rr.Project, &rr.Name, &rr.Type, &rr.SizeBytes); err != nil {
+				break
+			}
+			repos = append(repos, rr)
+		}
+		_ = rows.Err()
+	}
+
+	writeJSON(w, http.StatusOK, storageDetailResponse{
+		TotalBytes: totalBytes,
+		UsedBytes:  usedBytes,
+		Repos:      repos,
+	})
+}
+
+// statfsTotal returns the total capacity of the filesystem containing path.
+// Returns 0 on any error or on non-Linux platforms (graceful degradation).
+func statfsTotal(path string) int64 {
+	if runtime.GOOS != "linux" {
+		return 0
+	}
+	return statfsTotalLinux(path)
 }

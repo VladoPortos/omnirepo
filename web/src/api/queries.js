@@ -152,3 +152,63 @@ export function useMaintenance() {
         retry: false,
     });
 }
+// -- Git --
+export function useGitRefs(projectName, repoName) {
+    return useQuery({
+        queryKey: ['projects', projectName, 'repos', repoName, 'git', 'refs'],
+        queryFn: () => api.get(`/projects/${projectName}/repos/${repoName}/git/refs`),
+        enabled: !!projectName && !!repoName,
+        staleTime: 30_000,
+    });
+}
+export function useGitTree(projectName, repoName, ref, path) {
+    return useQuery({
+        queryKey: ['projects', projectName, 'repos', repoName, 'git', 'tree', ref, path],
+        queryFn: () => api.get(`/projects/${projectName}/repos/${repoName}/git/tree/${ref}/${path}`),
+        enabled: !!projectName && !!repoName && !!ref,
+        staleTime: 30_000,
+    });
+}
+export function useGitBlob(projectName, repoName, ref, path) {
+    return useQuery({
+        queryKey: ['projects', projectName, 'repos', repoName, 'git', 'blob', ref, path],
+        queryFn: () => api.get(`/projects/${projectName}/repos/${repoName}/git/blob/${ref}/${path}`),
+        enabled: !!projectName && !!repoName && !!ref && !!path,
+        staleTime: 60_000,
+    });
+}
+export function useGitCommits(projectName, repoName, ref, cursor) {
+    const params = {};
+    if (cursor)
+        params.cursor = cursor;
+    return useQuery({
+        queryKey: ['projects', projectName, 'repos', repoName, 'git', 'commits', ref, cursor],
+        queryFn: () => api.get(`/projects/${projectName}/repos/${repoName}/git/commits/${ref}`, params),
+        enabled: !!projectName && !!repoName && !!ref,
+        staleTime: 30_000,
+    });
+}
+export function useGitCommitDetail(projectName, repoName, sha) {
+    return useQuery({
+        queryKey: ['projects', projectName, 'repos', repoName, 'git', 'commit', sha],
+        queryFn: () => api.get(`/projects/${projectName}/repos/${repoName}/git/commit/${sha}`),
+        enabled: !!projectName && !!repoName && !!sha,
+        staleTime: 120_000,
+    });
+}
+export function useGitBlame(projectName, repoName, ref, path) {
+    return useQuery({
+        queryKey: ['projects', projectName, 'repos', repoName, 'git', 'blame', ref, path],
+        queryFn: () => api.get(`/projects/${projectName}/repos/${repoName}/git/blame/${ref}/${path}`),
+        enabled: !!projectName && !!repoName && !!ref && !!path,
+        staleTime: 60_000,
+    });
+}
+export function useGitCompare(projectName, repoName, base, head) {
+    return useQuery({
+        queryKey: ['projects', projectName, 'repos', repoName, 'git', 'compare', base, head],
+        queryFn: () => api.get(`/projects/${projectName}/repos/${repoName}/git/compare/${base}...${head}`),
+        enabled: !!projectName && !!repoName && !!base && !!head,
+        staleTime: 30_000,
+    });
+}

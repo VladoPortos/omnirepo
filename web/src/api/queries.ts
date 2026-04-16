@@ -21,6 +21,13 @@ import type {
   SearchResponse,
   MaintenanceStatus,
   PaginatedResponse,
+  GitTreeEntry,
+  GitFileContent,
+  GitCommit,
+  GitDiff,
+  GitBlame,
+  GitRef,
+  GitCompareResponse,
 } from './types';
 
 // -- Auth / Me --
@@ -216,5 +223,123 @@ export function useMaintenance() {
     queryFn: () => api.get<MaintenanceStatus>('/admin/maintenance'),
     staleTime: 30_000,
     retry: false,
+  });
+}
+
+// -- Git --
+
+export function useGitRefs(projectName: string, repoName: string) {
+  return useQuery({
+    queryKey: ['projects', projectName, 'repos', repoName, 'git', 'refs'],
+    queryFn: () =>
+      api.get<{ items: GitRef[] }>(
+        `/projects/${projectName}/repos/${repoName}/git/refs`,
+      ),
+    enabled: !!projectName && !!repoName,
+    staleTime: 30_000,
+  });
+}
+
+export function useGitTree(
+  projectName: string,
+  repoName: string,
+  ref: string,
+  path: string,
+) {
+  return useQuery({
+    queryKey: ['projects', projectName, 'repos', repoName, 'git', 'tree', ref, path],
+    queryFn: () =>
+      api.get<{ items: GitTreeEntry[] }>(
+        `/projects/${projectName}/repos/${repoName}/git/tree/${ref}/${path}`,
+      ),
+    enabled: !!projectName && !!repoName && !!ref,
+    staleTime: 30_000,
+  });
+}
+
+export function useGitBlob(
+  projectName: string,
+  repoName: string,
+  ref: string,
+  path: string,
+) {
+  return useQuery({
+    queryKey: ['projects', projectName, 'repos', repoName, 'git', 'blob', ref, path],
+    queryFn: () =>
+      api.get<GitFileContent>(
+        `/projects/${projectName}/repos/${repoName}/git/blob/${ref}/${path}`,
+      ),
+    enabled: !!projectName && !!repoName && !!ref && !!path,
+    staleTime: 60_000,
+  });
+}
+
+export function useGitCommits(
+  projectName: string,
+  repoName: string,
+  ref: string,
+  cursor?: string,
+) {
+  const params: Record<string, string> = {};
+  if (cursor) params.cursor = cursor;
+  return useQuery({
+    queryKey: ['projects', projectName, 'repos', repoName, 'git', 'commits', ref, cursor],
+    queryFn: () =>
+      api.get<PaginatedResponse<GitCommit>>(
+        `/projects/${projectName}/repos/${repoName}/git/commits/${ref}`,
+        params,
+      ),
+    enabled: !!projectName && !!repoName && !!ref,
+    staleTime: 30_000,
+  });
+}
+
+export function useGitCommitDetail(
+  projectName: string,
+  repoName: string,
+  sha: string,
+) {
+  return useQuery({
+    queryKey: ['projects', projectName, 'repos', repoName, 'git', 'commit', sha],
+    queryFn: () =>
+      api.get<GitDiff>(
+        `/projects/${projectName}/repos/${repoName}/git/commit/${sha}`,
+      ),
+    enabled: !!projectName && !!repoName && !!sha,
+    staleTime: 120_000,
+  });
+}
+
+export function useGitBlame(
+  projectName: string,
+  repoName: string,
+  ref: string,
+  path: string,
+) {
+  return useQuery({
+    queryKey: ['projects', projectName, 'repos', repoName, 'git', 'blame', ref, path],
+    queryFn: () =>
+      api.get<GitBlame>(
+        `/projects/${projectName}/repos/${repoName}/git/blame/${ref}/${path}`,
+      ),
+    enabled: !!projectName && !!repoName && !!ref && !!path,
+    staleTime: 60_000,
+  });
+}
+
+export function useGitCompare(
+  projectName: string,
+  repoName: string,
+  base: string,
+  head: string,
+) {
+  return useQuery({
+    queryKey: ['projects', projectName, 'repos', repoName, 'git', 'compare', base, head],
+    queryFn: () =>
+      api.get<GitCompareResponse>(
+        `/projects/${projectName}/repos/${repoName}/git/compare/${base}...${head}`,
+      ),
+    enabled: !!projectName && !!repoName && !!base && !!head,
+    staleTime: 30_000,
   });
 }

@@ -220,7 +220,7 @@
 - [x] **UI-08**: Per-type repo detail screens (file browser + upload dropzone, README markdown editor + preview, scan results filter, SBOM download, size/count stats, sync-from-URL form, wipe contents, soft delete, public-read toggle, scan-severity gate, Docker-only: pull external + promote tag + cosign badge)
 - [ ] **UI-09**: Global search screen with type and severity filters; results link to source entities
 - [ ] **UI-10**: Profile screen (edit email, change password, manage own API keys with one-time reveal, manage own S3 keys)
-- [ ] **UI-11**: Admin screens (super-admin only): users CRUD, full audit log with filters, TLS cert upload, Trivy DB status + upload + online-pull, maintenance mode toggle, GC trigger, trash viewer with restore
+- [x] **UI-11**: Admin screens (super-admin only): users CRUD, full audit log with filters, TLS cert upload, Trivy DB status + upload + online-pull, maintenance mode toggle, GC trigger, trash viewer with restore
 - [x] **UI-12**: Every repo detail screen includes a copy-to-clipboard "use this repo" snippet (e.g. `helm repo add`, `pip install --index-url`, `docker login`, `aws --endpoint-url`, `git clone`)
 - [x] **UI-13**: Dark mode default; light theme available via toggle
 
@@ -451,7 +451,7 @@ Deferred to future release. Tracked but not in current roadmap.
 | UI-08 | Phase 5 | Complete |
 | UI-09 | Phase 5 | Pending |
 | UI-10 | Phase 5 | Pending |
-| UI-11 | Phase 5 | Pending |
+| UI-11 | Phase 5 | Complete |
 | UI-12 | Phase 5 | Complete |
 | UI-13 | Phase 5 | Complete |
 | AIR-01 | Phase 5 | Pending |

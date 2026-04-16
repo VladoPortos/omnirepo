@@ -18,12 +18,13 @@ import (
 
 // SearchResult holds one merged result from the FTS5 UNION query.
 type SearchResult struct {
-	Kind     string  // "repo", "artifact", "cve", "rpm", "deb", "pypi", "helm"
-	EntityID int64   // rowid or repo_id depending on Kind
-	Name     string  // primary display name
-	Location string  // secondary context (project, version, etc.)
-	Severity string  // non-empty for CVE results
-	Score    float64 // FTS5 rank (lower = more relevant)
+	Kind        string  // "repo", "artifact", "cve", "rpm", "deb", "pypi", "helm"
+	EntityID    int64   // rowid or repo_id depending on Kind
+	Name        string  // primary display name
+	Location    string  // secondary context (project, version, etc.)
+	Severity    string  // non-empty for CVE results
+	Score       float64 // FTS5 rank (lower = more relevant)
+	ProjectName string  // owning project name for auth filtering
 }
 
 // SearchParams captures the request filters for SearchAll.
@@ -62,37 +63,37 @@ func (db *DB) SearchAll(ctx context.Context, p SearchParams) ([]SearchResult, er
 
 	if p.Kind == "" || p.Kind == "repo" {
 		addArm(arm{
-			sql: `SELECT * FROM (SELECT 'repo' AS kind, rowid AS entity_id, repo_name AS name, project_name AS location, '' AS severity, rank * 1.5 AS score FROM repos_fts WHERE repos_fts MATCH ? LIMIT ?)`,
+			sql: `SELECT * FROM (SELECT 'repo' AS kind, rowid AS entity_id, repo_name AS name, project_name AS location, '' AS severity, rank * 1.5 AS score, project_name AS project_name FROM repos_fts WHERE repos_fts MATCH ? LIMIT ?)`,
 		})
 	}
 	if p.Kind == "" || p.Kind == "artifact" {
 		addArm(arm{
-			sql: `SELECT * FROM (SELECT 'artifact' AS kind, rowid AS entity_id, name, version AS location, '' AS severity, rank AS score FROM artifacts_fts WHERE artifacts_fts MATCH ? LIMIT ?)`,
+			sql: `SELECT * FROM (SELECT 'artifact' AS kind, f.rowid AS entity_id, f.name, f.version AS location, '' AS severity, rank AS score, COALESCE(p.name, '') AS project_name FROM artifacts_fts f LEFT JOIN repos r ON r.id = f.repo_id LEFT JOIN projects p ON p.id = r.project_id WHERE artifacts_fts MATCH ? LIMIT ?)`,
 		})
 	}
 	if p.Kind == "" || p.Kind == "cve" {
 		addArm(arm{
-			sql: `SELECT * FROM (SELECT 'cve' AS kind, rowid AS entity_id, cve_id AS name, package AS location, '' AS severity, rank AS score FROM cves_fts WHERE cves_fts MATCH ? LIMIT ?)`,
+			sql: `SELECT * FROM (SELECT 'cve' AS kind, rowid AS entity_id, cve_id AS name, package AS location, '' AS severity, rank AS score, '' AS project_name FROM cves_fts WHERE cves_fts MATCH ? LIMIT ?)`,
 		})
 	}
 	if p.Kind == "" || p.Kind == "rpm" {
 		addArm(arm{
-			sql: `SELECT * FROM (SELECT 'rpm' AS kind, rowid AS entity_id, name, version AS location, '' AS severity, rank AS score FROM rpm_fts WHERE rpm_fts MATCH ? LIMIT ?)`,
+			sql: `SELECT * FROM (SELECT 'rpm' AS kind, f.rowid AS entity_id, f.name, f.version AS location, '' AS severity, rank AS score, COALESCE(p.name, '') AS project_name FROM rpm_fts f LEFT JOIN repos r ON r.id = f.repo_id LEFT JOIN projects p ON p.id = r.project_id WHERE rpm_fts MATCH ? LIMIT ?)`,
 		})
 	}
 	if p.Kind == "" || p.Kind == "deb" {
 		addArm(arm{
-			sql: `SELECT * FROM (SELECT 'deb' AS kind, rowid AS entity_id, name, version AS location, '' AS severity, rank AS score FROM deb_fts WHERE deb_fts MATCH ? LIMIT ?)`,
+			sql: `SELECT * FROM (SELECT 'deb' AS kind, f.rowid AS entity_id, f.name, f.version AS location, '' AS severity, rank AS score, COALESCE(p.name, '') AS project_name FROM deb_fts f LEFT JOIN repos r ON r.id = f.repo_id LEFT JOIN projects p ON p.id = r.project_id WHERE deb_fts MATCH ? LIMIT ?)`,
 		})
 	}
 	if p.Kind == "" || p.Kind == "pypi" {
 		addArm(arm{
-			sql: `SELECT * FROM (SELECT 'pypi' AS kind, rowid AS entity_id, name, version AS location, '' AS severity, rank AS score FROM pypi_fts WHERE pypi_fts MATCH ? LIMIT ?)`,
+			sql: `SELECT * FROM (SELECT 'pypi' AS kind, f.rowid AS entity_id, f.name, f.version AS location, '' AS severity, rank AS score, COALESCE(p.name, '') AS project_name FROM pypi_fts f LEFT JOIN repos r ON r.id = f.repo_id LEFT JOIN projects p ON p.id = r.project_id WHERE pypi_fts MATCH ? LIMIT ?)`,
 		})
 	}
 	if p.Kind == "" || p.Kind == "helm" {
 		addArm(arm{
-			sql: `SELECT * FROM (SELECT 'helm' AS kind, rowid AS entity_id, name, version AS location, '' AS severity, rank AS score FROM helm_fts WHERE helm_fts MATCH ? LIMIT ?)`,
+			sql: `SELECT * FROM (SELECT 'helm' AS kind, f.rowid AS entity_id, f.name, f.version AS location, '' AS severity, rank AS score, COALESCE(p.name, '') AS project_name FROM helm_fts f LEFT JOIN repos r ON r.id = f.repo_id LEFT JOIN projects p ON p.id = r.project_id WHERE helm_fts MATCH ? LIMIT ?)`,
 		})
 	}
 
@@ -117,7 +118,7 @@ func (db *DB) SearchAll(ctx context.Context, p SearchParams) ([]SearchResult, er
 	var results []SearchResult
 	for rows.Next() {
 		var r SearchResult
-		if err := rows.Scan(&r.Kind, &r.EntityID, &r.Name, &r.Location, &r.Severity, &r.Score); err != nil {
+		if err := rows.Scan(&r.Kind, &r.EntityID, &r.Name, &r.Location, &r.Severity, &r.Score, &r.ProjectName); err != nil {
 			return nil, err
 		}
 		results = append(results, r)

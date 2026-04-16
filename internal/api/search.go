@@ -75,10 +75,14 @@ func (d Deps) handleSearch(w http.ResponseWriter, r *http.Request) {
 	items := make([]searchResultItem, 0, len(results))
 	for _, res := range results {
 		// Filter: if actor is not super-admin, only include results from
-		// projects the actor is a member of. The Location field contains
-		// the project name for repo/artifact results.
-		if memberProjectNames != nil && res.Location != "" {
-			if _, ok := memberProjectNames[res.Location]; !ok {
+		// projects the actor is a member of. ProjectName is populated by
+		// JOINing each FTS arm back to repos/projects.
+		if memberProjectNames != nil {
+			if res.ProjectName == "" {
+				// CVE results have no project association; skip for non-admins.
+				continue
+			}
+			if _, ok := memberProjectNames[res.ProjectName]; !ok {
 				continue
 			}
 		}

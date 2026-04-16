@@ -34,6 +34,8 @@ type dashboardResponse struct {
 type scanFindings struct {
 	Critical int64 `json:"critical"`
 	High     int64 `json:"high"`
+	Medium   int64 `json:"medium"`
+	Low      int64 `json:"low"`
 }
 
 type activityRow struct {
@@ -89,27 +91,31 @@ func (d Deps) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	_ = d.DB.Reader.QueryRowContext(r.Context(),
 		`SELECT COALESCE(SUM(size_bytes), 0) FROM repos WHERE deleted_at IS NULL`+scopeClause, storageArgs...).Scan(&storageUsed)
 
-	// Scan findings: count critical and high severity vulnerabilities.
-	var critical, high int64
+	// Scan findings: count all severity levels.
+	var critical, high, medium, low int64
 	if scopeClause == "" {
 		_ = d.DB.Reader.QueryRowContext(r.Context(), `
 			SELECT
 				COALESCE(SUM(CASE WHEN severity='CRITICAL' THEN 1 ELSE 0 END), 0),
-				COALESCE(SUM(CASE WHEN severity='HIGH' THEN 1 ELSE 0 END), 0)
+				COALESCE(SUM(CASE WHEN severity='HIGH' THEN 1 ELSE 0 END), 0),
+				COALESCE(SUM(CASE WHEN severity='MEDIUM' THEN 1 ELSE 0 END), 0),
+				COALESCE(SUM(CASE WHEN severity='LOW' THEN 1 ELSE 0 END), 0)
 			FROM vulnerabilities
-		`).Scan(&critical, &high)
+		`).Scan(&critical, &high, &medium, &low)
 	} else {
 		vulnArgs := make([]any, len(scopeArgs))
 		copy(vulnArgs, scopeArgs)
 		_ = d.DB.Reader.QueryRowContext(r.Context(), `
 			SELECT
 				COALESCE(SUM(CASE WHEN v.severity='CRITICAL' THEN 1 ELSE 0 END), 0),
-				COALESCE(SUM(CASE WHEN v.severity='HIGH' THEN 1 ELSE 0 END), 0)
+				COALESCE(SUM(CASE WHEN v.severity='HIGH' THEN 1 ELSE 0 END), 0),
+				COALESCE(SUM(CASE WHEN v.severity='MEDIUM' THEN 1 ELSE 0 END), 0),
+				COALESCE(SUM(CASE WHEN v.severity='LOW' THEN 1 ELSE 0 END), 0)
 			FROM vulnerabilities v
 			JOIN scans s ON s.id = v.scan_id
 			JOIN repos r ON r.id = s.repo_id
 			WHERE r.deleted_at IS NULL`+strings.Replace(scopeClause, "project_id", "r.project_id", 1),
-			vulnArgs...).Scan(&critical, &high)
+			vulnArgs...).Scan(&critical, &high, &medium, &low)
 	}
 
 	// Recent activity: last 20 audit events.
@@ -169,7 +175,7 @@ func (d Deps) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		StorageTotalBytes: storageTotalBytes,
 		RepoCount:         repoCount,
 		UserCount:         userCount,
-		ScanFindings:      scanFindings{Critical: critical, High: high},
+		ScanFindings:      scanFindings{Critical: critical, High: high, Medium: medium, Low: low},
 		RecentActivity:    activity,
 	})
 }

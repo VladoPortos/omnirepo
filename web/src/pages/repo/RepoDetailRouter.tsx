@@ -17,8 +17,8 @@ import { S3BucketPage } from './S3BucketPage';
 import { GitRepoPage } from './GitRepoPage';
 
 export function RepoDetailRouter() {
-  const { name, repo } = useParams<{ name: string; type: string; repo: string }>();
-  const { data, isLoading, isError } = useRepo(name!, repo!);
+  const { name, type, repo } = useParams<{ name: string; type: string; repo: string }>();
+  const { data, isLoading, isError } = useRepo(name!, type!, repo!);
 
   if (isLoading) return <RepoSkeleton />;
   if (isError || !data) return <NotFoundPage />;

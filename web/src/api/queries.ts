@@ -143,12 +143,12 @@ export function useRepos(projectName: string) {
   });
 }
 
-export function useRepo(projectName: string, repoName: string) {
+export function useRepo(projectName: string, repoType: string, repoName: string) {
   return useQuery({
-    queryKey: ['projects', projectName, 'repos', repoName],
+    queryKey: ['projects', projectName, 'repos', repoType, repoName],
     queryFn: () =>
-      api.get<Repo>(`/projects/${projectName}/repos/${repoName}`),
-    enabled: !!projectName && !!repoName,
+      api.get<Repo>(`/projects/${projectName}/repos/${repoType}/${repoName}`),
+    enabled: !!projectName && !!repoType && !!repoName,
   });
 }
 
@@ -174,16 +174,18 @@ export function usePatchRepo() {
   return useMutation({
     mutationFn: ({
       projectName,
+      repoType,
       repoName,
       data,
     }: {
       projectName: string;
+      repoType: string;
       repoName: string;
       data: RepoPatch;
-    }) => api.patch<Repo>(`/projects/${projectName}/repos/${repoName}`, data),
+    }) => api.patch<Repo>(`/projects/${projectName}/repos/${repoType}/${repoName}`, data),
     onSuccess: (_data, vars) =>
       qc.invalidateQueries({
-        queryKey: ['projects', vars.projectName, 'repos', vars.repoName],
+        queryKey: ['projects', vars.projectName, 'repos', vars.repoType, vars.repoName],
       }),
   });
 }
@@ -193,11 +195,13 @@ export function useDeleteRepo() {
   return useMutation({
     mutationFn: ({
       projectName,
+      repoType,
       repoName,
     }: {
       projectName: string;
+      repoType: string;
       repoName: string;
-    }) => api.del<void>(`/projects/${projectName}/repos/${repoName}`),
+    }) => api.del<void>(`/projects/${projectName}/repos/${repoType}/${repoName}`),
     onSuccess: (_data, vars) =>
       qc.invalidateQueries({
         queryKey: ['projects', vars.projectName, 'repos'],

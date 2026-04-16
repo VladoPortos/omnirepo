@@ -140,7 +140,7 @@ func TestAllActionsSliceMatchesConstants(t *testing.T) {
 	// Sanity check: every Action constant appears in AllActions. The sum of
 	// these constants should equal len(AllActions). Phase 3 Plan 01 adds
 	// four package-upload actions (RPM/DEB/PyPI/Helm).
-	want := 24
+	want := 28
 	if len(auth.AllActions) != want {
 		t.Fatalf("AllActions length: %d, want %d", len(auth.AllActions), want)
 	}
@@ -182,5 +182,74 @@ func TestPackageUploadActionsMemberOnly(t *testing.T) {
 		if ok || reason != auth.ReasonRequiresAuth {
 			t.Errorf("%s: anon ok=%v reason=%q, want false/%s", action, ok, reason, auth.ReasonRequiresAuth)
 		}
+	}
+}
+
+func TestS3BucketActions_S3KeyActor(t *testing.T) {
+	// S3-key actor with ProjectScope=42 should be allowed read/write on
+	// bucket belonging to project 42 and denied on project 99 (D-08).
+	pid := int64(42)
+	s3Actor := auth.Actor{
+		Kind:         auth.ActorKindS3Key,
+		ProjectScope: &pid,
+	}
+	ctx := context.Background()
+
+	// Same project -> allowed.
+	for _, action := range []auth.Action{auth.ActionS3BucketRead, auth.ActionS3BucketWrite} {
+		ok, reason := auth.Can(ctx, s3Actor, action, auth.Target{Kind: "repo", ProjectID: 42})
+		if !ok {
+			t.Errorf("%s: s3-key same-project denied (%q), want allow", action, reason)
+		}
+	}
+	// Cross-project -> denied.
+	for _, action := range []auth.Action{auth.ActionS3BucketRead, auth.ActionS3BucketWrite} {
+		ok, reason := auth.Can(ctx, s3Actor, action, auth.Target{Kind: "repo", ProjectID: 99})
+		if ok || reason != auth.ReasonNotAProjectMember {
+			t.Errorf("%s: s3-key cross-project ok=%v reason=%q, want false/%s",
+				action, ok, reason, auth.ReasonNotAProjectMember)
+		}
+	}
+	// S3BucketAdmin -> requires super-admin even for s3-key actor.
+	ok, reason := auth.Can(ctx, s3Actor, auth.ActionS3BucketAdmin, auth.Target{Kind: "repo", ProjectID: 42})
+	if ok || reason != auth.ReasonSuperAdminRequired {
+		t.Errorf("S3BucketAdmin: s3-key ok=%v reason=%q, want false/%s",
+			ok, reason, auth.ReasonSuperAdminRequired)
+	}
+}
+
+func TestS3BucketActions_SessionActor(t *testing.T) {
+	// Authenticated session actor uses project membership for S3 actions (D-07).
+	member := auth.Actor{ID: 10, Kind: auth.ActorKindUser}
+	outsider := auth.Actor{ID: 11, Kind: auth.ActorKindUser}
+	ctxMember := auth.WithProjectMembership(context.Background(), []int64{42})
+	ctxOutsider := auth.WithProjectMembership(context.Background(), []int64{99})
+
+	for _, action := range []auth.Action{auth.ActionS3BucketRead, auth.ActionS3BucketWrite} {
+		ok, reason := auth.Can(ctxMember, member, action, auth.Target{Kind: "repo", ProjectID: 42})
+		if !ok {
+			t.Errorf("%s: session member denied (%q), want allow", action, reason)
+		}
+		ok, reason = auth.Can(ctxOutsider, outsider, action, auth.Target{Kind: "repo", ProjectID: 42})
+		if ok || reason != auth.ReasonNotAProjectMember {
+			t.Errorf("%s: session outsider ok=%v reason=%q, want false/%s",
+				action, ok, reason, auth.ReasonNotAProjectMember)
+		}
+	}
+}
+
+func TestManageS3Keys_MembershipGated(t *testing.T) {
+	member := auth.Actor{ID: 10, Kind: auth.ActorKindUser}
+	outsider := auth.Actor{ID: 11, Kind: auth.ActorKindUser}
+	ctxMember := auth.WithProjectMembership(context.Background(), []int64{42})
+	ctxOutsider := auth.WithProjectMembership(context.Background(), []int64{99})
+
+	ok, reason := auth.Can(ctxMember, member, auth.ActionManageS3Keys, auth.Target{Kind: "project", ProjectID: 42})
+	if !ok {
+		t.Errorf("ManageS3Keys member denied (%q)", reason)
+	}
+	ok, reason = auth.Can(ctxOutsider, outsider, auth.ActionManageS3Keys, auth.Target{Kind: "project", ProjectID: 42})
+	if ok || reason != auth.ReasonNotAProjectMember {
+		t.Errorf("ManageS3Keys outsider ok=%v reason=%q", ok, reason)
 	}
 }

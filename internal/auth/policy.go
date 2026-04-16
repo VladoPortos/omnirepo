@@ -54,6 +54,19 @@ const (
 	ActionDEBUpload  Action = "deb.upload"
 	ActionPyPIUpload Action = "pypi.upload"
 	ActionHelmUpload Action = "helm.upload"
+
+	// Phase 04 Plan 05 — S3 bucket permission actions (D-07).
+	// Read/Write require project membership; Admin requires super-admin.
+	// For S3-key actors (ActorKindS3Key), membership is implied when the
+	// key's ProjectScope matches the target bucket's ProjectID.
+	ActionS3BucketRead  Action = "s3:bucket:read"
+	ActionS3BucketWrite Action = "s3:bucket:write"
+	ActionS3BucketAdmin Action = "s3:bucket:admin"
+
+	// Phase 04 Plan 05 — S3 access-key management (project-scoped).
+	// Create/list/revoke S3 keys within a project. Same membership
+	// semantics as ActionManageUpstreamCreds.
+	ActionManageS3Keys Action = "s3_key.manage"
 )
 
 // AllActions enumerates every Action constant in the package. Downstream
@@ -84,6 +97,10 @@ var AllActions = []Action{
 	ActionDEBUpload,
 	ActionPyPIUpload,
 	ActionHelmUpload,
+	ActionS3BucketRead,
+	ActionS3BucketWrite,
+	ActionS3BucketAdmin,
+	ActionManageS3Keys,
 }
 
 // Target is the object the actor is operating on.
@@ -217,13 +234,32 @@ func Can(ctx context.Context, actor Actor, action Action, target Target) (bool, 
 	case ActionCreateRepo, ActionDeleteRepo,
 		ActionUpdateRepo, ActionWipeRepo,
 		ActionAddProjectMember, ActionRemoveProjectMember,
-		ActionManageUpstreamCreds,
+		ActionManageUpstreamCreds, ActionManageS3Keys,
 		ActionRPMUpload, ActionDEBUpload,
 		ActionPyPIUpload, ActionHelmUpload:
 		if target.ProjectID != 0 && isMemberOfProject(ctx, target.ProjectID) {
 			return true, ""
 		}
 		return false, ReasonNotAProjectMember
+
+	// Phase 04 Plan 05 — S3 bucket actions (D-07, D-08).
+	// S3-key actors are project-scoped: key.ProjectScope must match
+	// target.ProjectID. Session/API-key actors use project membership.
+	case ActionS3BucketRead, ActionS3BucketWrite:
+		if actor.Kind == ActorKindS3Key && actor.ProjectScope != nil {
+			if target.ProjectID != 0 && *actor.ProjectScope == target.ProjectID {
+				return true, ""
+			}
+			return false, ReasonNotAProjectMember
+		}
+		if target.ProjectID != 0 && isMemberOfProject(ctx, target.ProjectID) {
+			return true, ""
+		}
+		return false, ReasonNotAProjectMember
+
+	case ActionS3BucketAdmin:
+		// Super-admin already handled above in step 2.
+		return false, ReasonSuperAdminRequired
 
 	case ActionRepoRead:
 		// Authenticated project members may always read their repos.

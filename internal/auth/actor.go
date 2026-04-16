@@ -20,6 +20,12 @@ const (
 	ActorKindUser      ActorKind = "user"
 	ActorKindAPIKey    ActorKind = "api_key"
 	ActorKindAnonymous ActorKind = "anonymous"
+
+	// ActorKindS3Key identifies an actor that authenticated via AWS SigV4
+	// against an s3_access_keys row (Phase 04 Plan 05, D-08). Always
+	// project-scoped — ProjectScope MUST be set and pins every bucket check
+	// to the project that owns the AKID.
+	ActorKindS3Key ActorKind = "s3_key"
 )
 
 // OwnerKind is the owner class of an API key (D-17): either a user or a

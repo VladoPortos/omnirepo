@@ -317,7 +317,7 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 	// dispatcher against handler registration.
 
 	// 6. Router with global middleware + system routes.
-	router := httpx.New(httpx.Deps{Config: cfg})
+	router := httpx.New(httpx.Deps{Config: cfg, Settings: metadata.NewSettingsRepo(db)})
 
 	// 6a. S3 virtual-host rewrite (Phase 04-07, D-23). MUST be registered
 	// as global middleware BEFORE any routes so chi's route matching sees

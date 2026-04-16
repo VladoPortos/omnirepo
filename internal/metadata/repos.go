@@ -122,6 +122,17 @@ func (r *ReposRepo) SoftDelete(ctx context.Context, id int64) error {
 	})
 }
 
+// Restore clears the soft-delete timestamp, making the repo live again.
+func (r *ReposRepo) Restore(ctx context.Context, id int64) error {
+	return r.db.WriteTx(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `UPDATE repos SET deleted_at=NULL WHERE id=?`, id)
+		if err != nil {
+			return fmt.Errorf("repos: restore %d: %w", id, err)
+		}
+		return nil
+	})
+}
+
 // ListByProject returns every live repo belonging to projectID.
 func (r *ReposRepo) ListByProject(ctx context.Context, projectID int64) ([]Repo, error) {
 	rows, err := r.db.Reader.QueryContext(ctx, `

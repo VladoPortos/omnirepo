@@ -12,12 +12,14 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 
 	"github.com/dxc-internal/omnirepo/internal/config"
+	"github.com/dxc-internal/omnirepo/internal/metadata"
 )
 
 // Deps is the dependency bundle the router needs at construction time.
 // Phase 1 only plumbs Config; later plans add Auth, DB, CertHolder, Audit.
 type Deps struct {
-	Config config.Config
+	Config   config.Config
+	Settings *metadata.SettingsRepo
 }
 
 // New constructs the OmniRepo chi router with the D-27 global middleware chain.
@@ -30,7 +32,7 @@ func New(d Deps) chi.Router {
 	r.Use(middleware.Recoverer)
 	r.Use(StructuredLogger(d.Config))
 	r.Use(AuditEnter)
-	r.Use(MaintenanceMode())
+	r.Use(MaintenanceMode(d.Settings))
 	r.Use(AuditExit)
 	return r
 }

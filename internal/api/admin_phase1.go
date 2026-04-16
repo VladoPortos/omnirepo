@@ -210,6 +210,12 @@ func Mount(r chi.Router, d Deps) {
 			// (D-37, OPS-06). RequireCan(ActionTriggerGC) gate inside.
 			d.mountAdminGC(r)
 
+			// Phase 05-03: admin audit, maintenance, trash, settings.
+			d.mountAdminAudit(r)
+			d.mountAdminMaintenance(r)
+			d.mountAdminTrash(r)
+			d.mountAdminSettings(r)
+
 			// Phase 03 Plan 06: SYNC-05 sync REST endpoint. Mounted inside
 			// the SessionOrAPIKey subtree so the ActorResolver finds the
 			// actor on ctx; the handler re-checks project membership inline.

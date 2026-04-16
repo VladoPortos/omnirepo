@@ -1,7 +1,8 @@
 /**
  * Dashboard page per D-03.
- * Overview cards (storage, repos, users, scan findings), activity feed,
- * high-severity findings, and quick-action buttons.
+ * Row 1: Repositories, Users, Scan Findings (3 equal cards).
+ * Row 2: Full-width storage breakdown with progress bar + per-repo list.
+ * Row 3: Recent Activity + High-Severity Findings.
  */
 
 import { Link } from 'react-router-dom';
@@ -13,14 +14,16 @@ import {
   Plus,
   Upload,
   Activity,
+  HardDrive,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
-import { StorageGauge } from '@/components/common/StorageGauge';
+import { Progress } from '@/components/ui/progress';
 import { SeverityBadge } from '@/components/common/SeverityBadge';
-import { useDashboard } from '@/api/queries';
-import { formatDate } from '@/lib/format';
+import { useDashboard, useDashboardStorage } from '@/api/queries';
+import { formatBytes, formatDate } from '@/lib/format';
+import type { StorageRepoRow } from '@/api/types';
 
 const cardVariants = {
   hidden: { opacity: 0, y: 12 },
@@ -31,10 +34,28 @@ const cardVariants = {
   }),
 };
 
+/** Color map for repo type indicators in the storage breakdown. */
+const repoTypeColor: Record<string, string> = {
+  docker: 'bg-blue-500',
+  rpm: 'bg-red-500',
+  deb: 'bg-green-500',
+  pypi: 'bg-yellow-500',
+  helm: 'bg-purple-500',
+  git: 'bg-orange-500',
+  raw: 'bg-slate-500',
+  s3: 'bg-cyan-500',
+};
+
 export function DashboardPage() {
   const { data, isLoading } = useDashboard();
+  const { data: storageData, isLoading: storageLoading } = useDashboardStorage();
 
   const findings = data?.scan_findings;
+  const totalFindings =
+    (findings?.critical ?? 0) +
+    (findings?.high ?? 0) +
+    (findings?.medium ?? 0) +
+    (findings?.low ?? 0);
 
   return (
     <div className="space-y-6">
@@ -53,34 +74,10 @@ export function DashboardPage() {
         </div>
       </div>
 
-      {/* Stat cards */}
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+      {/* Row 1: Repositories, Users, Scan Findings */}
+      <div className="grid gap-4 md:grid-cols-3">
         <motion.div
           custom={0}
-          initial="hidden"
-          animate="visible"
-          variants={cardVariants}
-        >
-          <Card>
-            <CardContent>
-              {isLoading ? (
-                <div className="space-y-3">
-                  <Skeleton className="h-4 w-16" />
-                  <Skeleton className="h-2 w-full" />
-                  <Skeleton className="h-3 w-24" />
-                </div>
-              ) : (
-                <StorageGauge
-                  used={data?.storage_used_bytes ?? 0}
-                  total={data?.storage_total_bytes ?? 1}
-                />
-              )}
-            </CardContent>
-          </Card>
-        </motion.div>
-
-        <motion.div
-          custom={1}
           initial="hidden"
           animate="visible"
           variants={cardVariants}
@@ -107,7 +104,7 @@ export function DashboardPage() {
         </motion.div>
 
         <motion.div
-          custom={2}
+          custom={1}
           initial="hidden"
           animate="visible"
           variants={cardVariants}
@@ -134,7 +131,7 @@ export function DashboardPage() {
         </motion.div>
 
         <motion.div
-          custom={3}
+          custom={2}
           initial="hidden"
           animate="visible"
           variants={cardVariants}
@@ -151,27 +148,43 @@ export function DashboardPage() {
             <CardContent>
               {isLoading ? (
                 <Skeleton className="h-8 w-32" />
-              ) : findings ? (
-                <div className="flex flex-wrap gap-2">
-                  {findings.critical > 0 && (
-                    <span className="flex items-center gap-1.5">
-                      <SeverityBadge severity="critical" />
-                      <span className="text-sm font-medium tabular-nums">
-                        {findings.critical}
+              ) : totalFindings > 0 ? (
+                <div className="space-y-2">
+                  <p className="text-3xl font-bold tabular-nums">{totalFindings}</p>
+                  <div className="flex flex-wrap gap-2">
+                    {(findings?.critical ?? 0) > 0 && (
+                      <span className="flex items-center gap-1.5">
+                        <SeverityBadge severity="critical" />
+                        <span className="text-sm font-medium tabular-nums">
+                          {findings!.critical}
+                        </span>
                       </span>
-                    </span>
-                  )}
-                  {findings.high > 0 && (
-                    <span className="flex items-center gap-1.5">
-                      <SeverityBadge severity="high" />
-                      <span className="text-sm font-medium tabular-nums">
-                        {findings.high}
+                    )}
+                    {(findings?.high ?? 0) > 0 && (
+                      <span className="flex items-center gap-1.5">
+                        <SeverityBadge severity="high" />
+                        <span className="text-sm font-medium tabular-nums">
+                          {findings!.high}
+                        </span>
                       </span>
-                    </span>
-                  )}
-                  {findings.critical === 0 && findings.high === 0 && (
-                    <p className="text-sm text-muted-foreground">No findings</p>
-                  )}
+                    )}
+                    {(findings?.medium ?? 0) > 0 && (
+                      <span className="flex items-center gap-1.5">
+                        <SeverityBadge severity="medium" />
+                        <span className="text-sm font-medium tabular-nums">
+                          {findings!.medium}
+                        </span>
+                      </span>
+                    )}
+                    {(findings?.low ?? 0) > 0 && (
+                      <span className="flex items-center gap-1.5">
+                        <SeverityBadge severity="low" />
+                        <span className="text-sm font-medium tabular-nums">
+                          {findings!.low}
+                        </span>
+                      </span>
+                    )}
+                  </div>
                 </div>
               ) : (
                 <p className="text-sm text-muted-foreground">No findings</p>
@@ -181,7 +194,43 @@ export function DashboardPage() {
         </motion.div>
       </div>
 
-      {/* Activity feed + high severity */}
+      {/* Row 2: Full-width storage breakdown */}
+      <motion.div
+        custom={3}
+        initial="hidden"
+        animate="visible"
+        variants={cardVariants}
+      >
+        <Card>
+          <CardHeader>
+            <div className="flex items-center gap-2">
+              <HardDrive className="size-4 text-muted-foreground" />
+              <CardTitle>Storage</CardTitle>
+            </div>
+          </CardHeader>
+          <CardContent>
+            {storageLoading ? (
+              <div className="space-y-4">
+                <Skeleton className="h-4 w-48" />
+                <Skeleton className="h-3 w-full" />
+                <div className="space-y-2">
+                  {Array.from({ length: 4 }).map((_, i) => (
+                    <Skeleton key={i} className="h-6 w-full" />
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <StorageBreakdown
+                totalBytes={storageData?.total_bytes ?? 0}
+                usedBytes={storageData?.used_bytes ?? 0}
+                repos={storageData?.repos ?? []}
+              />
+            )}
+          </CardContent>
+        </Card>
+      </motion.div>
+
+      {/* Row 3: Activity feed + high severity */}
       <div className="grid gap-6 lg:grid-cols-2">
         {/* Recent Activity */}
         <Card>
@@ -271,6 +320,75 @@ export function DashboardPage() {
             )}
           </CardContent>
         </Card>
+      </div>
+    </div>
+  );
+}
+
+/** Full-width storage breakdown with overall progress + per-repo list. */
+function StorageBreakdown({
+  totalBytes,
+  usedBytes,
+  repos,
+}: {
+  totalBytes: number;
+  usedBytes: number;
+  repos: StorageRepoRow[];
+}) {
+  const percentage = totalBytes > 0 ? Math.min(Math.round((usedBytes / totalBytes) * 100), 100) : 0;
+
+  return (
+    <div className="grid gap-6 lg:grid-cols-[300px_1fr]">
+      {/* Left: Overall gauge */}
+      <div className="space-y-3">
+        <div className="flex items-baseline justify-between">
+          <span className="text-3xl font-bold tabular-nums">{formatBytes(usedBytes)}</span>
+          <span className="text-sm text-muted-foreground">
+            / {totalBytes > 0 ? formatBytes(totalBytes) : 'unknown'}
+          </span>
+        </div>
+        <Progress value={percentage}>
+          <span className="sr-only">{percentage}% used</span>
+        </Progress>
+        <p className="text-xs text-muted-foreground text-right tabular-nums">
+          {percentage}% used
+        </p>
+      </div>
+
+      {/* Right: Per-repo breakdown */}
+      <div className="space-y-2">
+        {repos.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No repositories with stored data.</p>
+        ) : (
+          <div className="max-h-[300px] space-y-1.5 overflow-y-auto">
+            {repos.map((repo) => {
+              const repoPercent = usedBytes > 0 ? (repo.size_bytes / usedBytes) * 100 : 0;
+              const dotColor = repoTypeColor[repo.type] ?? 'bg-gray-400';
+              return (
+                <div key={`${repo.project}/${repo.type}/${repo.name}`} className="flex items-center gap-3 text-sm">
+                  <span className={`inline-block size-2.5 shrink-0 rounded-full ${dotColor}`} />
+                  <span className="min-w-0 flex-1 truncate">
+                    <span className="text-muted-foreground">{repo.project}</span>
+                    {' / '}
+                    <span className="font-medium">{repo.name}</span>
+                    <span className="ml-1.5 text-xs text-muted-foreground">({repo.type})</span>
+                  </span>
+                  <span className="shrink-0 tabular-nums font-medium">
+                    {formatBytes(repo.size_bytes)}
+                  </span>
+                  <div className="hidden sm:block w-24 shrink-0">
+                    <div className="h-1.5 w-full rounded-full bg-muted overflow-hidden">
+                      <div
+                        className={`h-full rounded-full ${dotColor}`}
+                        style={{ width: `${Math.max(repoPercent, 1)}%` }}
+                      />
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
     </div>
   );

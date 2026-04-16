@@ -19,6 +19,7 @@ import type {
   RepoCreate,
   RepoPatch,
   DashboardResponse,
+  DashboardStorageResponse,
   SearchResponse,
   MaintenanceStatus,
   PaginatedResponse,
@@ -92,6 +93,14 @@ export function useDashboard() {
   return useQuery({
     queryKey: ['dashboard'],
     queryFn: () => api.get<DashboardResponse>('/dashboard'),
+    staleTime: 15_000,
+  });
+}
+
+export function useDashboardStorage() {
+  return useQuery({
+    queryKey: ['dashboard', 'storage'],
+    queryFn: () => api.get<DashboardStorageResponse>('/dashboard/storage'),
     staleTime: 15_000,
   });
 }

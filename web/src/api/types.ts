@@ -362,6 +362,8 @@ export type SettingsPatch = Record<string, string>;
 export interface DashboardScanFindings {
   critical: number;
   high: number;
+  medium?: number;
+  low?: number;
 }
 
 export interface DashboardActivityItem {
@@ -378,6 +380,19 @@ export interface DashboardResponse {
   user_count: number;
   scan_findings: DashboardScanFindings;
   recent_activity: DashboardActivityItem[];
+}
+
+export interface StorageRepoRow {
+  project: string;
+  name: string;
+  type: string;
+  size_bytes: number;
+}
+
+export interface DashboardStorageResponse {
+  total_bytes: number;
+  used_bytes: number;
+  repos: StorageRepoRow[];
 }
 
 // -- Git --

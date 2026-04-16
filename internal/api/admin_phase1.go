@@ -123,6 +123,18 @@ func Mount(r chi.Router, d Deps) {
 		SessionHardTTL: d.sessionHardTTL(),
 	}
 
+	// API-02: Swagger UI at /api/docs, OpenAPI spec at /api/v1/openapi.yaml.
+	r.Get("/api/v1/openapi.yaml", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/yaml; charset=utf-8")
+		w.Write(openapiSpec)
+	})
+	r.Get("/api/docs", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/swagger/index.html", http.StatusMovedPermanently)
+	})
+	r.Get("/api/docs/*", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/swagger/index.html", http.StatusMovedPermanently)
+	})
+
 	r.Route("/api/v1", func(r chi.Router) {
 		// Unauthenticated: login.
 		r.Post("/auth/login", d.handleLogin)

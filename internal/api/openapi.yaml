@@ -1,0 +1,2585 @@
+openapi: "3.1.0"
+info:
+  title: OmniRepo API
+  version: "1.0.0"
+  description: |
+    REST API for OmniRepo — self-hosted artifact repository server.
+    Serves OCI/Docker, RPM, APT/Debian, PyPI, Helm, RAW, S3, and Git
+    from a single container on one HTTP/HTTPS port.
+
+servers:
+  - url: /api/v1
+
+security:
+  - cookieAuth: []
+  - bearerAuth: []
+
+components:
+  securitySchemes:
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: session
+    bearerAuth:
+      type: http
+      scheme: bearer
+
+  schemas:
+    # -- Generic --
+    # ErrorResponse is hand-written in errors.go to coexist with existing handlers.
+
+    PaginatedList:
+      type: object
+      properties:
+        items:
+          type: array
+          items: {}
+        next_cursor:
+          type: string
+          nullable: true
+
+    # -- Auth --
+    LoginRequest:
+      type: object
+      required: [login, password]
+      properties:
+        login:
+          type: string
+        password:
+          type: string
+
+    LoginResponse:
+      type: object
+      required: [login, is_super_admin, must_change_password]
+      properties:
+        login:
+          type: string
+        is_super_admin:
+          type: boolean
+        must_change_password:
+          type: boolean
+
+    ChangePasswordRequest:
+      type: object
+      required: [current, new]
+      properties:
+        current:
+          type: string
+        new:
+          type: string
+
+    # -- User --
+    User:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        login:
+          type: string
+        email:
+          type: string
+        is_super_admin:
+          type: boolean
+        must_change_password:
+          type: boolean
+        avatar_seed:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    MeResponse:
+      type: object
+      required: [id, login, email, is_super_admin, must_change_password]
+      properties:
+        id:
+          type: integer
+          format: int64
+        login:
+          type: string
+        email:
+          type: string
+        is_super_admin:
+          type: boolean
+        must_change_password:
+          type: boolean
+        avatar_seed:
+          type: string
+
+    MeUpdateRequest:
+      type: object
+      properties:
+        email:
+          type: string
+        avatar_seed:
+          type: string
+
+    UserCreate:
+      type: object
+      required: [login, email]
+      properties:
+        login:
+          type: string
+        email:
+          type: string
+
+    UserCreateResponse:
+      type: object
+      required: [login, one_time_password]
+      properties:
+        login:
+          type: string
+        one_time_password:
+          type: string
+
+    UserUpdate:
+      type: object
+      properties:
+        email:
+          type: string
+        is_super_admin:
+          type: boolean
+
+    # -- Project --
+    Project:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        name:
+          type: string
+        description_md:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    ProjectCreate:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+        description_md:
+          type: string
+
+    ProjectCreateResponse:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        name:
+          type: string
+
+    # -- Repo --
+    Repo:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        project_id:
+          type: integer
+          format: int64
+        type:
+          type: string
+        name:
+          type: string
+        description_md:
+          type: string
+        auto_scan:
+          type: boolean
+        block_on_severity:
+          type: string
+          enum: [none, low, medium, high, critical]
+        public_read:
+          type: boolean
+        size_bytes:
+          type: integer
+          format: int64
+        created_at:
+          type: string
+          format: date-time
+
+    RepoCreate:
+      type: object
+      required: [name, type]
+      properties:
+        name:
+          type: string
+        type:
+          type: string
+        description_md:
+          type: string
+        auto_scan:
+          type: boolean
+        block_on_severity:
+          type: string
+          enum: [none, low, medium, high, critical]
+        public_read:
+          type: boolean
+
+    RepoPatch:
+      type: object
+      properties:
+        description_md:
+          type: string
+        auto_scan:
+          type: boolean
+        block_on_severity:
+          type: string
+          enum: [none, low, medium, high, critical]
+        public_read:
+          type: boolean
+
+    WipeResponse:
+      type: object
+      properties:
+        artifact_count:
+          type: integer
+          format: int64
+        bytes_freed:
+          type: integer
+          format: int64
+        trash_id:
+          type: string
+
+    # -- Sync --
+    SyncRequest:
+      type: object
+      required: [source_url]
+      properties:
+        source_url:
+          type: string
+        cred_id:
+          type: integer
+          format: int64
+
+    SyncJob:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        kind:
+          type: string
+        repo_id:
+          type: integer
+          format: int64
+        status:
+          type: string
+          enum: [pending, running, done, failed]
+        log:
+          type: string
+        error:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        started_at:
+          type: string
+          format: date-time
+        finished_at:
+          type: string
+          format: date-time
+
+    # -- Scan --
+    Scan:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        repo_id:
+          type: integer
+          format: int64
+        artifact_kind:
+          type: string
+        artifact_id:
+          type: string
+        status:
+          type: string
+          enum: [pending, running, done, failed]
+        attempts:
+          type: integer
+          format: int64
+        last_error:
+          type: string
+        severity_summary_json:
+          type: string
+        sbom_path:
+          type: string
+        trivy_db_version:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        started_at:
+          type: string
+          format: date-time
+        finished_at:
+          type: string
+          format: date-time
+
+    Vulnerability:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        scan_id:
+          type: integer
+          format: int64
+        cve_id:
+          type: string
+        severity:
+          type: string
+          enum: [CRITICAL, HIGH, MEDIUM, LOW, UNKNOWN]
+        package_name:
+          type: string
+        package_version:
+          type: string
+        fixed_version:
+          type: string
+        title:
+          type: string
+        description:
+          type: string
+
+    SBOMRef:
+      type: object
+      properties:
+        scan_id:
+          type: integer
+          format: int64
+        format:
+          type: string
+        download_url:
+          type: string
+
+    # -- Search --
+    SearchResult:
+      type: object
+      properties:
+        kind:
+          type: string
+          enum: [repo, artifact, cve, rpm, deb, pypi, helm]
+        entity_id:
+          type: integer
+          format: int64
+        name:
+          type: string
+        location:
+          type: string
+        severity:
+          type: string
+        score:
+          type: number
+          format: double
+
+    SearchResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/SearchResult'
+        next_cursor:
+          type: string
+          nullable: true
+
+    # -- Audit --
+    AuditEvent:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        timestamp:
+          type: string
+          format: date-time
+        actor:
+          type: string
+        action:
+          type: string
+        target_kind:
+          type: string
+        target_id:
+          type: string
+        outcome:
+          type: string
+        ip:
+          type: string
+        user_agent:
+          type: string
+        details:
+          type: object
+          additionalProperties: true
+
+    AuditListResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/AuditEvent'
+        next_cursor:
+          type: string
+          nullable: true
+
+    # -- TLS --
+    TLSCertInfo:
+      type: object
+      properties:
+        subject:
+          type: string
+        issuer:
+          type: string
+        not_before:
+          type: string
+          format: date-time
+        not_after:
+          type: string
+          format: date-time
+        serial:
+          type: string
+        fingerprint_sha256:
+          type: string
+        source:
+          type: string
+          enum: [self-signed, uploaded]
+
+    TLSHistoryEntry:
+      type: object
+      properties:
+        uploaded_at:
+          type: string
+          format: date-time
+        uploaded_by:
+          type: string
+        subject:
+          type: string
+        fingerprint_sha256:
+          type: string
+
+    # -- Trivy DB --
+    TrivyDBStatus:
+      type: object
+      properties:
+        version:
+          type: string
+        age_hours:
+          type: number
+          format: double
+        source:
+          type: string
+          enum: [baked-in, uploaded, online-pulled]
+        stale:
+          type: boolean
+        applied_at:
+          type: string
+          format: date-time
+
+    # -- GC --
+    GCTriggerResponse:
+      type: object
+      properties:
+        job_id:
+          type: integer
+          format: int64
+
+    GCStatusResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [idle, running, done, failed]
+        job_id:
+          type: integer
+          format: int64
+        started_at:
+          type: string
+          format: date-time
+        finished_at:
+          type: string
+          format: date-time
+        bytes_freed:
+          type: integer
+          format: int64
+
+    # -- Maintenance --
+    MaintenanceStatus:
+      type: object
+      properties:
+        enabled:
+          type: boolean
+
+    MaintenanceToggle:
+      type: object
+      required: [enabled]
+      properties:
+        enabled:
+          type: boolean
+
+    # -- Trash --
+    TrashEntry:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        type:
+          type: string
+        original_location:
+          type: string
+        deleted_by:
+          type: string
+        deleted_at:
+          type: string
+          format: date-time
+        retention_countdown:
+          type: string
+
+    TrashListResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/TrashEntry'
+        next_cursor:
+          type: string
+          nullable: true
+
+    # -- Settings --
+    SettingsMap:
+      type: object
+      additionalProperties:
+        type: string
+
+    SettingsPatch:
+      type: object
+      additionalProperties:
+        type: string
+
+    # -- Dashboard --
+    DashboardResponse:
+      type: object
+      properties:
+        storage_used:
+          type: integer
+          format: int64
+        storage_total:
+          type: integer
+          format: int64
+        repo_count:
+          type: integer
+        user_count:
+          type: integer
+        scan_findings_summary:
+          type: object
+          additionalProperties: true
+        recent_activity:
+          type: array
+          items:
+            $ref: '#/components/schemas/AuditEvent'
+
+    # -- Git --
+    GitTreeEntry:
+      type: object
+      properties:
+        name:
+          type: string
+        path:
+          type: string
+        type:
+          type: string
+          enum: [blob, tree, commit]
+        size:
+          type: integer
+          format: int64
+        sha:
+          type: string
+
+    GitFileContent:
+      type: object
+      properties:
+        name:
+          type: string
+        path:
+          type: string
+        sha:
+          type: string
+        size:
+          type: integer
+          format: int64
+        encoding:
+          type: string
+        content:
+          type: string
+
+    GitCommit:
+      type: object
+      properties:
+        sha:
+          type: string
+        message:
+          type: string
+        author_name:
+          type: string
+        author_email:
+          type: string
+        author_date:
+          type: string
+          format: date-time
+        committer_name:
+          type: string
+        committer_email:
+          type: string
+        committer_date:
+          type: string
+          format: date-time
+        parent_shas:
+          type: array
+          items:
+            type: string
+
+    GitDiff:
+      type: object
+      properties:
+        sha:
+          type: string
+        message:
+          type: string
+        stats:
+          type: object
+          properties:
+            additions:
+              type: integer
+            deletions:
+              type: integer
+            files_changed:
+              type: integer
+        files:
+          type: array
+          items:
+            type: object
+            properties:
+              path:
+                type: string
+              status:
+                type: string
+              patch:
+                type: string
+
+    GitBlame:
+      type: object
+      properties:
+        path:
+          type: string
+        lines:
+          type: array
+          items:
+            type: object
+            properties:
+              line_number:
+                type: integer
+              sha:
+                type: string
+              author:
+                type: string
+              date:
+                type: string
+                format: date-time
+              content:
+                type: string
+
+    GitRef:
+      type: object
+      properties:
+        name:
+          type: string
+        type:
+          type: string
+          enum: [branch, tag]
+        sha:
+          type: string
+
+    GitCompareResponse:
+      type: object
+      properties:
+        base:
+          type: string
+        head:
+          type: string
+        ahead_by:
+          type: integer
+        behind_by:
+          type: integer
+        commits:
+          type: array
+          items:
+            $ref: '#/components/schemas/GitCommit'
+        files:
+          type: array
+          items:
+            type: object
+            properties:
+              path:
+                type: string
+              status:
+                type: string
+              patch:
+                type: string
+
+    # -- API Keys --
+    APIKey:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        prefix:
+          type: string
+        label:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        last_used_at:
+          type: string
+          format: date-time
+
+    APIKeyCreate:
+      type: object
+      required: [label]
+      properties:
+        label:
+          type: string
+
+    APIKeyCreateResponse:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        prefix:
+          type: string
+        secret:
+          type: string
+          description: Shown once at creation time only
+        label:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    # -- S3 Keys --
+    S3Key:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        access_key_id:
+          type: string
+        label:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        last_used_at:
+          type: string
+          format: date-time
+
+    S3KeyCreate:
+      type: object
+      required: [label]
+      properties:
+        label:
+          type: string
+
+    S3KeyCreateResponse:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        access_key_id:
+          type: string
+        secret:
+          type: string
+          description: Shown once at creation time only
+        label:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    # -- Upstream Creds --
+    UpstreamCred:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        host:
+          type: string
+        kind:
+          type: string
+        username:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    UpstreamCredCreate:
+      type: object
+      required: [host, kind]
+      properties:
+        host:
+          type: string
+        kind:
+          type: string
+        username:
+          type: string
+        password:
+          type: string
+        token:
+          type: string
+
+    # -- Docker --
+    DockerPullExternalRequest:
+      type: object
+      required: [image]
+      properties:
+        image:
+          type: string
+        tag:
+          type: string
+        cred_id:
+          type: integer
+          format: int64
+
+    DockerPromoteRequest:
+      type: object
+      required: [source_repo, digest]
+      properties:
+        source_repo:
+          type: string
+        digest:
+          type: string
+        new_tag:
+          type: string
+
+    # -- Upload --
+    UploadResponse:
+      type: object
+      properties:
+        artifact_count:
+          type: integer
+        scan_id:
+          type: integer
+          format: int64
+
+    # -- Activity --
+    ActivityEvent:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        timestamp:
+          type: string
+          format: date-time
+        actor:
+          type: string
+        action:
+          type: string
+        target_kind:
+          type: string
+        target_id:
+          type: string
+        details:
+          type: object
+          additionalProperties: true
+
+    ActivityListResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ActivityEvent'
+        next_cursor:
+          type: string
+          nullable: true
+
+    # -- Members --
+    MemberAction:
+      type: object
+      properties:
+        status:
+          type: string
+
+    StatusOK:
+      type: object
+      properties:
+        status:
+          type: string
+
+  parameters:
+    limitParam:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 200
+        default: 50
+    cursorParam:
+      name: cursor
+      in: query
+      schema:
+        type: string
+
+paths:
+  # ============================== AUTH ==============================
+  /auth/login:
+    post:
+      operationId: login
+      security: []
+      tags: [auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        "200":
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        "401":
+          description: Invalid credentials
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  detail:
+                    type: string
+
+  /auth/logout:
+    post:
+      operationId: logout
+      tags: [auth]
+      responses:
+        "200":
+          description: Logged out
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusOK'
+
+  /auth/change-password:
+    post:
+      operationId: changePassword
+      tags: [auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChangePasswordRequest'
+      responses:
+        "200":
+          description: Password changed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusOK'
+
+  # ============================== ME ==============================
+  /me:
+    get:
+      operationId: getMe
+      tags: [me]
+      responses:
+        "200":
+          description: Current user info
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MeResponse'
+    patch:
+      operationId: updateMe
+      tags: [me]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MeUpdateRequest'
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MeResponse'
+    delete:
+      operationId: deleteMe
+      tags: [me]
+      responses:
+        "200":
+          description: Account deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusOK'
+
+  # ============================== API KEYS ==============================
+  /me/api-keys:
+    get:
+      operationId: listMyAPIKeys
+      tags: [api-keys]
+      responses:
+        "200":
+          description: List of API keys
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/APIKey'
+    post:
+      operationId: createAPIKey
+      tags: [api-keys]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/APIKeyCreate'
+      responses:
+        "201":
+          description: API key created (secret shown once)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIKeyCreateResponse'
+
+  /me/api-keys/{id}:
+    delete:
+      operationId: deleteAPIKey
+      tags: [api-keys]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        "204":
+          description: API key revoked
+
+  # ============================== ME S3 KEYS ==============================
+  /me/s3-keys:
+    get:
+      operationId: listMyS3Keys
+      tags: [s3-keys]
+      responses:
+        "200":
+          description: List of S3 keys across all projects
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/S3Key'
+    post:
+      operationId: createMyS3Key
+      tags: [s3-keys]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/S3KeyCreate'
+      responses:
+        "201":
+          description: S3 key created (secret shown once)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/S3KeyCreateResponse'
+
+  /me/s3-keys/{id}:
+    delete:
+      operationId: deleteMyS3Key
+      tags: [s3-keys]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        "204":
+          description: S3 key revoked
+
+  # ============================== PROJECTS ==============================
+  /projects:
+    get:
+      operationId: listProjects
+      tags: [projects]
+      parameters:
+        - $ref: '#/components/parameters/limitParam'
+        - $ref: '#/components/parameters/cursorParam'
+      responses:
+        "200":
+          description: Paginated list of projects
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Project'
+                  next_cursor:
+                    type: string
+                    nullable: true
+    post:
+      operationId: createProject
+      tags: [projects]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProjectCreate'
+      responses:
+        "200":
+          description: Project created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectCreateResponse'
+
+  /projects/{name}:
+    get:
+      operationId: getProject
+      tags: [projects]
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Project detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Project'
+    delete:
+      operationId: deleteProject
+      tags: [projects]
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Project soft-deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusOK'
+
+  /projects/{name}/activity:
+    get:
+      operationId: getProjectActivity
+      tags: [projects]
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/limitParam'
+        - $ref: '#/components/parameters/cursorParam'
+      responses:
+        "200":
+          description: Per-project activity feed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActivityListResponse'
+
+  # ============================== MEMBERS ==============================
+  /projects/{name}/members/{login}:
+    post:
+      operationId: addProjectMember
+      tags: [members]
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: login
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Member added
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusOK'
+    delete:
+      operationId: removeProjectMember
+      tags: [members]
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: login
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Member removed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusOK'
+
+  # ============================== REPOS ==============================
+  /projects/{name}/repos:
+    get:
+      operationId: listRepos
+      tags: [repos]
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/limitParam'
+        - $ref: '#/components/parameters/cursorParam'
+      responses:
+        "200":
+          description: Repos in project
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Repo'
+                  next_cursor:
+                    type: string
+                    nullable: true
+    post:
+      operationId: createRepo
+      tags: [repos]
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RepoCreate'
+      responses:
+        "200":
+          description: Repo created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Repo'
+
+  /projects/{name}/repos/{type}/{repo}:
+    get:
+      operationId: getRepo
+      tags: [repos]
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: type
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: repo
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Repo detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Repo'
+    patch:
+      operationId: patchRepo
+      tags: [repos]
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: type
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: repo
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RepoPatch'
+      responses:
+        "200":
+          description: Repo updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Repo'
+    delete:
+      operationId: deleteRepo
+      tags: [repos]
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: type
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: repo
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Repo soft-deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusOK'
+
+  /projects/{name}/repos/{type}/{repo}/wipe:
+    post:
+      operationId: wipeRepo
+      tags: [repos]
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: type
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: repo
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Repo contents wiped
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WipeResponse'
+
+  /projects/{name}/repos/{type}/{repo}/upload:
+    post:
+      operationId: uploadArtifact
+      tags: [repos]
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: type
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: repo
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        "200":
+          description: Artifact uploaded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadResponse'
+
+  /projects/{name}/repos/{type}/{repo}/sync:
+    post:
+      operationId: syncRepo
+      tags: [sync]
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: type
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: repo
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SyncRequest'
+      responses:
+        "202":
+          description: Sync job enqueued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SyncJob'
+
+  /projects/{name}/repos/{type}/{repo}/sync-jobs:
+    get:
+      operationId: listSyncJobs
+      tags: [sync]
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: type
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: repo
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/limitParam'
+        - $ref: '#/components/parameters/cursorParam'
+      responses:
+        "200":
+          description: Sync jobs for repo
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/SyncJob'
+                  next_cursor:
+                    type: string
+                    nullable: true
+
+  /projects/{name}/repos/{type}/{repo}/sync-jobs/{id}:
+    get:
+      operationId: getSyncJob
+      tags: [sync]
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: type
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: repo
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        "200":
+          description: Sync job detail with log
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SyncJob'
+
+  # ============================== DOCKER ==============================
+  /projects/{name}/repos/docker/{repo}/pull-external:
+    post:
+      operationId: dockerPullExternal
+      tags: [docker]
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: repo
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DockerPullExternalRequest'
+      responses:
+        "202":
+          description: Pull enqueued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SyncJob'
+
+  /projects/{name}/repos/docker/{repo}/promote:
+    post:
+      operationId: dockerPromote
+      tags: [docker]
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: repo
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DockerPromoteRequest'
+      responses:
+        "200":
+          description: Image promoted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusOK'
+
+  # ============================== SCANS ==============================
+  /projects/{name}/repos/{type}/{repo}/scans:
+    get:
+      operationId: listScans
+      tags: [scans]
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: type
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: repo
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/limitParam'
+        - $ref: '#/components/parameters/cursorParam'
+      responses:
+        "200":
+          description: Scans for repo
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Scan'
+                  next_cursor:
+                    type: string
+                    nullable: true
+    post:
+      operationId: rescanRepo
+      tags: [scans]
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: type
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: repo
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "202":
+          description: Rescan enqueued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  scan_id:
+                    type: integer
+                    format: int64
+
+  /projects/{name}/repos/{type}/{repo}/scans/{id}:
+    get:
+      operationId: getScan
+      tags: [scans]
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: type
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: repo
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        "200":
+          description: Scan detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Scan'
+
+  /projects/{name}/repos/{type}/{repo}/scans/{id}/sbom:
+    get:
+      operationId: getScanSBOM
+      tags: [scans]
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: type
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: repo
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        "200":
+          description: SBOM download
+          content:
+            application/json:
+              schema:
+                type: object
+
+  # ============================== UPSTREAM CREDS ==============================
+  /projects/{name}/repos/{type}/{repo}/upstream-creds:
+    get:
+      operationId: listUpstreamCreds
+      tags: [upstream-creds]
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: type
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: repo
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Upstream credentials
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/UpstreamCred'
+    post:
+      operationId: createUpstreamCred
+      tags: [upstream-creds]
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: type
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: repo
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpstreamCredCreate'
+      responses:
+        "201":
+          description: Credential created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UpstreamCred'
+
+  /projects/{name}/repos/{type}/{repo}/upstream-creds/{id}:
+    delete:
+      operationId: deleteUpstreamCred
+      tags: [upstream-creds]
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: type
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: repo
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        "204":
+          description: Credential deleted
+
+  # ============================== S3 ACCESS KEYS ==============================
+  /projects/{name}/s3-access-keys:
+    get:
+      operationId: listS3AccessKeys
+      tags: [s3-keys]
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: S3 access keys for project
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/S3Key'
+    post:
+      operationId: createS3AccessKey
+      tags: [s3-keys]
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/S3KeyCreate'
+      responses:
+        "201":
+          description: S3 key created (secret shown once)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/S3KeyCreateResponse'
+
+  /projects/{name}/s3-access-keys/{id}:
+    delete:
+      operationId: deleteS3AccessKey
+      tags: [s3-keys]
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        "204":
+          description: S3 key revoked
+
+  # ============================== GIT ==============================
+  /projects/{name}/repos/git/{repo}/tree/{ref}/{path}:
+    get:
+      operationId: gitTree
+      tags: [git]
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: repo
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: ref
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: path
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: File tree entries
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/GitTreeEntry'
+
+  /projects/{name}/repos/git/{repo}/blob/{ref}/{path}:
+    get:
+      operationId: gitBlob
+      tags: [git]
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: repo
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: ref
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: path
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: File content
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GitFileContent'
+
+  /projects/{name}/repos/git/{repo}/commits/{ref}:
+    get:
+      operationId: gitCommits
+      tags: [git]
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: repo
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: ref
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/limitParam'
+        - $ref: '#/components/parameters/cursorParam'
+      responses:
+        "200":
+          description: Commit log
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/GitCommit'
+                  next_cursor:
+                    type: string
+                    nullable: true
+
+  /projects/{name}/repos/git/{repo}/commit/{sha}:
+    get:
+      operationId: gitCommitDetail
+      tags: [git]
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: repo
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: sha
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Single commit with diff
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GitDiff'
+
+  /projects/{name}/repos/git/{repo}/blame/{ref}/{path}:
+    get:
+      operationId: gitBlame
+      tags: [git]
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: repo
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: ref
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: path
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Blame info
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GitBlame'
+
+  /projects/{name}/repos/git/{repo}/compare/{base}...{head}:
+    get:
+      operationId: gitCompare
+      tags: [git]
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: repo
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: base
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: head
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Comparison
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GitCompareResponse'
+
+  /projects/{name}/repos/git/{repo}/refs:
+    get:
+      operationId: gitRefs
+      tags: [git]
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: repo
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Branches and tags
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/GitRef'
+
+  # ============================== SEARCH ==============================
+  /search:
+    get:
+      operationId: search
+      tags: [search]
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: kind
+          in: query
+          schema:
+            type: string
+            enum: [repo, artifact, cve, rpm, deb, pypi, helm]
+        - name: severity
+          in: query
+          schema:
+            type: string
+        - name: project
+          in: query
+          schema:
+            type: string
+        - $ref: '#/components/parameters/limitParam'
+        - $ref: '#/components/parameters/cursorParam'
+      responses:
+        "200":
+          description: Search results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SearchResponse'
+
+  # ============================== ADMIN USERS ==============================
+  /admin/users:
+    get:
+      operationId: listUsers
+      tags: [admin]
+      parameters:
+        - $ref: '#/components/parameters/limitParam'
+        - $ref: '#/components/parameters/cursorParam'
+      responses:
+        "200":
+          description: Paginated user list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/User'
+                  next_cursor:
+                    type: string
+                    nullable: true
+    post:
+      operationId: createUser
+      tags: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserCreate'
+      responses:
+        "200":
+          description: User created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserCreateResponse'
+
+  /admin/users/{login}:
+    get:
+      operationId: getUser
+      tags: [admin]
+      parameters:
+        - name: login
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: User detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+    patch:
+      operationId: updateUser
+      tags: [admin]
+      parameters:
+        - name: login
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserUpdate'
+      responses:
+        "200":
+          description: User updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+    delete:
+      operationId: deleteUser
+      tags: [admin]
+      parameters:
+        - name: login
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: User deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusOK'
+
+  # ============================== ADMIN AUDIT ==============================
+  /admin/audit:
+    get:
+      operationId: listAuditEvents
+      tags: [admin]
+      parameters:
+        - name: actor
+          in: query
+          schema:
+            type: string
+        - name: action
+          in: query
+          schema:
+            type: string
+        - name: target_kind
+          in: query
+          schema:
+            type: string
+        - name: from
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: outcome
+          in: query
+          schema:
+            type: string
+        - $ref: '#/components/parameters/limitParam'
+        - $ref: '#/components/parameters/cursorParam'
+      responses:
+        "200":
+          description: Audit log
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditListResponse'
+
+  # ============================== ADMIN TLS ==============================
+  /admin/tls/current:
+    get:
+      operationId: getTLSCurrent
+      tags: [admin]
+      responses:
+        "200":
+          description: Current TLS cert info
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TLSCertInfo'
+
+  /admin/tls/upload:
+    post:
+      operationId: uploadTLSCert
+      tags: [admin]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                cert:
+                  type: string
+                  format: binary
+                key:
+                  type: string
+                  format: binary
+      responses:
+        "200":
+          description: TLS cert uploaded and applied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusOK'
+
+  /admin/tls/history:
+    get:
+      operationId: getTLSHistory
+      tags: [admin]
+      responses:
+        "200":
+          description: TLS certificate upload history
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/TLSHistoryEntry'
+
+  # ============================== ADMIN TRIVY DB ==============================
+  /admin/trivy/db/status:
+    get:
+      operationId: getTrivyDBStatus
+      tags: [admin]
+      responses:
+        "200":
+          description: Trivy DB status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TrivyDBStatus'
+
+  /admin/trivy/db:
+    post:
+      operationId: uploadTrivyDB
+      tags: [admin]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                db:
+                  type: string
+                  format: binary
+      responses:
+        "200":
+          description: Trivy DB uploaded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TrivyDBStatus'
+
+  /admin/trivy/db/pull:
+    post:
+      operationId: pullTrivyDB
+      tags: [admin]
+      responses:
+        "202":
+          description: Trivy DB online pull started
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusOK'
+
+  # ============================== ADMIN GC ==============================
+  /admin/gc:
+    post:
+      operationId: triggerGC
+      tags: [admin]
+      responses:
+        "202":
+          description: GC job enqueued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GCTriggerResponse'
+
+  /admin/gc/status:
+    get:
+      operationId: getGCStatus
+      tags: [admin]
+      responses:
+        "200":
+          description: GC status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GCStatusResponse'
+
+  # ============================== ADMIN MAINTENANCE ==============================
+  /admin/maintenance:
+    get:
+      operationId: getMaintenanceStatus
+      tags: [admin]
+      responses:
+        "200":
+          description: Maintenance mode status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MaintenanceStatus'
+    post:
+      operationId: toggleMaintenance
+      tags: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MaintenanceToggle'
+      responses:
+        "200":
+          description: Maintenance mode toggled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MaintenanceStatus'
+
+  # ============================== ADMIN TRASH ==============================
+  /admin/trash:
+    get:
+      operationId: listTrash
+      tags: [admin]
+      parameters:
+        - $ref: '#/components/parameters/limitParam'
+        - $ref: '#/components/parameters/cursorParam'
+      responses:
+        "200":
+          description: Trash items
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TrashListResponse'
+
+  /admin/trash/{id}/restore:
+    post:
+      operationId: restoreFromTrash
+      tags: [admin]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Item restored
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusOK'
+
+  /admin/trash/{id}:
+    delete:
+      operationId: purgeTrashItem
+      tags: [admin]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: Item purged permanently
+
+  # ============================== ADMIN SETTINGS ==============================
+  /admin/settings:
+    get:
+      operationId: getSettings
+      tags: [admin]
+      responses:
+        "200":
+          description: All settings
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SettingsMap'
+    patch:
+      operationId: patchSettings
+      tags: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SettingsPatch'
+      responses:
+        "200":
+          description: Settings updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SettingsMap'
+
+  # ============================== DASHBOARD ==============================
+  /dashboard:
+    get:
+      operationId: getDashboard
+      tags: [dashboard]
+      responses:
+        "200":
+          description: Dashboard summary
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DashboardResponse'

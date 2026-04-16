@@ -374,7 +374,7 @@ func (d Deps) handleMe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, MeResponse{
-		ID: u.ID, Login: u.Login, Email: u.Email,
+		Id: u.ID, Login: u.Login, Email: u.Email,
 		IsSuperAdmin: u.IsSuperAdmin, MustChangePassword: u.MustChangePassword,
 	})
 }

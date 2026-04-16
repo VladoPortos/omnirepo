@@ -1,0 +1,185 @@
+// Package metadata — S3KeysRepo owns the per-project S3 access-key table
+// (Phase 04 Plan 02, D-04..D-12). The AWS SigV4 verifier looks up the key
+// by AKID on every signed request, so the hot path is FindByAKID — which
+// MUST collapse "missing" and "revoked" into a single ErrS3AccessKeyNotFound
+// to avoid leaking a revocation oracle (D-12).
+//
+// `secret_enc` stores the AES-GCM-sealed secret — see internal/crypto/aead.go.
+// This package carries the sealed bytes opaquely; decryption is Plan 05's
+// concern (SigV4 verifier).
+package metadata
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"time"
+)
+
+// ErrS3AccessKeyNotFound is returned by S3KeysRepo.FindByAKID when no
+// live (non-revoked) row matches. Revoked rows collapse to this error too
+// so attackers cannot probe historical AKID existence (D-12).
+var ErrS3AccessKeyNotFound = errors.New("metadata: s3 access key not found or revoked")
+
+// S3AccessKey mirrors one s3_access_keys row.
+type S3AccessKey struct {
+	ID              int64
+	ProjectID       int64
+	AccessKeyID     string
+	SecretEnc       []byte // opaque AEAD-sealed bytes; callers decrypt via internal/crypto
+	Label           string
+	CreatedByUserID int64
+	CreatedAt       time.Time
+	LastUsedAt      *time.Time
+	RevokedAt       *time.Time
+}
+
+// S3KeysRepo is the typed repo for s3_access_keys. Writers ride in the
+// caller's *sql.Tx so the INSERT lands alongside any project-level audit
+// event in one writer transaction.
+type S3KeysRepo struct{ db *DB }
+
+// NewS3KeysRepo constructs the repo bound to db.
+func NewS3KeysRepo(db *DB) *S3KeysRepo { return &S3KeysRepo{db: db} }
+
+// Insert writes a new row. `secretEnc` is the sealed secret blob (the
+// caller owns AEAD encryption). Returns the new row id. Uniqueness on
+// `access_key_id` surfaces as a driver-native UNIQUE error that callers
+// can unwrap for typed 409 mapping.
+func (r *S3KeysRepo) Insert(ctx context.Context, tx *sql.Tx, row *S3AccessKey) (int64, error) {
+	if row == nil {
+		return 0, errors.New("s3_access_keys: nil row")
+	}
+	if row.AccessKeyID == "" || len(row.SecretEnc) == 0 || row.ProjectID == 0 || row.CreatedByUserID == 0 {
+		return 0, errors.New("s3_access_keys: project_id, access_key_id, secret_enc, created_by_user_id required")
+	}
+	res, err := tx.ExecContext(ctx, `
+		INSERT INTO s3_access_keys(project_id, access_key_id, secret_enc, label, created_by_user_id)
+		VALUES (?, ?, ?, ?, ?)
+	`, row.ProjectID, row.AccessKeyID, row.SecretEnc, row.Label, row.CreatedByUserID)
+	if err != nil {
+		return 0, fmt.Errorf("s3_access_keys: insert: %w", err)
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return 0, fmt.Errorf("s3_access_keys: last insert id: %w", err)
+	}
+	return id, nil
+}
+
+// FindByAKID returns the live (non-revoked) key with the matching AKID.
+// Collapses missing + revoked into ErrS3AccessKeyNotFound (D-12 no-oracle).
+func (r *S3KeysRepo) FindByAKID(ctx context.Context, akid string) (*S3AccessKey, error) {
+	row := r.db.Reader.QueryRowContext(ctx, `
+		SELECT id, project_id, access_key_id, secret_enc, label, created_by_user_id,
+		       created_at, last_used_at, revoked_at
+		FROM s3_access_keys
+		WHERE access_key_id = ? AND revoked_at IS NULL
+	`, akid)
+	k, err := scanS3AccessKey(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrS3AccessKeyNotFound
+		}
+		return nil, fmt.Errorf("s3_access_keys: find by akid: %w", err)
+	}
+	return k, nil
+}
+
+// FindByID returns the key row by primary id, regardless of revoked state.
+// Used by admin-scoped endpoints. Returns ErrNotFound when missing.
+func (r *S3KeysRepo) FindByID(ctx context.Context, id int64) (*S3AccessKey, error) {
+	row := r.db.Reader.QueryRowContext(ctx, `
+		SELECT id, project_id, access_key_id, secret_enc, label, created_by_user_id,
+		       created_at, last_used_at, revoked_at
+		FROM s3_access_keys WHERE id = ?
+	`, id)
+	k, err := scanS3AccessKey(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("s3_access_keys: find by id: %w", err)
+	}
+	return k, nil
+}
+
+// ListByProject returns every non-revoked key for projectID, ordered by
+// created_at ASC (oldest first, matching UI list conventions).
+func (r *S3KeysRepo) ListByProject(ctx context.Context, projectID int64) ([]S3AccessKey, error) {
+	rows, err := r.db.Reader.QueryContext(ctx, `
+		SELECT id, project_id, access_key_id, secret_enc, label, created_by_user_id,
+		       created_at, last_used_at, revoked_at
+		FROM s3_access_keys
+		WHERE project_id = ? AND revoked_at IS NULL
+		ORDER BY created_at ASC, id ASC
+	`, projectID)
+	if err != nil {
+		return nil, fmt.Errorf("s3_access_keys: list by project: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []S3AccessKey
+	for rows.Next() {
+		k, err := scanS3AccessKey(rows)
+		if err != nil {
+			return nil, fmt.Errorf("s3_access_keys: scan: %w", err)
+		}
+		out = append(out, *k)
+	}
+	return out, rows.Err()
+}
+
+// TouchLastUsed bumps last_used_at = now() for the AKID. Best-effort: the
+// caller typically invokes this inside a short-lived goroutine so a hot
+// SigV4 verify path never blocks on a writer-pool contention.
+//
+// Returns nil for a missing or revoked AKID (no error) — this is a
+// telemetry path, not a correctness path, so we do not surface oracle-y
+// errors to the caller.
+func (r *S3KeysRepo) TouchLastUsed(ctx context.Context, akid string) error {
+	_, err := r.db.Writer.ExecContext(ctx, `
+		UPDATE s3_access_keys
+		   SET last_used_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+		 WHERE access_key_id = ? AND revoked_at IS NULL
+	`, akid)
+	if err != nil {
+		return fmt.Errorf("s3_access_keys: touch last_used: %w", err)
+	}
+	return nil
+}
+
+// Revoke stamps revoked_at = now() for the key id inside the caller's tx.
+// Idempotent: re-revoking a revoked row is a no-op.
+func (r *S3KeysRepo) Revoke(ctx context.Context, tx *sql.Tx, id int64) error {
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE s3_access_keys
+		   SET revoked_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+		 WHERE id = ? AND revoked_at IS NULL
+	`, id); err != nil {
+		return fmt.Errorf("s3_access_keys: revoke %d: %w", id, err)
+	}
+	return nil
+}
+
+func scanS3AccessKey(rs scanner) (*S3AccessKey, error) {
+	var k S3AccessKey
+	var created string
+	var lastUsed, revoked sql.NullString
+	if err := rs.Scan(
+		&k.ID, &k.ProjectID, &k.AccessKeyID, &k.SecretEnc, &k.Label, &k.CreatedByUserID,
+		&created, &lastUsed, &revoked,
+	); err != nil {
+		return nil, err
+	}
+	k.CreatedAt, _ = time.Parse("2006-01-02T15:04:05.000Z", created)
+	if lastUsed.Valid {
+		t, _ := time.Parse("2006-01-02T15:04:05.000Z", lastUsed.String)
+		k.LastUsedAt = &t
+	}
+	if revoked.Valid {
+		t, _ := time.Parse("2006-01-02T15:04:05.000Z", revoked.String)
+		k.RevokedAt = &t
+	}
+	return &k, nil
+}

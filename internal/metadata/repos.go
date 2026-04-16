@@ -23,6 +23,10 @@ type Repo struct {
 	SizeBytes       int64
 	CreatedAt       time.Time
 	DeletedAt       *time.Time
+	// GitMaxPushBytes (Phase 4 Plan 02, D-35) — per-repo override for the
+	// global git push-size cap. NULL → inherit cfg.repos.git.max_push_bytes.
+	// Only meaningful when Type == "git"; populated by migration 017.
+	GitMaxPushBytes *int64
 }
 
 // ReposRepo owns CRUD on repos.
@@ -122,7 +126,7 @@ func (r *ReposRepo) SoftDelete(ctx context.Context, id int64) error {
 func (r *ReposRepo) ListByProject(ctx context.Context, projectID int64) ([]Repo, error) {
 	rows, err := r.db.Reader.QueryContext(ctx, `
 		SELECT id, project_id, type, name, description_md, auto_scan, block_on_severity,
-		       public_read, size_bytes, created_at, deleted_at
+		       public_read, size_bytes, created_at, deleted_at, git_max_push_bytes
 		FROM repos WHERE project_id=? AND deleted_at IS NULL
 		ORDER BY type, name
 	`, projectID)
@@ -259,7 +263,7 @@ func (r *ReposRepo) catalogQuery(ctx context.Context, q string, args ...any) ([]
 func (r *ReposRepo) ListAll(ctx context.Context) ([]Repo, error) {
 	rows, err := r.db.Reader.QueryContext(ctx, `
 		SELECT id, project_id, type, name, description_md, auto_scan, block_on_severity,
-		       public_read, size_bytes, created_at, deleted_at
+		       public_read, size_bytes, created_at, deleted_at, git_max_push_bytes
 		FROM repos WHERE deleted_at IS NULL ORDER BY project_id, type, name
 	`)
 	if err != nil {
@@ -280,7 +284,7 @@ func (r *ReposRepo) ListAll(ctx context.Context) ([]Repo, error) {
 func (r *ReposRepo) scanOne(ctx context.Context, where string, args ...any) (*Repo, error) {
 	row := r.db.Reader.QueryRowContext(ctx, `
 		SELECT id, project_id, type, name, description_md, auto_scan, block_on_severity,
-		       public_read, size_bytes, created_at, deleted_at
+		       public_read, size_bytes, created_at, deleted_at, git_max_push_bytes
 		FROM repos WHERE `+where, args...)
 	rr, err := scanRepoRow(row)
 	if err != nil {
@@ -355,7 +359,7 @@ func (r *ReposRepo) Update(ctx context.Context, tx *sql.Tx, repoID int64, f Upda
 	// Read-back via the same tx so the caller sees its own write before commit.
 	row := tx.QueryRowContext(ctx, `
 		SELECT id, project_id, type, name, description_md, auto_scan, block_on_severity,
-		       public_read, size_bytes, created_at, deleted_at
+		       public_read, size_bytes, created_at, deleted_at, git_max_push_bytes
 		FROM repos WHERE id = ? AND deleted_at IS NULL
 	`, repoID)
 	rr, err := scanRepoRow(row)
@@ -619,7 +623,8 @@ func scanRepoRow(rs scanner) (*Repo, error) {
 	var r Repo
 	var as, pr int64
 	var deleted sql.NullTime
-	if err := rs.Scan(&r.ID, &r.ProjectID, &r.Type, &r.Name, &r.DescriptionMD, &as, &r.BlockOnSeverity, &pr, &r.SizeBytes, &r.CreatedAt, &deleted); err != nil {
+	var gitMax sql.NullInt64
+	if err := rs.Scan(&r.ID, &r.ProjectID, &r.Type, &r.Name, &r.DescriptionMD, &as, &r.BlockOnSeverity, &pr, &r.SizeBytes, &r.CreatedAt, &deleted, &gitMax); err != nil {
 		return nil, err
 	}
 	r.AutoScan = as != 0
@@ -627,6 +632,10 @@ func scanRepoRow(rs scanner) (*Repo, error) {
 	if deleted.Valid {
 		t := deleted.Time
 		r.DeletedAt = &t
+	}
+	if gitMax.Valid {
+		v := gitMax.Int64
+		r.GitMaxPushBytes = &v
 	}
 	return &r, nil
 }

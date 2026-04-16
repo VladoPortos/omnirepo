@@ -93,9 +93,9 @@ func (d Deps) handleSearch(w http.ResponseWriter, r *http.Request) {
 
 	var nextCursor string
 	if len(items) >= pp.Limit {
-		// There may be more results; encode cursor from last item.
-		last := results[len(results)-1]
-		nextCursor = EncodeCursor(Cursor{ID: last.EntityID, SortValue: last.Name})
+		// There may be more results; encode cursor from last filtered item.
+		last := items[len(items)-1]
+		nextCursor = EncodeCursor(Cursor{ID: 0, SortValue: last.Name})
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{

@@ -120,7 +120,16 @@ var validSeverities = map[string]struct{}{
 //  5. Passwords and tokens never persist as plaintext.
 //  6. settings.seeded_from_bootstrap and settings.bootstrap_sha256 are written
 //     inside the same tx so the audit trail is immediate and atomic.
+// RepoCreateHookFn is the signature for the composed repo-create hook.
+// When non-nil, ApplyBootstrap calls it inside the same tx for each repo so
+// that git bare repos get initialized, signing keys get generated, etc.
+type RepoCreateHookFn func(ctx context.Context, tx *sql.Tx, repoID int64, repoType, projectName, repoName string) (map[string]any, error)
+
 func ApplyBootstrap(ctx context.Context, db *metadata.DB, cfg config.Config, path string) (*BootstrapReport, error) {
+	return ApplyBootstrapWithHook(ctx, db, cfg, path, nil)
+}
+
+func ApplyBootstrapWithHook(ctx context.Context, db *metadata.DB, cfg config.Config, path string, repoHook RepoCreateHookFn) (*BootstrapReport, error) {
 	// 1. Idempotent fast-path.
 	empty, err := usersTableEmpty(ctx, db)
 	if err != nil {
@@ -217,8 +226,14 @@ func ApplyBootstrap(ctx context.Context, db *metadata.DB, cfg config.Config, pat
 			if !ok {
 				return bootstrapErr(fmt.Sprintf("repos[%d].project", i), "project %q not found", rr.Project)
 			}
-			if err := insertRepo(ctx, tx, pid, rr); err != nil {
+			repoID, err := insertRepoReturningID(ctx, tx, pid, rr)
+			if err != nil {
 				return err
+			}
+			if repoHook != nil {
+				if _, err := repoHook(ctx, tx, repoID, rr.Type, rr.Project, rr.Name); err != nil {
+					return bootstrapErr(fmt.Sprintf("repos[%d].hook", i), "%w", err)
+				}
 			}
 			report.ReposSeeded++
 		}
@@ -328,6 +343,11 @@ func insertProject(ctx context.Context, tx *sql.Tx, p BootstrapProject) (int64, 
 }
 
 func insertRepo(ctx context.Context, tx *sql.Tx, projectID int64, r BootstrapRepo) error {
+	_, err := insertRepoReturningID(ctx, tx, projectID, r)
+	return err
+}
+
+func insertRepoReturningID(ctx context.Context, tx *sql.Tx, projectID int64, r BootstrapRepo) (int64, error) {
 	autoScan := int64(1)
 	if r.AutoScan != nil {
 		autoScan = boolToInt(*r.AutoScan)
@@ -340,14 +360,18 @@ func insertRepo(ctx context.Context, tx *sql.Tx, projectID int64, r BootstrapRep
 	if r.PublicRead != nil {
 		pr = boolToInt(*r.PublicRead)
 	}
-	_, err := tx.ExecContext(ctx, `
+	res, err := tx.ExecContext(ctx, `
 		INSERT INTO repos(project_id, type, name, description_md, auto_scan, block_on_severity, public_read)
 		VALUES (?, ?, ?, ?, ?, ?, ?)
 	`, projectID, r.Type, r.Name, r.DescriptionMD, autoScan, bos, pr)
 	if err != nil {
-		return bootstrapErr(fmt.Sprintf("repos[project=%s,type=%s,name=%s]", r.Project, r.Type, r.Name), "insert: %w", err)
+		return 0, bootstrapErr(fmt.Sprintf("repos[project=%s,type=%s,name=%s]", r.Project, r.Type, r.Name), "insert: %w", err)
 	}
-	return nil
+	id, err := res.LastInsertId()
+	if err != nil {
+		return 0, bootstrapErr(fmt.Sprintf("repos[project=%s,type=%s,name=%s]", r.Project, r.Type, r.Name), "last insert id: %w", err)
+	}
+	return id, nil
 }
 
 func setSettingTx(ctx context.Context, tx *sql.Tx, key, value string) error {

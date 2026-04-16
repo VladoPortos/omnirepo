@@ -65,7 +65,9 @@ func (d Deps) clock() time.Time {
 }
 
 // writeJSON401 emits a 401 with JSON body {"error":"unauthenticated"}.
+// Includes WWW-Authenticate so git/docker CLI clients retry with credentials.
 func writeJSON401(w http.ResponseWriter) {
+	w.Header().Set("WWW-Authenticate", `Basic realm="omnirepo"`)
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(http.StatusUnauthorized)
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": "unauthenticated"})

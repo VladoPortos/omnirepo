@@ -10,7 +10,6 @@ package gitbench
 
 import (
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -162,17 +161,14 @@ server:
 	pid := cmd.Process.Pid
 	t.Logf("omnirepo pid=%d backend=%s", pid, backend)
 
-	// Read stderr to discover the HTTPS port.
-	httpsPort := discoverPort(t, stderrPipe, 30*time.Second)
-	t.Logf("omnirepo HTTPS port: %d", httpsPort)
+	// Read stderr to discover the HTTP port (simpler than HTTPS for git CLI).
+	httpPort := discoverPort(t, stderrPipe, 30*time.Second, "http.listen")
+	t.Logf("omnirepo HTTP port: %d", httpPort)
 
 	// Wait for the server to be healthy.
-	tlsClient := &http.Client{
-		Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}},
-		Timeout:   10 * time.Second,
-	}
-	healthURL := fmt.Sprintf("https://127.0.0.1:%d/healthz", httpsPort)
-	waitHealthy(t, healthURL, tlsClient, 30*time.Second)
+	healthClient := &http.Client{Timeout: 10 * time.Second}
+	healthURL := fmt.Sprintf("http://127.0.0.1:%d/healthz", httpPort)
+	waitHealthy(t, healthURL, healthClient, 30*time.Second)
 
 	// Start RSS sampler.
 	samplerCtx, samplerCancel := context.WithCancel(context.Background())
@@ -181,11 +177,11 @@ server:
 
 	// Run git clone.
 	cloneDst := t.TempDir()
-	cloneURL := fmt.Sprintf("https://127.0.0.1:%d/git/bench/big.git", httpsPort)
-	t.Logf("cloning %s -> %s", cloneURL, cloneDst)
+	cloneURL := fmt.Sprintf("http://admin:bench-password-12345@127.0.0.1:%d/git/bench/big.git", httpPort)
+	t.Logf("cloning %s -> %s", fmt.Sprintf("http://127.0.0.1:%d/git/bench/big.git", httpPort), cloneDst)
 
 	start := time.Now()
-	cloneCmd := exec.Command("git", "clone", "--config", "http.sslVerify=false", cloneURL, filepath.Join(cloneDst, "clone"))
+	cloneCmd := exec.Command("git", "clone", cloneURL, filepath.Join(cloneDst, "clone"))
 	cloneCmd.Stdout = os.Stderr
 	cloneCmd.Stderr = os.Stderr
 	if err := cloneCmd.Run(); err != nil {
@@ -242,7 +238,7 @@ func waitHealthy(t *testing.T, url string, client *http.Client, timeout time.Dur
 
 // discoverPort reads stderr output looking for the HTTPS listen address.
 // Omnirepo logs something like: "https.listen addr=:PORT" or similar.
-func discoverPort(t *testing.T, r io.Reader, timeout time.Duration) int {
+func discoverPort(t *testing.T, r io.Reader, timeout time.Duration, marker string) int {
 	t.Helper()
 	buf := make([]byte, 0, 16384)
 	tmp := make([]byte, 1024)
@@ -256,7 +252,7 @@ func discoverPort(t *testing.T, r io.Reader, timeout time.Duration) int {
 			// "https.listen" "addr=:PORT" or "https_addr" "127.0.0.1:PORT"
 			lines := strings.Split(string(buf), "\n")
 			for _, line := range lines {
-				port := extractHTTPSPort(line)
+				port := extractPort(line, marker)
 				if port > 0 {
 					// Keep draining in background so the pipe doesn't block.
 					go func() {
@@ -280,12 +276,12 @@ func discoverPort(t *testing.T, r io.Reader, timeout time.Duration) int {
 	return 0
 }
 
-// extractHTTPSPort attempts to find the HTTPS port from a slog text log line.
-// Expected format: "... msg=https.listen addr=[::]:PORT" or "addr=0.0.0.0:PORT"
+// extractPort attempts to find a port from a slog text log line matching the marker.
+// Expected format: "... msg=<marker> addr=[::]:PORT" or "addr=0.0.0.0:PORT"
 // or "addr=:PORT" or "addr=127.0.0.1:PORT".
-func extractHTTPSPort(line string) int {
+func extractPort(line string, marker string) int {
 	lower := strings.ToLower(line)
-	if !strings.Contains(lower, "https.listen") {
+	if !strings.Contains(lower, strings.ToLower(marker)) {
 		return 0
 	}
 	// Find "addr=" and extract the port after the last colon.

@@ -98,6 +98,7 @@ func (h *Handler) Mount(parent chi.Router) {
 
 	parent.Route("/git/{project}/{repo}", func(r chi.Router) {
 		r.Use(authmw.BasicOrAPIKey(authDeps))
+		r.Use(resolveMembership(h.members))
 		r.Use(ResolveRepoFromURL(h.projects, h.repos))
 		r.Use(RequireGitPermission())
 		r.Use(PerRepoMutex(h.locks))

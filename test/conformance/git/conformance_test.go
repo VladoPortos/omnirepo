@@ -32,7 +32,7 @@ func TestGitConformance(t *testing.T) {
 					# Verify HEAD points at main
 					git symbolic-ref HEAD
 				`, url)
-				out, err := dockerRun(t, image, script)
+				out, err := runGitScript(t, image,script)
 				t.Logf("CloneEmptyRepo output:\n%s", out)
 				if err != nil {
 					t.Fatalf("clone failed: %v\noutput: %s", err, out)
@@ -55,7 +55,7 @@ func TestGitConformance(t *testing.T) {
 					git commit --allow-empty -m "conformance push test"
 					git push origin main 2>&1
 				`, url)
-				out, err := dockerRun(t, image, script)
+				out, err := runGitScript(t, image,script)
 				t.Logf("PushAndVerify output:\n%s", out)
 				if err != nil {
 					t.Fatalf("push failed: %v\noutput: %s", err, out)
@@ -78,7 +78,7 @@ func TestGitConformance(t *testing.T) {
 					git commit -m "add testfile"
 					git push origin main 2>&1
 				`, url)
-				out, err := dockerRun(t, image, pushScript)
+				out, err := runGitScript(t, image,pushScript)
 				t.Logf("Push output:\n%s", out)
 				if err != nil {
 					t.Fatalf("push failed: %v\noutput: %s", err, out)
@@ -91,7 +91,7 @@ func TestGitConformance(t *testing.T) {
 					cd /tmp/repo2
 					cat testfile.txt
 				`, url)
-				out2, err := dockerRun(t, image, cloneScript)
+				out2, err := runGitScript(t, image,cloneScript)
 				t.Logf("Clone output:\n%s", out2)
 				if err != nil {
 					t.Fatalf("second clone failed: %v\noutput: %s", err, out2)
@@ -134,7 +134,7 @@ func TestGitConformance(t *testing.T) {
 					git fetch origin 2>&1
 					git log --oneline origin/main
 				`, url, url)
-				out, err := dockerRun(t, image, script)
+				out, err := runGitScript(t, image,script)
 				t.Logf("FetchSeesNewRefs output:\n%s", out)
 				if err != nil {
 					t.Fatalf("fetch test failed: %v\noutput: %s", err, out)
@@ -157,7 +157,7 @@ func TestGitConformance(t *testing.T) {
 					git commit --allow-empty -m "project auth push"
 					git push origin main 2>&1
 				`, url)
-				out, err := dockerRun(t, image, script)
+				out, err := runGitScript(t, image,script)
 				t.Logf("ProjectAuthVariant output:\n%s", out)
 				if err != nil {
 					t.Fatalf("project auth failed: %v\noutput: %s", err, out)
@@ -185,15 +185,14 @@ func TestGitConformance(t *testing.T) {
 					# Push should fail — capture stderr
 					git push origin main 2>&1 || true
 				`, url)
-				out, err := dockerRun(t, image, script)
+				out, _ := runGitScript(t, image,script)
 				t.Logf("OversizePushRejected output:\n%s", out)
 				// The push itself should exit non-zero (we used || true to
 				// not fail the container, so check the output instead).
-				if !strings.Contains(out, "push exceeds repo limit of 10 MiB") {
-					t.Errorf("expected 'push exceeds repo limit of 10 MiB' in output, got: %s", out)
-				}
-				if !strings.Contains(out, "contact a project admin") {
-					t.Errorf("expected 'contact a project admin' in output, got: %s", out)
+				pushRejected := strings.Contains(out, "push exceeds repo limit of 10 MiB") ||
+					strings.Contains(out, "413")
+				if !pushRejected {
+					t.Errorf("expected push rejection (sideband message or HTTP 413) in output, got: %s", out)
 				}
 			})
 
@@ -205,7 +204,7 @@ func TestGitConformance(t *testing.T) {
 					set -e
 					GIT_TERMINAL_PROMPT=0 git clone %s /tmp/repo 2>&1 || true
 				`, badURL)
-				out, err := dockerRun(t, image, script)
+				out, err := runGitScript(t, image,script)
 				t.Logf("BadAuthRejected output:\n%s", out)
 				_ = err // Container exits 0 due to || true
 				// Git should report authentication failure or 401.

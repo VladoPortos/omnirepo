@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Ready to execute
-last_updated: "2026-04-16T03:03:05.050Z"
+status: Phase complete — ready for verification
+last_updated: "2026-04-16T03:24:49.705Z"
 progress:
   total_phases: 5
-  completed_phases: 3
+  completed_phases: 4
   total_plans: 40
-  completed_plans: 38
-  percent: 95
+  completed_plans: 40
+  percent: 100
 ---
 
 # STATE: OmniRepo
@@ -25,7 +25,7 @@ progress:
 ## Current Position
 
 Phase: 04 (s3-git) — EXECUTING
-Plan: 12 of 13
+Plan: 13 of 13
 
 - **Phase**: 1 — Foundation
 - **Plan**: none yet (planning not started)
@@ -64,6 +64,8 @@ Plan: 12 of 13
 | Phase 04-s3-git P07 | 15m | 1 tasks | 9 files |
 | Phase 04-s3-git P10 | 15m | 1 tasks | 6 files |
 | Phase 04-s3-git P11 | 13m | 1 tasks | 5 files |
+| Phase 04-s3-git P12 | 4m | 1 tasks | 4 files |
+| Phase 04-s3-git P13 | 10m | 2 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -134,6 +136,8 @@ Version-drift corrections to apply at first commit (from `.planning/research/SUM
 - [Phase 04-s3-git]: Plan 07: VHostRewrite as global middleware before routes (chi constraint); SigV4 verifies against original pre-rewrite path via context stash; r.Host injected into r.Header for canonical-request computation
 - [Phase 04-s3-git]: Plan 10: HEAD fetched via explicit Reference(plumbing.HEAD) + dedup; Git hook composed into existing chain; audit event git.refs.synced carries ref_count only
 - [Phase 04-s3-git]: Clock-skew test uses hand-rolled SigV4 (aws-sdk-go-v2 has no NowFunc); bucket provisioning via direct DB insert (S3 CreateBucket admin-gated)
+- [Phase 04-s3-git]: Git DinD conformance: conformance-git + test-git-conformance alias; 10 MiB cap for oversize test; alpine/git:2.43.0 pinned image
+- [Phase 04-s3-git]: TEST-07 hard gate: child-process VmRSS bench at 50ms with peak_rss < 3x repo_bytes; gitgen uses git CLI with fixed env for deterministic byte-identical packs
 
 ### Todos
 

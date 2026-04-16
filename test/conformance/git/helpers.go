@@ -58,14 +58,13 @@ type gitFixture struct {
 // cloneURL returns the git clone URL with the given credentials embedded.
 // Format: http://<login>:<password>@host.docker.internal:<port>/git/<project>/<repo>.git
 func (f *gitFixture) cloneURL(login, password string) string {
-	return fmt.Sprintf("http://%s:%s@host.docker.internal:%d/git/%s/%s.git",
+	return fmt.Sprintf("http://%s:%s@127.0.0.1:%d/git/%s/%s.git",
 		login, password, f.port, f.project, f.repo)
 }
 
 // cloneURLProjectAuth returns the git clone URL using project:<proj>:<key> auth.
-// Format: http://project:<proj>:<key>@host.docker.internal:<port>/git/<project>/<repo>.git
 func (f *gitFixture) cloneURLProjectAuth() string {
-	return fmt.Sprintf("http://project:%s:%s@host.docker.internal:%d/git/%s/%s.git",
+	return fmt.Sprintf("http://project:%s:%s@127.0.0.1:%d/git/%s/%s.git",
 		f.project, f.projectAPIKey, f.port, f.project, f.repo)
 }
 
@@ -133,14 +132,14 @@ func bootAppWithGitRepo(t *testing.T, backend string) *gitFixture {
 	cfg := config.Defaults()
 	cfg.DataRoot = dataRoot
 	cfg.Bootstrap.Path = bsPath
-	cfg.Server.ExternalHostnames = []string{"localhost", "host.docker.internal"}
+	cfg.Server.ExternalHostnames = []string{"localhost", "127.0.0.1"}
 	cfg.Server.GitBackend = backend
 
-	httpLn, err := net.Listen("tcp", "127.0.0.1:0")
+	httpLn, err := net.Listen("tcp", "0.0.0.0:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	httpsLn, err := net.Listen("tcp", "127.0.0.1:0")
+	httpsLn, err := net.Listen("tcp", "0.0.0.0:0")
 	if err != nil {
 		_ = httpLn.Close()
 		t.Fatal(err)
@@ -300,21 +299,48 @@ func resolveImage(t *testing.T, key string) string {
 	return ""
 }
 
-func dindHostArg() []string {
-	if runtime.GOOS == "linux" {
-		return []string{"--add-host", "host.docker.internal:host-gateway"}
+// runGitScript runs a shell script using the local git CLI.
+// Falls back to DinD when git is not available locally.
+func runGitScript(t *testing.T, image, script string) (string, error) {
+	t.Helper()
+	script = "git config --global init.defaultBranch main 2>/dev/null || true\n" + script
+	if _, err := exec.LookPath("git"); err == nil {
+		return runLocalScript(t, script)
 	}
-	return nil
+	return runDockerScript(t, image, script)
 }
 
-// dockerRun runs the git-client image with --entrypoint sh.
-func dockerRun(t *testing.T, image, script string) (string, error) {
+func runLocalScript(t *testing.T, script string) (string, error) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	tmpHome := t.TempDir()
+	// Redirect /tmp references to a unique temp dir so scripts don't collide.
+	localTmp := filepath.Join(tmpHome, "tmp")
+	_ = os.MkdirAll(localTmp, 0o755)
+	script = fmt.Sprintf("export TMPDIR=%s\ncd %s\n%s", localTmp, localTmp, script)
+	// Replace hardcoded /tmp/ paths in scripts with the unique temp dir.
+	script = strings.ReplaceAll(script, "/tmp/repo", filepath.Join(localTmp, "repo"))
+	script = strings.ReplaceAll(script, "/tmp/repo2", filepath.Join(localTmp, "repo2"))
+	cmd := exec.CommandContext(ctx, "bash", "-c", script)
+	cmd.Env = append(os.Environ(),
+		"HOME="+tmpHome,
+		"GIT_TERMINAL_PROMPT=0",
+		"GIT_CONFIG_NOSYSTEM=1",
+	)
+	out, err := cmd.CombinedOutput()
+	return string(out), err
+}
+
+func runDockerScript(t *testing.T, image, script string) (string, error) {
 	t.Helper()
 	containerName := fmt.Sprintf("omnirepo-gitconf-%d", time.Now().UnixNano())
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	args := []string{"run", "--rm", "--name", containerName, "--entrypoint", "sh"}
-	args = append(args, dindHostArg()...)
+	if runtime.GOOS == "linux" {
+		args = append(args, "--add-host", "host.docker.internal:host-gateway")
+	}
 	args = append(args, image, "-c", script)
 	cmd := exec.CommandContext(ctx, "docker", args...)
 	out, err := cmd.CombinedOutput()

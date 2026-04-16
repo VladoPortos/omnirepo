@@ -59,6 +59,29 @@ func projectFromContext(ctx context.Context) string {
 	return v
 }
 
+// ---- Step 1b: resolveMembership ----
+
+// resolveMembership populates auth.WithProjectMembership on the context so
+// that downstream auth.Can checks can verify project membership. Without
+// this, isMemberOfProject always returns false and all non-super-admin
+// requests get 403.
+func resolveMembership(members *metadata.MembersRepo) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			actor, ok := auth.ActorFromContext(r.Context())
+			if ok && actor.Kind == auth.ActorKindUser && actor.ID != 0 {
+				ids, err := members.ListProjectIDsForUser(r.Context(), actor.ID)
+				if err == nil {
+					r = r.WithContext(auth.WithProjectMembership(r.Context(), ids))
+				}
+			} else if ok && actor.Kind == auth.ActorKindAPIKey && actor.ProjectScope != nil {
+				r = r.WithContext(auth.WithProjectMembership(r.Context(), []int64{*actor.ProjectScope}))
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
 // ---- Step 2: ResolveRepoFromURL ----
 
 // ResolveRepoFromURL returns a chi middleware that parses the URL path to

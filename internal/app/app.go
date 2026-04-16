@@ -170,7 +170,23 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 	// 3. Bootstrap (if path configured and file exists).
 	if cfg.Bootstrap.Path != "" {
 		if _, serr := os.Stat(cfg.Bootstrap.Path); serr == nil {
-			if _, err := ApplyBootstrap(ctx, db, cfg, cfg.Bootstrap.Path); err != nil {
+			gitRefsRepoBoot := metadata.NewGitRefsRepo(db)
+			bootHook := func(ctx context.Context, tx *sql.Tx, repoID int64, repoType, projectName, repoName string) (map[string]any, error) {
+				if repoType == "git" {
+					repoPath := filepath.Join(cfg.DataRoot, "repos", projectName, "git", repoName+".git")
+					if err := gitpkg.InitBare(repoPath, "main"); err != nil {
+						return nil, err
+					}
+					seed := []metadata.GitRef{
+						{Name: "HEAD", Target: "refs/heads/main", Type: metadata.GitRefSymbolic},
+					}
+					if err := gitRefsRepoBoot.ReplaceAll(ctx, tx, repoID, seed); err != nil {
+						return nil, err
+					}
+				}
+				return nil, nil
+			}
+			if _, err := ApplyBootstrapWithHook(ctx, db, cfg, cfg.Bootstrap.Path, bootHook); err != nil {
 				return err // preserve *ErrBootstrap
 			}
 		}

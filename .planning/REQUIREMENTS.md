@@ -111,7 +111,7 @@
 - [x] **GIT-04**: Bare repos created at `/var/lib/omnirepo/repos/<project>/git/<repo>.git/`
 - [x] **GIT-05**: System enforces a configurable per-repo push size limit (default 500 MB); requests exceeding the cap are rejected with a clear error
 - [x] **GIT-06**: System maintains a denormalized `git_refs` table mirror (ref name → commit SHA) for search/UI; authoritative state is the on-disk bare repo
-- [ ] **GIT-07**: Conformance verified by `git clone`, `git push`, `git fetch` against a real `git` CLI
+- [x] **GIT-07**: Conformance verified by `git clone`, `git push`, `git fetch` against a real `git` CLI
 
 ### RPM Protocol (RPM)
 
@@ -375,7 +375,7 @@ Deferred to future release. Tracked but not in current roadmap.
 | GIT-04 | Phase 4 | Complete |
 | GIT-05 | Phase 4 | Complete |
 | GIT-06 | Phase 4 | Complete |
-| GIT-07 | Phase 4 | Pending |
+| GIT-07 | Phase 4 | Complete |
 | RPM-01 | Phase 3 | Complete |
 | RPM-02 | Phase 3 | Complete |
 | RPM-03 | Phase 3 | Complete |

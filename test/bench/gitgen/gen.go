@@ -123,7 +123,8 @@ func generate(outPath string, seed int64, commits int) error {
 	}
 
 	// Repack aggressively so the pack layout is canonical.
-	if err := gitCmd(workRepo, nil, "gc", "--aggressive"); err != nil {
+	// Use --force to override stale lock files from auto-gc.
+	if err := gitCmd(workRepo, nil, "gc", "--aggressive", "--force"); err != nil {
 		return fmt.Errorf("git gc: %w", err)
 	}
 

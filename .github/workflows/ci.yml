@@ -49,8 +49,8 @@ jobs:
         # which is acceptable for a foundation P2 mitigation gate.
         run: make bench-sqlite
 
-      - name: go-git v6 spike
-        run: go test -mod=vendor -tags=spike ./internal/protocol/git/spike/... -count=1
+      # Phase 4 D-28: spike retired; production gogit+gitkit backends are
+      # covered by the default `make test` unit suite. No dedicated job.
 
   # Phase 2 D-42 gate: OCI Distribution conformance suite driven by a real
   # crane client against the running binary. Runs as a dedicated job so a

@@ -43,7 +43,17 @@ func (d Deps) handlePatchSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Protected settings cannot be modified through the REST API.
+	var protectedSettings = map[string]bool{
+		"upstream_creds_aead_key":  true,
+		"docker_token_hmac_secret": true,
+	}
+
 	for k, v := range patch {
+		if protectedSettings[k] {
+			writeJSONError(w, http.StatusForbidden, ErrValidationFailed, k+" is a protected setting")
+			return
+		}
 		if err := d.Settings.Set(r.Context(), k, v); err != nil {
 			writeJSONError(w, http.StatusInternalServerError, ErrInternal, "failed to set "+k)
 			return

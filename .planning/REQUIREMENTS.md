@@ -57,9 +57,9 @@
 
 - [ ] **S3K-01**: User can create dedicated S3 access-key/secret pairs from the profile screen
 - [ ] **S3K-02**: Project members can create dedicated S3 access-key/secret pairs scoped to their projects
-- [ ] **S3K-03**: S3 secret is AES-GCM encrypted at rest with a per-install key stored in `settings`; SigV4 verification recomputes HMAC using the decrypted secret
-- [ ] **S3K-04**: SigV4 middleware rejects requests with clock skew beyond a configurable window (default 15 minutes), echoing server time in `x-amz-date`-aware error
-- [ ] **S3K-05**: Wrong signature returns `403 SignatureDoesNotMatch`; missing credential returns `403 InvalidAccessKeyId`
+- [x] **S3K-03**: S3 secret is AES-GCM encrypted at rest with a per-install key stored in `settings`; SigV4 verification recomputes HMAC using the decrypted secret
+- [x] **S3K-04**: SigV4 middleware rejects requests with clock skew beyond a configurable window (default 15 minutes), echoing server time in `x-amz-date`-aware error
+- [x] **S3K-05**: Wrong signature returns `403 SignatureDoesNotMatch`; missing credential returns `403 InvalidAccessKeyId`
 
 ### Bootstrap (BOOT)
 
@@ -96,20 +96,20 @@
 
 ### S3 Protocol (S3)
 
-- [ ] **S3-01**: S3 API served at `/s3/<bucket>/<key>` (path-style) and at `<bucket>.<host>/...` (virtual-host style via `Host` header routing)
+- [x] **S3-01**: S3 API served at `/s3/<bucket>/<key>` (path-style) and at `<bucket>.<host>/...` (virtual-host style via `Host` header routing)
 - [ ] **S3-02**: Operations supported: `CreateBucket`, `ListBuckets`, `HeadBucket`, `DeleteBucket`, `PutObject`, `GetObject`, `HeadObject`, `DeleteObject`, `ListObjectsV1`, `ListObjectsV2`, multipart upload (`CreateMultipartUpload`, `UploadPart`, `CompleteMultipartUpload`, `AbortMultipartUpload`)
-- [ ] **S3-03**: SigV4 middleware validates every request; failures return AWS-shape XML errors (`SignatureDoesNotMatch`, `InvalidAccessKeyId`, `RequestTimeTooSkewed`)
+- [x] **S3-03**: SigV4 middleware validates every request; failures return AWS-shape XML errors (`SignatureDoesNotMatch`, `InvalidAccessKeyId`, `RequestTimeTooSkewed`)
 - [ ] **S3-04**: Bucket contents stored at `/var/lib/omnirepo/s3/<bucket>/<key>` (flat keyspace materialized as a directory tree)
 - [ ] **S3-05**: No versioning, no object lock, no website hosting in v1
 - [ ] **S3-06**: Conformance verified against `aws-sdk-go-v2`; positive and negative test cases covered
 
 ### Git Protocol (GIT)
 
-- [ ] **GIT-01**: Git Smart HTTP served at `/git/<project>/<repo>.git/...` via go-git v6 `backend` package (with sosedoff/gitkit fallback behind a config flag)
+- [x] **GIT-01**: Git Smart HTTP served at `/git/<project>/<repo>.git/...` via go-git v6 `backend` package (with sosedoff/gitkit fallback behind a config flag)
 - [ ] **GIT-02**: HTTP Basic auth (login + password OR `<login>:<api-key>` OR `project:<project>:<project-api-key>`) verified before reaching the Git backend
-- [ ] **GIT-03**: `info/refs`, `git-upload-pack`, and `git-receive-pack` endpoints implemented
-- [ ] **GIT-04**: Bare repos created at `/var/lib/omnirepo/repos/<project>/git/<repo>.git/`
-- [ ] **GIT-05**: System enforces a configurable per-repo push size limit (default 500 MB); requests exceeding the cap are rejected with a clear error
+- [x] **GIT-03**: `info/refs`, `git-upload-pack`, and `git-receive-pack` endpoints implemented
+- [x] **GIT-04**: Bare repos created at `/var/lib/omnirepo/repos/<project>/git/<repo>.git/`
+- [x] **GIT-05**: System enforces a configurable per-repo push size limit (default 500 MB); requests exceeding the cap are rejected with a clear error
 - [ ] **GIT-06**: System maintains a denormalized `git_refs` table mirror (ref name → commit SHA) for search/UI; authoritative state is the on-disk bare repo
 - [ ] **GIT-07**: Conformance verified by `git clone`, `git push`, `git fetch` against a real `git` CLI
 
@@ -336,9 +336,9 @@ Deferred to future release. Tracked but not in current roadmap.
 | KEY-08 | Phase 1 | Complete |
 | S3K-01 | Phase 4 | Pending |
 | S3K-02 | Phase 4 | Pending |
-| S3K-03 | Phase 4 | Pending |
-| S3K-04 | Phase 4 | Pending |
-| S3K-05 | Phase 4 | Pending |
+| S3K-03 | Phase 4 | Complete |
+| S3K-04 | Phase 4 | Complete |
+| S3K-05 | Phase 4 | Complete |
 | BOOT-01 | Phase 1 | Complete |
 | BOOT-02 | Phase 1 | Complete |
 | BOOT-03 | Phase 1 | Complete |
@@ -363,17 +363,17 @@ Deferred to future release. Tracked but not in current roadmap.
 | OCI-08 | Phase 2 | Pending |
 | OCI-09 | Phase 2 | Pending |
 | OCI-10 | Phase 2 | Pending |
-| S3-01 | Phase 4 | Pending |
+| S3-01 | Phase 4 | Complete |
 | S3-02 | Phase 4 | Pending |
-| S3-03 | Phase 4 | Pending |
+| S3-03 | Phase 4 | Complete |
 | S3-04 | Phase 4 | Pending |
 | S3-05 | Phase 4 | Pending |
 | S3-06 | Phase 4 | Pending |
-| GIT-01 | Phase 4 | Pending |
+| GIT-01 | Phase 4 | Complete |
 | GIT-02 | Phase 4 | Pending |
-| GIT-03 | Phase 4 | Pending |
-| GIT-04 | Phase 4 | Pending |
-| GIT-05 | Phase 4 | Pending |
+| GIT-03 | Phase 4 | Complete |
+| GIT-04 | Phase 4 | Complete |
+| GIT-05 | Phase 4 | Complete |
 | GIT-06 | Phase 4 | Pending |
 | GIT-07 | Phase 4 | Pending |
 | RPM-01 | Phase 3 | Complete |

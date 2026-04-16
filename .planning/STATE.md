@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Ready to execute
-last_updated: "2026-04-16T00:44:57.332Z"
+last_updated: "2026-04-16T01:19:37.795Z"
 progress:
   total_phases: 5
   completed_phases: 3
   total_plans: 40
-  completed_plans: 28
-  percent: 70
+  completed_plans: 32
+  percent: 80
 ---
 
 # STATE: OmniRepo
@@ -25,7 +25,7 @@ progress:
 ## Current Position
 
 Phase: 04 (s3-git) — EXECUTING
-Plan: 2 of 13
+Plan: 6 of 13
 
 - **Phase**: 1 — Foundation
 - **Plan**: none yet (planning not started)
@@ -54,6 +54,10 @@ Plan: 2 of 13
 | Phase 03 P06 | 75min | 2 tasks | 16 files |
 | Phase 03-package-repos-rpm-apt-pypi-helm P07 | 65min | 2 tasks | 12 files |
 | Phase 04-s3-git P01 | 7m | 3 tasks | 35 files |
+| Phase 04-s3-git P02 | 15m | 2 tasks | 16 files |
+| Phase 04-s3-git P03 | 3m | 1 tasks | 4 files |
+| Phase 04-s3-git P08 | 18m | 1 tasks | 12 files |
+| Phase 04-s3-git P04 | 20m | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -111,6 +115,12 @@ Version-drift corrections to apply at first commit (from `.planning/research/SUM
 - [Phase 04-s3-git]: gofakes3 has no v1.0.0 tag upstream — pinned to master pseudo-version v0.0.0-20260208201424-4c385a1f6a73
 - [Phase 04-s3-git]: gitkit v0.4.0 compiles clean on Go 1.25 — Plan 09 fallback unblocked
 - [Phase 04-s3-git]: Probe files named probe_test.go (not _probe_test.go) — Go ignores _-prefixed sources
+- [Phase 04-s3-git]: Phase 4 Plan 02 landed migrations 016-019 + typed repos (S3KeysRepo, S3ObjectsRepo, S3MultipartRepo, GitRefsRepo) + repos.GitMaxPushBytes; strftime timestamp convention adopted for new tables for Phase-3 consistency
+- [Phase 04-s3-git]: ErrS3AccessKeyNotFound collapses missing+revoked (D-12 no-oracle enforced at repo layer)
+- [Phase 04-s3-git]: Config validator-with-fallback pattern: max_push_bytes=0 is sentinel for inherit-default; negative rejected (T-04-03-02 DoS mitigation)
+- [Phase 04-s3-git]: Plan 03 landed Phase 4 config surface: server.git_backend (gogit|gitkit), repos.git.max_push_bytes (500 MiB), external_hostnames; first typed Config.Validate() method
+- [Phase 04-s3-git]: Plan 08 promoted Phase 1 git spike to production GitServer interface: gogit (go-git v6 transport primitives) + gitkit (subprocess fallback) + pktline sideband + InitBare helper; spike files deleted per D-28
+- [Phase 04-s3-git]: SigV4 verifier landed: hand-rolled canonical-request/HMAC-chain/constant-time-compare + STREAMING chunked parser (64 MiB per-chunk cap); all 5 aws4_testsuite vectors byte-exact + 14 behavioral tests green
 
 ### Todos
 

@@ -117,13 +117,13 @@ Plans:
 
 Plans:
 - [x] 04-01-PLAN.md — Wave 0 probes: gitkit Go 1.25 compile, gofakes3 MultipartBackend surface, AWS SigV4 test vectors vendored, conformance images pinned
-- [ ] 04-02-PLAN.md — Migrations 016–019 (s3_access_keys, git_extensions, s3_objects, s3_multipart) + typed repos
-- [ ] 04-03-PLAN.md — Config schema extension (server.git_backend, repos.git.max_push_bytes, external_hostnames) + reserved-prefix verify
-- [ ] 04-04-PLAN.md — SigV4 verifier: canonical/errors + Verify + STREAMING chunked parser
+- [x] 04-02-PLAN.md — Migrations 016–019 (s3_access_keys, git_extensions, s3_objects, s3_multipart) + typed repos
+- [x] 04-03-PLAN.md — Config schema extension (server.git_backend, repos.git.max_push_bytes, external_hostnames) + reserved-prefix verify
+- [x] 04-04-PLAN.md — SigV4 verifier: canonical/errors + Verify + STREAMING chunked parser
 - [ ] 04-05-PLAN.md — S3 access-key service (AEAD lookup) + admin REST /api/v1/projects/{name}/s3-access-keys + auth.Can ActionS3Bucket{Read,Write,Admin}
 - [ ] 04-06-PLAN.md — gofakes3 Backend + multipart (staging + streaming merge + orphan GC)
 - [ ] 04-07-PLAN.md — S3 route wiring: vhost middleware + SigV4 middleware + auth.Can + gofakes3 mount
-- [ ] 04-08-PLAN.md — GitServer interface + gogit production backend (spike promotion) + gitkit fallback + pktline sideband + delete spike
+- [x] 04-08-PLAN.md — GitServer interface + gogit production backend (spike promotion) + gitkit fallback + pktline sideband + delete spike
 - [ ] 04-09-PLAN.md — Git middleware chain (BasicOrAPIKey project: variant + perRepoMutex + pushSizeLimit) + backend selection via config
 - [ ] 04-10-PLAN.md — Post-ReceivePack refs walker (git_refs sync) + bare-repo lifecycle hooks (OnRepoCreate/OnRepoDelete)
 - [ ] 04-11-PLAN.md — S3 conformance via aws-sdk-go-v2 (positive + negative matrix) + CI job

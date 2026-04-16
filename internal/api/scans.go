@@ -84,9 +84,101 @@ func (d Deps) mountScans(r chi.Router) {
 	}
 	r.Post("/projects/{name}/repos/{type}/{repo}/artifacts/{id}/rescan", d.handleRescan)
 	r.Get("/projects/{name}/repos/{type}/{repo}/artifacts/{id}/scans", d.handleListArtifactScans)
+	// Repo-level scans list — declared in openapi.yaml, previously absent
+	// from the router so requests fell through to the SPA (WALKTHROUGH-
+	// FINDINGS F-2b). Populates the "Scan Results" tab on the repo page.
+	r.Get("/projects/{name}/repos/{type}/{repo}/scans", d.handleListRepoScans)
 	r.Get("/scans/{id}", d.handleGetScan)
 	r.Get("/scans/{id}/vulnerabilities", d.handleListScanVulns)
 	r.Get("/scans/{id}/sbom", d.handleGetSBOM)
+}
+
+// handleListRepoScans returns scans rows for an entire repo, newest first.
+// Filters optional `?status=` and `?limit=` (default 100, max 500).
+func (d Deps) handleListRepoScans(w http.ResponseWriter, r *http.Request) {
+	actor, ok := auth.ActorFromContext(r.Context())
+	if !ok {
+		writeJSONError(w, http.StatusUnauthorized, ErrUnauthenticated, "")
+		return
+	}
+	projectName := chi.URLParam(r, "name")
+	repoType := chi.URLParam(r, "type")
+	repoName := chi.URLParam(r, "repo")
+	if _, ok := validRepoTypes[repoType]; !ok {
+		writeJSONError(w, http.StatusNotFound, ErrNotFound, "repo not found")
+		return
+	}
+	p, err := d.Projects.FindByName(r.Context(), projectName)
+	if err != nil || p == nil {
+		writeJSONError(w, http.StatusNotFound, ErrNotFound, "project not found")
+		return
+	}
+	repo, err := d.Repos.FindByTriple(r.Context(), p.ID, repoType, repoName)
+	if err != nil || repo == nil {
+		writeJSONError(w, http.StatusNotFound, ErrNotFound, "repo not found")
+		return
+	}
+	if !d.actorIsProjectMember(r.Context(), actor, p.ID) {
+		writeJSONError(w, http.StatusForbidden, ErrForbidden, "not a project member")
+		return
+	}
+	limit := int64(100)
+	if q := r.URL.Query().Get("limit"); q != "" {
+		if v, perr := strconv.ParseInt(q, 10, 64); perr == nil && v > 0 {
+			if v > 500 {
+				v = 500
+			}
+			limit = v
+		}
+	}
+	status := r.URL.Query().Get("status")
+
+	query := `
+		SELECT id, repo_id, artifact_kind, artifact_id, status, attempts,
+		       COALESCE(last_error, ''),
+		       COALESCE(severity_summary_json, ''),
+		       COALESCE(sbom_path, ''),
+		       COALESCE(trivy_db_version, ''),
+		       created_at, started_at, finished_at
+		FROM scans
+		WHERE repo_id=?`
+	args := []any{repo.ID}
+	if status != "" {
+		query += ` AND status=?`
+		args = append(args, status)
+	}
+	query += ` ORDER BY id DESC LIMIT ?`
+	args = append(args, limit)
+
+	rows, err := d.DB.Reader.QueryContext(r.Context(), query, args...)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+		return
+	}
+	defer func() { _ = rows.Close() }()
+	out := make([]scanRowResponse, 0, 32)
+	for rows.Next() {
+		var s scanRowResponse
+		var startedAt, finishedAt sql.NullTime
+		if err := rows.Scan(&s.ID, &s.RepoID, &s.ArtifactKind, &s.ArtifactID, &s.Status,
+			&s.Attempts, &s.LastError, &s.SeveritySummaryJSON, &s.SBOMPath,
+			&s.TrivyDBVersion, &s.CreatedAt, &startedAt, &finishedAt); err != nil {
+			writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+			return
+		}
+		if startedAt.Valid {
+			s.StartedAt = startedAt.Time
+		}
+		if finishedAt.Valid {
+			s.FinishedAt = finishedAt.Time
+		}
+		out = append(out, s)
+	}
+	if err := rows.Err(); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // resolveArtifactRepo resolves project + repo from the URL params and

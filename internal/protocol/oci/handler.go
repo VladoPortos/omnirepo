@@ -35,14 +35,14 @@ type Deps struct {
 	// this constructor shape does not have to change between plans;
 	// making them concrete here keeps the Handler struct the single
 	// source of truth for every wiring concern.
-	CAS          storage.CAS                      // blob content-addressed store
-	Blobs        *metadata.DockerBlobsRepo        // docker_blobs refcount table
-	BlobUploads  *metadata.BlobUploadsRepo        // blob_uploads GC-exclusion set
-	Sess         *metadata.BlobUploadSessionsRepo // blob_upload_sessions
-	Audit        audit.Logger                     // audit logger (best-effort)
-	DataRoot     string                           // /var/lib/omnirepo (tmp uploads live under it)
-	ChunkMaxBytes   int64 // per-chunk cap; default 64 MiB
-	SessionMaxBytes int64 // per-session cap; default 10 GiB
+	CAS             storage.CAS                      // blob content-addressed store
+	Blobs           *metadata.DockerBlobsRepo        // docker_blobs refcount table
+	BlobUploads     *metadata.BlobUploadsRepo        // blob_uploads GC-exclusion set
+	Sess            *metadata.BlobUploadSessionsRepo // blob_upload_sessions
+	Audit           audit.Logger                     // audit logger (best-effort)
+	DataRoot        string                           // /var/lib/omnirepo (tmp uploads live under it)
+	ChunkMaxBytes   int64                            // per-chunk cap; default 64 MiB
+	SessionMaxBytes int64                            // per-session cap; default 10 GiB
 
 	// Phase 02-07 dependencies: manifests + tags + catalog + cosign.
 	Manifests *metadata.DockerManifestsRepo
@@ -61,6 +61,12 @@ type Deps struct {
 
 	HMACSecret []byte        // 32 random bytes (D-06)
 	JWTTTL     time.Duration // default 3600s
+
+	// ExternalHostnames is the trust-list from config (server.external_hostnames).
+	// When non-empty, the WWW-Authenticate challenge uses the configured first
+	// entry rather than r.Host, closing WR-01 (host-header injection in the
+	// Docker bearer realm).
+	ExternalHostnames []string
 }
 
 // SeverityGateFn is the block_on_severity hook signature. 02-09 will plug in
@@ -102,6 +108,10 @@ type Handler struct {
 	scans        *metadata.ScansRepo
 	scanKick     func()
 	severityGate SeverityGateFn
+
+	// externalHostnames: first entry used for WWW-Authenticate realm in
+	// preference to r.Host when non-empty (WR-01 fix).
+	externalHostnames []string
 }
 
 // New constructs a Handler from deps.
@@ -119,28 +129,29 @@ func New(d Deps) *Handler {
 		sess = 10 << 30 // 10 GiB
 	}
 	return &Handler{
-		db:              d.DB,
-		users:           d.Users,
-		apiKeys:         d.APIKeys,
-		repos:           d.Repos,
-		projects:        d.Projects,
-		sessions:        d.Sessions,
-		members:         d.Members,
-		hmacSecret:      d.HMACSecret,
-		jwtTTL:          ttl,
-		cas:             d.CAS,
-		blobs:           d.Blobs,
-		blobUploads:     d.BlobUploads,
-		sess:            d.Sess,
-		auditLogger:     d.Audit,
-		dataRoot:        d.DataRoot,
-		chunkMaxBytes:   chunk,
-		sessionMaxBytes: sess,
-		manifests:       d.Manifests,
-		tags:            d.Tags,
-		scans:           d.Scans,
-		scanKick:        d.ScanKick,
-		severityGate:    d.SeverityGate,
+		db:                d.DB,
+		users:             d.Users,
+		apiKeys:           d.APIKeys,
+		repos:             d.Repos,
+		projects:          d.Projects,
+		sessions:          d.Sessions,
+		members:           d.Members,
+		hmacSecret:        d.HMACSecret,
+		jwtTTL:            ttl,
+		cas:               d.CAS,
+		blobs:             d.Blobs,
+		blobUploads:       d.BlobUploads,
+		sess:              d.Sess,
+		auditLogger:       d.Audit,
+		dataRoot:          d.DataRoot,
+		chunkMaxBytes:     chunk,
+		sessionMaxBytes:   sess,
+		manifests:         d.Manifests,
+		tags:              d.Tags,
+		scans:             d.Scans,
+		scanKick:          d.ScanKick,
+		severityGate:      d.SeverityGate,
+		externalHostnames: d.ExternalHostnames,
 	}
 }
 

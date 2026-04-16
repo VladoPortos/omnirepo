@@ -6,7 +6,7 @@
 import { useState, useMemo, type FormEvent } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { Plus, Users, Activity, FolderGit2 } from 'lucide-react';
+import { Plus, Users, Activity, FolderGit2, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -35,6 +35,7 @@ import {
   useProject,
   useProjectActivity,
   useCreateRepo,
+  useDeleteProject,
 } from '@/api/queries';
 import { formatBytes, formatDate } from '@/lib/format';
 import { ApiError } from '@/api/client';
@@ -51,6 +52,11 @@ const REPO_TYPES: { value: RepoType; label: string }[] = [
   { value: 's3', label: 'S3' },
 ];
 
+// ME-09: repo types creatable via the POST /repos handler. S3 is managed
+// as a separate resource (buckets, not repos) — the create dialog omits
+// it to avoid a guaranteed 422 from the backend validator.
+const CREATABLE_REPO_TYPES = REPO_TYPES.filter((t) => t.value !== 's3');
+
 const ALL_TABS = ['overview', ...REPO_TYPES.map((t) => t.value)] as const;
 
 export function ProjectDetailPage() {
@@ -59,6 +65,7 @@ export function ProjectDetailPage() {
   const { data: project, isLoading } = useProject(name);
   const { data: activityData } = useProjectActivity(name);
   const createRepo = useCreateRepo();
+  const deleteProject = useDeleteProject();
 
   const [activeTab, setActiveTab] = useState<string>('overview');
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -67,6 +74,9 @@ export function ProjectDetailPage() {
     activeTab !== 'overview' ? (activeTab as RepoType) : 'docker',
   );
   const [createError, setCreateError] = useState('');
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState('');
+  const [deleteError, setDeleteError] = useState('');
 
   // Group repos by type
   const reposByType = useMemo(() => {
@@ -146,25 +156,93 @@ export function ProjectDetailPage() {
   return (
     <div className="space-y-6">
       {/* Title */}
-      <div>
-        <h1 className="text-[28px] font-semibold leading-tight">
-          {project.name}
-        </h1>
-        {project.description_md && (
-          <p className="mt-1 text-sm text-muted-foreground">
-            {project.description_md}
-          </p>
-        )}
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-[28px] font-semibold leading-tight">
+            {project.name}
+          </h1>
+          {project.description_md && (
+            <p className="mt-1 text-sm text-muted-foreground">
+              {project.description_md}
+            </p>
+          )}
+        </div>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="text-destructive hover:bg-destructive/10"
+          onClick={() => {
+            setDeleteError('');
+            setDeleteConfirm('');
+            setDeleteOpen(true);
+          }}
+        >
+          <Trash2 className="mr-1.5 size-4" />
+          Delete Project
+        </Button>
       </div>
+
+      <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete project &quot;{project.name}&quot;?</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <p className="text-sm text-muted-foreground">
+              This soft-deletes the project. Repositories, artifacts, and members
+              are retained for the configured retention window and can be restored
+              by an administrator until then.
+            </p>
+            {deleteError && (
+              <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
+                {deleteError}
+              </div>
+            )}
+            <div className="space-y-2">
+              <Label htmlFor="delete-confirm">
+                Type <span className="font-mono font-semibold">{project.name}</span> to confirm
+              </Label>
+              <Input
+                id="delete-confirm"
+                value={deleteConfirm}
+                onChange={(e) => setDeleteConfirm(e.target.value)}
+                autoFocus
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={deleteConfirm !== project.name || deleteProject.isPending}
+              onClick={async () => {
+                try {
+                  await deleteProject.mutateAsync(project.name);
+                  toast.success(`Project "${project.name}" deleted.`);
+                  setDeleteOpen(false);
+                  navigate('/projects');
+                } catch (err) {
+                  if (err instanceof ApiError) setDeleteError(err.detail);
+                  else setDeleteError('Failed to delete project.');
+                }
+              }}
+            >
+              {deleteProject.isPending ? 'Deleting...' : 'Delete Project'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Tabs */}
       <Tabs
         value={activeTab}
         onValueChange={(val) => setActiveTab(val as string)}
       >
-        <TabsList variant="line" className="w-full overflow-x-auto overflow-y-hidden pb-1.5">
+        <TabsList variant="line" className="w-full justify-start overflow-x-auto overflow-y-hidden pb-1.5">
           {ALL_TABS.map((tab) => (
-            <TabsTrigger key={tab} value={tab}>
+            <TabsTrigger key={tab} value={tab} className="flex-none px-3">
               {tab === 'overview'
                 ? 'Overview'
                 : REPO_TYPES.find((t) => t.value === tab)?.label ?? tab}
@@ -277,36 +355,47 @@ export function ProjectDetailPage() {
         </TabsContent>
 
         {/* Type tabs */}
-        {REPO_TYPES.map((rt) => (
+        {REPO_TYPES.map((rt) => {
+          // ME-09: S3 is not createable via the repo dialog — buckets are
+          // managed as a separate resource. Hide the create buttons for S3
+          // but still surface the tab so users can see existing buckets.
+          const canCreate = rt.value !== 's3';
+          return (
           <TabsContent key={rt.value} value={rt.value}>
             <div className="mt-4 space-y-4">
               <div className="flex items-center justify-between">
-                <h2 className="text-lg font-semibold">{rt.label} Repositories</h2>
-                <Button
-                  size="sm"
-                  onClick={() => openCreateDialog(rt.value)}
-                >
-                  <Plus className="mr-1.5 size-4" />
-                  Create Repository
-                </Button>
+                <h2 className="text-lg font-semibold">{rt.label} {rt.value === 's3' ? 'Buckets' : 'Repositories'}</h2>
+                {canCreate && (
+                  <Button
+                    size="sm"
+                    onClick={() => openCreateDialog(rt.value)}
+                  >
+                    <Plus className="mr-1.5 size-4" />
+                    Create Repository
+                  </Button>
+                )}
               </div>
 
               {reposByType[rt.value].length === 0 ? (
                 <div className="flex flex-col items-center justify-center rounded-lg border border-dashed p-12 text-center">
                   <FolderGit2 className="size-12 text-muted-foreground/50" />
                   <h3 className="mt-4 text-lg font-semibold">
-                    No repositories
+                    No {rt.value === 's3' ? 'buckets' : 'repositories'}
                   </h3>
                   <p className="mt-2 max-w-md text-sm text-muted-foreground">
-                    Create your first {rt.label.toLowerCase()} repository
+                    {canCreate
+                      ? `Create your first ${rt.label.toLowerCase()} repository`
+                      : 'S3 buckets are provisioned separately via the S3 API.'}
                   </p>
-                  <Button
-                    className="mt-6"
-                    onClick={() => openCreateDialog(rt.value)}
-                  >
-                    <Plus className="mr-1.5 size-4" />
-                    Create Repository
-                  </Button>
+                  {canCreate && (
+                    <Button
+                      className="mt-6"
+                      onClick={() => openCreateDialog(rt.value)}
+                    >
+                      <Plus className="mr-1.5 size-4" />
+                      Create Repository
+                    </Button>
+                  )}
                 </div>
               ) : (
                 <div className="space-y-2">
@@ -317,41 +406,40 @@ export function ProjectDetailPage() {
                       animate={{ opacity: 1, y: 0 }}
                       transition={{ duration: 0.15 }}
                     >
-                      <Card
-                        className="cursor-pointer transition-all duration-150 hover:-translate-y-0.5 hover:shadow-md"
-                        onClick={() =>
-                          navigate(
-                            `/projects/${name}/${repo.type}/${repo.name}`,
-                          )
-                        }
+                      <Link
+                        to={`/projects/${name}/${repo.type}/${repo.name}`}
+                        className="block focus:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-xl"
                       >
-                        <CardContent className="flex items-center justify-between py-3">
-                          <div className="flex items-center gap-3">
-                            <TypeBadge type={repo.type as RepoType} />
-                            <div>
-                              <p className="font-medium">{repo.name}</p>
-                              {repo.description_md && (
-                                <p className="text-xs text-muted-foreground line-clamp-1">
-                                  {repo.description_md}
-                                </p>
-                              )}
+                        <Card className="transition-all duration-150 hover:-translate-y-0.5 hover:shadow-md">
+                          <CardContent className="flex items-center justify-between py-3">
+                            <div className="flex items-center gap-3">
+                              <TypeBadge type={repo.type as RepoType} />
+                              <div>
+                                <p className="font-medium">{repo.name}</p>
+                                {repo.description_md && (
+                                  <p className="text-xs text-muted-foreground line-clamp-1">
+                                    {repo.description_md}
+                                  </p>
+                                )}
+                              </div>
                             </div>
-                          </div>
-                          <div className="flex items-center gap-4 text-xs text-muted-foreground">
-                            <span>{formatBytes(repo.size_bytes)}</span>
-                            <span>
-                              Created {formatDate(repo.created_at)}
-                            </span>
-                          </div>
-                        </CardContent>
-                      </Card>
+                            <div className="flex items-center gap-4 text-xs text-muted-foreground">
+                              <span>{formatBytes(repo.size_bytes)}</span>
+                              <span>
+                                Created {formatDate(repo.created_at)}
+                              </span>
+                            </div>
+                          </CardContent>
+                        </Card>
+                      </Link>
                     </motion.div>
                   ))}
                 </div>
               )}
             </div>
           </TabsContent>
-        ))}
+          );
+        })}
       </Tabs>
 
       {/* Create Repo Dialog */}
@@ -377,7 +465,7 @@ export function ProjectDetailPage() {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {REPO_TYPES.map((rt) => (
+                    {CREATABLE_REPO_TYPES.map((rt) => (
                       <SelectItem key={rt.value} value={rt.value}>
                         {rt.label}
                       </SelectItem>

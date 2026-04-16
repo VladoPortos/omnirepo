@@ -3,8 +3,8 @@ package app
 import (
 	"context"
 	cryptorand "crypto/rand"
-	"database/sql"
 	stdtls "crypto/tls"
+	"database/sql"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -199,6 +199,14 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 		}
 	}
 
+	// 3b. One-shot FTS backfill for pre-existing DBs. The bootstrap path now
+	// indexes repos into repos_fts inline, but DBs seeded before that change
+	// (or manually) have empty FTS tables. Rebuild if repos_fts is empty but
+	// repos has rows. Idempotent: skipped when either side is already aligned.
+	if err := ensureFTSIndexed(ctx, db); err != nil {
+		return fmt.Errorf("app.Run: fts backfill: %w", err)
+	}
+
 	// 4. TLS: first-boot self-signed if no live cert, otherwise load existing.
 	certPath := filepath.Join(cfg.DataRoot, "certs", "server.crt")
 	keyPath := filepath.Join(cfg.DataRoot, "certs", "server.key")
@@ -310,13 +318,20 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 	}
 	// One handler covers both kinds; Pool dispatches by JobView.Kind which
 	// for scans rows is ArtifactKind.
-	scanHandlers["docker"] = func(c context.Context, j *jobs.JobView) error {
+	dispatch := func(c context.Context, j *jobs.JobView) error {
 		return scanHandler.Handle(c, &metadata.Scan{
 			ID: j.ID, RepoID: j.RepoID, ArtifactKind: j.Kind,
 			ArtifactID: j.Payload, Attempts: j.Attempts, LeaseID: j.LeaseID,
 		})
 	}
-	scanHandlers["raw"] = scanHandlers["docker"]
+	// All artifact kinds share the same dispatcher; the Handle switch
+	// materializes + scans per kind.
+	scanHandlers["docker"] = dispatch
+	scanHandlers["raw"] = dispatch
+	scanHandlers["rpm"] = dispatch
+	scanHandlers["deb"] = dispatch
+	scanHandlers["pypi"] = dispatch
+	scanHandlers["helm"] = dispatch
 
 	// NOTE: syncPool.Run / scanPool.Run are started BELOW, after all
 	// sync handlers (02-10 pull-external etc.) have been registered.
@@ -375,6 +390,8 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 			severityCache,
 			auditLogger,
 		),
+		// WR-01: trust-pinned host for WWW-Authenticate realm.
+		ExternalHostnames: cfg.Server.ExternalHostnames,
 	})
 	ociHandler.Mount(router)
 	ociHandler.MountCosign(router)
@@ -517,14 +534,14 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 		UpstreamCreds: upstreamCreds,
 		// Phase 04-05: S3 access-key CRUD. Reuses the same per-install
 		// AEAD master key as upstream_creds.
-		S3Keys: metadata.NewS3KeysRepo(db),
-		S3AEAD: aead,
-		Holder:        holder,
-		DataRoot:      cfg.DataRoot,
-		Audit:         auditLogger,
-		Trash:         storage.NewTrash(filepath.Join(cfg.DataRoot, "trash")),
-		Locks:         storage.NewLocks(),
-		SessionTTL:    cfg.Auth.SessionTTL,
+		S3Keys:     metadata.NewS3KeysRepo(db),
+		S3AEAD:     aead,
+		Holder:     holder,
+		DataRoot:   cfg.DataRoot,
+		Audit:      auditLogger,
+		Trash:      storage.NewTrash(filepath.Join(cfg.DataRoot, "trash")),
+		Locks:      storage.NewLocks(),
+		SessionTTL: cfg.Auth.SessionTTL,
 
 		RepoCreateHook: composedRepoCreateHook,
 		// Plan 02-09: scan REST endpoints.

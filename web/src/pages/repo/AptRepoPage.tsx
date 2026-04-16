@@ -5,6 +5,7 @@
  */
 
 import { useState, useMemo } from 'react';
+import { useParams } from 'react-router-dom';
 import { ExternalLink } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
@@ -27,6 +28,7 @@ import { FilterChips } from '@/components/common/FilterChips';
 import { RepoPageLayout } from './RepoPageLayout';
 import { formatBytes, formatDate } from '@/lib/format';
 import { api } from '@/api/client';
+import { useRepoContent } from '@/api/queries';
 import type { Repo } from '@/api/types';
 
 interface DebPackage {
@@ -46,14 +48,29 @@ interface AptRepoPageProps {
 }
 
 export function AptRepoPage({ repo }: AptRepoPageProps) {
+  const { name: projectName } = useParams<{ name: string }>();
   const [filter, setFilter] = useState('');
   const [sort, setSort] = useState<SortState>({ column: 'name', direction: 'asc' });
   const [suiteFilter, setSuiteFilter] = useState<string[]>([]);
   const [componentFilter, setComponentFilter] = useState<string[]>([]);
   const [syncOpen, setSyncOpen] = useState(false);
 
-  // Packages will be fetched from API
-  const packages: DebPackage[] = [];
+  const { data: contentRows } = useRepoContent(projectName ?? '', 'deb', repo.name);
+  const packages: DebPackage[] = useMemo(
+    () =>
+      (contentRows ?? []).map((row) => ({
+        id: row.id ?? 0,
+        name: row.name,
+        version: row.version ?? '',
+        arch: String(row.extra?.architecture ?? ''),
+        suite: String(row.extra?.suite ?? ''),
+        component: String(row.extra?.component ?? ''),
+        size: row.size_bytes,
+        scan_severity: row.scan_severity ?? '',
+        uploaded_at: row.uploaded_at,
+      })),
+    [contentRows],
+  );
 
   // Derive available suites and components from packages
   const suiteOptions = useMemo(

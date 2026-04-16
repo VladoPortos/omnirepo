@@ -24,6 +24,7 @@ func (d Deps) mountSearch(r chi.Router) {
 // searchResultItem is the JSON projection of one search result.
 type searchResultItem struct {
 	Kind     string  `json:"kind"`
+	EntityID int64   `json:"entity_id"`
 	Name     string  `json:"name"`
 	Location string  `json:"location"`
 	Severity string  `json:"severity,omitempty"`
@@ -88,6 +89,7 @@ func (d Deps) handleSearch(w http.ResponseWriter, r *http.Request) {
 		}
 		items = append(items, searchResultItem{
 			Kind:     res.Kind,
+			EntityID: res.EntityID,
 			Name:     res.Name,
 			Location: res.Location,
 			Severity: res.Severity,

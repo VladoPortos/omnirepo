@@ -64,10 +64,16 @@ func TestDashboardStorage_ReturnsRepoBreakdown(t *testing.T) {
 
 	ctx := context.Background()
 	pid, _ := s.deps.Projects.Create(ctx, "storage-proj", "")
-	_, _ = s.deps.Repos.Create(ctx, pid, "docker", "big-repo", "", nil, nil, nil)
+	repoID, _ := s.deps.Repos.Create(ctx, pid, "docker", "big-repo", "", nil, nil, nil)
 
-	// Set a size on the repo.
-	_, _ = s.db.Writer.ExecContext(ctx, `UPDATE repos SET size_bytes = 1073741824 WHERE name = 'big-repo'`)
+	// Plant a 1 GiB docker manifest row so `repoSizeExpr` computes real
+	// bytes. The storage handler ignores `repos.size_bytes` after F-5 and
+	// sums live from the artifact tables, so writing the column directly
+	// (the prior approach) no longer affects the response.
+	_, _ = s.db.Writer.ExecContext(ctx,
+		`INSERT INTO docker_manifests(digest, repo_id, media_type, body, size_bytes, ref_count)
+		 VALUES (?, ?, 'application/vnd.oci.image.manifest.v1+json', X'7b7d', 1073741824, 1)`,
+		"sha256:aa", repoID)
 	// Set total in settings.
 	_, _ = s.db.Writer.ExecContext(ctx, `INSERT INTO settings(key, value) VALUES ('storage_total_bytes', '10737418240') ON CONFLICT(key) DO UPDATE SET value=excluded.value`)
 

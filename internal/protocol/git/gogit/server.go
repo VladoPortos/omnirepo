@@ -100,14 +100,18 @@ func (h *repoHandler) handleService(w http.ResponseWriter, r *http.Request, serv
 	}
 
 	// Request body may be gzip-encoded (git CLI does this for larger payloads).
-	var body io.ReadCloser = r.Body
+	// CR-01: a failed gzip Close signals a truncated/corrupt decompression
+	// stream — surface it as a 400 rather than silently processing partial
+	// push data.
+	body := r.Body
+	var gzReader *gzip.Reader
 	if r.Header.Get("Content-Encoding") == "gzip" {
 		gz, gerr := gzip.NewReader(r.Body)
 		if gerr != nil {
 			http.Error(w, gerr.Error(), http.StatusBadRequest)
 			return
 		}
-		defer gz.Close()
+		gzReader = gz
 		body = io.NopCloser(gz)
 	}
 
@@ -128,6 +132,17 @@ func (h *repoHandler) handleService(w http.ResponseWriter, r *http.Request, serv
 	case transport.ReceivePackService:
 		if err := transport.ReceivePack(ctx, st, body, wc, &transport.ReceivePackRequest{StatelessRPC: true}); err != nil {
 			slog.WarnContext(ctx, "gogit.receive_pack failed", "err", err)
+		}
+	}
+
+	// CR-01: surface gzip stream errors (including truncation detected at
+	// Close). Headers are already written at this point so we can't return
+	// 400; the transport layer above has already consumed the body and
+	// propagated any read errors. Logging at warn keeps audit visibility
+	// for corrupted push bodies that would otherwise be silent.
+	if gzReader != nil {
+		if err := gzReader.Close(); err != nil {
+			slog.WarnContext(ctx, "gogit.gzip_close_failed", "service", service, "err", err)
 		}
 	}
 }

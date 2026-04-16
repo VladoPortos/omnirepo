@@ -427,7 +427,7 @@ function S3KeysSection() {
   const [revokeTarget, setRevokeTarget] = useState<S3Key | null>(null);
 
   const keys = data?.items ?? [];
-  const projects = projectsData?.items ?? [];
+  const projects = useMemo(() => projectsData?.items ?? [], [projectsData?.items]);
 
   const handleCreate = useCallback(async () => {
     const projectId = parseInt(selectedProject, 10);

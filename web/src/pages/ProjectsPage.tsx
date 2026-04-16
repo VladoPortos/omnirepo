@@ -3,8 +3,8 @@
  * Project cards with member/repo counts, empty state, create dialog.
  */
 
-import { useState, type FormEvent } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useEffect, useState, type FormEvent } from 'react';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { Plus, FolderGit2, Users } from 'lucide-react';
 import { toast } from 'sonner';
@@ -37,6 +37,7 @@ const cardVariants = {
 
 export function ProjectsPage() {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { data, isLoading } = useProjects();
   const createProject = useCreateProject();
 
@@ -44,6 +45,16 @@ export function ProjectsPage() {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [error, setError] = useState('');
+
+  // Open create dialog when arriving from dashboard with ?create=1.
+  useEffect(() => {
+    if (searchParams.get('create') === '1') {
+      setDialogOpen(true);
+      const next = new URLSearchParams(searchParams);
+      next.delete('create');
+      setSearchParams(next, { replace: true });
+    }
+  }, [searchParams, setSearchParams]);
 
   const projects = data?.items ?? [];
 
@@ -168,35 +179,37 @@ export function ProjectsPage() {
               animate="visible"
               variants={cardVariants}
             >
-              <Card
-                className="cursor-pointer transition-all duration-150 hover:-translate-y-0.5 hover:shadow-md"
-                onClick={() => navigate(`/projects/${project.name}`)}
+              <Link
+                to={`/projects/${project.name}`}
+                className="block focus:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-xl"
               >
-                <CardHeader>
-                  <CardTitle className="text-base">{project.name}</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  {project.description_md && (
-                    <p className="mb-3 line-clamp-2 text-sm text-muted-foreground">
-                      {project.description_md}
+                <Card className="transition-all duration-150 hover:-translate-y-0.5 hover:shadow-md">
+                  <CardHeader>
+                    <CardTitle className="text-base">{project.name}</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    {project.description_md && (
+                      <p className="mb-3 line-clamp-2 text-sm text-muted-foreground">
+                        {project.description_md}
+                      </p>
+                    )}
+                    <div className="flex items-center gap-4 text-xs text-muted-foreground">
+                      <span className="inline-flex items-center gap-1">
+                        <Users className="size-3.5" />
+                        {project.member_count} member{project.member_count !== 1 ? 's' : ''}
+                      </span>
+                      <span className="inline-flex items-center gap-1">
+                        <FolderGit2 className="size-3.5" />
+                        {project.repo_count} repo{project.repo_count !== 1 ? 's' : ''}
+                      </span>
+                      <span>{formatBytes(project.size_bytes)}</span>
+                    </div>
+                    <p className="mt-2 text-xs text-muted-foreground">
+                      Created {formatDate(project.created_at)}
                     </p>
-                  )}
-                  <div className="flex items-center gap-4 text-xs text-muted-foreground">
-                    <span className="inline-flex items-center gap-1">
-                      <Users className="size-3.5" />
-                      {project.member_count} member{project.member_count !== 1 ? 's' : ''}
-                    </span>
-                    <span className="inline-flex items-center gap-1">
-                      <FolderGit2 className="size-3.5" />
-                      {project.repo_count} repo{project.repo_count !== 1 ? 's' : ''}
-                    </span>
-                    <span>{formatBytes(project.size_bytes)}</span>
-                  </div>
-                  <p className="mt-2 text-xs text-muted-foreground">
-                    Created {formatDate(project.created_at)}
-                  </p>
-                </CardContent>
-              </Card>
+                  </CardContent>
+                </Card>
+              </Link>
             </motion.div>
           ))}
         </div>

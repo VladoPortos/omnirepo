@@ -4,6 +4,7 @@
  */
 
 import { useState, useMemo } from 'react';
+import { useParams } from 'react-router-dom';
 import { Upload, ExternalLink } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
@@ -24,6 +25,7 @@ import { Dropzone } from '@/components/common/Dropzone';
 import { RepoPageLayout } from './RepoPageLayout';
 import { formatBytes, formatDate } from '@/lib/format';
 import { api } from '@/api/client';
+import { useRepoContent } from '@/api/queries';
 import type { Repo } from '@/api/types';
 
 interface RpmPackage {
@@ -42,13 +44,28 @@ interface RpmRepoPageProps {
 }
 
 export function RpmRepoPage({ repo }: RpmRepoPageProps) {
+  const { name: projectName } = useParams<{ name: string }>();
   const [filter, setFilter] = useState('');
   const [sort, setSort] = useState<SortState>({ column: 'name', direction: 'asc' });
   const [syncOpen, setSyncOpen] = useState(false);
   const [selectedPkg, setSelectedPkg] = useState<RpmPackage | null>(null);
 
-  // Packages will be fetched from API; placeholder empty array
-  const packages: RpmPackage[] = [];
+  // Fetch live packages from the repo-content endpoint (F-3).
+  const { data: contentRows } = useRepoContent(projectName ?? '', 'rpm', repo.name);
+  const packages: RpmPackage[] = useMemo(
+    () =>
+      (contentRows ?? []).map((row) => ({
+        id: row.id ?? 0,
+        name: row.name,
+        version: row.version ?? '',
+        release: String(row.extra?.release ?? ''),
+        arch: String(row.extra?.arch ?? ''),
+        size: row.size_bytes,
+        scan_severity: row.scan_severity ?? '',
+        uploaded_at: row.uploaded_at,
+      })),
+    [contentRows],
+  );
 
   const filtered = useMemo(() => {
     if (!filter) return packages;

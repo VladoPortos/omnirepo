@@ -13,10 +13,19 @@ import (
 )
 
 // DevProxy returns a reverse proxy handler that forwards requests to the
-// Vite dev server at http://localhost:5173.
+// Vite dev server at http://localhost:5173. /api/* and /v2/* NotFounds
+// still return 404 JSON — otherwise unknown API routes get a Vite 404 HTML
+// page, which masks legitimate routing bugs during development.
 func DevProxy() http.Handler {
 	target, _ := url.Parse("http://localhost:5173")
-	return httputil.NewSingleHostReverseProxy(target)
+	proxy := httputil.NewSingleHostReverseProxy(target)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if isAPILikePath(r.URL.Path) {
+			writeAPINotFound(w)
+			return
+		}
+		proxy.ServeHTTP(w, r)
+	})
 }
 
 // IsDevMode returns true when the OMNIREPO_DEV environment variable is

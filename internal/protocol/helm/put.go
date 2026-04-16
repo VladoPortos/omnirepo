@@ -30,7 +30,7 @@ import (
 //   - Chart.yaml parse via helm SDK loader before promote; parse failure →
 //     400 invalid_package.
 //   - Writer tx: helm_charts upsert + helm_fts refresh + metadata_state='dirty'
-//     + optional auto-scan enqueue.
+//   - optional auto-scan enqueue.
 //   - After commit: coalescer.Get(repoID).Kick().
 //   - Audit EvtHelmUpload (with kind=chart|provenance in details).
 func (h *Handler) put(w http.ResponseWriter, r *http.Request) {
@@ -164,6 +164,8 @@ func (h *Handler) putChart(w http.ResponseWriter, r *http.Request, res resolved)
 		}
 		return nil
 	}); err != nil {
+		// HI-02: roll back the chart tgz on disk when the metadata tx fails.
+		_ = h.pathStore.Delete(r.Context(), storageKey)
 		http.Error(w, fmt.Sprintf("commit: %v", err), http.StatusInternalServerError)
 		return
 	}

@@ -61,6 +61,10 @@ function useTrivyDBPull() {
 // ---------- Helpers ----------
 
 function formatAgeHours(hours: number): string {
+  // The backend returns -1 when the DB directory exists but no trivy_db_meta
+  // row was ever recorded (baked-in image, manual copy). Don't claim it's
+  // "less than an hour" old — we simply don't know.
+  if (hours < 0) return 'unknown age';
   if (hours < 1) return 'less than an hour';
   if (hours < 24) return `${Math.round(hours)} hour${Math.round(hours) !== 1 ? 's' : ''}`;
   const days = Math.floor(hours / 24);
@@ -154,12 +158,24 @@ export default function TrivyPage() {
         </p>
       </div>
 
-      {/* Stale Warning */}
-      {isStale && (
+      {/* Stale Warning — only when we can actually measure age (>= 0) and
+          the backend has flagged the DB as stale. age=-1 means "no meta
+          recorded" (baked-in image); in that case we show a distinct
+          information banner instead of a stale warning. */}
+      {isStale && status && status.age_hours >= 0 && (
         <div className="flex items-center gap-3 rounded-lg border border-amber-300 bg-amber-50 p-4 dark:border-amber-700 dark:bg-amber-950/30">
           <AlertTriangle className="size-5 shrink-0 text-amber-600 dark:text-amber-400" />
           <p className="text-sm text-amber-800 dark:text-amber-300">
             Trivy database is {ageText} old. Consider updating for the latest vulnerability data.
+          </p>
+        </div>
+      )}
+      {isStale && status && status.age_hours < 0 && (
+        <div className="flex items-center gap-3 rounded-lg border border-muted bg-muted/30 p-4">
+          <AlertTriangle className="size-5 shrink-0 text-muted-foreground" />
+          <p className="text-sm text-muted-foreground">
+            Trivy database age is unknown (no update has been recorded on this instance).
+            Upload a tarball or pull from the internet to record an applied timestamp.
           </p>
         </div>
       )}

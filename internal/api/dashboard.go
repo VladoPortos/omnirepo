@@ -6,6 +6,7 @@
 package api
 
 import (
+	"log/slog"
 	"net/http"
 	"runtime"
 	"strings"
@@ -21,16 +22,58 @@ func (d Deps) mountDashboard(r chi.Router) {
 	r.Get("/dashboard/storage", d.handleStorageDetail)
 }
 
+// repoSizeExpr is a SQL scalar subquery that computes the live storage used
+// by one repo row, summing across every artifact table. The `repos.size_bytes`
+// column is currently never written (WALKTHROUGH-FINDINGS F-5) so reading it
+// directly reported 0 B on every dashboard. Until a counter-update hook is
+// added to each protocol's PUT path, we recompute on read.
+//
+// The inner correlated subqueries all filter by `r.id` which is the outer
+// `repos` alias; every caller MUST alias the repos table as `r` for this
+// fragment to bind.
+//
+// Docker is an underestimate: we count manifest body bytes only, not the
+// ref-counted blob tree (blobs are global and attributing them per-repo
+// requires a manifest→blob join that costs too much per dashboard load).
+// Good enough for "is storage growing?" — not for billing.
+// The docker sub-expression sums the manifest bodies themselves plus the
+// de-duplicated config+layer blobs they reference. Blobs are ref-counted
+// globally in `docker_blobs`, but the (repo_id → blob digest) graph is
+// only carried in each manifest's JSON body — no join table exists — so
+// we walk the `layers` array and `config.digest` with SQLite's JSON1
+// functions. Per-repo shared blobs are NOT split across repos: a blob
+// referenced by two repos is fully counted in both (overestimate), which
+// matches how operators think about stored bytes per logical repo.
+const repoSizeExpr = `(
+	COALESCE((SELECT SUM(size_bytes) FROM rpm_packages  WHERE repo_id = r.id), 0) +
+	COALESCE((SELECT SUM(size_bytes) FROM deb_packages  WHERE repo_id = r.id), 0) +
+	COALESCE((SELECT SUM(size_bytes) FROM pypi_files    WHERE repo_id = r.id), 0) +
+	COALESCE((SELECT SUM(size_bytes) FROM helm_charts   WHERE repo_id = r.id), 0) +
+	COALESCE((SELECT SUM(size_bytes) FROM raw_files     WHERE repo_id = r.id), 0) +
+	COALESCE((SELECT SUM(size_bytes) FROM docker_manifests WHERE repo_id = r.id), 0) +
+	COALESCE((
+		SELECT SUM(size_bytes) FROM docker_blobs WHERE digest IN (
+			SELECT DISTINCT json_extract(jl.value, '$.digest')
+			FROM docker_manifests m, json_each(m.body, '$.layers') jl
+			WHERE m.repo_id = r.id
+			UNION
+			SELECT DISTINCT json_extract(m.body, '$.config.digest')
+			FROM docker_manifests m
+			WHERE m.repo_id = r.id AND json_extract(m.body, '$.config.digest') IS NOT NULL
+		)
+	), 0)
+)`
+
 // dashboardResponse is the JSON shape returned by GET /dashboard.
 type dashboardResponse struct {
-	StorageUsedBytes  int64          `json:"storage_used_bytes"`
-	StorageTotalBytes int64          `json:"storage_total_bytes"`
-	ProjectCount      int64          `json:"project_count"`
-	RepoCount         int64          `json:"repo_count"`
-	UserCount         int64          `json:"user_count"`
-	ScanFindings      scanFindings   `json:"scan_findings"`
-	HighSeverity      []vulnRow      `json:"high_severity"`
-	RecentActivity    []activityRow  `json:"recent_activity"`
+	StorageUsedBytes  int64         `json:"storage_used_bytes"`
+	StorageTotalBytes int64         `json:"storage_total_bytes"`
+	ProjectCount      int64         `json:"project_count"`
+	RepoCount         int64         `json:"repo_count"`
+	UserCount         int64         `json:"user_count"`
+	ScanFindings      scanFindings  `json:"scan_findings"`
+	HighSeverity      []vulnRow     `json:"high_severity"`
+	RecentActivity    []activityRow `json:"recent_activity"`
 }
 
 type vulnRow struct {
@@ -85,38 +128,68 @@ func (d Deps) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		scopeClause = " AND project_id IN (" + strings.Join(placeholders, ",") + ")"
 	}
 
+	// ME-11: log DB errors instead of silently swallowing. COALESCE still
+	// guarantees zero on missing rows, but a driver/connection failure now
+	// surfaces in the server log rather than masquerading as "empty data."
+	logDashErr := func(err error, query string) {
+		if err != nil {
+			slog.WarnContext(r.Context(), "dashboard.query_failed", "query", query, "err", err)
+		}
+	}
+
 	// Repo count.
 	var repoCount int64
 	repoArgs := make([]any, len(scopeArgs))
 	copy(repoArgs, scopeArgs)
-	_ = d.DB.Reader.QueryRowContext(r.Context(),
-		`SELECT COUNT(*) FROM repos WHERE deleted_at IS NULL`+scopeClause, repoArgs...).Scan(&repoCount)
+	logDashErr(d.DB.Reader.QueryRowContext(r.Context(),
+		`SELECT COUNT(*) FROM repos WHERE deleted_at IS NULL`+scopeClause, repoArgs...).Scan(&repoCount),
+		"repo_count")
 
 	// User count (always global — not sensitive).
-	userCount, _ := d.Users.Count(r.Context())
+	userCount, userErr := d.Users.Count(r.Context())
+	logDashErr(userErr, "user_count")
 
-	// Storage: sum of repos' size_bytes.
+	// Storage: live sum across artifact tables per-repo (F-5). `repos.size_bytes`
+	// is never written, so we rebuild it at read time using repoSizeExpr.
 	storageArgs := make([]any, len(scopeArgs))
 	copy(storageArgs, scopeArgs)
 	var storageUsed int64
-	_ = d.DB.Reader.QueryRowContext(r.Context(),
-		`SELECT COALESCE(SUM(size_bytes), 0) FROM repos WHERE deleted_at IS NULL`+scopeClause, storageArgs...).Scan(&storageUsed)
+	logDashErr(d.DB.Reader.QueryRowContext(r.Context(),
+		`SELECT COALESCE(SUM(`+repoSizeExpr+`), 0) FROM repos r WHERE r.deleted_at IS NULL`+strings.Replace(scopeClause, "project_id", "r.project_id", 1),
+		storageArgs...).Scan(&storageUsed),
+		"storage_used")
+
+	// S3 buckets are project-scoped, not repo-scoped, so they don't fit
+	// into repoSizeExpr. Add the total of stored objects in every bucket
+	// owned by a visible project (F-5). Deleted buckets are skipped.
+	s3Args := make([]any, len(scopeArgs))
+	copy(s3Args, scopeArgs)
+	var s3Used int64
+	s3Scope := strings.Replace(scopeClause, "project_id", "b.project_id", 1)
+	logDashErr(d.DB.Reader.QueryRowContext(r.Context(),
+		`SELECT COALESCE(SUM(o.size_bytes), 0)
+		 FROM s3_objects o
+		 JOIN s3_buckets b ON b.id = o.bucket_id
+		 WHERE b.deleted_at IS NULL`+s3Scope,
+		s3Args...).Scan(&s3Used),
+		"storage_used_s3")
+	storageUsed += s3Used
 
 	// Scan findings: count all severity levels.
 	var critical, high, medium, low int64
 	if scopeClause == "" {
-		_ = d.DB.Reader.QueryRowContext(r.Context(), `
+		logDashErr(d.DB.Reader.QueryRowContext(r.Context(), `
 			SELECT
 				COALESCE(SUM(CASE WHEN severity='CRITICAL' THEN 1 ELSE 0 END), 0),
 				COALESCE(SUM(CASE WHEN severity='HIGH' THEN 1 ELSE 0 END), 0),
 				COALESCE(SUM(CASE WHEN severity='MEDIUM' THEN 1 ELSE 0 END), 0),
 				COALESCE(SUM(CASE WHEN severity='LOW' THEN 1 ELSE 0 END), 0)
 			FROM vulnerabilities
-		`).Scan(&critical, &high, &medium, &low)
+		`).Scan(&critical, &high, &medium, &low), "scan_findings_global")
 	} else {
 		vulnArgs := make([]any, len(scopeArgs))
 		copy(vulnArgs, scopeArgs)
-		_ = d.DB.Reader.QueryRowContext(r.Context(), `
+		logDashErr(d.DB.Reader.QueryRowContext(r.Context(), `
 			SELECT
 				COALESCE(SUM(CASE WHEN v.severity='CRITICAL' THEN 1 ELSE 0 END), 0),
 				COALESCE(SUM(CASE WHEN v.severity='HIGH' THEN 1 ELSE 0 END), 0),
@@ -126,14 +199,14 @@ func (d Deps) handleDashboard(w http.ResponseWriter, r *http.Request) {
 			JOIN scans s ON s.id = v.scan_id
 			JOIN repos r ON r.id = s.repo_id
 			WHERE r.deleted_at IS NULL`+strings.Replace(scopeClause, "project_id", "r.project_id", 1),
-			vulnArgs...).Scan(&critical, &high, &medium, &low)
+			vulnArgs...).Scan(&critical, &high, &medium, &low), "scan_findings_scoped")
 	}
 
 	// Project count.
 	var projectCount int64
 	if scopeClause == "" {
-		_ = d.DB.Reader.QueryRowContext(r.Context(),
-			`SELECT COUNT(*) FROM projects`).Scan(&projectCount)
+		logDashErr(d.DB.Reader.QueryRowContext(r.Context(),
+			`SELECT COUNT(*) FROM projects`).Scan(&projectCount), "project_count")
 	} else {
 		projArgs := make([]any, len(scopeArgs))
 		copy(projArgs, scopeArgs)
@@ -141,8 +214,9 @@ func (d Deps) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		for i := range ph {
 			ph[i] = "?"
 		}
-		_ = d.DB.Reader.QueryRowContext(r.Context(),
-			`SELECT COUNT(*) FROM projects WHERE id IN (`+strings.Join(ph, ",")+`)`, projArgs...).Scan(&projectCount)
+		logDashErr(d.DB.Reader.QueryRowContext(r.Context(),
+			`SELECT COUNT(*) FROM projects WHERE id IN (`+strings.Join(ph, ",")+`)`, projArgs...).Scan(&projectCount),
+			"project_count_scoped")
 	}
 
 	// High-severity findings: top 20 CRITICAL/HIGH vulnerabilities with repo context.
@@ -251,8 +325,8 @@ func (d Deps) handleDashboard(w http.ResponseWriter, r *http.Request) {
 
 // storageDetailResponse is the JSON shape for GET /dashboard/storage.
 type storageDetailResponse struct {
-	TotalBytes int64             `json:"total_bytes"`
-	UsedBytes  int64             `json:"used_bytes"`
+	TotalBytes int64            `json:"total_bytes"`
+	UsedBytes  int64            `json:"used_bytes"`
 	Repos      []storageRepoRow `json:"repos"`
 }
 
@@ -287,12 +361,24 @@ func (d Deps) handleStorageDetail(w http.ResponseWriter, r *http.Request) {
 		scopeClause = " AND r.project_id IN (" + strings.Join(placeholders, ",") + ")"
 	}
 
-	// Used bytes.
+	// Used bytes — live computed (F-5). Also adds S3 bucket contents which
+	// are project-scoped, not repo-scoped, and therefore outside repoSizeExpr.
 	usedArgs := make([]any, len(scopeArgs))
 	copy(usedArgs, scopeArgs)
 	var usedBytes int64
 	_ = d.DB.Reader.QueryRowContext(r.Context(),
-		`SELECT COALESCE(SUM(r.size_bytes), 0) FROM repos r WHERE r.deleted_at IS NULL`+scopeClause, usedArgs...).Scan(&usedBytes)
+		`SELECT COALESCE(SUM(`+repoSizeExpr+`), 0) FROM repos r WHERE r.deleted_at IS NULL`+scopeClause, usedArgs...).Scan(&usedBytes)
+
+	s3Args := make([]any, len(scopeArgs))
+	copy(s3Args, scopeArgs)
+	var s3Used int64
+	_ = d.DB.Reader.QueryRowContext(r.Context(),
+		`SELECT COALESCE(SUM(o.size_bytes), 0)
+		 FROM s3_objects o
+		 JOIN s3_buckets b ON b.id = o.bucket_id
+		 WHERE b.deleted_at IS NULL`+strings.Replace(scopeClause, "r.project_id", "b.project_id", 1),
+		s3Args...).Scan(&s3Used)
+	usedBytes += s3Used
 
 	// Total bytes: Statfs or settings fallback.
 	totalBytes := statfsTotal(d.DataRoot)
@@ -310,15 +396,15 @@ func (d Deps) handleStorageDetail(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Per-repo breakdown sorted by size DESC.
+	// Per-repo breakdown sorted by size DESC (live-computed, F-5).
 	repoArgs := make([]any, len(scopeArgs))
 	copy(repoArgs, scopeArgs)
 	rows, err := d.DB.Reader.QueryContext(r.Context(), `
-		SELECT p.name, r.name, r.type, r.size_bytes
+		SELECT p.name, r.name, r.type, `+repoSizeExpr+` AS bytes
 		FROM repos r
 		JOIN projects p ON p.id = r.project_id
 		WHERE r.deleted_at IS NULL`+scopeClause+`
-		ORDER BY r.size_bytes DESC
+		ORDER BY bytes DESC
 	`, repoArgs...)
 	repos := make([]storageRepoRow, 0)
 	if err == nil {

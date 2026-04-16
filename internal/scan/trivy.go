@@ -33,6 +33,11 @@ func NewTrivyRunner(cfg config.Trivy) Runner {
 // baseFlags returns the D-22 mandatory flag set. Centralized so the
 // air-gap invariant is impossible to drop accidentally — grep tests assert
 // these appear in EVERY exec call path.
+//
+// Scanners: vuln + secret + misconfig. Misconfig was added for F-4 so
+// Helm chart scans surface Kubernetes misconfigurations (e.g., containers
+// using images from untrusted registries). Vuln stays for OS-package +
+// language-lockfile CVEs; secret stays for the existing RAW pathway.
 func (t *trivyRunner) baseFlags() []string {
 	return []string{
 		"--cache-dir", t.cachePath,
@@ -46,6 +51,7 @@ func (t *trivyRunner) baseFlags() []string {
 		"--skip-java-db-update",
 		// VEX repo is similarly fetched on first hit; same rule applies.
 		"--skip-vex-repo-update",
+		"--scanners", "vuln,secret,misconfig",
 		"--format", "json",
 	}
 }

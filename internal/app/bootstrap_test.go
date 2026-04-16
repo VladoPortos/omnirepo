@@ -104,6 +104,13 @@ func TestApplyBootstrap_HappyPath(t *testing.T) {
 	if err != nil || len(sha) != 64 {
 		t.Fatalf("bootstrap_sha256 bad: %q err=%v", sha, err)
 	}
+
+	// Regression: bootstrapped repos must be indexed in repos_fts so
+	// global search surfaces them. Pre-fix the FTS tables stayed empty
+	// and every search returned zero results until a manual recreate.
+	if got := countRows(t, db, "repos_fts"); got != rep.ReposSeeded {
+		t.Fatalf("repos_fts rows=%d want=%d", got, rep.ReposSeeded)
+	}
 }
 
 func TestApplyBootstrap_PasswordsHashed(t *testing.T) {

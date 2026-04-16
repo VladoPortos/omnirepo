@@ -10,6 +10,10 @@ import type {
   MeUpdateRequest,
   LoginRequest,
   LoginResponse,
+  SetupStatusResponse,
+  SetupSuperAdminRequest,
+  SetupSuperAdminResponse,
+  RepoContentEntry,
   ProjectListItem,
   ProjectDetail,
   ProjectCreate,
@@ -21,7 +25,6 @@ import type {
   DashboardResponse,
   DashboardStorageResponse,
   SearchResponse,
-  MaintenanceStatus,
   PaginatedResponse,
   GitTreeEntry,
   GitFileContent,
@@ -37,6 +40,54 @@ import type {
   S3KeyCreate,
   S3KeyCreateResponse,
 } from './types';
+
+// -- Repo content (listing artifacts uploaded to a repo) --
+
+export function useRepoContent(
+  projectName: string,
+  repoType: string,
+  repoName: string,
+  opts?: { limit?: number; offset?: number },
+) {
+  return useQuery({
+    queryKey: ['repo-content', projectName, repoType, repoName, opts?.limit ?? 100, opts?.offset ?? 0],
+    queryFn: () => {
+      const params: Record<string, string> = {};
+      if (opts?.limit != null) params.limit = String(opts.limit);
+      if (opts?.offset != null) params.offset = String(opts.offset);
+      return api.get<RepoContentEntry[]>(
+        `/projects/${projectName}/repos/${repoType}/${repoName}/content`,
+        params,
+      );
+    },
+    staleTime: 15_000,
+  });
+}
+
+// -- First-run setup --
+
+export function useSetupStatus() {
+  return useQuery({
+    queryKey: ['setup', 'status'],
+    queryFn: () => api.get<SetupStatusResponse>('/setup/status'),
+    // Once we know it's false we don't want to keep re-polling; once it's
+    // true the only state change is "user creates super-admin" which the
+    // mutation's onSuccess handles directly.
+    staleTime: Infinity,
+    retry: false,
+  });
+}
+
+export function useSetupSuperAdmin() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: SetupSuperAdminRequest) =>
+      api.post<SetupSuperAdminResponse>('/setup/superadmin', data),
+    onSuccess: () => {
+      qc.setQueryData<SetupStatusResponse>(['setup', 'status'], { needs_setup: false });
+    },
+  });
+}
 
 // -- Auth / Me --
 
@@ -137,7 +188,10 @@ export function useCreateProject() {
   return useMutation({
     mutationFn: (data: ProjectCreate) =>
       api.post<ProjectCreateResponse>('/projects', data),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['projects'] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['projects'] });
+      qc.invalidateQueries({ queryKey: ['dashboard'] });
+    },
   });
 }
 
@@ -145,7 +199,10 @@ export function useDeleteProject() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (name: string) => api.del<void>(`/projects/${name}`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['projects'] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['projects'] });
+      qc.invalidateQueries({ queryKey: ['dashboard'] });
+    },
   });
 }
 
@@ -180,10 +237,15 @@ export function useCreateRepo() {
       projectName: string;
       data: RepoCreate;
     }) => api.post<Repo>(`/projects/${projectName}/repos`, data),
-    onSuccess: (_data, vars) =>
-      qc.invalidateQueries({
-        queryKey: ['projects', vars.projectName, 'repos'],
-      }),
+    onSuccess: (_data, vars) => {
+      // The project detail page renders tab counts from the project summary
+      // (["projects", name]), repo cards from the project repo list
+      // (["projects", name, "repos"]), and storage breakdown on the
+      // dashboard. Invalidate all of them so create feels immediate.
+      qc.invalidateQueries({ queryKey: ['projects', vars.projectName] });
+      qc.invalidateQueries({ queryKey: ['projects', vars.projectName, 'repos'] });
+      qc.invalidateQueries({ queryKey: ['dashboard'] });
+    },
   });
 }
 
@@ -201,10 +263,13 @@ export function usePatchRepo() {
       repoName: string;
       data: RepoPatch;
     }) => api.patch<Repo>(`/projects/${projectName}/repos/${repoType}/${repoName}`, data),
-    onSuccess: (_data, vars) =>
+    onSuccess: (_data, vars) => {
       qc.invalidateQueries({
         queryKey: ['projects', vars.projectName, 'repos', vars.repoType, vars.repoName],
-      }),
+      });
+      qc.invalidateQueries({ queryKey: ['projects', vars.projectName] });
+      qc.invalidateQueries({ queryKey: ['projects', vars.projectName, 'repos'] });
+    },
   });
 }
 
@@ -220,10 +285,11 @@ export function useDeleteRepo() {
       repoType: string;
       repoName: string;
     }) => api.del<void>(`/projects/${projectName}/repos/${repoType}/${repoName}`),
-    onSuccess: (_data, vars) =>
-      qc.invalidateQueries({
-        queryKey: ['projects', vars.projectName, 'repos'],
-      }),
+    onSuccess: (_data, vars) => {
+      qc.invalidateQueries({ queryKey: ['projects', vars.projectName] });
+      qc.invalidateQueries({ queryKey: ['projects', vars.projectName, 'repos'] });
+      qc.invalidateQueries({ queryKey: ['dashboard'] });
+    },
   });
 }
 
@@ -247,9 +313,12 @@ export function useSearch(q: string, kind?: string, severity?: string, project?:
 // -- Maintenance --
 
 export function useMaintenance() {
+  // ME-06: public status endpoint (/maintenance/status) returns only the
+  // enabled flag so the banner is visible to non-admin users. Admin-gated
+  // details (toggled_by/toggled_at) live on /admin/maintenance.
   return useQuery({
     queryKey: ['maintenance'],
-    queryFn: () => api.get<MaintenanceStatus>('/admin/maintenance'),
+    queryFn: () => api.get<{ enabled: boolean }>('/maintenance/status'),
     staleTime: 30_000,
     retry: false,
   });

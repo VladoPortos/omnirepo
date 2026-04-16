@@ -5,9 +5,10 @@
  */
 
 import { lazy, Suspense, type ReactNode } from 'react';
-import { createBrowserRouter, Navigate } from 'react-router-dom';
+import { createBrowserRouter, Navigate, useLocation } from 'react-router-dom';
 import { AppShell } from '@/components/layout/AppShell';
 import { LoginPage } from '@/pages/LoginPage';
+import { SetupPage } from '@/pages/SetupPage';
 import { ChangePasswordPage } from '@/pages/ChangePasswordPage';
 import { NotFoundPage } from '@/pages/NotFoundPage';
 import { DashboardPage } from '@/pages/DashboardPage';
@@ -15,6 +16,7 @@ import { ProjectsPage } from '@/pages/ProjectsPage';
 import { ProjectDetailPage } from '@/pages/ProjectDetailPage';
 import { RepoDetailRouter } from '@/pages/repo/RepoDetailRouter';
 import { useAuth } from '@/hooks/useAuth';
+import { useSetupStatus } from '@/api/queries';
 import { Skeleton } from '@/components/ui/skeleton';
 
 import { SearchPage } from '@/pages/SearchPage';
@@ -78,6 +80,32 @@ function LazyFallback() {
   );
 }
 
+// Setup guard: when the install has no users yet, funnel every entry point
+// to /setup so the operator is never stuck on a login form with no valid
+// credentials. Wraps both AuthGuard (protected routes) and /login (otherwise
+// users landing on /login directly would see a dead sign-in form).
+function SetupGuard({ children }: { children: ReactNode }) {
+  const { data, isLoading, isError } = useSetupStatus();
+  const location = useLocation();
+
+  if (isLoading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-background">
+        <p className="text-muted-foreground">Checking setup status…</p>
+      </div>
+    );
+  }
+
+  // Fail-open if the status probe errors — the backend might be briefly
+  // unreachable, and sending the user to /setup unconditionally would hide
+  // the real problem. Real 401s from later calls still work normally.
+  if (!isError && data?.needs_setup && location.pathname !== '/setup') {
+    return <Navigate to="/setup" replace />;
+  }
+
+  return <>{children}</>;
+}
+
 // Auth guard: redirects unauthenticated users to /login
 function AuthGuard({ children }: { children: ReactNode }) {
   const { isAuthenticated, isLoading } = useAuth();
@@ -113,8 +141,16 @@ function MustChangePasswordGuard({ children }: { children: ReactNode }) {
 
 export const router = createBrowserRouter([
   {
+    path: '/setup',
+    element: <SetupPage />,
+  },
+  {
     path: '/login',
-    element: <LoginPage />,
+    element: (
+      <SetupGuard>
+        <LoginPage />
+      </SetupGuard>
+    ),
   },
   {
     path: '/change-password',
@@ -123,11 +159,13 @@ export const router = createBrowserRouter([
   {
     path: '/',
     element: (
-      <AuthGuard>
-        <MustChangePasswordGuard>
-          <AppShell />
-        </MustChangePasswordGuard>
-      </AuthGuard>
+      <SetupGuard>
+        <AuthGuard>
+          <MustChangePasswordGuard>
+            <AppShell />
+          </MustChangePasswordGuard>
+        </AuthGuard>
+      </SetupGuard>
     ),
     children: [
       { index: true, element: <DashboardPage /> },

@@ -26,6 +26,15 @@ const LABEL_MAP: Record<string, string> = {
   trash: 'Trash',
   maintenance: 'Maintenance',
   profile: 'Profile',
+  // Repo-type segments (lowercase in URL, display-cased in breadcrumbs).
+  rpm: 'RPM',
+  deb: 'APT',
+  pypi: 'PyPI',
+  docker: 'Docker',
+  helm: 'Helm',
+  git: 'Git',
+  raw: 'RAW',
+  s3: 'S3',
 };
 
 function segmentLabel(segment: string): string {

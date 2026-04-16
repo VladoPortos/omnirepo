@@ -13,7 +13,6 @@ import {
   Users,
   ShieldAlert,
   Plus,
-  Upload,
   Activity,
   HardDrive,
 } from 'lucide-react';
@@ -64,13 +63,9 @@ export function DashboardPage() {
       <div className="flex items-center justify-between">
         <h1 className="text-[28px] font-semibold leading-tight">Dashboard</h1>
         <div className="flex gap-2">
-          <Button variant="outline" size="sm" nativeButton={false} render={<Link to="/projects" />}>
+          <Button variant="outline" size="sm" nativeButton={false} render={<Link to="/projects?create=1" />}>
             <Plus className="mr-1.5 size-4" />
             Create Project
-          </Button>
-          <Button variant="outline" size="sm" nativeButton={false} render={<Link to="/projects" />}>
-            <Upload className="mr-1.5 size-4" />
-            Upload Artifact
           </Button>
         </div>
       </div>
@@ -224,18 +219,34 @@ export function DashboardPage() {
                 ))}
               </div>
             ) : data?.recent_activity && data.recent_activity.length > 0 ? (
-              <div className="max-h-[400px] space-y-3 overflow-y-auto">
-                {data.recent_activity.slice(0, 20).map((event) => (
-                  <div key={event.id} className="flex items-start gap-3 text-sm">
-                    <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
-                      {formatDate(event.created_at)}
-                    </span>
-                    <span className="flex-1">
-                      <span className="font-medium">{event.action}</span>{' '}
-                      <span className="text-muted-foreground">{event.target_id}</span>
-                    </span>
-                  </div>
-                ))}
+              <div className="space-y-3">
+                {data.recent_activity.slice(0, 20).map((event) => {
+                  const href = activityTargetHref(event.action, event.target_id);
+                  const content = (
+                    <>
+                      <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
+                        {formatDate(event.created_at)}
+                      </span>
+                      <span className="flex-1">
+                        <span className="font-medium">{event.action}</span>{' '}
+                        <span className="text-muted-foreground">{event.target_id}</span>
+                      </span>
+                    </>
+                  );
+                  return href ? (
+                    <Link
+                      key={event.id}
+                      to={href}
+                      className="flex items-start gap-3 text-sm rounded-md px-1 -mx-1 py-0.5 hover:bg-muted/40 transition-colors"
+                    >
+                      {content}
+                    </Link>
+                  ) : (
+                    <div key={event.id} className="flex items-start gap-3 text-sm">
+                      {content}
+                    </div>
+                  );
+                })}
               </div>
             ) : (
               <p className="text-sm text-muted-foreground">No recent activity.</p>
@@ -273,9 +284,13 @@ export function DashboardPage() {
 
 function HighSeverityList({ items }: { items: DashboardVulnRow[] }) {
   return (
-    <div className="max-h-[400px] space-y-2 overflow-y-auto">
+    <div className="space-y-2">
       {items.map((v, i) => (
-        <div key={`${v.cve_id}-${i}`} className="flex items-start gap-2 text-sm">
+        <Link
+          key={`${v.cve_id}-${i}`}
+          to={`/projects/${v.project}/${vulnRepoType(v)}/${v.repo}`}
+          className="flex items-start gap-2 text-sm rounded-md px-1 -mx-1 py-0.5 hover:bg-muted/40 transition-colors"
+        >
           <SeverityBadge severity={v.severity.toLowerCase()} className="mt-0.5 shrink-0" />
           <div className="min-w-0 flex-1">
             <span className="font-mono font-medium">{v.cve_id}</span>
@@ -289,10 +304,39 @@ function HighSeverityList({ items }: { items: DashboardVulnRow[] }) {
               </span>
             )}
           </div>
-        </div>
+        </Link>
       ))}
     </div>
   );
+}
+
+// vulnRepoType picks the URL protocol segment for a vulnerability row. The
+// dashboard API returns the field as `repo_type`; fall back to `docker` only
+// if the backend hasn't populated it yet for legacy rows.
+function vulnRepoType(v: DashboardVulnRow): string {
+  return v.repo_type || 'docker';
+}
+
+// activityTargetHref maps a dashboard activity row to a navigable URL using
+// the action + target_id shape the backend actually emits:
+//   project.*          target_id = "<name>"               → /projects/<name>
+//   member.*           target_id = "<project>"            → /projects/<project>
+//   repo.*             target_id = "<project>/<type>/<name>" → /projects/.../type/name
+//   signing_key.*      same shape as repo.*
+// Anything else (auth.*, user.*, tls.*, trivy.*) has no useful drill-through
+// and stays rendered as plain text.
+function activityTargetHref(action: string, targetID: string): string {
+  if (!targetID) return '';
+  const parts = targetID.split('/');
+  if (action.startsWith('project.') || action.startsWith('member.')) {
+    return parts.length >= 1 && parts[0] ? `/projects/${parts[0]}` : '';
+  }
+  if (action.startsWith('repo.') || action.startsWith('signing_key.')) {
+    if (parts.length >= 3 && parts[0] && parts[1] && parts[2]) {
+      return `/projects/${parts[0]}/${parts[1]}/${parts[2]}`;
+    }
+  }
+  return '';
 }
 
 function StorageBreakdown({
@@ -329,14 +373,18 @@ function StorageBreakdown({
       {repos.length === 0 ? (
         <p className="text-sm text-muted-foreground">No repositories with stored data.</p>
       ) : (
-        <div className="max-h-[350px] space-y-2 overflow-y-auto">
+        <div className="space-y-2">
           {repos.map((repo) => {
             const barPercent = maxRepoBytes > 0
               ? Math.max((repo.size_bytes / maxRepoBytes) * 100, 8)
               : 8;
             const colors = repoTypeColor[repo.type] ?? defaultColor;
             return (
-              <div key={`${repo.project}/${repo.type}/${repo.name}`}>
+              <Link
+                key={`${repo.project}/${repo.type}/${repo.name}`}
+                to={`/projects/${repo.project}/${repo.type}/${repo.name}`}
+                className="block rounded-md p-1 -m-1 hover:bg-muted/40 transition-colors"
+              >
                 <div className="flex items-center gap-1.5 mb-0.5">
                   <span className={`inline-block size-2 shrink-0 rounded-full ${colors.dot}`} />
                   <span className="text-xs text-muted-foreground truncate">
@@ -354,7 +402,7 @@ function StorageBreakdown({
                     {formatBytes(repo.size_bytes)}
                   </span>
                 </div>
-              </div>
+              </Link>
             );
           })}
         </div>

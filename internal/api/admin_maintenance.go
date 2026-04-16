@@ -22,6 +22,22 @@ func (d Deps) mountAdminMaintenance(r chi.Router) {
 		Get("/admin/maintenance", d.handleGetMaintenance)
 	r.With(authmw.RequireCan(auth.ActionTriggerGC)).
 		Post("/admin/maintenance", d.handleToggleMaintenance)
+
+	// ME-06: public read of maintenance status (enabled bool only) so the
+	// banner is visible to non-admin users too. Toggled_by/toggled_at stay
+	// admin-gated above.
+	r.Get("/maintenance/status", d.handleMaintenanceStatus)
+}
+
+// handleMaintenanceStatus returns only the enabled flag — safe to expose to
+// any authenticated user (wider: the router mounts this under the auth'd
+// subtree, so no additional gate is needed).
+func (d Deps) handleMaintenanceStatus(w http.ResponseWriter, r *http.Request) {
+	enabled := false
+	if v, err := d.Settings.Get(r.Context(), "maintenance_mode"); err == nil && v == "true" {
+		enabled = true
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"enabled": enabled})
 }
 
 func (d Deps) handleGetMaintenance(w http.ResponseWriter, r *http.Request) {

@@ -4,6 +4,7 @@
  */
 
 import { useState, useMemo } from 'react';
+import { useParams } from 'react-router-dom';
 import {
   Folder,
   File as FileIcon,
@@ -26,6 +27,7 @@ import { Dropzone } from '@/components/common/Dropzone';
 import { RepoPageLayout } from './RepoPageLayout';
 import { formatBytes, formatDate } from '@/lib/format';
 import { api } from '@/api/client';
+import { useRepoContent } from '@/api/queries';
 import type { Repo } from '@/api/types';
 
 interface RawFileEntry {
@@ -42,12 +44,53 @@ interface RawRepoPageProps {
 }
 
 export function RawRepoPage({ repo }: RawRepoPageProps) {
+  const { name: projectName } = useParams<{ name: string }>();
   const [currentPath, setCurrentPath] = useState('');
   const [filter, setFilter] = useState('');
   const [sort, setSort] = useState<SortState>({ column: 'name', direction: 'asc' });
 
-  // Files fetched from API; placeholder empty
-  const entries: RawFileEntry[] = [];
+  const { data: contentRows } = useRepoContent(projectName ?? '', 'raw', repo.name);
+  // RAW content endpoint returns a flat list of paths; the directory-tree
+  // view is derived client-side by splitting on "/". Files at the root show
+  // up directly; deeper paths collapse into synthetic folder rows.
+  const entries: RawFileEntry[] = useMemo(() => {
+    const rows = contentRows ?? [];
+    const folderSizes = new Map<string, number>();
+    const folderLatest = new Map<string, string>();
+    const folders = new Set<string>();
+    const files: RawFileEntry[] = [];
+    const prefix = currentPath ? currentPath.replace(/\/$/, '') + '/' : '';
+    for (const row of rows) {
+      if (prefix && !row.name.startsWith(prefix)) continue;
+      const rest = row.name.slice(prefix.length);
+      const slash = rest.indexOf('/');
+      if (slash === -1) {
+        files.push({
+          name: rest,
+          path: row.name,
+          is_dir: false,
+          size: row.size_bytes,
+          content_type: String(row.extra?.mime ?? ''),
+          last_modified: row.uploaded_at,
+        });
+      } else {
+        const folder = rest.slice(0, slash);
+        folders.add(folder);
+        folderSizes.set(folder, (folderSizes.get(folder) ?? 0) + row.size_bytes);
+        const prev = folderLatest.get(folder) ?? '';
+        if (row.uploaded_at > prev) folderLatest.set(folder, row.uploaded_at);
+      }
+    }
+    const folderRows: RawFileEntry[] = Array.from(folders).map((name) => ({
+      name,
+      path: prefix + name,
+      is_dir: true,
+      size: folderSizes.get(name) ?? 0,
+      content_type: '',
+      last_modified: folderLatest.get(name) ?? '',
+    }));
+    return [...folderRows, ...files];
+  }, [contentRows, currentPath]);
 
   const filtered = useMemo(() => {
     if (!filter) return entries;

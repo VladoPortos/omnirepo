@@ -5,6 +5,7 @@
  */
 
 import { useState, useMemo } from 'react';
+import { useParams } from 'react-router-dom';
 import { ChevronDown, ChevronRight, Package } from 'lucide-react';
 import { DataTable, type ColumnDef, type SortState } from '@/components/common/DataTable';
 import { SeverityBadge } from '@/components/common/SeverityBadge';
@@ -13,6 +14,7 @@ import { Dropzone } from '@/components/common/Dropzone';
 import { RepoPageLayout } from './RepoPageLayout';
 import { formatBytes, formatDate } from '@/lib/format';
 import { api } from '@/api/client';
+import { useRepoContent } from '@/api/queries';
 import type { Repo } from '@/api/types';
 
 interface PypiFile {
@@ -45,12 +47,27 @@ interface PypiRepoPageProps {
 }
 
 export function PypiRepoPage({ repo }: PypiRepoPageProps) {
+  const { name: projectName } = useParams<{ name: string }>();
   const [filter, setFilter] = useState('');
   const [sort, setSort] = useState<SortState>({ column: 'normalized_name', direction: 'asc' });
   const [expandedProject, setExpandedProject] = useState<string | null>(null);
 
-  // Files fetched from API; placeholder empty
-  const files: PypiFile[] = [];
+  const { data: contentRows } = useRepoContent(projectName ?? '', 'pypi', repo.name);
+  const files: PypiFile[] = useMemo(
+    () =>
+      (contentRows ?? []).map((row) => ({
+        id: row.id ?? 0,
+        project_name: row.name,
+        normalized_name: row.name,
+        version: row.version ?? '',
+        filename: String(row.extra?.filename ?? ''),
+        size: row.size_bytes,
+        requires_python: String(row.extra?.requires_python ?? ''),
+        scan_severity: row.scan_severity ?? '',
+        uploaded_at: row.uploaded_at,
+      })),
+    [contentRows],
+  );
 
   // Group files by normalized project name
   const groups = useMemo<PypiProjectGroup[]>(() => {

@@ -60,10 +60,20 @@ func WriteAndRename(ctx context.Context, tmpDir, dstPath string, r io.Reader) (i
 	}
 	cleanup = false
 
-	// Parent dir fsync (Linux) — ensures the rename is durable.
-	if pf, err := os.Open(filepath.Dir(dstPath)); err == nil {
-		_ = pf.Sync()
-		_ = pf.Close()
+	// ME-13: parent-dir fsync (Linux) — ensures the rename is durable on
+	// ext4/xfs/btrfs. Previously an Open failure here was silently swallowed;
+	// now we return it so callers know the durability guarantee was not met.
+	pf, openErr := os.Open(filepath.Dir(dstPath))
+	if openErr != nil {
+		return n, fmt.Errorf("storage: open parent dir for fsync: %w", openErr)
+	}
+	syncErr := pf.Sync()
+	closeErr := pf.Close()
+	if syncErr != nil {
+		return n, fmt.Errorf("storage: fsync parent dir: %w", syncErr)
+	}
+	if closeErr != nil {
+		return n, fmt.Errorf("storage: close parent dir: %w", closeErr)
 	}
 
 	return n, nil

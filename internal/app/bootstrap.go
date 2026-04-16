@@ -230,6 +230,12 @@ func ApplyBootstrapWithHook(ctx context.Context, db *metadata.DB, cfg config.Con
 			if err != nil {
 				return err
 			}
+			// Index the repo in FTS so search surfaces it immediately — the
+			// bootstrap path previously skipped this because it inserted rows
+			// directly (not via the repo create handler that wires IndexRepo).
+			if err := metadata.IndexRepo(ctx, tx, repoID, rr.Name, rr.Project, rr.DescriptionMD, rr.Type); err != nil {
+				return bootstrapErr(fmt.Sprintf("repos[%d].fts_index", i), "%w", err)
+			}
 			if repoHook != nil {
 				if _, err := repoHook(ctx, tx, repoID, rr.Type, rr.Project, rr.Name); err != nil {
 					return bootstrapErr(fmt.Sprintf("repos[%d].hook", i), "%w", err)

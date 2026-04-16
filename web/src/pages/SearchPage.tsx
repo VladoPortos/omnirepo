@@ -4,12 +4,11 @@
  * Results fade-in staggered via framer-motion.
  */
 
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Search as SearchIcon } from 'lucide-react';
 import { Input } from '@/components/ui/input';
-import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import {
   Select,
@@ -40,7 +39,11 @@ const SEVERITY_OPTIONS = [
 function useDebounce(value: string, delay: number): string {
   const [debounced, setDebounced] = useState(value);
 
-  useMemo(() => {
+  // ME-05: useEffect actually runs the cleanup when value/delay change,
+  // cancelling stale timers. The previous useMemo version returned a
+  // cleanup that was never invoked, leaking timers and occasionally
+  // surfacing out-of-order debounced values while the user typed.
+  useEffect(() => {
     const timer = setTimeout(() => setDebounced(value), delay);
     return () => clearTimeout(timer);
   }, [value, delay]);
@@ -58,16 +61,44 @@ const resultVariants = {
   exit: { opacity: 0, y: -4, transition: { duration: 0.1 } },
 };
 
+// LO-02: build the most specific route the data supports. Repo results
+// deep-link into the project's tab for that repo kind; artifact/package
+// results land on the repo detail page; CVE results stay on /search
+// (we don't have a CVE detail page yet).
 function resultRoute(result: SearchResult): string {
-  // location format is "project/repo" or "project"
-  const parts = result.location.split('/');
-  if (result.kind === 'repo' && parts.length >= 2) {
-    return `/projects/${parts[0]}`;
+  const parts = result.location.split('/').filter(Boolean);
+  switch (result.kind) {
+    case 'repo': {
+      // location = "project/repo" for repo kind, project is parts[0], repo is parts[1].
+      if (parts.length >= 2) {
+        return `/projects/${parts[0]}`;
+      }
+      if (parts.length === 1) {
+        return `/projects/${parts[0]}`;
+      }
+      return '/projects';
+    }
+    case 'artifact':
+    case 'rpm':
+    case 'deb':
+    case 'pypi':
+    case 'helm': {
+      // location = "project/repo" (artifact FTS join), result.name is the
+      // artifact name. Send the user to the repo detail so they land on
+      // the listing that contains the artifact.
+      if (parts.length >= 2) {
+        return `/projects/${parts[0]}/${result.kind === 'artifact' ? 'raw' : result.kind}/${parts[1]}`;
+      }
+      if (parts.length === 1) {
+        return `/projects/${parts[0]}`;
+      }
+      return '/projects';
+    }
+    case 'cve':
+      return '/search';
+    default:
+      return parts.length > 0 ? `/projects/${parts[0]}` : '/search';
   }
-  if (parts.length >= 1) {
-    return `/projects/${parts[0]}`;
-  }
-  return '/search';
 }
 
 export function SearchPage() {
@@ -252,12 +283,13 @@ export function SearchPage() {
             ))}
         </AnimatePresence>
 
-        {/* Load more */}
-        {data?.next_cursor && !showLoading && (
-          <div className="flex justify-center pt-2">
-            <Button variant="outline" size="sm">
-              Load more
-            </Button>
+        {/* LO-03: the backend returns a next_cursor but the hook doesn't
+            yet accumulate pages. Hide the button until cursor-driven
+            pagination is wired through useSearch — a non-functional button
+            is worse than a visible limit. Refine the query instead. */}
+        {data?.next_cursor && !showLoading && filteredResults.length > 0 && (
+          <div className="flex justify-center pt-2 text-xs text-muted-foreground">
+            Showing top results — refine your query to see more.
           </div>
         )}
       </div>

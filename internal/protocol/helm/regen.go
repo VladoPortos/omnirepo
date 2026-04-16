@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"time"
@@ -108,7 +109,12 @@ func RegenFor(d RegenDeps) regen.RegenFn {
 			return d.recordFailure(ctx, fmt.Errorf("helm regen: scratch: %w", err))
 		}
 		scratchPath := tmpScratch.Name()
-		_ = tmpScratch.Close()
+		// LO-04: surface scratch-file close errors (FD-leak signal under
+		// failure storms). Still proceed on error — the file is removed
+		// via defer regardless.
+		if closeErr := tmpScratch.Close(); closeErr != nil {
+			slog.WarnContext(ctx, "helm.regen.scratch_close_failed", "path", scratchPath, "err", closeErr)
+		}
 		defer func() { _ = os.Remove(scratchPath) }()
 
 		if err := idx.WriteFile(scratchPath, 0o644); err != nil {

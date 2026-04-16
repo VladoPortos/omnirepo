@@ -214,8 +214,9 @@ func TestProtectedRoute_WWWAuthenticateChallenge(t *testing.T) {
 		t.Fatalf("status: %d; want 401", resp.StatusCode)
 	}
 	got := resp.Header.Get("WWW-Authenticate")
-	// Must match: Bearer realm="...//.../v2/token",service="omnirepo"
-	re := regexp.MustCompile(`^Bearer realm="https?://[^"]+/v2/token",service="omnirepo"$`)
+	// Must include realm, service, AND scope (F-1 fix). Without scope,
+	// docker/crane can't complete the Bearer exchange.
+	re := regexp.MustCompile(`^Bearer realm="https?://[^"]+/v2/token",service="omnirepo",scope="repository:nope/docker/nope:pull"$`)
 	if !re.MatchString(got) {
 		t.Fatalf("WWW-Authenticate mismatch: %q", got)
 	}

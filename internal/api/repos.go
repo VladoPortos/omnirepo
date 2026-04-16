@@ -107,6 +107,25 @@ func (d Deps) resolveRepoFromURL(w http.ResponseWriter, r *http.Request) (*metad
 	return p, rr, true
 }
 
+// handleGetRepo returns a single repo's metadata. Used by the UI to render
+// repo detail pages. Requires project membership; super-admin bypass applies.
+// Public-read repos are still gated by membership — this endpoint carries the
+// full administrative projection and should not leak through anonymous reads.
+func (d Deps) handleGetRepo(w http.ResponseWriter, r *http.Request) {
+	_, rr, ok := d.resolveRepoFromURL(w, r)
+	if !ok {
+		return
+	}
+	resp := repoToResponse(*rr)
+	// F-5: repos.size_bytes is never written; overlay the live aggregate so
+	// the repo header ("<name> · <size>") shows non-zero for repos that
+	// actually contain artifacts.
+	if sizes := d.liveRepoSizes(r.Context(), []int64{rr.ID}); len(sizes) > 0 {
+		resp.SizeBytes = sizes[rr.ID]
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
 // handlePatchRepo implements D-34. The per-route middleware already enforced
 // project membership via RequireCanWith(ActionUpdateRepo), so any caller
 // reaching here is authorized.

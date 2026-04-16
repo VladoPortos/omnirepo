@@ -17,3 +17,16 @@ coverage.txt
 example-before.png
 iana-after.png
 /omnirepo
+
+# Vite dev cache (not used at runtime)
+.vite/
+
+# Dev screenshots from walkthroughs — regenerated per session
+/[0-9][0-9]-*.png
+/walkthrough-*.png
+/fix-*.png
+/Screenshot.png
+
+# Stray TS→JS compilation output (Vite builds into dist/, these are accidental)
+web/src/**/*.js
+!web/src/**/*.config.js

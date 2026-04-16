@@ -149,6 +149,24 @@ func TestAPI_Repos(t *testing.T) {
 		t.Fatalf("expected %d repos, got %d items=%+v", len(types), len(items), body)
 	}
 
+	// Get a single repo — regression test for the missing GET handler that
+	// made every repo detail page in the UI render Page Not Found.
+	r, body = s.do(t, "GET", "/api/v1/projects/rp/repos/docker/r-docker", cookie, nil)
+	if r.StatusCode != 200 {
+		t.Fatalf("get repo code=%d body=%+v", r.StatusCode, body)
+	}
+	if name, _ := body["name"].(string); name != "r-docker" {
+		t.Fatalf("get repo name mismatch: %+v", body)
+	}
+	if typ, _ := body["type"].(string); typ != "docker" {
+		t.Fatalf("get repo type mismatch: %+v", body)
+	}
+	// Unknown repo returns 404.
+	r, _ = s.do(t, "GET", "/api/v1/projects/rp/repos/docker/nope", cookie, nil)
+	if r.StatusCode != 404 {
+		t.Fatalf("get unknown repo code=%d (want 404)", r.StatusCode)
+	}
+
 	// Patch a repo (e.g. description).
 	r, _ = s.do(t, "PATCH", "/api/v1/projects/rp/repos/raw/r-raw", cookie, map[string]any{
 		"description": "updated desc",

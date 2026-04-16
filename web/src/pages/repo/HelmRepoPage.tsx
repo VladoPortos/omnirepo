@@ -5,6 +5,7 @@
  */
 
 import { useState, useMemo } from 'react';
+import { useParams } from 'react-router-dom';
 import { ChevronDown, ChevronRight, Layers } from 'lucide-react';
 import { DataTable, type ColumnDef, type SortState } from '@/components/common/DataTable';
 import { SeverityBadge } from '@/components/common/SeverityBadge';
@@ -13,6 +14,7 @@ import { Dropzone } from '@/components/common/Dropzone';
 import { RepoPageLayout } from './RepoPageLayout';
 import { formatBytes, formatDate } from '@/lib/format';
 import { api } from '@/api/client';
+import { useRepoContent } from '@/api/queries';
 import type { Repo } from '@/api/types';
 
 interface HelmChartVersion {
@@ -42,12 +44,25 @@ interface HelmRepoPageProps {
 }
 
 export function HelmRepoPage({ repo }: HelmRepoPageProps) {
+  const { name: projectName } = useParams<{ name: string }>();
   const [filter, setFilter] = useState('');
   const [sort, setSort] = useState<SortState>({ column: 'chart_name', direction: 'asc' });
   const [expandedChart, setExpandedChart] = useState<string | null>(null);
 
-  // Charts fetched from API; placeholder empty
-  const chartVersions: HelmChartVersion[] = [];
+  const { data: contentRows } = useRepoContent(projectName ?? '', 'helm', repo.name);
+  const chartVersions: HelmChartVersion[] = useMemo(
+    () =>
+      (contentRows ?? []).map((row) => ({
+        id: row.id ?? 0,
+        chart_name: row.name,
+        version: row.version ?? '',
+        app_version: String(row.extra?.app_version ?? ''),
+        size: row.size_bytes,
+        scan_severity: row.scan_severity ?? '',
+        uploaded_at: row.uploaded_at,
+      })),
+    [contentRows],
+  );
 
   // Group by chart name
   const groups = useMemo<HelmChartGroup[]>(() => {

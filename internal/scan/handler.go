@@ -151,6 +151,19 @@ func (h *Handler) Handle(ctx context.Context, scan *metadata.Scan) error {
 			return h.failScan(ctx, scan, fmt.Errorf("materialize raw: %w", err))
 		}
 		result, err = h.deps.Runner.Filesystem(ctx, fsRoot)
+	case "rpm", "deb", "pypi", "helm":
+		// F-4: package-style artifacts. Materialize the archive (and best-
+		// effort extract it) into tmp, then point Trivy's filesystem
+		// scanner at the result. Trivy surfaces vuln + secret + misconfig
+		// for what it can decode — Helm charts in particular light up
+		// the misconfig scanner on templates/*.yaml.
+		var fsRoot string
+		fsRoot, err = h.materializePackage(ctx, tmp, scan.ArtifactKind, scan.RepoID, scan.ArtifactID)
+		if err != nil {
+			return h.failScan(ctx, scan,
+				fmt.Errorf("materialize %s: %w", scan.ArtifactKind, err))
+		}
+		result, err = h.deps.Runner.Filesystem(ctx, fsRoot)
 	default:
 		return h.permFailScan(ctx, scan, fmt.Errorf("unknown artifact kind %q", scan.ArtifactKind))
 	}
@@ -313,6 +326,24 @@ func (h *Handler) failScan(ctx context.Context, scan *metadata.Scan, herr error)
 	})
 	// The pool's markFailed path will record the error in the scans row.
 	return errors.New(sanitized)
+}
+
+// MarkNotImplemented is the termination path for artifact kinds we accept
+// but don't yet know how to scan (rpm, deb, pypi, helm as of F-4). Marks
+// the scans row permanently failed with `reason`, emits a scan.failed
+// audit record, and returns nil so the pool stops retrying.
+func (h *Handler) MarkNotImplemented(ctx context.Context, scanID int64, reason string) error {
+	if derr := h.deps.DB.WriteTx(ctx, func(tx *sql.Tx) error {
+		return h.deps.Scans.MarkPermanentlyFailed(ctx, tx, scanID, reason)
+	}); derr != nil {
+		slog.ErrorContext(ctx, "scan.not_implemented.markfailed_err",
+			"scan_id", scanID, "err", derr)
+		return derr
+	}
+	h.emitScanAudit(ctx, audit.EvtScanFailed, scanID, "permanent", map[string]any{
+		"reason": reason,
+	})
+	return nil
 }
 
 // permFailScan marks the scan permanently failed (no retry) for over-cap

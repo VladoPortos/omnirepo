@@ -4,7 +4,7 @@
  * refs, blame, diff, and branch comparison.
  */
 
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useMemo } from 'react';
 import { useParams } from 'react-router-dom';
 import { GitBranch } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -41,7 +41,7 @@ export function GitRepoPage({ repo }: GitRepoPageProps) {
     projectName!,
     repo.name,
   );
-  const refs = refsData?.items ?? [];
+  const refs = useMemo(() => refsData?.items ?? [], [refsData?.items]);
 
   // Default to first branch (HEAD-like) or first ref
   useEffect(() => {

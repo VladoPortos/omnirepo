@@ -5,7 +5,7 @@
  */
 
 import { useState, type FormEvent } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -16,6 +16,8 @@ import { ApiError } from '@/api/client';
 
 export function LoginPage() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const setupDone = (location.state as { setupDone?: boolean } | null)?.setupDone ?? false;
   const { login } = useAuth();
   const [loginValue, setLoginValue] = useState('');
   const [password, setPassword] = useState('');
@@ -64,6 +66,11 @@ export function LoginPage() {
           </CardHeader>
           <CardContent>
             <form onSubmit={handleSubmit} className="space-y-4">
+              {setupDone && !error && (
+                <div className="rounded-md bg-green-500/10 p-3 text-sm text-green-600 dark:text-green-400">
+                  Super-admin account created. Sign in to continue.
+                </div>
+              )}
               {error && (
                 <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
                   {error}

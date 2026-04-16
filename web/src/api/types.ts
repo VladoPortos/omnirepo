@@ -21,6 +21,35 @@ export interface LoginRequest {
   password: string;
 }
 
+// -- First-run setup --
+
+export interface SetupStatusResponse {
+  needs_setup: boolean;
+}
+
+export interface SetupSuperAdminRequest {
+  login: string;
+  email: string;
+  password: string;
+}
+
+export interface SetupSuperAdminResponse {
+  login: string;
+  is_super_admin: boolean;
+}
+
+// -- Repo content listing --
+
+export interface RepoContentEntry {
+  id?: number;
+  name: string;
+  version?: string;
+  size_bytes: number;
+  uploaded_at: string;
+  scan_severity?: string;
+  extra?: Record<string, unknown>;
+}
+
 export interface LoginResponse {
   login: string;
   is_super_admin: boolean;
@@ -261,17 +290,20 @@ export interface SearchResponse {
 
 // -- Audit --
 
+// ME-10: Backend returns nullable fields (actor/ip/outcome/etc.) with
+// omitempty and the `ok` outcome token for successful events. Match the
+// shape so anonymous/system events don't surface as undefined.
 export interface AuditEvent {
   id: number;
   timestamp: string;
-  actor: string;
+  actor?: string | null;
   action: string;
-  target_kind: string;
-  target_id: string;
-  outcome: string;
-  ip: string;
-  user_agent: string;
-  details: Record<string, unknown>;
+  target_kind?: string | null;
+  target_id?: string | null;
+  outcome?: string | null;
+  ip?: string | null;
+  user_agent?: string | null;
+  details?: string | null;
 }
 
 export interface AuditListResponse {

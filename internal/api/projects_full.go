@@ -6,6 +6,7 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"strings"
 	"time"
@@ -14,6 +15,38 @@ import (
 
 	"github.com/dxc-internal/omnirepo/internal/auth"
 )
+
+// liveRepoSizes returns a map repoID → summed bytes across every artifact
+// table (F-5). `repos.size_bytes` is never written, so the raw column reads
+// 0. This helper gives callers (projects list / detail, repo list, repo
+// detail) the real stored size.
+//
+// Returns an empty map for an empty input slice, never nil.
+func (d Deps) liveRepoSizes(ctx context.Context, ids []int64) map[int64]int64 {
+	out := make(map[int64]int64, len(ids))
+	if len(ids) == 0 {
+		return out
+	}
+	ph := make([]string, len(ids))
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		ph[i] = "?"
+		args[i] = id
+	}
+	query := `SELECT r.id, ` + repoSizeExpr + ` FROM repos r WHERE r.id IN (` + strings.Join(ph, ",") + `)`
+	rows, err := d.DB.Reader.QueryContext(ctx, query, args...)
+	if err != nil {
+		return out
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var id, sz int64
+		if err := rows.Scan(&id, &sz); err == nil {
+			out[id] = sz
+		}
+	}
+	return out
+}
 
 // mountProjectsFull installs the full projects endpoints.
 func (d Deps) mountProjectsFull(r chi.Router) {
@@ -108,9 +141,14 @@ func (d Deps) handleListProjects(w http.ResponseWriter, r *http.Request) {
 
 		memberIDs, _ := d.Members.ListUserIDsInProject(r.Context(), p.ID)
 		repos, _ := d.Repos.ListByProject(r.Context(), p.ID)
+		ids := make([]int64, len(repos))
+		for i, rr := range repos {
+			ids[i] = rr.ID
+		}
+		sizes := d.liveRepoSizes(r.Context(), ids)
 		var totalSize int64
 		for _, rr := range repos {
-			totalSize += rr.SizeBytes
+			totalSize += sizes[rr.ID]
 		}
 
 		items = append(items, projectListItem{
@@ -169,11 +207,16 @@ func (d Deps) handleGetProject(w http.ResponseWriter, r *http.Request) {
 	}
 
 	repos, _ := d.Repos.ListByProject(r.Context(), p.ID)
+	ids := make([]int64, len(repos))
+	for i, rr := range repos {
+		ids[i] = rr.ID
+	}
+	sizes := d.liveRepoSizes(r.Context(), ids)
 	repoItems := make([]projectRepo, 0, len(repos))
 	for _, rr := range repos {
 		repoItems = append(repoItems, projectRepo{
 			ID: rr.ID, Type: rr.Type, Name: rr.Name,
-			DescriptionMD: rr.DescriptionMD, SizeBytes: rr.SizeBytes,
+			DescriptionMD: rr.DescriptionMD, SizeBytes: sizes[rr.ID],
 			AutoScan: rr.AutoScan, PublicRead: rr.PublicRead,
 			CreatedAt: rr.CreatedAt,
 		})

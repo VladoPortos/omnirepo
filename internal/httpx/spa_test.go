@@ -80,6 +80,29 @@ func TestSPAHandler_DeepPathFallback(t *testing.T) {
 	}
 }
 
+// TestSPAHandler_APIPathReturns404JSON guards WALKTHROUGH-FINDINGS F-2a:
+// unknown /api/* must not fall through to index.html — that confused the
+// walkthrough because HTTP 200 with a SPA body looked like the call
+// succeeded until the caller tried to JSON-parse the body.
+func TestSPAHandler_APIPathReturns404JSON(t *testing.T) {
+	handler := httpx.SPAHandler(testDistFS())
+	for _, path := range []string{"/api/v1/missing", "/api/", "/v2/unknown/manifest/sha256:deadbeef"} {
+		req := httptest.NewRequest("GET", path, nil)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		if w.Code != http.StatusNotFound {
+			t.Errorf("%s code=%d, want 404", path, w.Code)
+		}
+		ct := w.Header().Get("Content-Type")
+		if !strings.HasPrefix(ct, "application/json") {
+			t.Errorf("%s content-type=%q, want application/json", path, ct)
+		}
+		if !strings.Contains(w.Body.String(), `"error":"not_found"`) {
+			t.Errorf("%s body=%q missing error envelope", path, w.Body.String())
+		}
+	}
+}
+
 func TestIsDevMode(t *testing.T) {
 	if httpx.IsDevMode() {
 		t.Fatal("expected IsDevMode=false by default")

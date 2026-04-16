@@ -108,3 +108,29 @@ func (r *SessionsRepo) Delete(ctx context.Context, id int64) error {
 		return nil
 	})
 }
+
+// DeleteAllForUser removes every session belonging to userID. Called after
+// admin password resets so stolen cookies do not survive the rotation.
+func (r *SessionsRepo) DeleteAllForUser(ctx context.Context, userID int64) error {
+	return r.db.WriteTx(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE user_id=?`, userID)
+		if err != nil {
+			return fmt.Errorf("sessions: delete all for user %d: %w", userID, err)
+		}
+		return nil
+	})
+}
+
+// DeleteAllForUserExcept removes every session belonging to userID except
+// exceptID. Used by self-service password change to keep the current browser
+// session alive while invalidating every other session (stolen cookies,
+// forgotten devices).
+func (r *SessionsRepo) DeleteAllForUserExcept(ctx context.Context, userID, exceptID int64) error {
+	return r.db.WriteTx(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE user_id=? AND id<>?`, userID, exceptID)
+		if err != nil {
+			return fmt.Errorf("sessions: delete all for user %d except %d: %w", userID, exceptID, err)
+		}
+		return nil
+	})
+}

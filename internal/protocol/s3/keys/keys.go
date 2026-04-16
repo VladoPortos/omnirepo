@@ -23,11 +23,16 @@ import (
 	"encoding/base64"
 	"errors"
 	"log/slog"
+	"time"
 
 	omrcrypto "github.com/dxc-internal/omnirepo/internal/crypto"
 	"github.com/dxc-internal/omnirepo/internal/metadata"
 	"github.com/dxc-internal/omnirepo/internal/protocol/s3/sigv4"
 )
+
+// touchLastUsedTimeout caps the background TouchLastUsed write so it cannot
+// outlive the request that spawned it by more than this budget (HI-07).
+const touchLastUsedTimeout = 2 * time.Second
 
 // GenerateS3AccessKey returns a new AKID/secret pair.
 //
@@ -93,8 +98,12 @@ func (s *Service) LookupFull(akid string) (*LookupResult, error) {
 		return nil, sigv4.ErrInvalidAccessKeyId
 	}
 
+	// HI-07: bound the fire-and-forget touch with a short timeout so it
+	// cannot accumulate forever under load or hang on shutdown.
 	go func(akid string) {
-		if err := s.Repo.TouchLastUsed(context.Background(), akid); err != nil {
+		tctx, cancel := context.WithTimeout(context.Background(), touchLastUsedTimeout)
+		defer cancel()
+		if err := s.Repo.TouchLastUsed(tctx, akid); err != nil {
 			slog.Warn("s3keys.touch_last_used", "akid", akid, "err", err)
 		}
 	}(akid)

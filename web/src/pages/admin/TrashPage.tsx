@@ -70,7 +70,7 @@ export default function TrashPage() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [purgeTarget, setPurgeTarget] = useState<string[] | null>(null);
 
-  const items = data?.items ?? [];
+  const items = useMemo(() => data?.items ?? [], [data?.items]);
   const allSelected = items.length > 0 && items.every((i) => selected.has(i.id));
 
   const toggleSelect = useCallback((id: string) => {

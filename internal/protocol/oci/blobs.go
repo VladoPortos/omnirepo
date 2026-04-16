@@ -7,18 +7,18 @@
 //
 // Invariants carried through from the plan action block and RESEARCH Pattern 1:
 //
-//   1. Chunk bytes NEVER buffered in memory. PATCH streams through
-//      io.LimitReader → append-only O_APPEND|O_WRONLY file at
-//      <dataRoot>/tmp/uploads/<uuid>.
-//   2. PUT finalization: recompute sha256 over the entire tmp file, then
-//      call blobUploads.Start(digest, 1h) BEFORE cas.PutFromPath rename.
-//      That ordering closes the SCAN-12 race — GC sees the digest in the
-//      exclusion set before the CAS file appears under its content address.
-//   3. After the CAS rename, the writer tx upserts docker_blobs with
-//      ref_count=0 and removes the blob_upload_sessions row. The manifest
-//      PUT (02-07) will ++ ref_count; blob_uploads.Complete at that time.
-//   4. DELETE only succeeds at ref_count==0. Non-zero → 405 MethodNotAllowed
-//      per OCI Distribution conventions (only GC may delete live blobs).
+//  1. Chunk bytes NEVER buffered in memory. PATCH streams through
+//     io.LimitReader → append-only O_APPEND|O_WRONLY file at
+//     <dataRoot>/tmp/uploads/<uuid>.
+//  2. PUT finalization: recompute sha256 over the entire tmp file, then
+//     call blobUploads.Start(digest, 1h) BEFORE cas.PutFromPath rename.
+//     That ordering closes the SCAN-12 race — GC sees the digest in the
+//     exclusion set before the CAS file appears under its content address.
+//  3. After the CAS rename, the writer tx upserts docker_blobs with
+//     ref_count=0 and removes the blob_upload_sessions row. The manifest
+//     PUT (02-07) will ++ ref_count; blob_uploads.Complete at that time.
+//  4. DELETE only succeeds at ref_count==0. Non-zero → 405 MethodNotAllowed
+//     per OCI Distribution conventions (only GC may delete live blobs).
 package oci
 
 import (
@@ -34,6 +34,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -62,9 +63,9 @@ func isUploadUUID(s string) bool {
 // resolvedRepo bundles what every blob handler needs after resolving the
 // URL-encoded (project, type, repo) triple.
 type resolvedRepo struct {
-	project     *metadata.Project
-	repo        *metadata.Repo
-	fullPath    string // "<project>/<type>/<repo>" for Location headers
+	project  *metadata.Project
+	repo     *metadata.Repo
+	fullPath string // "<project>/<type>/<repo>" for Location headers
 }
 
 // resolveRepo parses {project}, {type}, {repo} chi URL params, validates the
@@ -173,9 +174,9 @@ func (h *Handler) requireReader(w http.ResponseWriter, r *http.Request, rr *meta
 
 // blobPostDispatch routes POST /v2/<name>/blobs/uploads/ between three
 // shapes per OCI spec §4.2.1-§4.2.2:
-//   1. mount+from  → cross-repo mount (mount.go)
-//   2. body + digest query → monolithic upload
-//   3. empty body → start a new chunked session
+//  1. mount+from  → cross-repo mount (mount.go)
+//  2. body + digest query → monolithic upload
+//  3. empty body → start a new chunked session
 func (h *Handler) blobPostDispatch(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	if q.Get("mount") != "" && q.Get("from") != "" {
@@ -259,7 +260,7 @@ func (h *Handler) blobUploadPatch(w http.ResponseWriter, r *http.Request) {
 	cap1 := h.chunkMaxBytes + 1
 	n, err := appendChunk(h.uploadTmpPath(u), io.LimitReader(r.Body, cap1))
 	if err != nil {
-		writeOCIErr(w, http.StatusInternalServerError, ErrCodeUnknown, err)
+		writeAppendChunkError(w, err)
 		return
 	}
 	if n > h.chunkMaxBytes {
@@ -337,7 +338,7 @@ func (h *Handler) blobUploadPut(w http.ResponseWriter, r *http.Request) {
 	}
 	n, err := appendChunk(tmpPath, io.LimitReader(r.Body, h.chunkMaxBytes+1))
 	if err != nil {
-		writeOCIErr(w, http.StatusInternalServerError, ErrCodeUnknown, err)
+		writeAppendChunkError(w, err)
 		return
 	}
 	if n > h.chunkMaxBytes {
@@ -369,8 +370,11 @@ func (h *Handler) blobUploadPut(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Promote tmp → CAS via atomic rename.
+	// HI-06: CAS.PutFromPath leaves the source on error; remove the tmp
+	// file ourselves on failure so repeated errors don't fill the volume.
 	promoted, _, err := h.cas.PutFromPath(r.Context(), tmpPath)
 	if err != nil {
+		_ = os.Remove(tmpPath)
 		writeOCIErr(w, http.StatusInternalServerError, ErrCodeUnknown, err)
 		return
 	}
@@ -438,7 +442,7 @@ func (h *Handler) blobMonolithicPost(w http.ResponseWriter, r *http.Request) {
 	n, err := appendChunk(tmpPath, io.LimitReader(r.Body, h.sessionMaxBytes+1))
 	if err != nil {
 		_ = os.Remove(tmpPath)
-		writeOCIErr(w, http.StatusInternalServerError, ErrCodeUnknown, err)
+		writeAppendChunkError(w, err)
 		return
 	}
 	if n > h.sessionMaxBytes {
@@ -469,8 +473,10 @@ func (h *Handler) blobMonolithicPost(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// HI-06: clean up tmp on CAS put failure (same pattern as chunked path).
 	promoted, _, err := h.cas.PutFromPath(r.Context(), tmpPath)
 	if err != nil {
+		_ = os.Remove(tmpPath)
 		writeOCIErr(w, http.StatusInternalServerError, ErrCodeUnknown, err)
 		return
 	}
@@ -491,9 +497,9 @@ func (h *Handler) blobMonolithicPost(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.emitAudit(r, audit.EvtOCIBlobUploaded, actual, "ok", map[string]any{
-		"repo":        rr.fullPath,
-		"size":        size,
-		"monolithic":  true,
+		"repo":       rr.fullPath,
+		"size":       size,
+		"monolithic": true,
 	})
 
 	w.Header().Set("Location", fmt.Sprintf("/v2/%s/blobs/%s", rr.fullPath, actual))
@@ -742,6 +748,18 @@ func truncateFile(path string, size int64) error {
 		return err
 	}
 	return nil
+}
+
+// writeAppendChunkError maps an appendChunk error to the right OCI response.
+// ME-12: ENOSPC (disk full) must surface as 507 INSUFFICIENT STORAGE so
+// docker/crane back off instead of aggressively retrying and making things
+// worse. All other errors become 500 UNKNOWN.
+func writeAppendChunkError(w http.ResponseWriter, err error) {
+	if errors.Is(err, syscall.ENOSPC) {
+		writeOCIErr(w, http.StatusInsufficientStorage, ErrCodeSizeInvalid, err)
+		return
+	}
+	writeOCIErr(w, http.StatusInternalServerError, ErrCodeUnknown, err)
 }
 
 // sha256OfFile reads path and returns its sha256 digest (`sha256:<hex>`)

@@ -5,17 +5,9 @@
  */
 
 import { useState, type ReactNode } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
 import { Settings, Trash2, AlertTriangle } from 'lucide-react';
 import { toast } from 'sonner';
-import {
-  Breadcrumb,
-  BreadcrumbList,
-  BreadcrumbItem,
-  BreadcrumbLink,
-  BreadcrumbSeparator,
-  BreadcrumbPage,
-} from '@/components/ui/breadcrumb';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
@@ -92,29 +84,6 @@ export function RepoPageLayout({ repo, children, scanContent }: RepoPageLayoutPr
 
   return (
     <div className="space-y-6">
-      {/* Breadcrumb */}
-      <Breadcrumb>
-        <BreadcrumbList>
-          <BreadcrumbItem>
-            <BreadcrumbLink render={<Link to="/projects" />}>Projects</BreadcrumbLink>
-          </BreadcrumbItem>
-          <BreadcrumbSeparator />
-          <BreadcrumbItem>
-            <BreadcrumbLink render={<Link to={`/projects/${projectName}`} />}>
-              {projectName}
-            </BreadcrumbLink>
-          </BreadcrumbItem>
-          <BreadcrumbSeparator />
-          <BreadcrumbItem>
-            <span className="text-muted-foreground">{typeLabel}</span>
-          </BreadcrumbItem>
-          <BreadcrumbSeparator />
-          <BreadcrumbItem>
-            <BreadcrumbPage>{repo.name}</BreadcrumbPage>
-          </BreadcrumbItem>
-        </BreadcrumbList>
-      </Breadcrumb>
-
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>

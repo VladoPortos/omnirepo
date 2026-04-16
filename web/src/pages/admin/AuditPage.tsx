@@ -156,12 +156,12 @@ export default function AuditPage() {
     const headers = ['Timestamp', 'Actor', 'Action', 'Target Kind', 'Target ID', 'Outcome', 'IP'];
     const rows = data.items.map((e) => [
       e.timestamp,
-      e.actor,
+      e.actor ?? '',
       e.action,
-      e.target_kind,
-      e.target_id,
-      e.outcome,
-      e.ip,
+      e.target_kind ?? '',
+      e.target_id ?? '',
+      e.outcome ?? '',
+      e.ip ?? '',
     ]);
     const csv = [headers, ...rows].map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n');
     const blob = new Blob([csv], { type: 'text/csv' });
@@ -187,12 +187,15 @@ export default function AuditPage() {
     {
       id: 'actor',
       name: 'Actor',
-      render: (row) => (
-        <div className="flex items-center gap-2">
-          <ActorAvatar name={row.actor} />
-          <span className="font-medium text-sm">{row.actor}</span>
-        </div>
-      ),
+      render: (row) => {
+        const actor = row.actor ?? 'system';
+        return (
+          <div className="flex items-center gap-2">
+            <ActorAvatar name={actor} />
+            <span className="font-medium text-sm">{actor}</span>
+          </div>
+        );
+      },
     },
     {
       id: 'action',
@@ -206,30 +209,44 @@ export default function AuditPage() {
     {
       id: 'target',
       name: 'Target',
-      render: (row) => (
-        <span className="text-sm">
-          {row.target_kind}/{row.target_id}
-        </span>
-      ),
+      render: (row) => {
+        if (!row.target_kind && !row.target_id) {
+          return <span className="text-xs text-muted-foreground">—</span>;
+        }
+        return (
+          <span className="text-sm">
+            {row.target_kind ?? ''}/{row.target_id ?? ''}
+          </span>
+        );
+      },
     },
     {
       id: 'outcome',
       name: 'Outcome',
-      render: (row) =>
-        row.outcome === 'success' ? (
+      // ME-10: backend uses 'ok' (with legacy 'success' still accepted) for
+      // successful events and arbitrary strings (e.g. 'wrong_password',
+      // 'user_not_found') for failures. Treat null/empty as neutral.
+      render: (row) => {
+        const outcome = row.outcome ?? '';
+        if (outcome === '') {
+          return <span className="text-xs text-muted-foreground">—</span>;
+        }
+        const isSuccess = outcome === 'ok' || outcome === 'success' || outcome === 'updated';
+        return isSuccess ? (
           <Badge variant="secondary" className="text-green-700 dark:text-green-400">
-            success
+            {outcome}
           </Badge>
         ) : (
-          <Badge variant="destructive">failure</Badge>
-        ),
+          <Badge variant="destructive">{outcome}</Badge>
+        );
+      },
     },
     {
       id: 'ip',
       name: 'IP',
       className: 'hidden lg:table-cell',
       render: (row) => (
-        <span className="text-xs text-muted-foreground font-mono">{row.ip}</span>
+        <span className="text-xs text-muted-foreground font-mono">{row.ip ?? ''}</span>
       ),
     },
   ];

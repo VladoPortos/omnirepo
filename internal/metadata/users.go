@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -203,6 +204,33 @@ func (r *UsersRepo) UpdateAvatarSeed(ctx context.Context, id int64, seed string)
 		_, err := tx.ExecContext(ctx, `UPDATE users SET avatar_seed=? WHERE id=?`, seed, id)
 		if err != nil {
 			return fmt.Errorf("users: update avatar_seed %d: %w", id, err)
+		}
+		return nil
+	})
+}
+
+// UpdateProfile atomically sets email and/or avatar_seed in one tx (LO-01).
+// Either pointer may be nil to leave that column untouched. Returns nil if
+// both are nil.
+func (r *UsersRepo) UpdateProfile(ctx context.Context, id int64, email, avatarSeed *string) error {
+	if email == nil && avatarSeed == nil {
+		return nil
+	}
+	return r.db.WriteTx(ctx, func(tx *sql.Tx) error {
+		sets := []string{}
+		args := []any{}
+		if email != nil {
+			sets = append(sets, "email=?")
+			args = append(args, *email)
+		}
+		if avatarSeed != nil {
+			sets = append(sets, "avatar_seed=?")
+			args = append(args, *avatarSeed)
+		}
+		args = append(args, id)
+		query := "UPDATE users SET " + strings.Join(sets, ", ") + " WHERE id=?"
+		if _, err := tx.ExecContext(ctx, query, args...); err != nil {
+			return fmt.Errorf("users: update profile %d: %w", id, err)
 		}
 		return nil
 	})

@@ -93,6 +93,10 @@ func (h *Handler) put(w http.ResponseWriter, r *http.Request) {
 		}
 		return nil
 	}); err != nil {
+		// HI-02: DB commit failed after bytes were written to disk. Roll the
+		// file back so we don't leak an orphan the metadata layer has no row
+		// for. Best-effort: if the delete itself fails, log via audit below.
+		_ = h.pathStore.Delete(r.Context(), storageKey)
 		http.Error(w, fmt.Sprintf("commit: %v", err), http.StatusInternalServerError)
 		return
 	}

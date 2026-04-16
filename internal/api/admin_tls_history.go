@@ -5,8 +5,11 @@
 package api
 
 import (
+	"crypto/sha256"
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/pem"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -27,37 +30,35 @@ func (d Deps) mountAdminTLSHistory(r chi.Router) {
 		Get("/admin/tls/current", d.handleTLSCurrent)
 }
 
-type tlsCertInfo struct {
-	Filename  string `json:"filename"`
-	Subject   string `json:"subject"`
-	Issuer    string `json:"issuer"`
-	NotBefore string `json:"not_before"`
-	NotAfter  string `json:"not_after"`
-	UploadedAt string `json:"uploaded_at,omitempty"`
+// tlsHistoryEntry matches the frontend TLSHistoryEntry shape (ME-07).
+type tlsHistoryEntry struct {
+	UploadedAt        string `json:"uploaded_at"`
+	UploadedBy        string `json:"uploaded_by"`
+	Subject           string `json:"subject"`
+	FingerprintSHA256 string `json:"fingerprint_sha256"`
 }
 
+// handleTLSHistory recurses into certs/uploaded/<timestamp>/ subdirectories —
+// the layout actually produced by tls.ApplyUpload. The previous flat-scan
+// version always returned an empty list (ME-07).
 func (d Deps) handleTLSHistory(w http.ResponseWriter, r *http.Request) {
 	uploadDir := filepath.Join(d.DataRoot, "certs", "uploaded")
 	entries, err := os.ReadDir(uploadDir)
 	if err != nil {
 		if os.IsNotExist(err) {
-			writeJSON(w, http.StatusOK, map[string]any{"items": []any{}})
+			writeJSON(w, http.StatusOK, map[string]any{"items": []tlsHistoryEntry{}})
 			return
 		}
 		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
 		return
 	}
 
-	var items []tlsCertInfo
+	items := make([]tlsHistoryEntry, 0, len(entries))
 	for _, entry := range entries {
-		if entry.IsDir() {
+		if !entry.IsDir() {
 			continue
 		}
-		name := entry.Name()
-		if filepath.Ext(name) != ".crt" && filepath.Ext(name) != ".pem" {
-			continue
-		}
-		certPath := filepath.Join(uploadDir, name)
+		certPath := filepath.Join(uploadDir, entry.Name(), "server.crt")
 		raw, err := os.ReadFile(certPath)
 		if err != nil {
 			continue
@@ -66,13 +67,19 @@ func (d Deps) handleTLSHistory(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			continue
 		}
-		ci := parseCertInfo(raw)
-		ci.Filename = name
-		ci.UploadedAt = info.ModTime().UTC().Format(time.RFC3339)
-		items = append(items, ci)
+		leaf := parseLeaf(raw)
+		if leaf == nil {
+			continue
+		}
+		items = append(items, tlsHistoryEntry{
+			UploadedAt:        info.ModTime().UTC().Format(time.RFC3339),
+			UploadedBy:        "", // Not currently recorded per-upload; audit log holds this.
+			Subject:           leaf.Subject.CommonName,
+			FingerprintSHA256: sha256Hex(leaf.Raw),
+		})
 	}
 
-	// Sort by upload time descending.
+	// Sort by upload time descending (newest first).
 	sort.Slice(items, func(i, j int) bool {
 		return items[i].UploadedAt > items[j].UploadedAt
 	})
@@ -80,6 +87,8 @@ func (d Deps) handleTLSHistory(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
+// handleTLSCurrent returns the full TLSCertInfo shape the frontend expects —
+// including fingerprint_sha256 and source (ME-08).
 func (d Deps) handleTLSCurrent(w http.ResponseWriter, r *http.Request) {
 	if d.Holder == nil {
 		writeJSONError(w, http.StatusNotFound, ErrNotFound, "no TLS holder configured")
@@ -90,7 +99,6 @@ func (d Deps) handleTLSCurrent(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusNotFound, ErrNotFound, "no current certificate")
 		return
 	}
-	// cert is *tls.Certificate — parse the leaf.
 	if cert.Leaf == nil && len(cert.Certificate) > 0 {
 		leaf, err := x509.ParseCertificate(cert.Certificate[0])
 		if err == nil {
@@ -101,30 +109,47 @@ func (d Deps) handleTLSCurrent(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "cannot parse leaf")
 		return
 	}
+	// "source" is derived: if an uploaded server.crt exists, the live cert
+	// is uploaded; otherwise it's the self-signed bootstrap cert.
+	source := "self-signed"
+	if _, err := os.Stat(filepath.Join(d.DataRoot, "certs", "server.crt")); err == nil {
+		uploadDir := filepath.Join(d.DataRoot, "certs", "uploaded")
+		if entries, err := os.ReadDir(uploadDir); err == nil {
+			for _, e := range entries {
+				if e.IsDir() {
+					source = "uploaded"
+					break
+				}
+			}
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"subject":    cert.Leaf.Subject.CommonName,
-		"issuer":     cert.Leaf.Issuer.CommonName,
-		"not_before": cert.Leaf.NotBefore.UTC().Format(time.RFC3339),
-		"not_after":  cert.Leaf.NotAfter.UTC().Format(time.RFC3339),
-		"dns_names":  cert.Leaf.DNSNames,
+		"subject":            cert.Leaf.Subject.CommonName,
+		"issuer":             cert.Leaf.Issuer.CommonName,
+		"not_before":         cert.Leaf.NotBefore.UTC().Format(time.RFC3339),
+		"not_after":          cert.Leaf.NotAfter.UTC().Format(time.RFC3339),
+		"dns_names":          cert.Leaf.DNSNames,
+		"serial":             fmt.Sprintf("%x", cert.Leaf.SerialNumber),
+		"fingerprint_sha256": sha256Hex(cert.Leaf.Raw),
+		"source":             source,
 	})
 }
 
-// parseCertInfo extracts subject/issuer/validity from PEM-encoded cert data.
-// Returns a partial tlsCertInfo (Filename and UploadedAt set by caller).
-func parseCertInfo(pemData []byte) tlsCertInfo {
+// parseLeaf extracts the first x509 certificate from a PEM block, or nil.
+func parseLeaf(pemData []byte) *x509.Certificate {
 	block, _ := pem.Decode(pemData)
 	if block == nil {
-		return tlsCertInfo{Subject: "unknown", Issuer: "unknown"}
+		return nil
 	}
 	cert, err := x509.ParseCertificate(block.Bytes)
 	if err != nil {
-		return tlsCertInfo{Subject: "parse error", Issuer: "parse error"}
+		return nil
 	}
-	return tlsCertInfo{
-		Subject:   cert.Subject.CommonName,
-		Issuer:    cert.Issuer.CommonName,
-		NotBefore: cert.NotBefore.UTC().Format(time.RFC3339),
-		NotAfter:  cert.NotAfter.UTC().Format(time.RFC3339),
-	}
+	return cert
+}
+
+// sha256Hex returns the lowercase-hex SHA-256 digest of raw.
+func sha256Hex(raw []byte) string {
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:])
 }

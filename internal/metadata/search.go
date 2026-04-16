@@ -50,55 +50,92 @@ func (db *DB) SearchAll(ctx context.Context, p SearchParams) ([]SearchResult, er
 
 	perArmLimit := p.Limit * 2 // over-fetch per arm, trim after merge-sort
 
+	// ME-03: per-arm severity/project filters. Severity only meaningfully
+	// applies to CVE results (joined back to vulnerabilities for the latest
+	// finding). Project filter applies to every project-scoped arm.
 	type arm struct {
-		sql string
+		sql  string
+		vals []any
 	}
 	var arms []arm
-	var args []any
 
 	addArm := func(a arm) {
 		arms = append(arms, a)
-		args = append(args, ftsQuery, perArmLimit)
+	}
+
+	projectFilterExpr := ""
+	projectVals := []any{}
+	if p.Project != "" {
+		projectFilterExpr = " AND project_name = ?"
+		projectVals = []any{p.Project}
 	}
 
 	if p.Kind == "" || p.Kind == "repo" {
 		addArm(arm{
-			sql: `SELECT * FROM (SELECT 'repo' AS kind, rowid AS entity_id, repo_name AS name, project_name AS location, '' AS severity, rank * 1.5 AS score, project_name AS project_name FROM repos_fts WHERE repos_fts MATCH ? LIMIT ?)`,
+			sql:  `SELECT * FROM (SELECT 'repo' AS kind, rowid AS entity_id, repo_name AS name, project_name AS location, '' AS severity, rank * 1.5 AS score, project_name AS project_name FROM repos_fts WHERE repos_fts MATCH ?` + projectFilterExpr + ` LIMIT ?)`,
+			vals: append(append([]any{ftsQuery}, projectVals...), perArmLimit),
 		})
 	}
 	if p.Kind == "" || p.Kind == "artifact" {
 		addArm(arm{
-			sql: `SELECT * FROM (SELECT 'artifact' AS kind, f.rowid AS entity_id, f.name, f.version AS location, '' AS severity, rank AS score, COALESCE(p.name, '') AS project_name FROM artifacts_fts f LEFT JOIN repos r ON r.id = f.repo_id LEFT JOIN projects p ON p.id = r.project_id WHERE artifacts_fts MATCH ? LIMIT ?)`,
+			sql:  `SELECT * FROM (SELECT 'artifact' AS kind, f.rowid AS entity_id, f.name, f.version AS location, '' AS severity, rank AS score, COALESCE(p.name, '') AS project_name FROM artifacts_fts f LEFT JOIN repos r ON r.id = f.repo_id LEFT JOIN projects p ON p.id = r.project_id WHERE artifacts_fts MATCH ?` + projectFilterExpr + ` LIMIT ?)`,
+			vals: append(append([]any{ftsQuery}, projectVals...), perArmLimit),
 		})
 	}
 	if p.Kind == "" || p.Kind == "cve" {
+		// CVEs join vulnerabilities to surface severity (highest per CVE).
+		// When p.Severity is set, only rows matching are returned.
+		cveSeverityClause := ""
+		cveVals := []any{ftsQuery}
+		if p.Severity != "" {
+			cveSeverityClause = " AND v.severity = ?"
+			cveVals = append(cveVals, p.Severity)
+		}
+		cveVals = append(cveVals, perArmLimit)
 		addArm(arm{
-			sql: `SELECT * FROM (SELECT 'cve' AS kind, rowid AS entity_id, cve_id AS name, package AS location, '' AS severity, rank AS score, '' AS project_name FROM cves_fts WHERE cves_fts MATCH ? LIMIT ?)`,
+			sql:  `SELECT * FROM (SELECT 'cve' AS kind, f.rowid AS entity_id, f.cve_id AS name, f.package AS location, COALESCE(v.severity, '') AS severity, rank AS score, '' AS project_name FROM cves_fts f LEFT JOIN vulnerabilities v ON v.cve_id = f.cve_id WHERE cves_fts MATCH ?` + cveSeverityClause + ` GROUP BY f.cve_id LIMIT ?)`,
+			vals: cveVals,
 		})
 	}
 	if p.Kind == "" || p.Kind == "rpm" {
 		addArm(arm{
-			sql: `SELECT * FROM (SELECT 'rpm' AS kind, f.rowid AS entity_id, f.name, f.version AS location, '' AS severity, rank AS score, COALESCE(p.name, '') AS project_name FROM rpm_fts f LEFT JOIN repos r ON r.id = f.repo_id LEFT JOIN projects p ON p.id = r.project_id WHERE rpm_fts MATCH ? LIMIT ?)`,
+			sql:  `SELECT * FROM (SELECT 'rpm' AS kind, f.rowid AS entity_id, f.name, f.version AS location, '' AS severity, rank AS score, COALESCE(p.name, '') AS project_name FROM rpm_fts f LEFT JOIN repos r ON r.id = f.repo_id LEFT JOIN projects p ON p.id = r.project_id WHERE rpm_fts MATCH ?` + projectFilterExpr + ` LIMIT ?)`,
+			vals: append(append([]any{ftsQuery}, projectVals...), perArmLimit),
 		})
 	}
 	if p.Kind == "" || p.Kind == "deb" {
 		addArm(arm{
-			sql: `SELECT * FROM (SELECT 'deb' AS kind, f.rowid AS entity_id, f.name, f.version AS location, '' AS severity, rank AS score, COALESCE(p.name, '') AS project_name FROM deb_fts f LEFT JOIN repos r ON r.id = f.repo_id LEFT JOIN projects p ON p.id = r.project_id WHERE deb_fts MATCH ? LIMIT ?)`,
+			sql:  `SELECT * FROM (SELECT 'deb' AS kind, f.rowid AS entity_id, f.name, f.version AS location, '' AS severity, rank AS score, COALESCE(p.name, '') AS project_name FROM deb_fts f LEFT JOIN repos r ON r.id = f.repo_id LEFT JOIN projects p ON p.id = r.project_id WHERE deb_fts MATCH ?` + projectFilterExpr + ` LIMIT ?)`,
+			vals: append(append([]any{ftsQuery}, projectVals...), perArmLimit),
 		})
 	}
 	if p.Kind == "" || p.Kind == "pypi" {
 		addArm(arm{
-			sql: `SELECT * FROM (SELECT 'pypi' AS kind, f.rowid AS entity_id, f.name, f.version AS location, '' AS severity, rank AS score, COALESCE(p.name, '') AS project_name FROM pypi_fts f LEFT JOIN repos r ON r.id = f.repo_id LEFT JOIN projects p ON p.id = r.project_id WHERE pypi_fts MATCH ? LIMIT ?)`,
+			sql:  `SELECT * FROM (SELECT 'pypi' AS kind, f.rowid AS entity_id, f.name, f.version AS location, '' AS severity, rank AS score, COALESCE(p.name, '') AS project_name FROM pypi_fts f LEFT JOIN repos r ON r.id = f.repo_id LEFT JOIN projects p ON p.id = r.project_id WHERE pypi_fts MATCH ?` + projectFilterExpr + ` LIMIT ?)`,
+			vals: append(append([]any{ftsQuery}, projectVals...), perArmLimit),
 		})
 	}
 	if p.Kind == "" || p.Kind == "helm" {
 		addArm(arm{
-			sql: `SELECT * FROM (SELECT 'helm' AS kind, f.rowid AS entity_id, f.name, f.version AS location, '' AS severity, rank AS score, COALESCE(p.name, '') AS project_name FROM helm_fts f LEFT JOIN repos r ON r.id = f.repo_id LEFT JOIN projects p ON p.id = r.project_id WHERE helm_fts MATCH ? LIMIT ?)`,
+			sql:  `SELECT * FROM (SELECT 'helm' AS kind, f.rowid AS entity_id, f.name, f.version AS location, '' AS severity, rank AS score, COALESCE(p.name, '') AS project_name FROM helm_fts f LEFT JOIN repos r ON r.id = f.repo_id LEFT JOIN projects p ON p.id = r.project_id WHERE helm_fts MATCH ?` + projectFilterExpr + ` LIMIT ?)`,
+			vals: append(append([]any{ftsQuery}, projectVals...), perArmLimit),
 		})
 	}
 
 	if len(arms) == 0 {
 		return nil, nil
+	}
+
+	// ME-03: if a severity filter was requested but the query asked for a
+	// non-CVE kind, short-circuit to empty results — severity only applies
+	// to CVEs.
+	if p.Severity != "" && p.Kind != "" && p.Kind != "cve" {
+		return nil, nil
+	}
+
+	args := []any{}
+	for _, a := range arms {
+		args = append(args, a.vals...)
 	}
 
 	// Build the UNION ALL query.

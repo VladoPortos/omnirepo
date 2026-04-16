@@ -84,10 +84,16 @@ func ParseUpstream(
 	if err != nil {
 		return 0, fmt.Errorf("rpm upstream: gunzip primary: %w", err)
 	}
-	defer func() { _ = gz.Close() }()
 	primaryBody, err := io.ReadAll(io.LimitReader(gz, 1024*1024*1024))
 	if err != nil {
+		_ = gz.Close()
 		return 0, fmt.Errorf("rpm upstream: read primary: %w", err)
+	}
+	// ME-14: a failed Close on a gzip reader indicates the upstream stream
+	// was truncated/corrupt — fail the parse rather than importing half of
+	// primary.xml silently.
+	if err := gz.Close(); err != nil {
+		return 0, fmt.Errorf("rpm upstream: close primary gz: %w", err)
 	}
 	var root PrimaryRoot
 	if err := xml.Unmarshal(primaryBody, &root); err != nil {

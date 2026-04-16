@@ -21,11 +21,11 @@ import (
 
 // mountAdminUsersFull installs the extended user CRUD endpoints on r.
 func (d Deps) mountAdminUsersFull(r chi.Router) {
-	r.With(authmw.RequireCan(auth.ActionTriggerGC)).
+	r.With(authmw.RequireCan(auth.ActionCreateUser)).
 		Get("/admin/users", d.handleListUsers)
-	r.With(authmw.RequireCan(auth.ActionTriggerGC)).
+	r.With(authmw.RequireCan(auth.ActionCreateUser)).
 		Get("/admin/users/{login}", d.handleGetUser)
-	r.With(authmw.RequireCan(auth.ActionTriggerGC)).
+	r.With(authmw.RequireCan(auth.ActionCreateUser)).
 		Patch("/admin/users/{login}", d.handlePatchUser)
 }
 
@@ -194,6 +194,11 @@ func (d Deps) handlePatchUser(w http.ResponseWriter, r *http.Request) {
 		if patch.MustChangePassword != nil && *patch.MustChangePassword {
 			_ = d.Users.SetMustChangePassword(r.Context(), u.ID, true)
 		}
+		// HI-01: admin-forced reset invalidates every session for this user.
+		// Unlike self-service change, there is no "preserve current session"
+		// — an admin reset is precisely the scenario where we want every
+		// cookie for the victim to die.
+		_ = d.Sessions.DeleteAllForUser(r.Context(), u.ID)
 		changes["password"] = "reset"
 	}
 

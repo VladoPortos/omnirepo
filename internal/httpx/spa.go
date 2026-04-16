@@ -15,6 +15,28 @@ import (
 	"strings"
 )
 
+// isAPILikePath reports whether a NotFound request looks like a machine-
+// consumer path that should 404 as JSON instead of falling through to the
+// SPA shell. Without this guard, `GET /api/v1/missing-route` returns 200 +
+// index.html which is deeply misleading to anyone debugging an API call
+// (WALKTHROUGH-FINDINGS.md F-2a).
+func isAPILikePath(path string) bool {
+	switch {
+	case strings.HasPrefix(path, "/api/"),
+		strings.HasPrefix(path, "/v2/"):
+		return true
+	}
+	return false
+}
+
+// writeAPINotFound emits the same error envelope api/errors.go uses
+// (`{"error": "...", "detail": "..."}`) so clients get a consistent shape.
+func writeAPINotFound(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(http.StatusNotFound)
+	_, _ = w.Write([]byte(`{"error":"not_found","detail":"route not found"}`))
+}
+
 // SPAHandler returns an http.HandlerFunc that serves the SPA assets from
 // distFS. It expects distFS to contain a "dist" subdirectory with
 // index.html at the root.
@@ -29,6 +51,14 @@ func SPAHandler(distFS fs.FS) http.HandlerFunc {
 	fileServer := http.FileServer(http.FS(sub))
 
 	return func(w http.ResponseWriter, r *http.Request) {
+		// Never serve the SPA for /api/* or /v2/* NotFound requests — those
+		// reach here only when every mounted route has passed, so the right
+		// answer is a structured 404 JSON response.
+		if isAPILikePath(r.URL.Path) {
+			writeAPINotFound(w)
+			return
+		}
+
 		path := strings.TrimPrefix(r.URL.Path, "/")
 		if path == "" {
 			path = "index.html"

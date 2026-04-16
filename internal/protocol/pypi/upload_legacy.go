@@ -24,7 +24,7 @@ import (
 //
 // twine / uv publish send a multipart/form-data body with these fields:
 //   - name, version          — informational; the parsed wheel/sdist
-//                              metadata is canonical.
+//     metadata is canonical.
 //   - filetype               — "bdist_wheel" or "sdist".
 //   - sha256_digest          — optional, client-precomputed digest.
 //   - content                — the actual file payload.
@@ -203,6 +203,8 @@ func (h *Handler) handleLegacyUpload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.commitPyPIRow(r, res, parsed); err != nil {
+		// HI-02: roll back the on-disk artifact when metadata tx fails.
+		_ = h.pathStore.Delete(r.Context(), storageKey)
 		http.Error(w, fmt.Sprintf("commit: %v", err), http.StatusInternalServerError)
 		return
 	}

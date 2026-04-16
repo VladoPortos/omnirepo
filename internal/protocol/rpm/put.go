@@ -138,6 +138,8 @@ func (h *Handler) put(w http.ResponseWriter, r *http.Request) {
 		}
 		return nil
 	}); err != nil {
+		// HI-02: roll back the on-disk artifact when the metadata tx fails.
+		_ = h.pathStore.Delete(r.Context(), storageKey)
 		http.Error(w, fmt.Sprintf("commit: %v", err), http.StatusInternalServerError)
 		return
 	}

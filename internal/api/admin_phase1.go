@@ -16,8 +16,8 @@ import (
 
 	"github.com/dxc-internal/omnirepo/internal/audit"
 	"github.com/dxc-internal/omnirepo/internal/auth"
-	omrcrypto "github.com/dxc-internal/omnirepo/internal/crypto"
 	authmw "github.com/dxc-internal/omnirepo/internal/auth/middleware"
+	omrcrypto "github.com/dxc-internal/omnirepo/internal/crypto"
 	"github.com/dxc-internal/omnirepo/internal/metadata"
 	"github.com/dxc-internal/omnirepo/internal/storage"
 	omrtls "github.com/dxc-internal/omnirepo/internal/tls"
@@ -26,12 +26,12 @@ import (
 // Deps bundles every subsystem the D-36 admin REST surface needs. Populated
 // by internal/app.Run at startup.
 type Deps struct {
-	DB       *metadata.DB
-	Users    *metadata.UsersRepo
-	Sessions *metadata.SessionsRepo
-	APIKeys  *metadata.APIKeysRepo
-	Projects *metadata.ProjectsRepo
-	Members  *metadata.MembersRepo
+	DB            *metadata.DB
+	Users         *metadata.UsersRepo
+	Sessions      *metadata.SessionsRepo
+	APIKeys       *metadata.APIKeysRepo
+	Projects      *metadata.ProjectsRepo
+	Members       *metadata.MembersRepo
 	Repos         *metadata.ReposRepo
 	Settings      *metadata.SettingsRepo
 	UpstreamCreds *metadata.UpstreamCredsRepo
@@ -136,6 +136,12 @@ func Mount(r chi.Router, d Deps) {
 	})
 
 	r.Route("/api/v1", func(r chi.Router) {
+		// Unauthenticated: first-run setup probes + super-admin create.
+		// These must sit outside SessionOrAPIKey because there is no user
+		// to authenticate as until the setup endpoint has been called.
+		r.Get("/setup/status", d.handleSetupStatus)
+		r.Post("/setup/superadmin", d.handleSetupSuperAdmin)
+
 		// Unauthenticated: login + auth check.
 		r.Post("/auth/login", d.handleLogin)
 		r.With(authmw.OptionalSessionOrAPIKey(midDeps)).Get("/me", d.handleMe)
@@ -187,6 +193,11 @@ func Mount(r chi.Router, d Deps) {
 				Post("/projects/{name}/repos", d.handleCreateRepo)
 			r.With(authmw.RequireCanWith(auth.ActionDeleteRepo, d.resolveProjectTargetFromURL)).
 				Delete("/projects/{name}/repos/{type}/{repo}", d.handleDeleteRepo)
+			// Repo detail — project members (or super-admin) can view metadata
+			// for the detail page. Uses the project-scoped target resolver so
+			// ActionRepoRead's "member or super-admin" branch applies.
+			r.With(authmw.RequireCanWith(auth.ActionRepoRead, d.resolveProjectTargetFromURL)).
+				Get("/projects/{name}/repos/{type}/{repo}", d.handleGetRepo)
 			// Phase 02-11: PATCH settings + POST /wipe (REPO-05, REPO-07, D-34, D-35).
 			r.With(authmw.RequireCanWith(auth.ActionUpdateRepo, d.resolveProjectTargetFromURL)).
 				Patch("/projects/{name}/repos/{type}/{repo}", d.handlePatchRepo)
@@ -243,6 +254,7 @@ func Mount(r chi.Router, d Deps) {
 			d.mountAPIKeys(r)
 			d.mountProjectsFull(r)
 			d.mountReposList(r)
+			d.mountRepoContent(r)
 			d.mountDashboard(r)
 			d.mountGitBrowse(r)
 		})
@@ -294,7 +306,7 @@ func (d Deps) handleLogin(w http.ResponseWriter, r *http.Request) {
 	// password verification. Any early return on a failure path MUST have
 	// called auth.VerifyFixedCost first.
 	var req LoginRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8192)).Decode(&req); err != nil {
 		auth.VerifyFixedCost("")
 		writeJSONError(w, http.StatusUnauthorized, ErrUnauthenticated, "")
 		return
@@ -361,7 +373,7 @@ func (d Deps) handleLogout(w http.ResponseWriter, r *http.Request) {
 func (d Deps) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 	a, _ := auth.ActorFromContext(r.Context())
 	var req ChangePasswordRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&req); err != nil {
 		writeJSONError(w, http.StatusBadRequest, ErrValidationFailed, "invalid JSON")
 		return
 	}
@@ -388,9 +400,38 @@ func (d Deps) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
 		return
 	}
+	// HI-01: invalidate every other session for this user. Preserves the
+	// current browser session (the one that just authenticated to change
+	// the password) so the user isn't logged out of their own tab.
+	currentSessionID := sessionIDFromCookie(r, d.Sessions)
+	if currentSessionID != 0 {
+		_ = d.Sessions.DeleteAllForUserExcept(r.Context(), a.ID, currentSessionID)
+	} else {
+		_ = d.Sessions.DeleteAllForUser(r.Context(), a.ID)
+	}
 	uid := a.ID
 	d.recordAudit(r, audit.Event{Kind: audit.EvtAuthPasswordChanged, ActorUserID: &uid, TargetKind: "user", TargetID: u.Login})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// sessionIDFromCookie resolves the current request's session cookie to a row
+// id. Returns 0 if no cookie, invalid cookie, or session not found. Used by
+// password-change flows to preserve the caller's session while invalidating
+// all other sessions for the same user.
+func sessionIDFromCookie(r *http.Request, sessions *metadata.SessionsRepo) int64 {
+	c, err := r.Cookie(auth.SessionCookieName)
+	if err != nil || c.Value == "" {
+		return 0
+	}
+	prefix, ok := auth.SessionPrefix(c.Value)
+	if !ok {
+		return 0
+	}
+	s, err := sessions.FindByPrefixSha(r.Context(), prefix, auth.SessionSHA256(c.Value))
+	if err != nil {
+		return 0
+	}
+	return s.ID
 }
 
 func (d Deps) handleMe(w http.ResponseWriter, r *http.Request) {

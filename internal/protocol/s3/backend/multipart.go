@@ -7,15 +7,16 @@
 // Flow (D-18..D-22):
 //  1. CreateMultipartUpload       — inserts row, mkdir staging.
 //  2. UploadPart(N, body)         — writes <staging>/<N>.bin atomically,
-//                                   upserts s3_multipart_parts(md5, size).
+//     upserts s3_multipart_parts(md5, size).
 //  3. CompleteMultipartUpload     — merges parts in ascending order with
-//                                   io.Copy into a single temp file, renames
-//                                   atomically to the final bucket/key path,
-//                                   upserts s3_objects, deletes multipart rows.
+//     io.Copy into a single temp file, renames
+//     atomically to the final bucket/key path,
+//     upserts s3_objects, deletes multipart rows.
 //  4. AbortMultipartUpload        — deletes multipart rows + staging tree.
 //
 // ETag math (RESEARCH §Pattern 5):
-//     etag = hex(md5(hex-decode(part[0].md5) || hex-decode(part[1].md5) || ...)) + "-" + len
+//
+//	etag = hex(md5(hex-decode(part[0].md5) || hex-decode(part[1].md5) || ...)) + "-" + len
 //
 // Part-size bounds (D-22): UploadPart rejects > 5 GiB at the gate; the
 // "each part (except last) >= 5 MiB" rule is checked in CompleteMultipartUpload
@@ -304,8 +305,14 @@ func (b *Backend) CompleteMultipartUpload(bucket, object string, id gofakes3.Upl
 
 	finalETag := fmt.Sprintf("%s-%d", hex.EncodeToString(mergeHasher.Sum(nil)), len(parts))
 
-	// DB first, then rename. If the tx fails, the temp file is cleaned up by
-	// the deferred cleanup above — no orphaned objects on disk.
+	// HI-03: rename first, then commit the DB tx. If rename fails, nothing
+	// changed (DB still consistent, tmp cleaned up by deferred cleanup). If
+	// rename succeeds but DB commit fails, we delete the freshly-renamed
+	// final file so the DB row never points to an object that survives.
+	if err := os.Rename(tmpName, dst); err != nil {
+		return "", "", fmt.Errorf("backend: rename: %w", err)
+	}
+	cleanup = false
 	if err := b.DB.WriteTx(ctx, func(tx *sql.Tx) error {
 		if _, err := b.Objects.Upsert(ctx, tx, &metadata.S3Object{
 			BucketID:     bucketID,
@@ -320,13 +327,11 @@ func (b *Backend) CompleteMultipartUpload(bucket, object string, id gofakes3.Upl
 		}
 		return b.Multipart.DeleteUpload(ctx, tx, uploadID)
 	}); err != nil {
+		// Compensating file delete — the DB row was never persisted, so
+		// the final file is now an orphan. Best-effort.
+		_ = os.Remove(dst)
 		return "", "", fmt.Errorf("backend: commit multipart: %w", err)
 	}
-	// DB committed — now move the file into place.
-	if err := os.Rename(tmpName, dst); err != nil {
-		return "", "", fmt.Errorf("backend: rename: %w", err)
-	}
-	cleanup = false
 	if pf, err := os.Open(filepath.Dir(dst)); err == nil {
 		_ = pf.Sync()
 		_ = pf.Close()
@@ -393,8 +398,8 @@ func (b *Backend) ListMultipartUploads(bucket string, marker *gofakes3.UploadLis
 		}
 		t, _ := time.Parse("2006-01-02T15:04:05.000Z", initiated)
 		res.Uploads = append(res.Uploads, gofakes3.ListMultipartUploadItem{
-			Key:      key,
-			UploadID: gofakes3.UploadID(upID),
+			Key:       key,
+			UploadID:  gofakes3.UploadID(upID),
 			Initiated: gofakes3.NewContentTime(t),
 		})
 	}

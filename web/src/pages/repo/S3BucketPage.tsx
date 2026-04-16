@@ -42,6 +42,8 @@ interface S3Object {
   etag: string;
 }
 
+const emptyObjects: S3Object[] = [];
+
 interface S3BucketPageProps {
   repo: Repo;
 }
@@ -52,7 +54,7 @@ export function S3BucketPage({ repo }: S3BucketPageProps) {
   const [sort, setSort] = useState<SortState>({ column: 'key', direction: 'asc' });
 
   // Objects fetched from API; placeholder
-  const objects: S3Object[] = [];
+  const objects = emptyObjects;
   const totalObjects = 0;
   const totalSize = 0;
 

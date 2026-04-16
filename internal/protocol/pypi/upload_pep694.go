@@ -91,8 +91,8 @@ func (s *PEP694Sessions) Create(repoID, projectID int64, actorKey, project, vers
 // belongs to actorKey. Returns sentinel errors for the three negative
 // cases so handlers can pick the correct HTTP status.
 var (
-	ErrSessionNotFound = errors.New("pypi: session not found")
-	ErrSessionExpired  = errors.New("pypi: session expired")
+	ErrSessionNotFound   = errors.New("pypi: session not found")
+	ErrSessionExpired    = errors.New("pypi: session expired")
 	ErrSessionWrongActor = errors.New("pypi: session does not belong to actor")
 )
 
@@ -433,6 +433,10 @@ func (h *Handler) handleCommit(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := h.commitPyPIRow(r, res, f.Parsed); err != nil {
+			// HI-02: roll back the on-disk artifact for the current file so
+			// we don't leak orphans. Previously-committed files in this loop
+			// are already durable and intentionally left alone.
+			_ = h.pathStore.Delete(r.Context(), storageKey)
 			http.Error(w, fmt.Sprintf("commit %s: %v", f.Parsed.Filename, err), http.StatusInternalServerError)
 			return
 		}
@@ -460,9 +464,9 @@ func (h *Handler) handleCommit(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	resp := map[string]any{
-		"status":           "committed",
-		"committed_files":  committed,
-		"session_id":       sess.ID,
+		"status":          "committed",
+		"committed_files": committed,
+		"session_id":      sess.ID,
 	}
 	_ = json.NewEncoder(w).Encode(resp)
 }

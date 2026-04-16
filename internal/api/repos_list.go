@@ -67,6 +67,11 @@ func (d Deps) handleListRepos(w http.ResponseWriter, r *http.Request) {
 	skipping := pp.Cursor != nil
 	count := 0
 
+	ids := make([]int64, 0, len(repos))
+	for _, rr := range repos {
+		ids = append(ids, rr.ID)
+	}
+	sizes := d.liveRepoSizes(r.Context(), ids)
 	for _, rr := range repos {
 		if skipping {
 			if rr.ID == pp.Cursor.ID {
@@ -79,7 +84,7 @@ func (d Deps) handleListRepos(w http.ResponseWriter, r *http.Request) {
 		}
 		items = append(items, repoListItem{
 			ID: rr.ID, Type: rr.Type, Name: rr.Name,
-			DescriptionMD: rr.DescriptionMD, SizeBytes: rr.SizeBytes,
+			DescriptionMD: rr.DescriptionMD, SizeBytes: sizes[rr.ID],
 			AutoScan: rr.AutoScan, PublicRead: rr.PublicRead,
 			BlockOnSeverity: rr.BlockOnSeverity, CreatedAt: rr.CreatedAt,
 		})

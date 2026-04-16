@@ -10,7 +10,7 @@ func TestDistFS_ContainsIndexHTML(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DistFS.Open(dist/index.html): %v", err)
 	}
-	f.Close()
+	defer func() { _ = f.Close() }()
 }
 
 func TestDistFS_ContainsSwaggerIndexHTML(t *testing.T) {
@@ -18,7 +18,7 @@ func TestDistFS_ContainsSwaggerIndexHTML(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DistFS.Open(dist/swagger/index.html): %v", err)
 	}
-	f.Close()
+	defer func() { _ = f.Close() }()
 }
 
 func TestDistFS_ContainsFontFiles(t *testing.T) {

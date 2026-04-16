@@ -49,7 +49,11 @@ func (d Deps) handlePatchMe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// LO-01: collect diffs and apply in a single tx so a partial failure
+	// never leaves the user half-updated (and the audit entry always
+	// matches what actually committed).
 	diff := map[string]any{}
+	var emailPtr, avatarPtr *string
 
 	if req.Email != nil && *req.Email != u.Email {
 		if *req.Email == "" {
@@ -57,15 +61,16 @@ func (d Deps) handlePatchMe(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		diff["email"] = map[string]any{"from": u.Email, "to": *req.Email}
-		if err := d.Users.UpdateEmail(r.Context(), actor.ID, *req.Email); err != nil {
-			writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
-			return
-		}
+		emailPtr = req.Email
 	}
 
 	if req.AvatarSeed != nil && *req.AvatarSeed != u.AvatarSeed {
 		diff["avatar_seed"] = map[string]any{"from": u.AvatarSeed, "to": *req.AvatarSeed}
-		if err := d.Users.UpdateAvatarSeed(r.Context(), actor.ID, *req.AvatarSeed); err != nil {
+		avatarPtr = req.AvatarSeed
+	}
+
+	if emailPtr != nil || avatarPtr != nil {
+		if err := d.Users.UpdateProfile(r.Context(), actor.ID, emailPtr, avatarPtr); err != nil {
 			writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
 			return
 		}

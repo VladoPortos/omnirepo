@@ -42,11 +42,11 @@ export function DashboardPage() {
       <div className="flex items-center justify-between">
         <h1 className="text-[28px] font-semibold leading-tight">Dashboard</h1>
         <div className="flex gap-2">
-          <Button variant="outline" size="sm" render={<Link to="/projects" />}>
+          <Button variant="outline" size="sm" nativeButton={false} render={<Link to="/projects" />}>
             <Plus className="mr-1.5 size-4" />
             Create Project
           </Button>
-          <Button variant="outline" size="sm" render={<Link to="/projects" />}>
+          <Button variant="outline" size="sm" nativeButton={false} render={<Link to="/projects" />}>
             <Upload className="mr-1.5 size-4" />
             Upload Artifact
           </Button>

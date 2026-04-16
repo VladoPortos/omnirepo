@@ -401,6 +401,243 @@ func TestPhase3MigrationsForwardAndDown(t *testing.T) {
 	}
 }
 
+// Phase 4 Plan 02 — Migrations 016..019 (S3 access keys, git extensions,
+// S3 objects, S3 multipart).
+
+func TestPhase4MigrationsForwardAndDown(t *testing.T) {
+	t.Parallel()
+	db := openFreshDB(t)
+	ctx := context.Background()
+	applyReal(t, db)
+
+	// Forward: every new table exists and each migration is recorded.
+	forward := []struct {
+		stem  string
+		table string
+	}{
+		{"016_s3_access_keys", "s3_access_keys"},
+		{"017_git_extensions", "git_refs"},
+		{"018_s3_objects", "s3_objects"},
+		{"019_s3_multipart", "s3_multipart_uploads"},
+		{"019_s3_multipart", "s3_multipart_parts"},
+	}
+	for _, tc := range forward {
+		var name string
+		if err := db.Reader.QueryRow(
+			`SELECT name FROM sqlite_master WHERE type='table' AND name=?`, tc.table,
+		).Scan(&name); err != nil {
+			t.Fatalf("table %s missing after forward apply: %v", tc.table, err)
+		}
+		var n int
+		if err := db.Reader.QueryRow(
+			`SELECT COUNT(*) FROM schema_migrations WHERE name=?`, tc.stem,
+		).Scan(&n); err != nil || n != 1 {
+			t.Fatalf("schema_migrations %s: n=%d err=%v", tc.stem, n, err)
+		}
+	}
+
+	// 017 adds git_max_push_bytes column to repos.
+	var colCount int
+	if err := db.Reader.QueryRow(
+		`SELECT COUNT(*) FROM pragma_table_info('repos') WHERE name='git_max_push_bytes'`,
+	).Scan(&colCount); err != nil || colCount != 1 {
+		t.Fatalf("column repos.git_max_push_bytes missing after 017: n=%d err=%v", colCount, err)
+	}
+	// Verify it is nullable (no NOT NULL). pragma_table_info.notnull is 0 for NULLable columns.
+	var notnull int
+	if err := db.Reader.QueryRow(
+		`SELECT "notnull" FROM pragma_table_info('repos') WHERE name='git_max_push_bytes'`,
+	).Scan(&notnull); err != nil {
+		t.Fatalf("query git_max_push_bytes notnull: %v", err)
+	}
+	if notnull != 0 {
+		t.Fatalf("git_max_push_bytes should be NULLable (notnull=0), got notnull=%d", notnull)
+	}
+	// Verify the column type is INTEGER.
+	var colType string
+	if err := db.Reader.QueryRow(
+		`SELECT type FROM pragma_table_info('repos') WHERE name='git_max_push_bytes'`,
+	).Scan(&colType); err != nil {
+		t.Fatalf("query git_max_push_bytes type: %v", err)
+	}
+	if !strings.EqualFold(colType, "INTEGER") {
+		t.Fatalf("git_max_push_bytes type = %q, want INTEGER", colType)
+	}
+
+	// Inserting NULL into git_max_push_bytes must succeed.
+	if _, err := db.Writer.ExecContext(ctx, `INSERT INTO projects(name) VALUES ('p4a')`); err != nil {
+		t.Fatalf("seed project: %v", err)
+	}
+	if _, err := db.Writer.ExecContext(ctx,
+		`INSERT INTO repos(project_id,type,name,git_max_push_bytes) VALUES (?,?,?,NULL)`,
+		1, "git", "r-push-null",
+	); err != nil {
+		t.Fatalf("insert repo with NULL git_max_push_bytes: %v", err)
+	}
+
+	// Partial index on s3_access_keys.project_id WHERE revoked_at IS NULL.
+	var idxSQL string
+	if err := db.Reader.QueryRow(
+		`SELECT sql FROM sqlite_master WHERE type='index' AND name='idx_s3_access_keys_project'`,
+	).Scan(&idxSQL); err != nil {
+		t.Fatalf("query idx_s3_access_keys_project: %v", err)
+	}
+	if !strings.Contains(idxSQL, "WHERE revoked_at IS NULL") {
+		t.Fatalf("idx_s3_access_keys_project missing partial predicate: %q", idxSQL)
+	}
+
+	// git_refs CHECK constraint must reject bogus `type`.
+	if _, err := db.Writer.ExecContext(ctx,
+		`INSERT INTO repos(project_id,type,name) VALUES (1,'git','gr1')`,
+	); err != nil {
+		t.Fatalf("seed git repo: %v", err)
+	}
+	var gitRepoID int64
+	if err := db.Reader.QueryRow(
+		`SELECT id FROM repos WHERE name='gr1'`,
+	).Scan(&gitRepoID); err != nil {
+		t.Fatalf("find git repo: %v", err)
+	}
+	_, err := db.Writer.ExecContext(ctx,
+		`INSERT INTO git_refs(repo_id,name,target,type) VALUES (?,?,?,?)`,
+		gitRepoID, "refs/heads/main", "abc123", "bogus",
+	)
+	if err == nil || !strings.Contains(err.Error(), "CHECK") {
+		t.Fatalf("expected CHECK violation on git_refs.type='bogus', got %v", err)
+	}
+	// Valid types must insert cleanly.
+	if _, err := db.Writer.ExecContext(ctx,
+		`INSERT INTO git_refs(repo_id,name,target,type) VALUES (?,?,?,?)`,
+		gitRepoID, "refs/heads/main", "abc123", "branch",
+	); err != nil {
+		t.Fatalf("insert valid git_ref: %v", err)
+	}
+	// UNIQUE(repo_id,name) on git_refs.
+	_, err = db.Writer.ExecContext(ctx,
+		`INSERT INTO git_refs(repo_id,name,target,type) VALUES (?,?,?,?)`,
+		gitRepoID, "refs/heads/main", "def456", "branch",
+	)
+	if err == nil || !strings.Contains(err.Error(), "UNIQUE") {
+		t.Fatalf("expected UNIQUE violation on git_refs(repo_id,name), got %v", err)
+	}
+
+	// s3_objects UNIQUE(bucket_id,key) — seed bucket, then duplicate.
+	if _, err := db.Writer.ExecContext(ctx,
+		`INSERT INTO s3_buckets(name,project_id) VALUES ('b1',1)`,
+	); err != nil {
+		t.Fatalf("seed bucket: %v", err)
+	}
+	var bucketID int64
+	if err := db.Reader.QueryRow(`SELECT id FROM s3_buckets WHERE name='b1'`).Scan(&bucketID); err != nil {
+		t.Fatalf("find bucket: %v", err)
+	}
+	if _, err := db.Writer.ExecContext(ctx,
+		`INSERT INTO s3_objects(bucket_id,key,size_bytes,etag,sha256) VALUES (?,?,?,?,?)`,
+		bucketID, "foo/bar", 7, "etag-1", "sha256:aa",
+	); err != nil {
+		t.Fatalf("insert s3_object: %v", err)
+	}
+	_, err = db.Writer.ExecContext(ctx,
+		`INSERT INTO s3_objects(bucket_id,key,size_bytes,etag,sha256) VALUES (?,?,?,?,?)`,
+		bucketID, "foo/bar", 8, "etag-2", "sha256:bb",
+	)
+	if err == nil || !strings.Contains(err.Error(), "UNIQUE") {
+		t.Fatalf("expected UNIQUE violation on s3_objects(bucket_id,key), got %v", err)
+	}
+
+	// s3_access_keys UNIQUE(access_key_id) — seed a user so FK holds.
+	if _, err := db.Writer.ExecContext(ctx,
+		`INSERT INTO users(login,email,password_hash) VALUES ('alice','a@b.c','x')`,
+	); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	var userID int64
+	if err := db.Reader.QueryRow(`SELECT id FROM users WHERE login='alice'`).Scan(&userID); err != nil {
+		t.Fatalf("find user: %v", err)
+	}
+	if _, err := db.Writer.ExecContext(ctx,
+		`INSERT INTO s3_access_keys(project_id,access_key_id,secret_enc,label,created_by_user_id) VALUES (?,?,?,?,?)`,
+		1, "AKIA-test-01", []byte("enc"), "lbl", userID,
+	); err != nil {
+		t.Fatalf("insert s3 access key: %v", err)
+	}
+	_, err = db.Writer.ExecContext(ctx,
+		`INSERT INTO s3_access_keys(project_id,access_key_id,secret_enc,label,created_by_user_id) VALUES (?,?,?,?,?)`,
+		1, "AKIA-test-01", []byte("enc"), "lbl2", userID,
+	)
+	if err == nil || !strings.Contains(err.Error(), "UNIQUE") {
+		t.Fatalf("expected UNIQUE violation on s3_access_keys.access_key_id, got %v", err)
+	}
+
+	// s3_multipart_uploads UNIQUE(upload_id).
+	if _, err := db.Writer.ExecContext(ctx,
+		`INSERT INTO s3_multipart_uploads(upload_id,bucket_id,key,initiated_by_user_id) VALUES (?,?,?,?)`,
+		"uid-1", bucketID, "mp/obj", userID,
+	); err != nil {
+		t.Fatalf("insert multipart upload: %v", err)
+	}
+	_, err = db.Writer.ExecContext(ctx,
+		`INSERT INTO s3_multipart_uploads(upload_id,bucket_id,key,initiated_by_user_id) VALUES (?,?,?,?)`,
+		"uid-1", bucketID, "mp/obj2", userID,
+	)
+	if err == nil || !strings.Contains(err.Error(), "UNIQUE") {
+		t.Fatalf("expected UNIQUE violation on s3_multipart_uploads.upload_id, got %v", err)
+	}
+
+	// s3_multipart_parts UNIQUE(upload_id,part_number).
+	if _, err := db.Writer.ExecContext(ctx,
+		`INSERT INTO s3_multipart_parts(upload_id,part_number,size_bytes,md5) VALUES (?,?,?,?)`,
+		"uid-1", 1, 100, "md5a",
+	); err != nil {
+		t.Fatalf("insert multipart part: %v", err)
+	}
+	_, err = db.Writer.ExecContext(ctx,
+		`INSERT INTO s3_multipart_parts(upload_id,part_number,size_bytes,md5) VALUES (?,?,?,?)`,
+		"uid-1", 1, 100, "md5b",
+	)
+	if err == nil || !strings.Contains(err.Error(), "UNIQUE") {
+		t.Fatalf("expected UNIQUE violation on s3_multipart_parts(upload_id,part_number), got %v", err)
+	}
+
+	// Reverse: apply each .down.sql in reverse order (019 first) and verify
+	// the schema is scrubbed. Runner has no revert path (D-11), so exec directly.
+	downOrder := []string{
+		"019_s3_multipart.down.sql",
+		"018_s3_objects.down.sql",
+		"017_git_extensions.down.sql",
+		"016_s3_access_keys.down.sql",
+	}
+	for _, f := range downOrder {
+		b, err := fs.ReadFile(migrations.FS, f)
+		if err != nil {
+			t.Fatalf("read %s: %v", f, err)
+		}
+		if _, err := db.Writer.ExecContext(ctx, string(b)); err != nil {
+			t.Fatalf("exec %s: %v", f, err)
+		}
+	}
+	// Every phase-4 table must now be gone.
+	for _, tab := range []string{
+		"s3_access_keys", "git_refs", "s3_objects",
+		"s3_multipart_uploads", "s3_multipart_parts",
+	} {
+		var n int
+		_ = db.Reader.QueryRow(
+			`SELECT COUNT(*) FROM sqlite_master WHERE name=?`, tab,
+		).Scan(&n)
+		if n != 0 {
+			t.Fatalf("%s still present after down: n=%d", tab, n)
+		}
+	}
+	// git_max_push_bytes column must be gone.
+	var cnt int
+	if err := db.Reader.QueryRow(
+		`SELECT COUNT(*) FROM pragma_table_info('repos') WHERE name='git_max_push_bytes'`,
+	).Scan(&cnt); err != nil || cnt != 0 {
+		t.Fatalf("repos.git_max_push_bytes still present after 017 down: cnt=%d err=%v", cnt, err)
+	}
+}
+
 func TestReposSizeBytesColumnExists(t *testing.T) {
 	t.Parallel()
 	db := openFreshDB(t)

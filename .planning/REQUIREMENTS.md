@@ -175,31 +175,31 @@
 - [ ] **SCAN-06**: Scan results are parsed via tolerant JSON decoding and inserted into `scans` and `vulnerabilities` rows; snapshot tests guard the parser against Trivy schema drift
 - [ ] **SCAN-07**: Per-repo `block_on_severity` enum (`none|low|medium|high|critical`) blocks downloads of artifacts whose latest scan reports findings at or above the threshold; clients receive `403` with a clear message; `none` = advisory-only
 - [ ] **SCAN-08**: System generates SBOM (CycloneDX by default; SPDX selectable) for Docker images and language packages on demand and stores them under `/var/lib/omnirepo/sboms/<scan-id>.json`
-- [ ] **SCAN-09**: Super-admin can upload a Trivy DB tarball via UI (or `POST /api/v1/admin/trivy/db`); the system atomically swaps it into `/var/lib/omnirepo/trivy/db/`
-- [ ] **SCAN-10**: Super-admin can trigger an online Trivy DB pull via UI button (or `POST /api/v1/admin/trivy/db/pull`); the request returns a clear error if the network is unavailable
-- [ ] **SCAN-11**: Status page shows the active Trivy DB version, age, source (`baked-in`, `uploaded`, `online-pulled`), and a warning when the DB is older than a configurable threshold (default 7 days)
+- [x] **SCAN-09**: Super-admin can upload a Trivy DB tarball via UI (or `POST /api/v1/admin/trivy/db`); the system atomically swaps it into `/var/lib/omnirepo/trivy/db/`
+- [x] **SCAN-10**: Super-admin can trigger an online Trivy DB pull via UI button (or `POST /api/v1/admin/trivy/db/pull`); the request returns a clear error if the network is unavailable
+- [x] **SCAN-11**: Status page shows the active Trivy DB version, age, source (`baked-in`, `uploaded`, `online-pulled`), and a warning when the DB is older than a configurable threshold (default 7 days)
 - [ ] **SCAN-12**: System tracks `blob_uploads` in-flight registry; GC excludes any digest in `blob_uploads` and any digest with `last_touched_at < now - 1h`
 
 ### Operations (OPS)
 
 - [x] **OPS-01**: System writes an append-only `audit_log` row for every state-changing action (login attempt, user create/update/delete, project CRUD, repo CRUD, upload, delete, sync, scan, GC, TLS swap, maintenance toggle); fields include actor, target, IP, user-agent, outcome, structured details JSON
 - [x] **OPS-02**: Audit log mirrored to `/var/lib/omnirepo/logs/audit.log` (NDJSON) for tail-friendly inspection
-- [ ] **OPS-03**: Super-admin can browse, filter (by actor, target kind, time range, outcome), and paginate the audit log in the admin UI
+- [x] **OPS-03**: Super-admin can browse, filter (by actor, target kind, time range, outcome), and paginate the audit log in the admin UI
 - [ ] **OPS-04**: Per-project activity feed surfaces relevant audit events on the project detail screen
-- [ ] **OPS-05**: Super-admin can toggle maintenance mode; while active, all write paths return `503 maintenance` and reads continue to serve
+- [x] **OPS-05**: Super-admin can toggle maintenance mode; while active, all write paths return `503 maintenance` and reads continue to serve
 - [ ] **OPS-06**: Super-admin can trigger garbage collection (mark + sweep); orphan blobs and trash entries past retention are hard-deleted; CAS refcounts cross-checked
-- [ ] **OPS-07**: Super-admin can browse trash and restore soft-deleted repos or files
+- [x] **OPS-07**: Super-admin can browse trash and restore soft-deleted repos or files
 - [x] **OPS-08**: Super-admin can upload a new TLS certificate + private key (PEM) via UI; system validates the pair and atomically swaps them; running connections are unaffected; new connections use the new certificate (hot reload via `tls.Config.GetCertificate` and `atomic.Pointer`)
-- [ ] **OPS-09**: Super-admin can browse historical uploaded certificates under `/var/lib/omnirepo/certs/uploaded/`
+- [x] **OPS-09**: Super-admin can browse historical uploaded certificates under `/var/lib/omnirepo/certs/uploaded/`
 
 ### REST API (API)
 
 - [x] **API-01**: REST API served at `/api/v1/...`; OpenAPI 3.1 spec hand-written and committed at `internal/api/openapi.yaml`; `oapi-codegen/v2` generates Go types only (chi routes are hand-written)
 - [x] **API-02**: Swagger UI bundled (no CDN) and served at `/api/docs`
-- [ ] **API-03**: Every endpoint requires authentication except `/api/v1/auth/login`, `/healthz`, `/readyz`
+- [x] **API-03**: Every endpoint requires authentication except `/api/v1/auth/login`, `/healthz`, `/readyz`
 - [x] **API-04**: List endpoints paginate via `?limit=&cursor=` (cursor-based)
 - [ ] **API-05**: Upload endpoints stream the request body to disk; configurable max size; over-cap requests return `413`
-- [ ] **API-06**: Endpoints exist (at minimum) for: auth (login, logout, change-password), projects (CRUD), members (add, remove), repos (CRUD per type), uploads (multipart per type), repo wipe, sync, Docker pull-external, Docker promote, scans (start, get, list, SBOM download), search, audit, profile, own API keys, admin users, admin TLS upload, admin Trivy DB upload + pull, admin GC, admin maintenance, admin trash + restore
+- [x] **API-06**: Endpoints exist (at minimum) for: auth (login, logout, change-password), projects (CRUD), members (add, remove), repos (CRUD per type), uploads (multipart per type), repo wipe, sync, Docker pull-external, Docker promote, scans (start, get, list, SBOM download), search, audit, profile, own API keys, admin users, admin TLS upload, admin Trivy DB upload + pull, admin GC, admin maintenance, admin trash + restore
 
 ### Search (SRCH)
 
@@ -418,25 +418,25 @@ Deferred to future release. Tracked but not in current roadmap.
 | SCAN-06 | Phase 2 | Pending |
 | SCAN-07 | Phase 2 | Pending |
 | SCAN-08 | Phase 2 | Pending |
-| SCAN-09 | Phase 5 | Pending |
-| SCAN-10 | Phase 5 | Pending |
-| SCAN-11 | Phase 5 | Pending |
+| SCAN-09 | Phase 5 | Complete |
+| SCAN-10 | Phase 5 | Complete |
+| SCAN-11 | Phase 5 | Complete |
 | SCAN-12 | Phase 2 | Pending |
 | OPS-01 | Phase 1 | Complete |
 | OPS-02 | Phase 1 | Complete |
-| OPS-03 | Phase 5 | Pending |
+| OPS-03 | Phase 5 | Complete |
 | OPS-04 | Phase 5 | Pending |
-| OPS-05 | Phase 5 | Pending |
+| OPS-05 | Phase 5 | Complete |
 | OPS-06 | Phase 2 | Pending |
-| OPS-07 | Phase 5 | Pending |
+| OPS-07 | Phase 5 | Complete |
 | OPS-08 | Phase 1 | Complete |
-| OPS-09 | Phase 5 | Pending |
+| OPS-09 | Phase 5 | Complete |
 | API-01 | Phase 5 | Complete |
 | API-02 | Phase 5 | Complete |
-| API-03 | Phase 5 | Pending |
+| API-03 | Phase 5 | Complete |
 | API-04 | Phase 5 | Complete |
 | API-05 | Phase 5 | Pending |
-| API-06 | Phase 5 | Pending |
+| API-06 | Phase 5 | Complete |
 | SRCH-01 | Phase 2 | Pending |
 | SRCH-02 | Phase 3 | Pending |
 | SRCH-03 | Phase 5 | Complete |

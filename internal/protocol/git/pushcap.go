@@ -87,6 +87,11 @@ func (r *capturingReader) Read(p []byte) (int, error) {
 // non-error status is explicitly written. This gives the pushcap middleware
 // a window to detect MaxBytesError after the handler returns but before
 // the response is sent.
+// maxBufferedResponse caps the buffered response at 1 MiB. Git receive-pack
+// responses are typically a few KB; if we exceed this, flush early (losing
+// the MaxBytesError intercept window but preventing unbounded memory use).
+const maxBufferedResponse = 1 << 20
+
 type bufferingWriter struct {
 	http.ResponseWriter
 	committed    bool
@@ -106,7 +111,20 @@ func (w *bufferingWriter) Write(b []byte) (int, error) {
 		return w.ResponseWriter.Write(b)
 	}
 	w.pendingBytes = append(w.pendingBytes, b...)
+	if len(w.pendingBytes) > maxBufferedResponse {
+		w.flush()
+		return len(b), nil
+	}
 	return len(b), nil
+}
+
+// Flush implements http.Flusher. Required because gitkit's newWriteFlusher
+// asserts the writer has a Flush method.
+func (w *bufferingWriter) Flush() {
+	w.flush()
+	if f, ok := w.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
 }
 
 func (w *bufferingWriter) flush() {

@@ -52,17 +52,35 @@ func SigV4Middleware(service *s3keys.Service, skew time.Duration) func(http.Hand
 				verifyReq.URL.Path = origPath
 			}
 
-			result, err := sigv4.Verify(verifyReq, service.Lookup, skew)
+			// Use a capturing lookup that stores the full result (secret +
+			// project_id) from one DB query, avoiding the double-lookup of
+			// Lookup + ResolveProject.
+			var lookupResult *s3keys.LookupResult
+			capturingLookup := func(akid string) (string, error) {
+				r, err := service.LookupFull(akid)
+				if err != nil {
+					return "", err
+				}
+				lookupResult = r
+				return r.Secret, nil
+			}
+
+			result, err := sigv4.Verify(verifyReq, capturingLookup, skew)
 			if err != nil {
 				sigv4.WriteError(w, r, err)
 				return
 			}
 
-			// Resolve the project that owns this AKID.
-			projectID, perr := service.ResolveProject(result.AccessKeyID)
-			if perr != nil {
-				sigv4.WriteError(w, r, perr)
-				return
+			var projectID int64
+			if lookupResult != nil {
+				projectID = lookupResult.ProjectID
+			} else {
+				pid, perr := service.ResolveProject(result.AccessKeyID)
+				if perr != nil {
+					sigv4.WriteError(w, r, perr)
+					return
+				}
+				projectID = pid
 			}
 
 			actor := auth.Actor{

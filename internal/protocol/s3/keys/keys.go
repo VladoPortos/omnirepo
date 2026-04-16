@@ -67,57 +67,61 @@ func NewService(repo *metadata.S3KeysRepo, aead *omrcrypto.AEAD) *Service {
 	return &Service{Repo: repo, AEAD: aead}
 }
 
-// Lookup satisfies sigv4.SecretLookup. Per D-12 it collapses missing,
-// revoked, and any decrypt failure into sigv4.ErrInvalidAccessKeyId — leaking
-// no oracle.
-//
-// On success it fires a goroutine to bump s3_access_keys.last_used_at (D-14).
-// The goroutine is fire-and-forget — telemetry failure never blocks the hot
-// path or surfaces as a verify error.
-func (s *Service) Lookup(akid string) (string, error) {
+// LookupResult holds both the secret and the project_id from a single DB
+// lookup so callers don't need to query twice for the same AKID.
+type LookupResult struct {
+	Secret    string
+	ProjectID int64
+}
+
+// LookupFull retrieves the secret and project_id for an AKID in one DB query.
+// On success it fires a goroutine to bump last_used_at (D-14).
+func (s *Service) LookupFull(akid string) (*LookupResult, error) {
 	ctx := context.Background()
 	row, err := s.Repo.FindByAKID(ctx, akid)
 	if err != nil {
-		// Missing OR revoked — both map to ErrS3AccessKeyNotFound by the
-		// repo; anything else is a driver error we still collapse to
-		// InvalidAccessKeyId to avoid leaking internal detail. The
-		// operator-side log captures the true cause.
 		if !errors.Is(err, metadata.ErrS3AccessKeyNotFound) {
 			slog.Warn("s3keys.lookup: driver error", "err", err)
 		}
-		return "", sigv4.ErrInvalidAccessKeyId
+		return nil, sigv4.ErrInvalidAccessKeyId
 	}
 
-	// SecretEnc is the base64 envelope produced by aead.Encrypt.
 	plaintext, derr := s.AEAD.Decrypt(string(row.SecretEnc))
 	if derr != nil {
 		slog.Warn("s3keys.lookup: aead decrypt failed",
 			"akid", akid, "err", derr)
-		return "", sigv4.ErrInvalidAccessKeyId
+		return nil, sigv4.ErrInvalidAccessKeyId
 	}
 
-	// Fire-and-forget TouchLastUsed (D-14). Use a background context so the
-	// writer isn't tied to the request lifecycle.
 	go func(akid string) {
 		if err := s.Repo.TouchLastUsed(context.Background(), akid); err != nil {
 			slog.Warn("s3keys.touch_last_used", "akid", akid, "err", err)
 		}
 	}(akid)
 
-	return string(plaintext), nil
+	return &LookupResult{
+		Secret:    string(plaintext),
+		ProjectID: row.ProjectID,
+	}, nil
 }
 
-// ResolveProject returns the project_id an AKID is pinned to. Callers use it
-// to cross-check `bucket.project_id == key.project_id` per D-08 (no
-// cross-project bucket access).
-//
-// Missing or revoked AKIDs return sigv4.ErrInvalidAccessKeyId (no oracle).
-func (s *Service) ResolveProject(akid string) (int64, error) {
-	row, err := s.Repo.FindByAKID(context.Background(), akid)
+// Lookup satisfies sigv4.SecretLookup — returns only the secret.
+func (s *Service) Lookup(akid string) (string, error) {
+	r, err := s.LookupFull(akid)
 	if err != nil {
-		return 0, sigv4.ErrInvalidAccessKeyId
+		return "", err
 	}
-	return row.ProjectID, nil
+	return r.Secret, nil
+}
+
+// ResolveProject returns the project_id an AKID is pinned to.
+// Uses a fresh DB query (needed when called separately from Lookup).
+func (s *Service) ResolveProject(akid string) (int64, error) {
+	r, err := s.LookupFull(akid)
+	if err != nil {
+		return 0, err
+	}
+	return r.ProjectID, nil
 }
 
 // Compile-time assertion: Service.Lookup matches sigv4.SecretLookup.

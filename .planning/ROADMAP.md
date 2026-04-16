@@ -152,7 +152,7 @@ Plans:
 - [x] 05-02-PLAN.md — Frontend scaffold: Vite 8 + React 19 + Tailwind 4 + shadcn/ui + fonts + embed.go + Swagger UI assets
 - [x] 05-03-PLAN.md — Admin API endpoints: audit, maintenance, trash, Trivy DB, users full CRUD, TLS history, settings
 - [x] 05-04-PLAN.md — API endpoints: search, profile, API keys, projects list, repos list, git browse, dashboard, SPA handler, dev proxy
-- [ ] 05-05-PLAN.md — SPA shell: router, API client, auth flow (login + forced password change), sidebar, theme toggle, maintenance banner
+- [x] 05-05-PLAN.md — SPA shell: router, API client, auth flow (login + forced password change), sidebar, theme toggle, maintenance banner
 - [ ] 05-06-PLAN.md — Dashboard + Projects pages + shared components (DataTable, Dropzone, SnippetPanel, badges, formatters)
 - [ ] 05-07-PLAN.md — Repo detail pages: Docker, RPM, APT, PyPI, Helm, RAW, S3 + scan summary + markdown editor
 - [ ] 05-08-PLAN.md — Git repo detail: file tree, syntax highlighting (Shiki), commit log, diff viewer, blame, branch comparison

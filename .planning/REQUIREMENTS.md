@@ -214,7 +214,7 @@
 - [x] **UI-02**: SPA embedded in the Go binary via `//go:embed web/dist/*`; served at `/` with client-side-routing fallback to `index.html`
 - [x] **UI-03**: Dev mode (`OMNIREPO_DEV=1`) reverse-proxies non-API requests to a Vite dev server on `:5173` for HMR
 - [x] **UI-04**: All UI assets bundled: `lucide-react` SVG icons, `@dicebear/core` avatars, `swagger-ui-dist`, self-hosted Inter and JetBrains Mono `.woff2`; zero external CDN references at runtime
-- [ ] **UI-05**: Login screen + forced-password-change screen; offline-friendly error states
+- [x] **UI-05**: Login screen + forced-password-change screen; offline-friendly error states
 - [ ] **UI-06**: Dashboard shows total + free storage, recent audit events, recent high-severity scan findings
 - [ ] **UI-07**: Projects list and project detail (members, repos grouped by type, add repo, invite/remove user)
 - [ ] **UI-08**: Per-type repo detail screens (file browser + upload dropzone, README markdown editor + preview, scan results filter, SBOM download, size/count stats, sync-from-URL form, wipe contents, soft delete, public-read toggle, scan-severity gate, Docker-only: pull external + promote tag + cosign badge)
@@ -445,7 +445,7 @@ Deferred to future release. Tracked but not in current roadmap.
 | UI-02 | Phase 5 | Complete |
 | UI-03 | Phase 5 | Complete |
 | UI-04 | Phase 5 | Complete |
-| UI-05 | Phase 5 | Pending |
+| UI-05 | Phase 5 | Complete |
 | UI-06 | Phase 5 | Pending |
 | UI-07 | Phase 5 | Pending |
 | UI-08 | Phase 5 | Pending |

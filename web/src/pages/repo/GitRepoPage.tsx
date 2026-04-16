@@ -7,12 +7,17 @@
 import { useState, useCallback, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
 import { GitBranch } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { CopyButton } from '@/components/common/CopyButton';
 import { RepoPageLayout } from './RepoPageLayout';
 import { RefSelector } from '@/components/git/RefSelector';
 import { FileTree } from '@/components/git/FileTree';
 import { FileViewer } from '@/components/git/FileViewer';
+import { BlameViewer } from '@/components/git/BlameViewer';
+import { CommitLog } from '@/components/git/CommitLog';
+import { CommitDetail } from '@/components/git/CommitDetail';
+import { BranchCompare } from '@/components/git/BranchCompare';
 import { useGitRefs, useGitTree, useGitBlob } from '@/api/queries';
 import type { Repo, GitTreeEntry } from '@/api/types';
 
@@ -29,6 +34,7 @@ export function GitRepoPage({ repo }: GitRepoPageProps) {
   const [viewingFile, setViewingFile] = useState<string | null>(null);
   const [tab, setTab] = useState('files');
   const [showBlame, setShowBlame] = useState(false);
+  const [viewingCommit, setViewingCommit] = useState<string | null>(null);
 
   // Fetch refs
   const { data: refsData, isLoading: refsLoading } = useGitRefs(
@@ -76,6 +82,10 @@ export function GitRepoPage({ repo }: GitRepoPageProps) {
   }, []);
 
   const handleBack = useCallback(() => {
+    if (showBlame) {
+      setShowBlame(false);
+      return;
+    }
     if (viewingFile) {
       setViewingFile(null);
       setShowBlame(false);
@@ -84,13 +94,14 @@ export function GitRepoPage({ repo }: GitRepoPageProps) {
     const parts = currentPath.split('/').filter(Boolean);
     parts.pop();
     setCurrentPath(parts.join('/'));
-  }, [viewingFile, currentPath]);
+  }, [showBlame, viewingFile, currentPath]);
 
   const handleRefChange = useCallback((ref: string) => {
     setCurrentRef(ref);
     setCurrentPath('');
     setViewingFile(null);
     setShowBlame(false);
+    setViewingCommit(null);
   }, []);
 
   const cloneUrl = `${window.location.protocol}//${hostname}/${projectName}/${repo.name}.git`;
@@ -113,21 +124,25 @@ export function GitRepoPage({ repo }: GitRepoPageProps) {
           </div>
         </div>
 
-        {/* Tabs: Files, Commits, Refs */}
-        <Tabs defaultValue="files" value={tab} onValueChange={setTab}>
+        {/* Tabs: Files, Commits, Refs, Compare */}
+        <Tabs defaultValue="files" value={tab} onValueChange={(v) => { setTab(v); setViewingCommit(null); }}>
           <TabsList>
             <TabsTrigger value="files">Files</TabsTrigger>
             <TabsTrigger value="commits">Commits</TabsTrigger>
             <TabsTrigger value="refs">Refs</TabsTrigger>
+            <TabsTrigger value="compare">Compare</TabsTrigger>
           </TabsList>
 
           <TabsContent value="files">
             {viewingFile ? (
               showBlame ? (
-                // BlameViewer will be wired in Task 2
-                <div className="py-8 text-center text-sm text-muted-foreground">
-                  Blame view loading...
-                </div>
+                <BlameViewer
+                  projectName={projectName!}
+                  repoName={repo.name}
+                  currentRef={currentRef}
+                  filePath={viewingFile}
+                  onBack={handleBack}
+                />
               ) : (
                 <FileViewer
                   file={fileData}
@@ -149,10 +164,21 @@ export function GitRepoPage({ repo }: GitRepoPageProps) {
           </TabsContent>
 
           <TabsContent value="commits">
-            {/* CommitLog will be wired in Task 2 */}
-            <div className="py-8 text-center text-sm text-muted-foreground">
-              Commit log loading...
-            </div>
+            {viewingCommit ? (
+              <CommitDetail
+                projectName={projectName!}
+                repoName={repo.name}
+                sha={viewingCommit}
+                onBack={() => setViewingCommit(null)}
+              />
+            ) : (
+              <CommitLog
+                projectName={projectName!}
+                repoName={repo.name}
+                currentRef={currentRef}
+                onCommitClick={setViewingCommit}
+              />
+            )}
           </TabsContent>
 
           <TabsContent value="refs">
@@ -168,7 +194,14 @@ export function GitRepoPage({ repo }: GitRepoPageProps) {
                           key={r.name}
                           className="flex items-center justify-between rounded-md border px-3 py-2"
                         >
-                          <span className="text-sm">{r.name}</span>
+                          <Button
+                            variant="link"
+                            size="sm"
+                            className="h-auto p-0"
+                            onClick={() => { handleRefChange(r.name); setTab('files'); }}
+                          >
+                            {r.name}
+                          </Button>
                           <code className="text-xs text-muted-foreground">
                             {r.sha.slice(0, 8)}
                           </code>
@@ -188,7 +221,14 @@ export function GitRepoPage({ repo }: GitRepoPageProps) {
                           key={r.name}
                           className="flex items-center justify-between rounded-md border px-3 py-2"
                         >
-                          <span className="text-sm">{r.name}</span>
+                          <Button
+                            variant="link"
+                            size="sm"
+                            className="h-auto p-0"
+                            onClick={() => { handleRefChange(r.name); setTab('files'); }}
+                          >
+                            {r.name}
+                          </Button>
                           <code className="text-xs text-muted-foreground">
                             {r.sha.slice(0, 8)}
                           </code>
@@ -203,6 +243,16 @@ export function GitRepoPage({ repo }: GitRepoPageProps) {
                 </p>
               )}
             </div>
+          </TabsContent>
+
+          <TabsContent value="compare">
+            <BranchCompare
+              projectName={projectName!}
+              repoName={repo.name}
+              refs={refs}
+              defaultBase={refs.find((r) => r.type === 'branch' && r.name === 'main')?.name}
+              defaultHead={currentRef !== 'main' ? currentRef : ''}
+            />
           </TabsContent>
         </Tabs>
       </div>

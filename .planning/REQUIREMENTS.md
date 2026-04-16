@@ -163,7 +163,7 @@
 - [ ] **SYNC-03**: On boot, any `running` job older than 10 minutes is reset to `pending` for retry
 - [ ] **SYNC-04**: Failed jobs retry with exponential backoff (1m, 5m, 30m, fail at 5 attempts)
 - [x] **SYNC-05**: Project members can trigger a one-shot "sync from external URL" against an RPM, DEB, PyPI, or Helm repo; sync downloads the upstream index, fetches missing files (idempotent by checksum), and regenerates local metadata signed with the local key
-- [ ] **SYNC-06**: Sync job log is captured in the `sync_jobs.log` field and viewable in the UI
+- [x] **SYNC-06**: Sync job log is captured in the `sync_jobs.log` field and viewable in the UI
 
 ### Vulnerability Scanning & SBOM (SCAN)
 
@@ -185,7 +185,7 @@
 - [x] **OPS-01**: System writes an append-only `audit_log` row for every state-changing action (login attempt, user create/update/delete, project CRUD, repo CRUD, upload, delete, sync, scan, GC, TLS swap, maintenance toggle); fields include actor, target, IP, user-agent, outcome, structured details JSON
 - [x] **OPS-02**: Audit log mirrored to `/var/lib/omnirepo/logs/audit.log` (NDJSON) for tail-friendly inspection
 - [x] **OPS-03**: Super-admin can browse, filter (by actor, target kind, time range, outcome), and paginate the audit log in the admin UI
-- [ ] **OPS-04**: Per-project activity feed surfaces relevant audit events on the project detail screen
+- [x] **OPS-04**: Per-project activity feed surfaces relevant audit events on the project detail screen
 - [x] **OPS-05**: Super-admin can toggle maintenance mode; while active, all write paths return `503 maintenance` and reads continue to serve
 - [ ] **OPS-06**: Super-admin can trigger garbage collection (mark + sweep); orphan blobs and trash entries past retention are hard-deleted; CAS refcounts cross-checked
 - [x] **OPS-07**: Super-admin can browse trash and restore soft-deleted repos or files
@@ -198,7 +198,7 @@
 - [x] **API-02**: Swagger UI bundled (no CDN) and served at `/api/docs`
 - [x] **API-03**: Every endpoint requires authentication except `/api/v1/auth/login`, `/healthz`, `/readyz`
 - [x] **API-04**: List endpoints paginate via `?limit=&cursor=` (cursor-based)
-- [ ] **API-05**: Upload endpoints stream the request body to disk; configurable max size; over-cap requests return `413`
+- [x] **API-05**: Upload endpoints stream the request body to disk; configurable max size; over-cap requests return `413`
 - [x] **API-06**: Endpoints exist (at minimum) for: auth (login, logout, change-password), projects (CRUD), members (add, remove), repos (CRUD per type), uploads (multipart per type), repo wipe, sync, Docker pull-external, Docker promote, scans (start, get, list, SBOM download), search, audit, profile, own API keys, admin users, admin TLS upload, admin Trivy DB upload + pull, admin GC, admin maintenance, admin trash + restore
 
 ### Search (SRCH)
@@ -212,7 +212,7 @@
 
 - [x] **UI-01**: SPA built with React 19, TypeScript, Vite 8, Tailwind CSS 4 (CSS-first config), shadcn/ui 4, TanStack Query, React Router 7
 - [x] **UI-02**: SPA embedded in the Go binary via `//go:embed web/dist/*`; served at `/` with client-side-routing fallback to `index.html`
-- [ ] **UI-03**: Dev mode (`OMNIREPO_DEV=1`) reverse-proxies non-API requests to a Vite dev server on `:5173` for HMR
+- [x] **UI-03**: Dev mode (`OMNIREPO_DEV=1`) reverse-proxies non-API requests to a Vite dev server on `:5173` for HMR
 - [x] **UI-04**: All UI assets bundled: `lucide-react` SVG icons, `@dicebear/core` avatars, `swagger-ui-dist`, self-hosted Inter and JetBrains Mono `.woff2`; zero external CDN references at runtime
 - [ ] **UI-05**: Login screen + forced-password-change screen; offline-friendly error states
 - [ ] **UI-06**: Dashboard shows total + free storage, recent audit events, recent high-severity scan findings
@@ -409,7 +409,7 @@ Deferred to future release. Tracked but not in current roadmap.
 | SYNC-03 | Phase 2 | Pending |
 | SYNC-04 | Phase 2 | Pending |
 | SYNC-05 | Phase 3 | Complete |
-| SYNC-06 | Phase 5 | Pending |
+| SYNC-06 | Phase 5 | Complete |
 | SCAN-01 | Phase 2 | Pending |
 | SCAN-02 | Phase 2 | Pending |
 | SCAN-03 | Phase 2 | Pending |
@@ -425,7 +425,7 @@ Deferred to future release. Tracked but not in current roadmap.
 | OPS-01 | Phase 1 | Complete |
 | OPS-02 | Phase 1 | Complete |
 | OPS-03 | Phase 5 | Complete |
-| OPS-04 | Phase 5 | Pending |
+| OPS-04 | Phase 5 | Complete |
 | OPS-05 | Phase 5 | Complete |
 | OPS-06 | Phase 2 | Pending |
 | OPS-07 | Phase 5 | Complete |
@@ -435,7 +435,7 @@ Deferred to future release. Tracked but not in current roadmap.
 | API-02 | Phase 5 | Complete |
 | API-03 | Phase 5 | Complete |
 | API-04 | Phase 5 | Complete |
-| API-05 | Phase 5 | Pending |
+| API-05 | Phase 5 | Complete |
 | API-06 | Phase 5 | Complete |
 | SRCH-01 | Phase 2 | Pending |
 | SRCH-02 | Phase 3 | Pending |
@@ -443,7 +443,7 @@ Deferred to future release. Tracked but not in current roadmap.
 | SRCH-04 | Phase 5 | Complete |
 | UI-01 | Phase 5 | Complete |
 | UI-02 | Phase 5 | Complete |
-| UI-03 | Phase 5 | Pending |
+| UI-03 | Phase 5 | Complete |
 | UI-04 | Phase 5 | Complete |
 | UI-05 | Phase 5 | Pending |
 | UI-06 | Phase 5 | Pending |

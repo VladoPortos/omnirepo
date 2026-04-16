@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Ready to execute
-last_updated: "2026-04-16T09:57:24.854Z"
+last_updated: "2026-04-16T10:12:02.382Z"
 progress:
   total_phases: 5
   completed_phases: 4
   total_plans: 52
-  completed_plans: 43
-  percent: 83
+  completed_plans: 44
+  percent: 85
 ---
 
 # STATE: OmniRepo
@@ -25,7 +25,7 @@ progress:
 ## Current Position
 
 Phase: 05 (rest-api-web-ui-production-dockerfile) — EXECUTING
-Plan: 4 of 12
+Plan: 5 of 12
 
 - **Phase**: 1 — Foundation
 - **Plan**: none yet (planning not started)
@@ -69,6 +69,7 @@ Plan: 4 of 12
 | Phase 05-rest-api-web-ui-production-dockerfile P01 | 13m | 2 tasks | 14 files |
 | Phase 05 P02 | 5m | 2 tasks | 85 files |
 | Phase 05 P03 | 11m | 2 tasks | 21 files |
+| Phase 05 P04 | 12m | 2 tasks | 19 files |
 
 ## Accumulated Context
 
@@ -148,6 +149,8 @@ Version-drift corrections to apply at first commit (from `.planning/research/SUM
 - [Phase 05]: Reuse ActionTriggerGC gate for all admin endpoints (super-admin-only) rather than adding new action constants
 - [Phase 05]: MaintenanceMode middleware accepts *SettingsRepo parameter (nil-safe backward compat)
 - [Phase 05]: Trivy DB upload: temp dir + atomic rename to DataRoot/trivy/db with path traversal prevention
+- [Phase 05]: Git browse uses go-git v6 PlainOpen for read-only tree/blob/commit walking (no subprocess)
+- [Phase 05]: SPA handler serves only from embedded dist/ FS; dev proxy to Vite on :5173 when OMNIREPO_DEV=1
 
 ### Todos
 

@@ -97,9 +97,9 @@
 ### S3 Protocol (S3)
 
 - [x] **S3-01**: S3 API served at `/s3/<bucket>/<key>` (path-style) and at `<bucket>.<host>/...` (virtual-host style via `Host` header routing)
-- [ ] **S3-02**: Operations supported: `CreateBucket`, `ListBuckets`, `HeadBucket`, `DeleteBucket`, `PutObject`, `GetObject`, `HeadObject`, `DeleteObject`, `ListObjectsV1`, `ListObjectsV2`, multipart upload (`CreateMultipartUpload`, `UploadPart`, `CompleteMultipartUpload`, `AbortMultipartUpload`)
+- [x] **S3-02**: Operations supported: `CreateBucket`, `ListBuckets`, `HeadBucket`, `DeleteBucket`, `PutObject`, `GetObject`, `HeadObject`, `DeleteObject`, `ListObjectsV1`, `ListObjectsV2`, multipart upload (`CreateMultipartUpload`, `UploadPart`, `CompleteMultipartUpload`, `AbortMultipartUpload`)
 - [x] **S3-03**: SigV4 middleware validates every request; failures return AWS-shape XML errors (`SignatureDoesNotMatch`, `InvalidAccessKeyId`, `RequestTimeTooSkewed`)
-- [ ] **S3-04**: Bucket contents stored at `/var/lib/omnirepo/s3/<bucket>/<key>` (flat keyspace materialized as a directory tree)
+- [x] **S3-04**: Bucket contents stored at `/var/lib/omnirepo/s3/<bucket>/<key>` (flat keyspace materialized as a directory tree)
 - [ ] **S3-05**: No versioning, no object lock, no website hosting in v1
 - [ ] **S3-06**: Conformance verified against `aws-sdk-go-v2`; positive and negative test cases covered
 
@@ -364,9 +364,9 @@ Deferred to future release. Tracked but not in current roadmap.
 | OCI-09 | Phase 2 | Pending |
 | OCI-10 | Phase 2 | Pending |
 | S3-01 | Phase 4 | Complete |
-| S3-02 | Phase 4 | Pending |
+| S3-02 | Phase 4 | Complete |
 | S3-03 | Phase 4 | Complete |
-| S3-04 | Phase 4 | Pending |
+| S3-04 | Phase 4 | Complete |
 | S3-05 | Phase 4 | Pending |
 | S3-06 | Phase 4 | Pending |
 | GIT-01 | Phase 4 | Complete |

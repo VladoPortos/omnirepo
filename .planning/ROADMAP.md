@@ -121,7 +121,7 @@ Plans:
 - [x] 04-03-PLAN.md — Config schema extension (server.git_backend, repos.git.max_push_bytes, external_hostnames) + reserved-prefix verify
 - [x] 04-04-PLAN.md — SigV4 verifier: canonical/errors + Verify + STREAMING chunked parser
 - [ ] 04-05-PLAN.md — S3 access-key service (AEAD lookup) + admin REST /api/v1/projects/{name}/s3-access-keys + auth.Can ActionS3Bucket{Read,Write,Admin}
-- [ ] 04-06-PLAN.md — gofakes3 Backend + multipart (staging + streaming merge + orphan GC)
+- [x] 04-06-PLAN.md — gofakes3 Backend + multipart (staging + streaming merge + orphan GC)
 - [ ] 04-07-PLAN.md — S3 route wiring: vhost middleware + SigV4 middleware + auth.Can + gofakes3 mount
 - [x] 04-08-PLAN.md — GitServer interface + gogit production backend (spike promotion) + gitkit fallback + pktline sideband + delete spike
 - [ ] 04-09-PLAN.md — Git middleware chain (BasicOrAPIKey project: variant + perRepoMutex + pushSizeLimit) + backend selection via config
@@ -155,7 +155,7 @@ Plans:
 | 1. Foundation | 0/0 | Not started | - |
 | 2. OCI + RAW + Scan Pipeline | 13/13 | Complete   | 2026-04-15 |
 | 3. Package Repos (RPM + APT + PyPI + Helm) | 2/7 | In Progress|  |
-| 4. S3 + Git | 0/0 | Not started | - |
+| 4. S3 + Git | 6/13 | In Progress|  |
 | 5. REST API + Web UI + Production Dockerfile | 0/0 | Not started | - |
 
 ## Coverage Summary

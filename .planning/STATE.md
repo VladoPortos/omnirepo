@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Ready to execute
-last_updated: "2026-04-16T01:19:37.795Z"
+last_updated: "2026-04-16T01:32:39.152Z"
 progress:
   total_phases: 5
   completed_phases: 3
   total_plans: 40
-  completed_plans: 32
-  percent: 80
+  completed_plans: 33
+  percent: 83
 ---
 
 # STATE: OmniRepo
@@ -25,7 +25,7 @@ progress:
 ## Current Position
 
 Phase: 04 (s3-git) — EXECUTING
-Plan: 6 of 13
+Plan: 7 of 13
 
 - **Phase**: 1 — Foundation
 - **Plan**: none yet (planning not started)
@@ -58,6 +58,7 @@ Plan: 6 of 13
 | Phase 04-s3-git P03 | 3m | 1 tasks | 4 files |
 | Phase 04-s3-git P08 | 18m | 1 tasks | 12 files |
 | Phase 04-s3-git P04 | 20m | 2 tasks | 6 files |
+| Phase 04-s3-git P06 | 35m | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -121,6 +122,8 @@ Version-drift corrections to apply at first commit (from `.planning/research/SUM
 - [Phase 04-s3-git]: Plan 03 landed Phase 4 config surface: server.git_backend (gogit|gitkit), repos.git.max_push_bytes (500 MiB), external_hostnames; first typed Config.Validate() method
 - [Phase 04-s3-git]: Plan 08 promoted Phase 1 git spike to production GitServer interface: gogit (go-git v6 transport primitives) + gitkit (subprocess fallback) + pktline sideband + InitBare helper; spike files deleted per D-28
 - [Phase 04-s3-git]: SigV4 verifier landed: hand-rolled canonical-request/HMAC-chain/constant-time-compare + STREAMING chunked parser (64 MiB per-chunk cap); all 5 aws4_testsuite vectors byte-exact + 14 behavioral tests green
+- [Phase 04-s3-git]: Plan 06 landed: gofakes3.Backend + MultipartBackend on storage.WriteAndRename with known-vector multipart ETag + 24h orphan GC
+- [Phase 04-s3-git]: gofakes3 CreateBucket gated by Backend.DefaultProjectID=0 in production; REST uses CreateBucketForProject(name, projectID)
 
 ### Todos
 

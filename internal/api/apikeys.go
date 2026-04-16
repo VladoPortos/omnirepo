@@ -84,7 +84,7 @@ func (d Deps) handleCreateAPIKey(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req apiKeyCreateRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024)).Decode(&req); err != nil {
 		writeJSONError(w, http.StatusBadRequest, ErrValidationFailed, "invalid JSON")
 		return
 	}

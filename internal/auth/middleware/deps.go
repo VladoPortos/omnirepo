@@ -65,12 +65,19 @@ func (d Deps) clock() time.Time {
 }
 
 // writeJSON401 emits a 401 with JSON body {"error":"unauthenticated"}.
-// Includes WWW-Authenticate so git/docker CLI clients retry with credentials.
+// Does NOT include WWW-Authenticate so browsers won't pop the native
+// Basic Auth dialog on /api/v1/ requests from the SPA.
 func writeJSON401(w http.ResponseWriter) {
-	w.Header().Set("WWW-Authenticate", `Basic realm="omnirepo"`)
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(http.StatusUnauthorized)
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": "unauthenticated"})
+}
+
+// writeJSON401Basic emits a 401 with WWW-Authenticate: Basic so CLI
+// clients (git, docker, apt, yum) retry with credentials.
+func writeJSON401Basic(w http.ResponseWriter) {
+	w.Header().Set("WWW-Authenticate", `Basic realm="omnirepo"`)
+	writeJSON401(w)
 }
 
 // writeJSON403 emits a 403 with JSON body {"error": reason}.

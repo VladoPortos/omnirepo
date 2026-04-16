@@ -31,7 +31,7 @@ func BasicOrAPIKey(d Deps) func(http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			login, pw, ok := r.BasicAuth()
 			if !ok {
-				writeJSON401(w)
+				writeJSON401Basic(w)
 				return
 			}
 
@@ -49,13 +49,13 @@ func BasicOrAPIKey(d Deps) func(http.Handler) http.Handler {
 				if len(pwParts) == 2 && pwParts[0] != "" && auth.APIKeyRegex.MatchString(pwParts[1]) {
 					actor, authed := authenticateProjectKey(r.Context(), d, pwParts[0], pwParts[1])
 					if !authed {
-						writeJSON401(w)
+						writeJSON401Basic(w)
 						return
 					}
 					next.ServeHTTP(w, r.WithContext(auth.WithActor(r.Context(), actor)))
 					return
 				}
-				writeJSON401(w)
+				writeJSON401Basic(w)
 				return
 			}
 
@@ -63,7 +63,7 @@ func BasicOrAPIKey(d Deps) func(http.Handler) http.Handler {
 			if auth.APIKeyRegex.MatchString(pw) {
 				actor, authed := authenticateAPIKey(r.Context(), d, pw)
 				if !authed {
-					writeJSON401(w)
+					writeJSON401Basic(w)
 					return
 				}
 				next.ServeHTTP(w, r.WithContext(auth.WithActor(r.Context(), actor)))
@@ -73,7 +73,7 @@ func BasicOrAPIKey(d Deps) func(http.Handler) http.Handler {
 			// Password path (argon2id).
 			actor, authed := authenticatePassword(r.Context(), d, login, pw)
 			if !authed {
-				writeJSON401(w)
+				writeJSON401Basic(w)
 				return
 			}
 			next.ServeHTTP(w, r.WithContext(auth.WithActor(r.Context(), actor)))

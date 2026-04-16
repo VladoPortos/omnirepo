@@ -60,8 +60,8 @@ function useAdminCreateUser() {
 function useAdminUpdateUser() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, data }: { id: number; data: UserUpdate & { must_change_password?: boolean } }) =>
-      api.patch<User>(`/admin/users/${id}`, data),
+    mutationFn: ({ login, data }: { login: string; data: UserUpdate & { must_change_password?: boolean } }) =>
+      api.patch<User>(`/admin/users/${login}`, data),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['admin', 'users'] }),
   });
 }
@@ -69,7 +69,7 @@ function useAdminUpdateUser() {
 function useAdminDeleteUser() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (id: number) => api.del<void>(`/admin/users/${id}`),
+    mutationFn: (login: string) => api.del<void>(`/admin/users/${login}`),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['admin', 'users'] }),
   });
 }
@@ -136,7 +136,7 @@ export default function UsersPage() {
     if (!editUser) return;
     try {
       await updateMutation.mutateAsync({
-        id: editUser.id,
+        login: editUser.login,
         data: {
           email: editEmail || undefined,
           is_super_admin: editSuperAdmin,
@@ -153,7 +153,7 @@ export default function UsersPage() {
   const handleDelete = useCallback(async () => {
     if (!deleteUser) return;
     try {
-      await deleteMutation.mutateAsync(deleteUser.id);
+      await deleteMutation.mutateAsync(deleteUser.login);
       setDeleteUser(null);
       toast.success(`User "${deleteUser.login}" deleted.`);
     } catch (err) {

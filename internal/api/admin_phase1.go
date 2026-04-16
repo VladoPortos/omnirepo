@@ -233,6 +233,7 @@ func Mount(r chi.Router, d Deps) {
 			d.mountProjectsFull(r)
 			d.mountReposList(r)
 			d.mountDashboard(r)
+			d.mountGitBrowse(r)
 		})
 	})
 }

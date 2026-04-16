@@ -7,6 +7,7 @@ package api
 
 import (
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -203,17 +204,21 @@ func (d Deps) handleProjectActivity(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Escape LIKE wildcards in project name to prevent wildcard injection.
+	escapedName := strings.NewReplacer("%", "\\%", "_", "\\_").Replace(p.Name)
+
 	// Query audit_log for events scoped to this project.
+	// The details_json LIKE clause was removed — it was overly broad and
+	// could leak audit data from other projects.
 	rows, err := d.DB.Reader.QueryContext(r.Context(), `
 		SELECT id, event_kind, actor_user_id, target_kind, target_id,
 		       outcome, details_json, ip, user_agent, created_at
 		FROM audit_log
 		WHERE (target_kind='project' AND target_id=?)
-		   OR (target_kind IN ('repo','member') AND target_id LIKE ? || '/%')
-		   OR (target_kind IN ('repo','member') AND details_json LIKE '%' || ? || '%')
+		   OR (target_kind IN ('repo','member') AND target_id LIKE ? ESCAPE '\')
 		ORDER BY id DESC
 		LIMIT 50
-	`, p.Name, p.Name, p.Name)
+	`, p.Name, escapedName+"/%")
 	if err != nil {
 		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
 		return

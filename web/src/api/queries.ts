@@ -4,7 +4,7 @@
  */
 
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { api } from './client';
+import { api, ApiError } from './client';
 import type {
   MeResponse,
   MeUpdateRequest,
@@ -42,7 +42,16 @@ import type {
 export function useMe() {
   return useQuery({
     queryKey: ['me'],
-    queryFn: () => api.get<MeResponse>('/me'),
+    queryFn: async () => {
+      try {
+        return await api.get<MeResponse>('/me');
+      } catch (err) {
+        if (err instanceof ApiError && (err.status === 401 || err.status === 403)) {
+          return null;
+        }
+        throw err;
+      }
+    },
     staleTime: 60_000,
     retry: false,
   });

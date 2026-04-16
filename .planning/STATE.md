@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Ready to execute
-last_updated: "2026-04-16T02:05:43.674Z"
+last_updated: "2026-04-16T02:46:02.930Z"
 progress:
   total_phases: 5
   completed_phases: 3
   total_plans: 40
-  completed_plans: 35
-  percent: 88
+  completed_plans: 37
+  percent: 93
 ---
 
 # STATE: OmniRepo
@@ -25,7 +25,7 @@ progress:
 ## Current Position
 
 Phase: 04 (s3-git) — EXECUTING
-Plan: 9 of 13
+Plan: 11 of 13
 
 - **Phase**: 1 — Foundation
 - **Plan**: none yet (planning not started)
@@ -61,6 +61,8 @@ Plan: 9 of 13
 | Phase 04-s3-git P06 | 35m | 2 tasks | 5 files |
 | Phase 04-s3-git P05 | 5min | 2 tasks | 10 files |
 | Phase 04-s3-git P09 | 12m | 2 tasks | 13 files |
+| Phase 04-s3-git P07 | 15m | 1 tasks | 9 files |
+| Phase 04-s3-git P10 | 15m | 1 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -128,6 +130,8 @@ Version-drift corrections to apply at first commit (from `.planning/research/SUM
 - [Phase 04-s3-git]: gofakes3 CreateBucket gated by Backend.DefaultProjectID=0 in production; REST uses CreateBucketForProject(name, projectID)
 - [Phase 04-s3-git]: Added ActionManageS3Keys (new action) + ActorKindS3Key for project-scoped S3 auth dispatch; shown-once secret in POST only
 - [Phase 04-s3-git]: Plan 09: HTTP Basic auth project: variant uses login='project', pw='<projname>:<key>' — Go's BasicAuth splits on first colon; capturingReader+bufferingWriter pattern for MaxBytesError capture in pushcap middleware
+- [Phase 04-s3-git]: Plan 07: VHostRewrite as global middleware before routes (chi constraint); SigV4 verifies against original pre-rewrite path via context stash; r.Host injected into r.Header for canonical-request computation
+- [Phase 04-s3-git]: Plan 10: HEAD fetched via explicit Reference(plumbing.HEAD) + dedup; Git hook composed into existing chain; audit event git.refs.synced carries ref_count only
 
 ### Todos
 

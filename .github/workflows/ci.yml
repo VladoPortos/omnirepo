@@ -110,3 +110,34 @@ jobs:
 
       - name: Run Phase 3 conformance suites (rpm/deb/pypi/helm)
         run: make conformance-all
+
+  # Phase 4 D-45 gate: S3 conformance via aws-sdk-go-v2 + aws-cli DinD.
+  # Exercises SigV4 positive/negative matrix (SignatureDoesNotMatch,
+  # InvalidAccessKeyId, RequestTimeTooSkewed) and end-to-end `aws s3 cp`
+  # through a pinned aws-cli container.
+  s3-conformance:
+    runs-on: ubuntu-24.04
+    needs: build-test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+
+      - name: Pre-pull aws-cli image
+        run: |
+          set -euo pipefail
+          while IFS= read -r line; do
+            case "$line" in ''|\#*) continue ;; esac
+            case "$line" in aws-cli=*)
+              image="${line#aws-cli=}"
+              echo "pulling $image"
+              docker pull "$image"
+              ;;
+            esac
+          done < test/conformance/images.txt
+
+      - name: Run S3 conformance suite
+        run: make conformance-s3

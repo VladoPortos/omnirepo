@@ -122,10 +122,10 @@ Plans:
 - [x] 04-04-PLAN.md — SigV4 verifier: canonical/errors + Verify + STREAMING chunked parser
 - [x] 04-05-PLAN.md — S3 access-key service (AEAD lookup) + admin REST /api/v1/projects/{name}/s3-access-keys + auth.Can ActionS3Bucket{Read,Write,Admin}
 - [x] 04-06-PLAN.md — gofakes3 Backend + multipart (staging + streaming merge + orphan GC)
-- [ ] 04-07-PLAN.md — S3 route wiring: vhost middleware + SigV4 middleware + auth.Can + gofakes3 mount
+- [x] 04-07-PLAN.md — S3 route wiring: vhost middleware + SigV4 middleware + auth.Can + gofakes3 mount
 - [x] 04-08-PLAN.md — GitServer interface + gogit production backend (spike promotion) + gitkit fallback + pktline sideband + delete spike
 - [x] 04-09-PLAN.md — Git middleware chain (BasicOrAPIKey project: variant + perRepoMutex + pushSizeLimit) + backend selection via config
-- [ ] 04-10-PLAN.md — Post-ReceivePack refs walker (git_refs sync) + bare-repo lifecycle hooks (OnRepoCreate/OnRepoDelete)
+- [x] 04-10-PLAN.md — Post-ReceivePack refs walker (git_refs sync) + bare-repo lifecycle hooks (OnRepoCreate/OnRepoDelete)
 - [ ] 04-11-PLAN.md — S3 conformance via aws-sdk-go-v2 (positive + negative matrix) + CI job
 - [ ] 04-12-PLAN.md — Git conformance via real git CLI (gogit + gitkit parameterized) + oversize-push gate + CI job
 - [ ] 04-13-PLAN.md — Memory bench (TEST-07 hard gate: peak_rss < 3× repo_bytes) + air-gap extension (/s3 + /git routes)

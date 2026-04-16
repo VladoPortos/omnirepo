@@ -100,7 +100,7 @@
 - [x] **S3-02**: Operations supported: `CreateBucket`, `ListBuckets`, `HeadBucket`, `DeleteBucket`, `PutObject`, `GetObject`, `HeadObject`, `DeleteObject`, `ListObjectsV1`, `ListObjectsV2`, multipart upload (`CreateMultipartUpload`, `UploadPart`, `CompleteMultipartUpload`, `AbortMultipartUpload`)
 - [x] **S3-03**: SigV4 middleware validates every request; failures return AWS-shape XML errors (`SignatureDoesNotMatch`, `InvalidAccessKeyId`, `RequestTimeTooSkewed`)
 - [x] **S3-04**: Bucket contents stored at `/var/lib/omnirepo/s3/<bucket>/<key>` (flat keyspace materialized as a directory tree)
-- [ ] **S3-05**: No versioning, no object lock, no website hosting in v1
+- [x] **S3-05**: No versioning, no object lock, no website hosting in v1
 - [ ] **S3-06**: Conformance verified against `aws-sdk-go-v2`; positive and negative test cases covered
 
 ### Git Protocol (GIT)
@@ -110,7 +110,7 @@
 - [x] **GIT-03**: `info/refs`, `git-upload-pack`, and `git-receive-pack` endpoints implemented
 - [x] **GIT-04**: Bare repos created at `/var/lib/omnirepo/repos/<project>/git/<repo>.git/`
 - [x] **GIT-05**: System enforces a configurable per-repo push size limit (default 500 MB); requests exceeding the cap are rejected with a clear error
-- [ ] **GIT-06**: System maintains a denormalized `git_refs` table mirror (ref name → commit SHA) for search/UI; authoritative state is the on-disk bare repo
+- [x] **GIT-06**: System maintains a denormalized `git_refs` table mirror (ref name → commit SHA) for search/UI; authoritative state is the on-disk bare repo
 - [ ] **GIT-07**: Conformance verified by `git clone`, `git push`, `git fetch` against a real `git` CLI
 
 ### RPM Protocol (RPM)
@@ -367,14 +367,14 @@ Deferred to future release. Tracked but not in current roadmap.
 | S3-02 | Phase 4 | Complete |
 | S3-03 | Phase 4 | Complete |
 | S3-04 | Phase 4 | Complete |
-| S3-05 | Phase 4 | Pending |
+| S3-05 | Phase 4 | Complete |
 | S3-06 | Phase 4 | Pending |
 | GIT-01 | Phase 4 | Complete |
 | GIT-02 | Phase 4 | Complete |
 | GIT-03 | Phase 4 | Complete |
 | GIT-04 | Phase 4 | Complete |
 | GIT-05 | Phase 4 | Complete |
-| GIT-06 | Phase 4 | Pending |
+| GIT-06 | Phase 4 | Complete |
 | GIT-07 | Phase 4 | Pending |
 | RPM-01 | Phase 3 | Complete |
 | RPM-02 | Phase 3 | Complete |

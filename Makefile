@@ -5,7 +5,7 @@ BENCH_WORKERS ?= 16
 
 .PHONY: dev build test test-airgap bench-sqlite vendor lint seed grep-cdn \
 	conformance conformance-oci conformance-rpm conformance-deb \
-	conformance-pypi conformance-helm conformance-all
+	conformance-pypi conformance-helm conformance-s3 conformance-all
 
 dev:
 	$(GO) run ./cmd/omnirepo serve
@@ -85,6 +85,9 @@ conformance-pypi:
 
 conformance-helm:
 	$(GO) test -mod=vendor -tags=conformance -count=1 -timeout=10m ./test/conformance/helm/...
+
+conformance-s3:
+	$(GO) test -mod=vendor -tags=conformance -count=1 -timeout=5m ./test/conformance/s3/...
 
 # conformance-all runs every protocol's conformance suite in one invocation.
 # Used by the CI conformance job (D-31).

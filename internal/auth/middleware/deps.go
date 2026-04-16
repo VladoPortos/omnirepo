@@ -29,7 +29,8 @@ type Deps struct {
 	Users    *metadata.UsersRepo
 	Sessions *metadata.SessionsRepo
 	APIKeys  *metadata.APIKeysRepo
-	Clock    func() time.Time // default time.Now; injectable for tests
+	Projects *metadata.ProjectsRepo // Phase 04-09: needed for project:<proj>:<key> variant
+	Clock    func() time.Time       // default time.Now; injectable for tests
 
 	// SessionTTL is the D-07 sliding window (default 12h). SessionHardTTL
 	// is the absolute cap from issuance (default 7d). Middleware extends

@@ -140,7 +140,7 @@ func TestAllActionsSliceMatchesConstants(t *testing.T) {
 	// Sanity check: every Action constant appears in AllActions. The sum of
 	// these constants should equal len(AllActions). Phase 3 Plan 01 adds
 	// four package-upload actions (RPM/DEB/PyPI/Helm).
-	want := 28
+	want := 30
 	if len(auth.AllActions) != want {
 		t.Fatalf("AllActions length: %d, want %d", len(auth.AllActions), want)
 	}

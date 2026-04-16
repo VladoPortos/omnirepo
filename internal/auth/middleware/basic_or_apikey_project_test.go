@@ -10,7 +10,6 @@ import (
 	"github.com/dxc-internal/omnirepo/internal/auth"
 	"github.com/dxc-internal/omnirepo/internal/auth/middleware"
 	"github.com/dxc-internal/omnirepo/internal/metadata"
-	"github.com/dxc-internal/omnirepo/internal/metadata/sqlitetest"
 )
 
 // projectEnv extends the base testEnv with project-scoped fixtures.
@@ -54,13 +53,15 @@ func newProjectEnv(t *testing.T) *projectEnv {
 }
 
 // Test 3: project:<proj>:<omr_p_xxx> → project-scoped actor.
+// Wire format: Basic base64("project:<projname>:<omr_p_...>")
+// Go's BasicAuth splits on first ":", so login="project", pw="<projname>:<key>".
 func TestBasicProjectVariant_Success(t *testing.T) {
 	e := newProjectEnv(t)
 	h := middleware.BasicOrAPIKey(e.Deps)(okHandler())
 
-	login := "project:dxc"
+	// login="project", password="dxc:<key>" — produces base64("project:dxc:<key>")
 	req := httptest.NewRequest("GET", "/", nil)
-	req.Header.Set("Authorization", basicAuthHeader(login, e.ProjectKey.Plaintext))
+	req.Header.Set("Authorization", basicAuthHeader("project", "dxc:"+e.ProjectKey.Plaintext))
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -93,9 +94,8 @@ func TestBasicProjectVariant_MismatchProject(t *testing.T) {
 	h := middleware.BasicOrAPIKey(e.Deps)(okHandler())
 
 	// Try authenticating as project "dxc" using the key owned by "other"
-	login := "project:dxc"
 	req := httptest.NewRequest("GET", "/", nil)
-	req.Header.Set("Authorization", basicAuthHeader(login, k2.Plaintext))
+	req.Header.Set("Authorization", basicAuthHeader("project", "dxc:"+k2.Plaintext))
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -109,9 +109,8 @@ func TestBasicProjectVariant_NonexistentProject(t *testing.T) {
 	e := newProjectEnv(t)
 	h := middleware.BasicOrAPIKey(e.Deps)(okHandler())
 
-	login := "project:nonexistent"
 	req := httptest.NewRequest("GET", "/", nil)
-	req.Header.Set("Authorization", basicAuthHeader(login, e.ProjectKey.Plaintext))
+	req.Header.Set("Authorization", basicAuthHeader("project", "nonexistent:"+e.ProjectKey.Plaintext))
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 

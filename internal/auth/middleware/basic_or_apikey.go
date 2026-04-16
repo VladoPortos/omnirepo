@@ -3,6 +3,7 @@ package middleware
 import (
 	"context"
 	"net/http"
+	"strings"
 
 	"github.com/dxc-internal/omnirepo/internal/auth"
 )
@@ -30,6 +31,30 @@ func BasicOrAPIKey(d Deps) func(http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			login, pw, ok := r.BasicAuth()
 			if !ok {
+				writeJSON401(w)
+				return
+			}
+
+			// Phase 04-09 D-31: project:<projname>:<omr_p_...> variant.
+			//
+			// HTTP Basic auth format: base64("project:<projname>:<omr_p_...>")
+			// Go's r.BasicAuth() splits on the FIRST ":", so we get:
+			//   login = "project"
+			//   pw    = "<projname>:<omr_p_...>"
+			//
+			// Parse BEFORE the existing APIKeyRegex branch so the project:
+			// variant never falls through to the generic API-key path.
+			if login == "project" && d.Projects != nil {
+				pwParts := strings.SplitN(pw, ":", 2) // ["<projname>", "<omr_p_...>"]
+				if len(pwParts) == 2 && pwParts[0] != "" && auth.APIKeyRegex.MatchString(pwParts[1]) {
+					actor, authed := authenticateProjectKey(r.Context(), d, pwParts[0], pwParts[1])
+					if !authed {
+						writeJSON401(w)
+						return
+					}
+					next.ServeHTTP(w, r.WithContext(auth.WithActor(r.Context(), actor)))
+					return
+				}
 				writeJSON401(w)
 				return
 			}
@@ -77,4 +102,44 @@ func authenticatePassword(ctx context.Context, d Deps, login, password string) (
 		IsSuperAdmin:       u.IsSuperAdmin,
 		MustChangePassword: u.MustChangePassword,
 	}, true
+}
+
+// authenticateProjectKey handles the "project:<projname>" login variant
+// (D-31). It verifies the password is a valid project API key that belongs
+// to the named project. On mismatch (key owned by a different project) or
+// unknown project, returns false — preventing cross-project privilege
+// escalation (T-04-09-03).
+func authenticateProjectKey(ctx context.Context, d Deps, projectName, apiKey string) (auth.Actor, bool) {
+	_, prefix, sha, err := auth.ParseAPIKey(apiKey)
+	if err != nil {
+		return auth.Actor{}, false
+	}
+	row, err := d.APIKeys.FindByPrefixSha(ctx, prefix, sha)
+	if err != nil {
+		return auth.Actor{}, false
+	}
+	if !auth.EqualSHA256(row.TokenSHA256, sha) {
+		return auth.Actor{}, false
+	}
+	// Must be a project-owned key.
+	if row.OwnerKind != "project" || row.OwnerProjectID == nil {
+		return auth.Actor{}, false
+	}
+	// Look up the project by name and verify ownership match.
+	proj, err := d.Projects.FindByName(ctx, projectName)
+	if err != nil {
+		return auth.Actor{}, false
+	}
+	if proj.ID != *row.OwnerProjectID {
+		return auth.Actor{}, false // T-04-09-03: project mismatch
+	}
+	pid := proj.ID
+	actor := auth.Actor{
+		Kind:         auth.ActorKindAPIKey,
+		APIKeyID:     row.ID,
+		OwnerKind:    auth.OwnerKindProject,
+		ProjectScope: &pid,
+	}
+	_ = d.APIKeys.TouchLastUsed(ctx, row.ID, d.clock())
+	return actor, true
 }

@@ -67,6 +67,12 @@ const (
 	// Create/list/revoke S3 keys within a project. Same membership
 	// semantics as ActionManageUpstreamCreds.
 	ActionManageS3Keys Action = "s3_key.manage"
+
+	// Phase 04 Plan 09 — Git repo permission actions (D-30).
+	// Read/Write both require project membership (flat model) or super-admin.
+	// Project-scoped API keys count as members of their bound project.
+	ActionGitRepoRead  Action = "git:repo:read"
+	ActionGitRepoWrite Action = "git:repo:write"
 )
 
 // AllActions enumerates every Action constant in the package. Downstream
@@ -101,6 +107,8 @@ var AllActions = []Action{
 	ActionS3BucketWrite,
 	ActionS3BucketAdmin,
 	ActionManageS3Keys,
+	ActionGitRepoRead,
+	ActionGitRepoWrite,
 }
 
 // Target is the object the actor is operating on.
@@ -260,6 +268,15 @@ func Can(ctx context.Context, actor Actor, action Action, target Target) (bool, 
 	case ActionS3BucketAdmin:
 		// Super-admin already handled above in step 2.
 		return false, ReasonSuperAdminRequired
+
+	// Phase 04 Plan 09 — Git repo actions (D-30). Same membership gate as
+	// package uploads. Project-scoped API keys are treated as members of
+	// their bound project via the membership set populated upstream.
+	case ActionGitRepoRead, ActionGitRepoWrite:
+		if target.ProjectID != 0 && isMemberOfProject(ctx, target.ProjectID) {
+			return true, ""
+		}
+		return false, ReasonNotAProjectMember
 
 	case ActionRepoRead:
 		// Authenticated project members may always read their repos.

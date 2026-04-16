@@ -228,7 +228,6 @@ func TestPerRepoMutex_ReceivePackAcquiresLock(t *testing.T) {
 	repo := &metadata.Repo{ID: 1, ProjectID: 42, Name: "myrepo"}
 
 	actor := auth.Actor{ID: 10, Kind: auth.ActorKindUser, IsSuperAdmin: true}
-	ctx := auth.WithActor(context.Background(), actor)
 
 	mw := gitpkg.PerRepoMutex(locks)
 
@@ -249,8 +248,12 @@ func TestPerRepoMutex_ReceivePackAcquiresLock(t *testing.T) {
 	r := chi.NewRouter()
 	r.Route("/git/{project}/{repo}", func(sub chi.Router) {
 		sub.Use(func(next http.Handler) http.Handler {
-			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				next.ServeHTTP(w, r.WithContext(gitpkg.WithRepo(ctx, repo)))
+			return http.HandlerFunc(func(w http.ResponseWriter, rr *http.Request) {
+				// Compose: keep chi's route context, layer actor + repo + project on top.
+				c := auth.WithActor(rr.Context(), actor)
+				c = gitpkg.WithRepo(c, repo)
+				c = gitpkg.WithProject(c, "dxc")
+				next.ServeHTTP(w, rr.WithContext(c))
 			})
 		})
 		sub.Use(mw)
@@ -271,7 +274,6 @@ func TestPerRepoMutex_UploadPackNoLock(t *testing.T) {
 	repo := &metadata.Repo{ID: 1, ProjectID: 42, Name: "myrepo"}
 
 	actor := auth.Actor{ID: 10, Kind: auth.ActorKindUser, IsSuperAdmin: true}
-	ctx := auth.WithActor(context.Background(), actor)
 
 	mw := gitpkg.PerRepoMutex(locks)
 
@@ -291,8 +293,11 @@ func TestPerRepoMutex_UploadPackNoLock(t *testing.T) {
 	r := chi.NewRouter()
 	r.Route("/git/{project}/{repo}", func(sub chi.Router) {
 		sub.Use(func(next http.Handler) http.Handler {
-			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				next.ServeHTTP(w, r.WithContext(gitpkg.WithRepo(ctx, repo)))
+			return http.HandlerFunc(func(w http.ResponseWriter, rr *http.Request) {
+				c := auth.WithActor(rr.Context(), actor)
+				c = gitpkg.WithRepo(c, repo)
+				c = gitpkg.WithProject(c, "dxc")
+				next.ServeHTTP(w, rr.WithContext(c))
 			})
 		})
 		sub.Use(mw)

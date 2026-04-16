@@ -35,16 +35,17 @@ const cardVariants = {
   }),
 };
 
-const repoTypeColor: Record<string, string> = {
-  docker: 'bg-blue-500',
-  rpm: 'bg-red-500',
-  deb: 'bg-green-500',
-  pypi: 'bg-yellow-500',
-  helm: 'bg-purple-500',
-  git: 'bg-orange-500',
-  raw: 'bg-slate-500',
-  s3: 'bg-cyan-500',
+const repoTypeColor: Record<string, { dot: string; bar: string }> = {
+  docker: { dot: 'bg-blue-500', bar: '#3b82f6' },
+  rpm: { dot: 'bg-red-500', bar: '#ef4444' },
+  deb: { dot: 'bg-green-500', bar: '#22c55e' },
+  pypi: { dot: 'bg-yellow-500', bar: '#eab308' },
+  helm: { dot: 'bg-purple-500', bar: '#a855f7' },
+  git: { dot: 'bg-orange-500', bar: '#f97316' },
+  raw: { dot: 'bg-slate-500', bar: '#64748b' },
+  s3: { dot: 'bg-cyan-500', bar: '#06b6d4' },
 };
+const defaultColor = { dot: 'bg-gray-400', bar: '#9ca3af' };
 
 export function DashboardPage() {
   const { data, isLoading } = useDashboard();
@@ -304,60 +305,60 @@ function StorageBreakdown({
   repos: StorageRepoRow[];
 }) {
   const percentage = totalBytes > 0 ? Math.min(Math.round((usedBytes / totalBytes) * 100), 100) : 0;
+  const maxRepoBytes = repos.length > 0 ? repos[0].size_bytes : 1;
 
   return (
-    <div className="grid gap-6 lg:grid-cols-[280px_1fr]">
-      {/* Left: Overall gauge */}
-      <div className="space-y-3">
+    <div className="space-y-5">
+      {/* Overall gauge */}
+      <div className="space-y-2">
         <div className="flex items-baseline gap-2">
           <span className="text-3xl font-bold tabular-nums">{formatBytes(usedBytes)}</span>
           <span className="text-sm text-muted-foreground">
             / {totalBytes > 0 ? formatBytes(totalBytes) : 'unknown'}
           </span>
+          <span className="ml-auto text-sm text-muted-foreground tabular-nums">
+            {percentage}% used
+          </span>
         </div>
         <Progress value={percentage}>
           <span className="sr-only">{percentage}% used</span>
         </Progress>
-        <p className="text-xs text-muted-foreground tabular-nums">{percentage}% used</p>
       </div>
 
-      {/* Right: Per-repo breakdown — compact layout */}
-      <div className="space-y-1">
-        {repos.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No repositories with stored data.</p>
-        ) : (
-          <div className="max-h-[300px] space-y-1 overflow-y-auto">
-            {repos.map((repo) => {
-              const repoPercent = usedBytes > 0 ? (repo.size_bytes / usedBytes) * 100 : 0;
-              const dotColor = repoTypeColor[repo.type] ?? 'bg-gray-400';
-              return (
-                <div
-                  key={`${repo.project}/${repo.type}/${repo.name}`}
-                  className="flex items-center gap-2 text-sm py-0.5"
-                >
-                  <span className={`inline-block size-2 shrink-0 rounded-full ${dotColor}`} />
-                  <span className="min-w-0 truncate text-muted-foreground">
+      {/* Per-repo breakdown — full-width bars with label inside */}
+      {repos.length === 0 ? (
+        <p className="text-sm text-muted-foreground">No repositories with stored data.</p>
+      ) : (
+        <div className="max-h-[350px] space-y-2 overflow-y-auto">
+          {repos.map((repo) => {
+            const barPercent = maxRepoBytes > 0
+              ? Math.max((repo.size_bytes / maxRepoBytes) * 100, 8)
+              : 8;
+            const colors = repoTypeColor[repo.type] ?? defaultColor;
+            return (
+              <div key={`${repo.project}/${repo.type}/${repo.name}`}>
+                <div className="flex items-center gap-1.5 mb-0.5">
+                  <span className={`inline-block size-2 shrink-0 rounded-full ${colors.dot}`} />
+                  <span className="text-xs text-muted-foreground truncate">
                     {repo.project} /{' '}
                     <span className="font-medium text-foreground">{repo.name}</span>
-                    <span className="ml-1 text-xs">({repo.type})</span>
+                    <span className="ml-1">({repo.type})</span>
                   </span>
-                  <span className="ml-auto shrink-0 tabular-nums font-medium text-xs">
+                </div>
+                <div className="relative h-6 w-full rounded bg-muted/40 overflow-hidden">
+                  <div
+                    className="absolute inset-y-0 left-0 rounded"
+                    style={{ width: `${barPercent}%`, backgroundColor: colors.bar, opacity: 0.8 }}
+                  />
+                  <span className="absolute inset-y-0 left-2 flex items-center text-xs font-medium tabular-nums text-foreground drop-shadow-sm">
                     {formatBytes(repo.size_bytes)}
                   </span>
-                  <div className="w-16 shrink-0">
-                    <div className="h-1.5 w-full rounded-full bg-muted overflow-hidden">
-                      <div
-                        className={`h-full rounded-full ${dotColor}`}
-                        style={{ width: `${Math.max(repoPercent, 1)}%` }}
-                      />
-                    </div>
-                  </div>
                 </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

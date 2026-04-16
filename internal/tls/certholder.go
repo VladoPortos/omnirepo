@@ -59,6 +59,12 @@ func (h *CertHolder) Swap(certPEM, keyPEM []byte) error {
 	return nil
 }
 
+// Current returns the current certificate or nil if none is loaded. Used by
+// the admin TLS status endpoint (Phase 05-03, OPS-09).
+func (h *CertHolder) Current() *tls.Certificate {
+	return h.p.Load()
+}
+
 // Loaded reports whether a certificate is currently live. Used by /readyz.
 func (h *CertHolder) Loaded() bool {
 	return h.p.Load() != nil

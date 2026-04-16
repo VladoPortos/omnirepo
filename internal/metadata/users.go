@@ -149,6 +149,54 @@ func (r *UsersRepo) scanOne(ctx context.Context, where string, args ...any) (*Us
 	return &u, nil
 }
 
+// ListAll returns every live (non-soft-deleted) user ordered by login.
+func (r *UsersRepo) ListAll(ctx context.Context) ([]User, error) {
+	rows, err := r.db.Reader.QueryContext(ctx, `
+		SELECT id, login, email, avatar_seed, password_hash, is_super_admin,
+		       must_change_password, password_changed_at, created_at, deleted_at
+		FROM users WHERE deleted_at IS NULL
+		ORDER BY login
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("users: list all: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []User
+	for rows.Next() {
+		var u User
+		var isSA, mcp int64
+		var pwChanged sql.NullTime
+		var deleted sql.NullTime
+		if err := rows.Scan(&u.ID, &u.Login, &u.Email, &u.AvatarSeed, &u.PasswordHash,
+			&isSA, &mcp, &pwChanged, &u.CreatedAt, &deleted); err != nil {
+			return nil, fmt.Errorf("users: list scan: %w", err)
+		}
+		u.IsSuperAdmin = isSA != 0
+		u.MustChangePassword = mcp != 0
+		if pwChanged.Valid {
+			t := pwChanged.Time
+			u.PasswordChangedAt = &t
+		}
+		if deleted.Valid {
+			t := deleted.Time
+			u.DeletedAt = &t
+		}
+		out = append(out, u)
+	}
+	return out, rows.Err()
+}
+
+// UpdateEmail sets the user's email address.
+func (r *UsersRepo) UpdateEmail(ctx context.Context, id int64, email string) error {
+	return r.db.WriteTx(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `UPDATE users SET email=? WHERE id=?`, email, id)
+		if err != nil {
+			return fmt.Errorf("users: update email %d: %w", id, err)
+		}
+		return nil
+	})
+}
+
 // boolInt converts a Go bool to the sqlite 0/1 integer form used by our schema
 // (which uses BOOLEAN but sqlite stores it as INTEGER anyway).
 func boolInt(b bool) int64 {

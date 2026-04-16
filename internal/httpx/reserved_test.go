@@ -50,6 +50,16 @@ func TestReservedPrefixesContainsAll(t *testing.T) {
 	}
 }
 
+// Phase 4 Plan 03 — defensive check that s3 and git remain reserved, since
+// Phase 4 is the first phase that actually mounts handlers at those prefixes.
+func TestPhase04ReservedIncludesS3AndGit(t *testing.T) {
+	for _, p := range []string{"s3", "git"} {
+		if !httpx.IsReserved(p) {
+			t.Fatalf("reserved prefix missing: %s", p)
+		}
+	}
+}
+
 func TestMountReservedPanicsOnReservedPrefix(t *testing.T) {
 	defer func() {
 		r := recover()

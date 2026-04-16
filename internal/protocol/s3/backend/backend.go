@@ -72,11 +72,9 @@ type Backend struct {
 	PartCountLimit int
 }
 
-// Compile-time interface assertions.
-var (
-	_ gofakes3.Backend          = (*Backend)(nil)
-	_ gofakes3.MultipartBackend = (*Backend)(nil)
-)
+// Compile-time interface assertion for the base Backend surface. The
+// MultipartBackend assertion lives in multipart.go (Task 2).
+var _ gofakes3.Backend = (*Backend)(nil)
 
 // New constructs a Backend with sensible defaults.
 func New(dataRoot string, db *metadata.DB, locks storage.Locks) *Backend {

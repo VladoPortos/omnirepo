@@ -224,6 +224,15 @@ func Mount(r chi.Router, d Deps) {
 			// the SessionOrAPIKey subtree so the ActorResolver finds the
 			// actor on ctx; the handler re-checks project membership inline.
 			RegisterSyncRoutes(r, d.SyncDeps)
+
+			// Phase 05-04: search, profile, API keys, projects list,
+			// repos list, dashboard (any auth, filtered by membership).
+			d.mountSearch(r)
+			d.mountProfile(r)
+			d.mountAPIKeys(r)
+			d.mountProjectsFull(r)
+			d.mountReposList(r)
+			d.mountDashboard(r)
 		})
 	})
 }

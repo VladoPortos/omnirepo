@@ -1,0 +1,259 @@
+// Package api — full projects list + detail + activity (Phase 05-04).
+//
+// GET  /api/v1/projects            — paginated list with member_count, repo_count
+// GET  /api/v1/projects/{name}     — full detail with members + repos
+// GET  /api/v1/projects/{name}/activity (OPS-04) — recent audit events
+package api
+
+import (
+	"net/http"
+	"time"
+
+	"github.com/go-chi/chi/v5"
+
+	"github.com/dxc-internal/omnirepo/internal/auth"
+)
+
+// mountProjectsFull installs the full projects endpoints.
+func (d Deps) mountProjectsFull(r chi.Router) {
+	r.Get("/projects", d.handleListProjects)
+	r.Get("/projects/{name}", d.handleGetProject)
+	r.Get("/projects/{name}/activity", d.handleProjectActivity)
+}
+
+// projectListItem is the JSON projection for project listing.
+type projectListItem struct {
+	ID            int64     `json:"id"`
+	Name          string    `json:"name"`
+	DescriptionMD string   `json:"description_md"`
+	MemberCount   int       `json:"member_count"`
+	RepoCount     int       `json:"repo_count"`
+	SizeBytes     int64     `json:"size_bytes"`
+	CreatedAt     time.Time `json:"created_at"`
+}
+
+// projectDetailResponse is the full project detail.
+type projectDetailResponse struct {
+	ID            int64            `json:"id"`
+	Name          string           `json:"name"`
+	DescriptionMD string           `json:"description_md"`
+	CreatedAt     time.Time        `json:"created_at"`
+	Members       []projectMember  `json:"members"`
+	Repos         []projectRepo    `json:"repos"`
+}
+
+type projectMember struct {
+	UserID int64  `json:"user_id"`
+	Login  string `json:"login"`
+	Email  string `json:"email"`
+}
+
+type projectRepo struct {
+	ID            int64     `json:"id"`
+	Type          string    `json:"type"`
+	Name          string    `json:"name"`
+	DescriptionMD string   `json:"description_md"`
+	SizeBytes     int64     `json:"size_bytes"`
+	AutoScan      bool      `json:"auto_scan"`
+	PublicRead    bool      `json:"public_read"`
+	CreatedAt     time.Time `json:"created_at"`
+}
+
+func (d Deps) handleListProjects(w http.ResponseWriter, r *http.Request) {
+	actor, ok := auth.ActorFromContext(r.Context())
+	if !ok {
+		writeJSONError(w, http.StatusUnauthorized, ErrUnauthenticated, "")
+		return
+	}
+
+	allProjects, err := d.Projects.ListAll(r.Context())
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+		return
+	}
+
+	// Filter to actor's projects unless super-admin.
+	var memberSet map[int64]struct{}
+	if !actor.IsSuperAdmin {
+		ids, _ := d.Members.ListProjectIDsForUser(r.Context(), actor.ID)
+		memberSet = make(map[int64]struct{}, len(ids))
+		for _, pid := range ids {
+			memberSet[pid] = struct{}{}
+		}
+	}
+
+	pp := ParsePaginationParams(r)
+	items := make([]projectListItem, 0)
+	count := 0
+	skipping := pp.Cursor != nil
+
+	for _, p := range allProjects {
+		if memberSet != nil {
+			if _, ok := memberSet[p.ID]; !ok {
+				continue
+			}
+		}
+
+		if skipping {
+			if p.ID == pp.Cursor.ID {
+				skipping = false
+			}
+			continue
+		}
+
+		if count >= pp.Limit {
+			break
+		}
+
+		memberIDs, _ := d.Members.ListUserIDsInProject(r.Context(), p.ID)
+		repos, _ := d.Repos.ListByProject(r.Context(), p.ID)
+		var totalSize int64
+		for _, rr := range repos {
+			totalSize += rr.SizeBytes
+		}
+
+		items = append(items, projectListItem{
+			ID:            p.ID,
+			Name:          p.Name,
+			DescriptionMD: p.DescriptionMD,
+			MemberCount:   len(memberIDs),
+			RepoCount:     len(repos),
+			SizeBytes:     totalSize,
+			CreatedAt:     p.CreatedAt,
+		})
+		count++
+	}
+
+	var nextCursor string
+	if len(items) >= pp.Limit && len(items) > 0 {
+		last := items[len(items)-1]
+		nextCursor = EncodeCursor(Cursor{ID: last.ID, SortValue: last.Name})
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"items":       items,
+		"next_cursor": nextCursor,
+	})
+}
+
+func (d Deps) handleGetProject(w http.ResponseWriter, r *http.Request) {
+	actor, ok := auth.ActorFromContext(r.Context())
+	if !ok {
+		writeJSONError(w, http.StatusUnauthorized, ErrUnauthenticated, "")
+		return
+	}
+
+	name := chi.URLParam(r, "name")
+	p, err := d.Projects.FindByName(r.Context(), name)
+	if err != nil {
+		writeJSONError(w, http.StatusNotFound, ErrNotFound, "project not found")
+		return
+	}
+
+	if !d.actorIsProjectMember(r.Context(), actor, p.ID) {
+		writeJSONError(w, http.StatusForbidden, ErrForbidden, "not a project member")
+		return
+	}
+
+	memberIDs, _ := d.Members.ListUserIDsInProject(r.Context(), p.ID)
+	members := make([]projectMember, 0, len(memberIDs))
+	for _, uid := range memberIDs {
+		u, err := d.Users.FindByID(r.Context(), uid)
+		if err != nil {
+			continue
+		}
+		members = append(members, projectMember{
+			UserID: u.ID, Login: u.Login, Email: u.Email,
+		})
+	}
+
+	repos, _ := d.Repos.ListByProject(r.Context(), p.ID)
+	repoItems := make([]projectRepo, 0, len(repos))
+	for _, rr := range repos {
+		repoItems = append(repoItems, projectRepo{
+			ID: rr.ID, Type: rr.Type, Name: rr.Name,
+			DescriptionMD: rr.DescriptionMD, SizeBytes: rr.SizeBytes,
+			AutoScan: rr.AutoScan, PublicRead: rr.PublicRead,
+			CreatedAt: rr.CreatedAt,
+		})
+	}
+
+	writeJSON(w, http.StatusOK, projectDetailResponse{
+		ID: p.ID, Name: p.Name, DescriptionMD: p.DescriptionMD,
+		CreatedAt: p.CreatedAt, Members: members, Repos: repoItems,
+	})
+}
+
+func (d Deps) handleProjectActivity(w http.ResponseWriter, r *http.Request) {
+	actor, ok := auth.ActorFromContext(r.Context())
+	if !ok {
+		writeJSONError(w, http.StatusUnauthorized, ErrUnauthenticated, "")
+		return
+	}
+
+	name := chi.URLParam(r, "name")
+	p, err := d.Projects.FindByName(r.Context(), name)
+	if err != nil {
+		writeJSONError(w, http.StatusNotFound, ErrNotFound, "project not found")
+		return
+	}
+
+	if !d.actorIsProjectMember(r.Context(), actor, p.ID) {
+		writeJSONError(w, http.StatusForbidden, ErrForbidden, "not a project member")
+		return
+	}
+
+	// Query audit_log for events scoped to this project.
+	rows, err := d.DB.Reader.QueryContext(r.Context(), `
+		SELECT id, event_kind, actor_user_id, target_kind, target_id,
+		       outcome, details_json, ip, user_agent, created_at
+		FROM audit_log
+		WHERE (target_kind='project' AND target_id=?)
+		   OR (target_kind IN ('repo','member') AND target_id LIKE ? || '/%')
+		   OR (target_kind IN ('repo','member') AND details_json LIKE '%' || ? || '%')
+		ORDER BY id DESC
+		LIMIT 50
+	`, p.Name, p.Name, p.Name)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+		return
+	}
+	defer func() { _ = rows.Close() }()
+
+	type activityItem struct {
+		ID         int64   `json:"id"`
+		Action     string  `json:"action"`
+		ActorID    *int64  `json:"actor_user_id,omitempty"`
+		TargetKind string  `json:"target_kind"`
+		TargetID   string  `json:"target_id"`
+		Outcome    string  `json:"outcome,omitempty"`
+		Details    string  `json:"details,omitempty"`
+		CreatedAt  string  `json:"created_at"`
+	}
+
+	items := make([]activityItem, 0)
+	for rows.Next() {
+		var item activityItem
+		var actorID *int64
+		var details, ip, ua, outcome *string
+		if err := rows.Scan(&item.ID, &item.Action, &actorID, &item.TargetKind,
+			&item.TargetID, &outcome, &details, &ip, &ua, &item.CreatedAt); err != nil {
+			writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+			return
+		}
+		item.ActorID = actorID
+		if outcome != nil {
+			item.Outcome = *outcome
+		}
+		if details != nil {
+			item.Details = *details
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}

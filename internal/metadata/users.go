@@ -197,6 +197,24 @@ func (r *UsersRepo) UpdateEmail(ctx context.Context, id int64, email string) err
 	})
 }
 
+// UpdateAvatarSeed sets the user's avatar seed string.
+func (r *UsersRepo) UpdateAvatarSeed(ctx context.Context, id int64, seed string) error {
+	return r.db.WriteTx(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `UPDATE users SET avatar_seed=? WHERE id=?`, seed, id)
+		if err != nil {
+			return fmt.Errorf("users: update avatar_seed %d: %w", id, err)
+		}
+		return nil
+	})
+}
+
+// Count returns the number of live (non-soft-deleted) users.
+func (r *UsersRepo) Count(ctx context.Context) (int64, error) {
+	var n int64
+	err := r.db.Reader.QueryRowContext(ctx, `SELECT COUNT(*) FROM users WHERE deleted_at IS NULL`).Scan(&n)
+	return n, err
+}
+
 // boolInt converts a Go bool to the sqlite 0/1 integer form used by our schema
 // (which uses BOOLEAN but sqlite stores it as INTEGER anyway).
 func boolInt(b bool) int64 {

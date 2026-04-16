@@ -287,10 +287,13 @@ func TestLogout(t *testing.T) {
 	if resp.StatusCode != 200 {
 		t.Fatalf("logout code=%d", resp.StatusCode)
 	}
-	// Subsequent /me with stale cookie → 401.
-	resp2, _ := s.do(t, "GET", "/api/v1/me", cookie, nil)
-	if resp2.StatusCode != 401 {
-		t.Fatalf("expected 401 after logout, got %d", resp2.StatusCode)
+	// Subsequent /me with stale cookie → 200 null (not authenticated).
+	resp2, body2 := s.do(t, "GET", "/api/v1/me", cookie, nil)
+	if resp2.StatusCode != 200 {
+		t.Fatalf("expected 200 after logout, got %d", resp2.StatusCode)
+	}
+	if body2 != nil && body2["login"] != nil {
+		t.Fatalf("expected null body after logout, got %+v", body2)
 	}
 }
 
@@ -348,8 +351,8 @@ func TestMe(t *testing.T) {
 func TestMe_Unauthenticated(t *testing.T) {
 	s := newTestServer(t)
 	resp, _ := s.do(t, "GET", "/api/v1/me", "", nil)
-	if resp.StatusCode != 401 {
-		t.Fatalf("code=%d", resp.StatusCode)
+	if resp.StatusCode != 200 {
+		t.Fatalf("code=%d, want 200 with null body", resp.StatusCode)
 	}
 }
 
@@ -361,9 +364,12 @@ func TestDeleteMe(t *testing.T) {
 	if resp.StatusCode != 200 {
 		t.Fatalf("code=%d", resp.StatusCode)
 	}
-	resp2, _ := s.do(t, "GET", "/api/v1/me", cookie, nil)
-	if resp2.StatusCode != 401 {
-		t.Fatalf("expected 401 after delete, got %d", resp2.StatusCode)
+	resp2, body2 := s.do(t, "GET", "/api/v1/me", cookie, nil)
+	if resp2.StatusCode != 200 {
+		t.Fatalf("expected 200 after delete, got %d", resp2.StatusCode)
+	}
+	if body2 != nil && body2["login"] != nil {
+		t.Fatalf("expected null body after delete, got %+v", body2)
 	}
 }
 

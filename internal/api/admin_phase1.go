@@ -136,8 +136,9 @@ func Mount(r chi.Router, d Deps) {
 	})
 
 	r.Route("/api/v1", func(r chi.Router) {
-		// Unauthenticated: login.
+		// Unauthenticated: login + auth check.
 		r.Post("/auth/login", d.handleLogin)
+		r.With(authmw.OptionalSessionOrAPIKey(midDeps)).Get("/me", d.handleMe)
 
 		// Authenticated routes use SessionOrAPIKey; projects/repos/members
 		// additionally pre-resolve project membership before RequireCanWith.
@@ -152,8 +153,6 @@ func Mount(r chi.Router, d Deps) {
 				}
 				return auth.Target{}
 			})).Post("/auth/change-password", d.handleChangePassword)
-
-			r.Get("/me", d.handleMe)
 			r.With(authmw.RequireCanWith(auth.ActionDeleteOwnUser, func(r *http.Request) auth.Target {
 				if a, ok := auth.ActorFromContext(r.Context()); ok {
 					return auth.Target{Kind: "user", UserID: a.ID}
@@ -397,12 +396,12 @@ func (d Deps) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 func (d Deps) handleMe(w http.ResponseWriter, r *http.Request) {
 	a, ok := auth.ActorFromContext(r.Context())
 	if !ok {
-		writeJSONError(w, http.StatusUnauthorized, ErrUnauthenticated, "")
+		writeJSON(w, http.StatusOK, nil)
 		return
 	}
 	u, err := d.Users.FindByID(r.Context(), a.ID)
 	if err != nil {
-		writeJSONError(w, http.StatusUnauthorized, ErrUnauthenticated, "")
+		writeJSON(w, http.StatusOK, nil)
 		return
 	}
 	writeJSON(w, http.StatusOK, MeResponse{

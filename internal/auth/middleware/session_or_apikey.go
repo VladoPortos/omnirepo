@@ -168,5 +168,29 @@ func authenticateSession(ctx context.Context, d Deps, token string) (auth.Actor,
 	}, true
 }
 
+// OptionalSessionOrAPIKey is like SessionOrAPIKey but does NOT reject
+// unauthenticated requests. If valid credentials are present, the actor
+// is placed on context. If not, the request proceeds with no actor.
+// Used for endpoints like GET /me that should return 200 null instead of 401.
+func OptionalSessionOrAPIKey(d Deps) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if bearer := stripBearer(r.Header.Get("Authorization")); bearer != "" {
+				if actor, ok := authenticateAPIKey(r.Context(), d, bearer); ok {
+					r = r.WithContext(auth.WithActor(r.Context(), actor))
+				}
+				next.ServeHTTP(w, r)
+				return
+			}
+			if c, err := r.Cookie(auth.SessionCookieName); err == nil && c.Value != "" {
+				if actor, ok := authenticateSession(r.Context(), d, c.Value); ok {
+					r = r.WithContext(auth.WithActor(r.Context(), actor))
+				}
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
 // ensure metadata import used even if the compiler does inlining tricks.
 var _ = metadata.ErrNotFound

@@ -50,10 +50,13 @@ func TestAPI_Auth(t *testing.T) {
 		t.Fatalf("logout code=%d", r.StatusCode)
 	}
 
-	// Stale cookie returns 401.
-	r, _ = s.do(t, "GET", "/api/v1/me", cookie, nil)
-	if r.StatusCode != 401 {
-		t.Fatalf("stale cookie should 401, got %d", r.StatusCode)
+	// Stale cookie returns 200 null (not authenticated).
+	r, b := s.do(t, "GET", "/api/v1/me", cookie, nil)
+	if r.StatusCode != 200 {
+		t.Fatalf("stale cookie should 200 null, got %d", r.StatusCode)
+	}
+	if b != nil && b["login"] != nil {
+		t.Fatalf("stale cookie should return null body, got %+v", b)
 	}
 }
 

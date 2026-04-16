@@ -101,7 +101,7 @@
 - [x] **S3-03**: SigV4 middleware validates every request; failures return AWS-shape XML errors (`SignatureDoesNotMatch`, `InvalidAccessKeyId`, `RequestTimeTooSkewed`)
 - [x] **S3-04**: Bucket contents stored at `/var/lib/omnirepo/s3/<bucket>/<key>` (flat keyspace materialized as a directory tree)
 - [x] **S3-05**: No versioning, no object lock, no website hosting in v1
-- [ ] **S3-06**: Conformance verified against `aws-sdk-go-v2`; positive and negative test cases covered
+- [x] **S3-06**: Conformance verified against `aws-sdk-go-v2`; positive and negative test cases covered
 
 ### Git Protocol (GIT)
 
@@ -242,7 +242,7 @@
 - [ ] **TEST-04**: Playwright end-to-end suite covers login, forced password change, project + repo create, upload, scan view, search, profile API key reveal, admin maintenance toggle, TLS cert upload, GC trigger, trash restore
 - [ ] **TEST-05**: Bench target (`make bench`) measures upload + sync + scan throughput on a representative dataset
 - [x] **TEST-06**: SQLite contention bench: 16 concurrent uploads across protocols, zero `SQLITE_BUSY`
-- [ ] **TEST-07**: go-git v6 memory bench: 200 MB synthetic repo clone, RSS < 3× repo size
+- [x] **TEST-07**: go-git v6 memory bench: 200 MB synthetic repo clone, RSS < 3× repo size
 - [x] **TEST-08**: Air-gap invariant test (`--network=none`) is part of the standard `make test` matrix
 - [x] **TEST-09**: `make test` is the merge gate; no feature lands without tests passing
 
@@ -368,7 +368,7 @@ Deferred to future release. Tracked but not in current roadmap.
 | S3-03 | Phase 4 | Complete |
 | S3-04 | Phase 4 | Complete |
 | S3-05 | Phase 4 | Complete |
-| S3-06 | Phase 4 | Pending |
+| S3-06 | Phase 4 | Complete |
 | GIT-01 | Phase 4 | Complete |
 | GIT-02 | Phase 4 | Complete |
 | GIT-03 | Phase 4 | Complete |
@@ -467,7 +467,7 @@ Deferred to future release. Tracked but not in current roadmap.
 | TEST-04 | Phase 5 | Pending |
 | TEST-05 | Phase 5 | Pending |
 | TEST-06 | Phase 1 | Complete |
-| TEST-07 | Phase 4 | Pending |
+| TEST-07 | Phase 4 | Complete |
 | TEST-08 | Phase 1 | Complete |
 | TEST-09 | Phase 1 | Complete |
 

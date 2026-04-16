@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Ready to execute
-last_updated: "2026-04-16T02:46:02.930Z"
+last_updated: "2026-04-16T03:03:05.050Z"
 progress:
   total_phases: 5
   completed_phases: 3
   total_plans: 40
-  completed_plans: 37
-  percent: 93
+  completed_plans: 38
+  percent: 95
 ---
 
 # STATE: OmniRepo
@@ -25,7 +25,7 @@ progress:
 ## Current Position
 
 Phase: 04 (s3-git) — EXECUTING
-Plan: 11 of 13
+Plan: 12 of 13
 
 - **Phase**: 1 — Foundation
 - **Plan**: none yet (planning not started)
@@ -63,6 +63,7 @@ Plan: 11 of 13
 | Phase 04-s3-git P09 | 12m | 2 tasks | 13 files |
 | Phase 04-s3-git P07 | 15m | 1 tasks | 9 files |
 | Phase 04-s3-git P10 | 15m | 1 tasks | 6 files |
+| Phase 04-s3-git P11 | 13m | 1 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -132,6 +133,7 @@ Version-drift corrections to apply at first commit (from `.planning/research/SUM
 - [Phase 04-s3-git]: Plan 09: HTTP Basic auth project: variant uses login='project', pw='<projname>:<key>' — Go's BasicAuth splits on first colon; capturingReader+bufferingWriter pattern for MaxBytesError capture in pushcap middleware
 - [Phase 04-s3-git]: Plan 07: VHostRewrite as global middleware before routes (chi constraint); SigV4 verifies against original pre-rewrite path via context stash; r.Host injected into r.Header for canonical-request computation
 - [Phase 04-s3-git]: Plan 10: HEAD fetched via explicit Reference(plumbing.HEAD) + dedup; Git hook composed into existing chain; audit event git.refs.synced carries ref_count only
+- [Phase 04-s3-git]: Clock-skew test uses hand-rolled SigV4 (aws-sdk-go-v2 has no NowFunc); bucket provisioning via direct DB insert (S3 CreateBucket admin-gated)
 
 ### Todos
 

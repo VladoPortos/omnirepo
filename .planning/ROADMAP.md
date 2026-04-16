@@ -126,7 +126,7 @@ Plans:
 - [x] 04-08-PLAN.md — GitServer interface + gogit production backend (spike promotion) + gitkit fallback + pktline sideband + delete spike
 - [x] 04-09-PLAN.md — Git middleware chain (BasicOrAPIKey project: variant + perRepoMutex + pushSizeLimit) + backend selection via config
 - [x] 04-10-PLAN.md — Post-ReceivePack refs walker (git_refs sync) + bare-repo lifecycle hooks (OnRepoCreate/OnRepoDelete)
-- [ ] 04-11-PLAN.md — S3 conformance via aws-sdk-go-v2 (positive + negative matrix) + CI job
+- [x] 04-11-PLAN.md — S3 conformance via aws-sdk-go-v2 (positive + negative matrix) + CI job
 - [ ] 04-12-PLAN.md — Git conformance via real git CLI (gogit + gitkit parameterized) + oversize-push gate + CI job
 - [ ] 04-13-PLAN.md — Memory bench (TEST-07 hard gate: peak_rss < 3× repo_bytes) + air-gap extension (/s3 + /git routes)
 

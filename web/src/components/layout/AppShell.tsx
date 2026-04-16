@@ -3,7 +3,7 @@
  */
 
 import { Outlet } from 'react-router-dom';
-import { AppSidebar } from './Sidebar';
+import { AppSidebar, AppSidebarProvider } from './Sidebar';
 import { Breadcrumbs } from './Breadcrumbs';
 import { MaintenanceBanner } from './MaintenanceBanner';
 import { useMaintenance } from '@/hooks/useMaintenance';
@@ -12,7 +12,7 @@ export function AppShell() {
   const { isMaintenanceMode } = useMaintenance();
 
   return (
-    <div className="flex min-h-screen">
+    <AppSidebarProvider>
       <MaintenanceBanner />
       <AppSidebar />
       <main
@@ -23,6 +23,6 @@ export function AppShell() {
           <Outlet />
         </div>
       </main>
-    </div>
+    </AppSidebarProvider>
   );
 }

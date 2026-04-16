@@ -5,7 +5,7 @@
  * User avatar + menu at bottom with theme toggle, profile, sign out.
  */
 
-import { useEffect, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard,
@@ -80,6 +80,24 @@ function getInitials(login: string): string {
   return login.slice(0, 2).toUpperCase();
 }
 
+export function AppSidebarProvider({ children }: { children: React.ReactNode }) {
+  const [defaultOpen] = useState(() => {
+    if (typeof window === 'undefined') return true;
+    const stored = localStorage.getItem(SIDEBAR_STORAGE_KEY);
+    return stored !== 'false';
+  });
+
+  const handleOpenChange = (open: boolean) => {
+    localStorage.setItem(SIDEBAR_STORAGE_KEY, String(open));
+  };
+
+  return (
+    <SidebarProvider defaultOpen={defaultOpen} onOpenChange={handleOpenChange}>
+      {children}
+    </SidebarProvider>
+  );
+}
+
 export function AppSidebar() {
   const location = useLocation();
   const { user, isSuperAdmin, logout } = useAuth();
@@ -87,18 +105,6 @@ export function AppSidebar() {
   const [adminOpen, setAdminOpen] = useState(() =>
     location.pathname.startsWith('/admin'),
   );
-
-  // Read initial sidebar state from localStorage
-  const [defaultOpen] = useState(() => {
-    if (typeof window === 'undefined') return true;
-    const stored = localStorage.getItem(SIDEBAR_STORAGE_KEY);
-    return stored !== 'false';
-  });
-
-  // Persist sidebar state changes
-  const handleOpenChange = (open: boolean) => {
-    localStorage.setItem(SIDEBAR_STORAGE_KEY, String(open));
-  };
 
   // Expand admin section when navigating to admin routes
   useEffect(() => {
@@ -108,7 +114,6 @@ export function AppSidebar() {
   }, [location.pathname]);
 
   return (
-    <SidebarProvider defaultOpen={defaultOpen} onOpenChange={handleOpenChange}>
       <SidebarRoot collapsible="icon" className="border-r border-border">
         {/* Header: Logo */}
         <SidebarHeader>
@@ -243,6 +248,5 @@ export function AppSidebar() {
         </SidebarFooter>
         <SidebarRail />
       </SidebarRoot>
-    </SidebarProvider>
   );
 }

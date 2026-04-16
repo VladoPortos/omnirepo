@@ -451,20 +451,20 @@ export interface GitCompareResponse {
 export interface APIKey {
   id: number;
   prefix: string;
-  label: string;
+  name: string;
   created_at: string;
-  last_used_at: string;
+  last_used_at: string | null;
 }
 
 export interface APIKeyCreate {
-  label: string;
+  name: string;
 }
 
 export interface APIKeyCreateResponse {
   id: number;
   prefix: string;
   secret: string;
-  label: string;
+  name: string;
   created_at: string;
 }
 

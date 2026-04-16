@@ -377,7 +377,7 @@ export function useDeleteAccount() {
 export function useAPIKeys() {
   return useQuery({
     queryKey: ['me', 'api-keys'],
-    queryFn: () => api.get<{ items: APIKey[] }>('/me/api-keys'),
+    queryFn: () => api.get<APIKey[]>('/me/api-keys'),
     staleTime: 30_000,
   });
 }

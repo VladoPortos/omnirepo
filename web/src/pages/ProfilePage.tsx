@@ -268,11 +268,11 @@ function APIKeysSection() {
   const [showReveal, setShowReveal] = useState(false);
   const [revokeTarget, setRevokeTarget] = useState<APIKey | null>(null);
 
-  const keys = data?.items ?? [];
+  const keys = data ?? [];
 
   const handleCreate = useCallback(async () => {
     try {
-      const result = await createKey.mutateAsync({ label: keyLabel });
+      const result = await createKey.mutateAsync({ name: keyLabel });
       setShowCreate(false);
       setKeyLabel('');
       setRevealSecret(result.secret);
@@ -294,7 +294,7 @@ function APIKeysSection() {
   }, [revokeKey, revokeTarget]);
 
   const columns: ColumnDef<APIKey>[] = [
-    { id: 'label', name: 'Name', render: (row) => row.label },
+    { id: 'name', name: 'Name', render: (row) => row.name },
     {
       id: 'prefix',
       name: 'Key Prefix',

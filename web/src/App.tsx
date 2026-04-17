@@ -5,7 +5,12 @@
  */
 
 import { lazy, Suspense, type ReactNode } from 'react';
-import { createBrowserRouter, Navigate, useLocation } from 'react-router-dom';
+import {
+  createBrowserRouter,
+  Navigate,
+  useLocation,
+  type RouteObject,
+} from 'react-router-dom';
 import { AppShell } from '@/components/layout/AppShell';
 import { LoginPage } from '@/pages/LoginPage';
 import { SetupPage } from '@/pages/SetupPage';
@@ -69,6 +74,18 @@ const AdminMaintenancePage = lazy(() =>
     default: () => <PlaceholderPage name="Maintenance" />,
   })),
 );
+
+// Dev-only error-class story page (Phase 6 / plan 03 task 3). Lazy-loaded
+// AND conditional on import.meta.env.DEV so Vite tree-shakes the import
+// entirely in production builds — verified by the absence of
+// ErrorClassStoryPage in web/dist/assets/*.js (threat T-06-03-04).
+const ErrorClassStoryPage = import.meta.env.DEV
+  ? lazy(() =>
+      import('@/pages/_dev/ErrorClassStoryPage').then((m) => ({
+        default: m.ErrorClassStoryPage,
+      })),
+    )
+  : null;
 
 // Loading fallback for lazy routes
 function LazyFallback() {
@@ -140,7 +157,25 @@ function MustChangePasswordGuard({ children }: { children: ReactNode }) {
   return <>{children}</>;
 }
 
+// Dev-only routes appended to the top-level router when Vite is in dev
+// mode. Conditional at module scope (not inside JSX) so the branch is
+// statically eliminated at build time.
+const devRoutes: RouteObject[] =
+  import.meta.env.DEV && ErrorClassStoryPage
+    ? [
+        {
+          path: '/_dev/error-class-story',
+          element: (
+            <Suspense fallback={<div className="p-8">Loading…</div>}>
+              <ErrorClassStoryPage />
+            </Suspense>
+          ),
+        },
+      ]
+    : [];
+
 export const router = createBrowserRouter([
+  ...devRoutes,
   {
     path: '/setup',
     element: <SetupPage />,

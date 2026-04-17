@@ -15,7 +15,6 @@
     "@base-ui/react": "^1.4.0",
     "@dicebear/collection": "9.2.2",
     "@dicebear/core": "9.2.2",
-    "@fontsource-variable/geist": "^5.2.8",
     "@milkdown/kit": "^7.20.0",
     "@milkdown/react": "^7.20.0",
     "@milkdown/theme-nord": "^7.20.0",

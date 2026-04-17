@@ -40,25 +40,32 @@ export function CopyButton({ text, className }: CopyButtonProps) {
   }, [text]);
 
   return (
-    <Tooltip>
-      <TooltipTrigger
-        render={
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            className={className}
-            onClick={handleCopy}
-            aria-label="Copy to clipboard"
-          />
-        }
-      >
-        {copied ? (
-          <Check className="size-3.5 text-green-500" />
-        ) : (
-          <Copy className="size-3.5" />
-        )}
-      </TooltipTrigger>
-      <TooltipContent>{copied ? 'Copied!' : 'Copy'}</TooltipContent>
-    </Tooltip>
+    <>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className={className}
+              onClick={handleCopy}
+              aria-label="Copy to clipboard"
+            />
+          }
+        >
+          {copied ? (
+            <Check className="size-3.5 text-green-500" />
+          ) : (
+            <Copy className="size-3.5" />
+          )}
+        </TooltipTrigger>
+        <TooltipContent>{copied ? 'Copied!' : 'Copy'}</TooltipContent>
+      </Tooltip>
+      {/* Phase 6: aria-live announcement so SR users hear copy success
+          even when the Tooltip content never receives focus. */}
+      <span aria-live="polite" aria-atomic="true" className="sr-only">
+        {copied ? 'Copied to clipboard' : ''}
+      </span>
+    </>
   );
 }

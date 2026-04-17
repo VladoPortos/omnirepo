@@ -98,6 +98,16 @@ const ErrorClassStoryPage = DEV_ROUTES_ENABLED
     )
   : null;
 
+// Phase 6 / plan 06-06: primitives story page. Same tree-shake gate
+// as ErrorClassStoryPage above — dev builds only.
+const PrimitivesStoryPage = DEV_ROUTES_ENABLED
+  ? lazy(() =>
+      import('@/pages/_dev/PrimitivesStoryPage').then((m) => ({
+        default: m.PrimitivesStoryPage,
+      })),
+    )
+  : null;
+
 // Loading fallback for lazy routes
 function LazyFallback() {
   return (
@@ -172,13 +182,21 @@ function MustChangePasswordGuard({ children }: { children: ReactNode }) {
 // mode. Conditional at module scope (not inside JSX) so the branch is
 // statically eliminated at build time.
 const devRoutes: RouteObject[] =
-  DEV_ROUTES_ENABLED && ErrorClassStoryPage
+  DEV_ROUTES_ENABLED && ErrorClassStoryPage && PrimitivesStoryPage
     ? [
         {
           path: '/_dev/error-class-story',
           element: (
             <Suspense fallback={<div className="p-8">Loading…</div>}>
               <ErrorClassStoryPage />
+            </Suspense>
+          ),
+        },
+        {
+          path: '/_dev/primitives-story',
+          element: (
+            <Suspense fallback={<div className="p-8">Loading…</div>}>
+              <PrimitivesStoryPage />
             </Suspense>
           ),
         },

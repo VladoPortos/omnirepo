@@ -34,7 +34,7 @@ type searchResultItem struct {
 func (d Deps) handleSearch(w http.ResponseWriter, r *http.Request) {
 	actor, ok := auth.ActorFromContext(r.Context())
 	if !ok {
-		writeJSONError(w, http.StatusUnauthorized, ErrUnauthenticated, "")
+		writeJSONError(w, r, http.StatusUnauthorized, ErrUnauthenticated, "")
 		return
 	}
 
@@ -55,7 +55,7 @@ func (d Deps) handleSearch(w http.ResponseWriter, r *http.Request) {
 
 	results, err := d.DB.SearchAll(r.Context(), params)
 	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
 	}
 

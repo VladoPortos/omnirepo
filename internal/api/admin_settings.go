@@ -26,7 +26,7 @@ func (d Deps) mountAdminSettings(r chi.Router) {
 func (d Deps) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 	all, err := d.Settings.GetAll(r.Context())
 	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
 	}
 	writeJSON(w, http.StatusOK, all)
@@ -35,11 +35,11 @@ func (d Deps) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 func (d Deps) handlePatchSettings(w http.ResponseWriter, r *http.Request) {
 	var patch map[string]string
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&patch); err != nil {
-		writeJSONError(w, http.StatusBadRequest, ErrValidationFailed, "invalid JSON")
+		writeJSONError(w, r, http.StatusBadRequest, ErrValidationFailed, "invalid JSON")
 		return
 	}
 	if len(patch) == 0 {
-		writeJSONError(w, http.StatusUnprocessableEntity, ErrValidationFailed, "empty patch")
+		writeJSONError(w, r, http.StatusUnprocessableEntity, ErrValidationFailed, "empty patch")
 		return
 	}
 
@@ -51,11 +51,11 @@ func (d Deps) handlePatchSettings(w http.ResponseWriter, r *http.Request) {
 
 	for k, v := range patch {
 		if protectedSettings[k] {
-			writeJSONError(w, http.StatusForbidden, ErrValidationFailed, k+" is a protected setting")
+			writeJSONError(w, r, http.StatusForbidden, ErrValidationFailed, k+" is a protected setting")
 			return
 		}
 		if err := d.Settings.Set(r.Context(), k, v); err != nil {
-			writeJSONError(w, http.StatusInternalServerError, ErrInternal, "failed to set "+k)
+			writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "failed to set "+k)
 			return
 		}
 	}
@@ -73,7 +73,7 @@ func (d Deps) handlePatchSettings(w http.ResponseWriter, r *http.Request) {
 	// Return updated settings.
 	all, err := d.Settings.GetAll(r.Context())
 	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
 	}
 	writeJSON(w, http.StatusOK, all)

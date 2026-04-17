@@ -49,7 +49,7 @@ func (d Deps) handleTLSHistory(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusOK, map[string]any{"items": []tlsHistoryEntry{}})
 			return
 		}
-		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
 	}
 
@@ -91,12 +91,12 @@ func (d Deps) handleTLSHistory(w http.ResponseWriter, r *http.Request) {
 // including fingerprint_sha256 and source (ME-08).
 func (d Deps) handleTLSCurrent(w http.ResponseWriter, r *http.Request) {
 	if d.Holder == nil {
-		writeJSONError(w, http.StatusNotFound, ErrNotFound, "no TLS holder configured")
+		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "no TLS holder configured")
 		return
 	}
 	cert := d.Holder.Current()
 	if cert == nil {
-		writeJSONError(w, http.StatusNotFound, ErrNotFound, "no current certificate")
+		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "no current certificate")
 		return
 	}
 	if cert.Leaf == nil && len(cert.Certificate) > 0 {
@@ -106,7 +106,7 @@ func (d Deps) handleTLSCurrent(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if cert.Leaf == nil {
-		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "cannot parse leaf")
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "cannot parse leaf")
 		return
 	}
 	// "source" is derived: if an uploaded server.crt exists, the live cert

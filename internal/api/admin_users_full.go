@@ -44,7 +44,7 @@ func (d Deps) handleListUsers(w http.ResponseWriter, r *http.Request) {
 
 	users, err := d.Users.ListAll(r.Context())
 	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
 	}
 
@@ -108,7 +108,7 @@ func (d Deps) handleGetUser(w http.ResponseWriter, r *http.Request) {
 	login := chi.URLParam(r, "login")
 	u, err := d.Users.FindByLogin(r.Context(), login)
 	if err != nil {
-		writeJSONError(w, http.StatusNotFound, ErrNotFound, "user not found")
+		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "user not found")
 		return
 	}
 
@@ -139,7 +139,7 @@ func (d Deps) handlePatchUser(w http.ResponseWriter, r *http.Request) {
 	login := chi.URLParam(r, "login")
 	u, err := d.Users.FindByLogin(r.Context(), login)
 	if err != nil {
-		writeJSONError(w, http.StatusNotFound, ErrNotFound, "user not found")
+		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "user not found")
 		return
 	}
 
@@ -150,7 +150,7 @@ func (d Deps) handlePatchUser(w http.ResponseWriter, r *http.Request) {
 		NewPassword        *string `json:"new_password"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8192)).Decode(&patch); err != nil {
-		writeJSONError(w, http.StatusBadRequest, ErrValidationFailed, "invalid JSON")
+		writeJSONError(w, r, http.StatusBadRequest, ErrValidationFailed, "invalid JSON")
 		return
 	}
 
@@ -159,7 +159,7 @@ func (d Deps) handlePatchUser(w http.ResponseWriter, r *http.Request) {
 
 	if patch.Email != nil && *patch.Email != u.Email {
 		if err := d.Users.UpdateEmail(r.Context(), u.ID, *patch.Email); err != nil {
-			writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+			writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 			return
 		}
 		changes["email"] = map[string]string{"from": u.Email, "to": *patch.Email}
@@ -167,7 +167,7 @@ func (d Deps) handlePatchUser(w http.ResponseWriter, r *http.Request) {
 
 	if patch.IsSuperAdmin != nil && *patch.IsSuperAdmin != u.IsSuperAdmin {
 		if err := d.Users.SetIsSuperAdmin(r.Context(), u.ID, *patch.IsSuperAdmin); err != nil {
-			writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+			writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 			return
 		}
 		changes["is_super_admin"] = *patch.IsSuperAdmin
@@ -175,7 +175,7 @@ func (d Deps) handlePatchUser(w http.ResponseWriter, r *http.Request) {
 
 	if patch.MustChangePassword != nil && *patch.MustChangePassword != u.MustChangePassword {
 		if err := d.Users.SetMustChangePassword(r.Context(), u.ID, *patch.MustChangePassword); err != nil {
-			writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+			writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 			return
 		}
 		changes["must_change_password"] = *patch.MustChangePassword
@@ -184,11 +184,11 @@ func (d Deps) handlePatchUser(w http.ResponseWriter, r *http.Request) {
 	if patch.NewPassword != nil && *patch.NewPassword != "" {
 		hash, err := auth.HashPassword(*patch.NewPassword)
 		if err != nil {
-			writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+			writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 			return
 		}
 		if err := d.Users.UpdatePasswordHash(r.Context(), u.ID, hash); err != nil {
-			writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+			writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 			return
 		}
 		if patch.MustChangePassword != nil && *patch.MustChangePassword {

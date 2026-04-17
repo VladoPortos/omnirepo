@@ -67,11 +67,11 @@ func (d Deps) handleTriggerGC(w http.ResponseWriter, r *http.Request) {
 	// single-admin case.
 	n, err := gcAlreadyRunningCount(r.Context(), d.DB)
 	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
 	}
 	if n > 0 {
-		writeJSONError(w, http.StatusConflict, ErrConflict, "gc already running")
+		writeJSONError(w, r, http.StatusConflict, ErrConflict, "gc already running")
 		return
 	}
 
@@ -85,7 +85,7 @@ func (d Deps) handleTriggerGC(w http.ResponseWriter, r *http.Request) {
 		jobID = id
 		return nil
 	}); err != nil {
-		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
 	}
 
@@ -147,7 +147,7 @@ func (d Deps) handleGCStatus(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusOK, gcStatusResponse{Status: "idle"})
 			return
 		}
-		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
 	}
 

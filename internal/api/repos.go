@@ -91,17 +91,17 @@ func (d Deps) resolveRepoFromURL(w http.ResponseWriter, r *http.Request) (*metad
 	repoType := chi.URLParam(r, "type")
 	repoName := chi.URLParam(r, "repo")
 	if _, ok := validRepoTypes[repoType]; !ok {
-		writeJSONError(w, http.StatusNotFound, ErrNotFound, "repo not found")
+		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "repo not found")
 		return nil, nil, false
 	}
 	p, err := d.Projects.FindByName(r.Context(), projectName)
 	if err != nil {
-		writeJSONError(w, http.StatusNotFound, ErrNotFound, "project not found")
+		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "project not found")
 		return nil, nil, false
 	}
 	rr, err := d.Repos.FindByTriple(r.Context(), p.ID, repoType, repoName)
 	if err != nil {
-		writeJSONError(w, http.StatusNotFound, ErrNotFound, "repo not found")
+		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "repo not found")
 		return nil, nil, false
 	}
 	return p, rr, true
@@ -137,12 +137,12 @@ func (d Deps) handlePatchRepo(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxRepoPatchBodyBytes)
 	var body repoPatchRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeJSONError(w, http.StatusBadRequest, ErrValidationFailed, "invalid JSON")
+		writeJSONError(w, r, http.StatusBadRequest, ErrValidationFailed, "invalid JSON")
 		return
 	}
 	if body.BlockOnSeverity != nil {
 		if _, ok := validBlockOnSeverity[*body.BlockOnSeverity]; !ok {
-			writeJSONError(w, http.StatusBadRequest, ErrValidationFailed, "invalid block_on_severity")
+			writeJSONError(w, r, http.StatusBadRequest, ErrValidationFailed, "invalid block_on_severity")
 			return
 		}
 	}
@@ -180,10 +180,10 @@ func (d Deps) handlePatchRepo(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		if errors.Is(err, metadata.ErrNotFound) {
-			writeJSONError(w, http.StatusNotFound, ErrNotFound, "repo not found")
+			writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "repo not found")
 			return
 		}
-		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
 	}
 
@@ -216,7 +216,7 @@ func (d Deps) handleWipeRepo(w http.ResponseWriter, r *http.Request) {
 	case "docker", "raw":
 		// ok
 	default:
-		writeJSONError(w, http.StatusNotImplemented, "not_implemented",
+		writeJSONError(w, r, http.StatusNotImplemented, "not_implemented",
 			fmt.Sprintf("wipe not supported for type %q in Phase 2", rr.Type))
 		return
 	}
@@ -240,7 +240,7 @@ func (d Deps) handleWipeRepo(w http.ResponseWriter, r *http.Request) {
 		return nil
 	})
 	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
 	}
 

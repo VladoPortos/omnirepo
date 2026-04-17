@@ -98,28 +98,28 @@ func (d Deps) mountScans(r chi.Router) {
 func (d Deps) handleListRepoScans(w http.ResponseWriter, r *http.Request) {
 	actor, ok := auth.ActorFromContext(r.Context())
 	if !ok {
-		writeJSONError(w, http.StatusUnauthorized, ErrUnauthenticated, "")
+		writeJSONError(w, r, http.StatusUnauthorized, ErrUnauthenticated, "")
 		return
 	}
 	projectName := chi.URLParam(r, "name")
 	repoType := chi.URLParam(r, "type")
 	repoName := chi.URLParam(r, "repo")
 	if _, ok := validRepoTypes[repoType]; !ok {
-		writeJSONError(w, http.StatusNotFound, ErrNotFound, "repo not found")
+		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "repo not found")
 		return
 	}
 	p, err := d.Projects.FindByName(r.Context(), projectName)
 	if err != nil || p == nil {
-		writeJSONError(w, http.StatusNotFound, ErrNotFound, "project not found")
+		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "project not found")
 		return
 	}
 	repo, err := d.Repos.FindByTriple(r.Context(), p.ID, repoType, repoName)
 	if err != nil || repo == nil {
-		writeJSONError(w, http.StatusNotFound, ErrNotFound, "repo not found")
+		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "repo not found")
 		return
 	}
 	if !d.actorIsProjectMember(r.Context(), actor, p.ID) {
-		writeJSONError(w, http.StatusForbidden, ErrForbidden, "not a project member")
+		writeJSONError(w, r, http.StatusForbidden, ErrForbidden, "not a project member")
 		return
 	}
 	limit := int64(100)
@@ -152,7 +152,7 @@ func (d Deps) handleListRepoScans(w http.ResponseWriter, r *http.Request) {
 
 	rows, err := d.DB.Reader.QueryContext(r.Context(), query, args...)
 	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
 	}
 	defer func() { _ = rows.Close() }()
@@ -163,7 +163,7 @@ func (d Deps) handleListRepoScans(w http.ResponseWriter, r *http.Request) {
 		if err := rows.Scan(&s.ID, &s.RepoID, &s.ArtifactKind, &s.ArtifactID, &s.Status,
 			&s.Attempts, &s.LastError, &s.SeveritySummaryJSON, &s.SBOMPath,
 			&s.TrivyDBVersion, &s.CreatedAt, &startedAt, &finishedAt); err != nil {
-			writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+			writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 			return
 		}
 		if startedAt.Valid {
@@ -175,7 +175,7 @@ func (d Deps) handleListRepoScans(w http.ResponseWriter, r *http.Request) {
 		out = append(out, s)
 	}
 	if err := rows.Err(); err != nil {
-		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -186,7 +186,7 @@ func (d Deps) handleListRepoScans(w http.ResponseWriter, r *http.Request) {
 func (d Deps) resolveArtifactRepo(w http.ResponseWriter, r *http.Request) (*metadata.Project, *metadata.Repo, string, bool) {
 	actor, ok := auth.ActorFromContext(r.Context())
 	if !ok {
-		writeJSONError(w, http.StatusUnauthorized, ErrUnauthenticated, "")
+		writeJSONError(w, r, http.StatusUnauthorized, ErrUnauthenticated, "")
 		return nil, nil, "", false
 	}
 	projectName := chi.URLParam(r, "name")
@@ -194,21 +194,21 @@ func (d Deps) resolveArtifactRepo(w http.ResponseWriter, r *http.Request) (*meta
 	repoName := chi.URLParam(r, "repo")
 	artifactID := chi.URLParam(r, "id")
 	if _, ok := validRepoTypes[repoType]; !ok {
-		writeJSONError(w, http.StatusNotFound, ErrNotFound, "repo not found")
+		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "repo not found")
 		return nil, nil, "", false
 	}
 	p, err := d.Projects.FindByName(r.Context(), projectName)
 	if err != nil || p == nil {
-		writeJSONError(w, http.StatusNotFound, ErrNotFound, "project not found")
+		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "project not found")
 		return nil, nil, "", false
 	}
 	rr, err := d.Repos.FindByTriple(r.Context(), p.ID, repoType, repoName)
 	if err != nil || rr == nil {
-		writeJSONError(w, http.StatusNotFound, ErrNotFound, "repo not found")
+		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "repo not found")
 		return nil, nil, "", false
 	}
 	if !d.actorIsProjectMember(r.Context(), actor, p.ID) {
-		writeJSONError(w, http.StatusForbidden, ErrForbidden, "not a project member")
+		writeJSONError(w, r, http.StatusForbidden, ErrForbidden, "not a project member")
 		return nil, nil, "", false
 	}
 	return p, rr, artifactID, true
@@ -246,7 +246,7 @@ func (d Deps) handleRescan(w http.ResponseWriter, r *http.Request) {
 	}
 	kind := artifactKindForRepoType(repo.Type)
 	if kind == "" {
-		writeJSONError(w, http.StatusBadRequest, ErrValidationFailed,
+		writeJSONError(w, r, http.StatusBadRequest, ErrValidationFailed,
 			"rescan only supported for docker + raw artifacts in Phase 2")
 		return
 	}
@@ -256,7 +256,7 @@ func (d Deps) handleRescan(w http.ResponseWriter, r *http.Request) {
 		sid = s
 		return err
 	}); err != nil {
-		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
 	}
 	if d.ScanDeps.ScanKick != nil {
@@ -311,7 +311,7 @@ func (d Deps) handleListArtifactScans(w http.ResponseWriter, r *http.Request) {
 		LIMIT 100
 	`, repo.ID, kind, artifactID)
 	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
 	}
 	defer func() { _ = rows.Close() }()
@@ -322,7 +322,7 @@ func (d Deps) handleListArtifactScans(w http.ResponseWriter, r *http.Request) {
 		if err := rows.Scan(&s.ID, &s.RepoID, &s.ArtifactKind, &s.ArtifactID, &s.Status,
 			&s.Attempts, &s.LastError, &s.SeveritySummaryJSON, &s.SBOMPath,
 			&s.TrivyDBVersion, &s.CreatedAt, &startedAt, &finishedAt); err != nil {
-			writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+			writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 			return
 		}
 		if startedAt.Valid {
@@ -334,7 +334,7 @@ func (d Deps) handleListArtifactScans(w http.ResponseWriter, r *http.Request) {
 		out = append(out, s)
 	}
 	if err := rows.Err(); err != nil {
-		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -346,12 +346,12 @@ func (d Deps) loadScanRowAndAuth(w http.ResponseWriter, r *http.Request) (*scanR
 	idStr := chi.URLParam(r, "id")
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil || id <= 0 {
-		writeJSONError(w, http.StatusBadRequest, ErrValidationFailed, "invalid scan id")
+		writeJSONError(w, r, http.StatusBadRequest, ErrValidationFailed, "invalid scan id")
 		return nil, false
 	}
 	actor, ok := auth.ActorFromContext(r.Context())
 	if !ok {
-		writeJSONError(w, http.StatusUnauthorized, ErrUnauthenticated, "")
+		writeJSONError(w, r, http.StatusUnauthorized, ErrUnauthenticated, "")
 		return nil, false
 	}
 	var s scanRowResponse
@@ -368,11 +368,11 @@ func (d Deps) loadScanRowAndAuth(w http.ResponseWriter, r *http.Request) (*scanR
 		&s.LastError, &s.SeveritySummaryJSON, &s.SBOMPath, &s.TrivyDBVersion,
 		&s.CreatedAt, &startedAt, &finishedAt)
 	if errors.Is(err, sql.ErrNoRows) {
-		writeJSONError(w, http.StatusNotFound, ErrNotFound, "scan not found")
+		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "scan not found")
 		return nil, false
 	}
 	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return nil, false
 	}
 	if startedAt.Valid {
@@ -383,11 +383,11 @@ func (d Deps) loadScanRowAndAuth(w http.ResponseWriter, r *http.Request) (*scanR
 	}
 	repo, err := d.Repos.FindByID(r.Context(), s.RepoID)
 	if err != nil || repo == nil {
-		writeJSONError(w, http.StatusNotFound, ErrNotFound, "scan repo not found")
+		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "scan repo not found")
 		return nil, false
 	}
 	if !d.actorIsProjectMember(r.Context(), actor, repo.ProjectID) {
-		writeJSONError(w, http.StatusForbidden, ErrForbidden, "not a project member")
+		writeJSONError(w, r, http.StatusForbidden, ErrForbidden, "not a project member")
 		return nil, false
 	}
 	return &s, true
@@ -414,7 +414,7 @@ func (d Deps) handleListScanVulns(w http.ResponseWriter, r *http.Request) {
 		LIMIT 1000
 	`, s.ID)
 	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
 	}
 	defer func() { _ = rows.Close() }()
@@ -423,13 +423,13 @@ func (d Deps) handleListScanVulns(w http.ResponseWriter, r *http.Request) {
 		var v vulnRowResponse
 		if err := rows.Scan(&v.ID, &v.ScanID, &v.CVEID, &v.Severity,
 			&v.PackageName, &v.PackageVersion, &v.FixedVersion, &v.Title, &v.Description); err != nil {
-			writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+			writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 			return
 		}
 		out = append(out, v)
 	}
 	if err := rows.Err(); err != nil {
-		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -442,30 +442,30 @@ func (d Deps) handleGetSBOM(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.SBOMPath == "" {
-		writeJSONError(w, http.StatusNotFound, ErrNotFound, "sbom not generated for this scan")
+		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "sbom not generated for this scan")
 		return
 	}
 	// Defense in depth: only serve files under the configured SBOM root.
 	if d.ScanDeps != nil && d.ScanDeps.SBOMRoot != "" {
 		clean, err := filepath.Abs(s.SBOMPath)
 		if err != nil || !isUnder(clean, d.ScanDeps.SBOMRoot) {
-			writeJSONError(w, http.StatusBadRequest, ErrValidationFailed, "invalid sbom path")
+			writeJSONError(w, r, http.StatusBadRequest, ErrValidationFailed, "invalid sbom path")
 			return
 		}
 	}
 	f, err := os.Open(s.SBOMPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			writeJSONError(w, http.StatusNotFound, ErrNotFound, "sbom file missing on disk")
+			writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "sbom file missing on disk")
 			return
 		}
-		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
 	}
 	defer func() { _ = f.Close() }()
 	fi, err := f.Stat()
 	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")

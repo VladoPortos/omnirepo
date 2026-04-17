@@ -40,25 +40,25 @@ type repoListItem struct {
 func (d Deps) handleListRepos(w http.ResponseWriter, r *http.Request) {
 	actor, ok := auth.ActorFromContext(r.Context())
 	if !ok {
-		writeJSONError(w, http.StatusUnauthorized, ErrUnauthenticated, "")
+		writeJSONError(w, r, http.StatusUnauthorized, ErrUnauthenticated, "")
 		return
 	}
 
 	name := chi.URLParam(r, "name")
 	p, err := d.Projects.FindByName(r.Context(), name)
 	if err != nil {
-		writeJSONError(w, http.StatusNotFound, ErrNotFound, "project not found")
+		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "project not found")
 		return
 	}
 
 	if !d.actorIsProjectMember(r.Context(), actor, p.ID) {
-		writeJSONError(w, http.StatusForbidden, ErrForbidden, "not a project member")
+		writeJSONError(w, r, http.StatusForbidden, ErrForbidden, "not a project member")
 		return
 	}
 
 	repos, err := d.Repos.ListByProject(r.Context(), p.ID)
 	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
 	}
 
@@ -119,7 +119,7 @@ type syncJobItem struct {
 func (d Deps) handleListSyncJobs(w http.ResponseWriter, r *http.Request) {
 	actor, ok := auth.ActorFromContext(r.Context())
 	if !ok {
-		writeJSONError(w, http.StatusUnauthorized, ErrUnauthenticated, "")
+		writeJSONError(w, r, http.StatusUnauthorized, ErrUnauthenticated, "")
 		return
 	}
 
@@ -129,18 +129,18 @@ func (d Deps) handleListSyncJobs(w http.ResponseWriter, r *http.Request) {
 
 	p, err := d.Projects.FindByName(r.Context(), projectName)
 	if err != nil {
-		writeJSONError(w, http.StatusNotFound, ErrNotFound, "project not found")
+		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "project not found")
 		return
 	}
 
 	if !d.actorIsProjectMember(r.Context(), actor, p.ID) {
-		writeJSONError(w, http.StatusForbidden, ErrForbidden, "not a project member")
+		writeJSONError(w, r, http.StatusForbidden, ErrForbidden, "not a project member")
 		return
 	}
 
 	rr, err := d.Repos.FindByTriple(r.Context(), p.ID, repoType, repoName)
 	if err != nil {
-		writeJSONError(w, http.StatusNotFound, ErrNotFound, "repo not found")
+		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "repo not found")
 		return
 	}
 
@@ -157,7 +157,7 @@ func (d Deps) handleListSyncJobs(w http.ResponseWriter, r *http.Request) {
 		LIMIT ?
 	`, rr.ID, pp.Limit)
 	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
 	}
 	defer func() { _ = rows.Close() }()
@@ -168,13 +168,13 @@ func (d Deps) handleListSyncJobs(w http.ResponseWriter, r *http.Request) {
 		if err := rows.Scan(&item.ID, &item.Kind, &item.Status, &item.Attempts,
 			&item.LastError, &item.PayloadJSON, &item.Log,
 			&item.CreatedAt, &item.UpdatedAt); err != nil {
-			writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+			writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 			return
 		}
 		items = append(items, item)
 	}
 	if err := rows.Err(); err != nil {
-		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
 	}
 
@@ -184,7 +184,7 @@ func (d Deps) handleListSyncJobs(w http.ResponseWriter, r *http.Request) {
 func (d Deps) handleGetSyncJob(w http.ResponseWriter, r *http.Request) {
 	actor, ok := auth.ActorFromContext(r.Context())
 	if !ok {
-		writeJSONError(w, http.StatusUnauthorized, ErrUnauthenticated, "")
+		writeJSONError(w, r, http.StatusUnauthorized, ErrUnauthenticated, "")
 		return
 	}
 
@@ -195,24 +195,24 @@ func (d Deps) handleGetSyncJob(w http.ResponseWriter, r *http.Request) {
 
 	jobID, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil || jobID <= 0 {
-		writeJSONError(w, http.StatusBadRequest, ErrValidationFailed, "invalid job id")
+		writeJSONError(w, r, http.StatusBadRequest, ErrValidationFailed, "invalid job id")
 		return
 	}
 
 	p, err := d.Projects.FindByName(r.Context(), projectName)
 	if err != nil {
-		writeJSONError(w, http.StatusNotFound, ErrNotFound, "project not found")
+		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "project not found")
 		return
 	}
 
 	if !d.actorIsProjectMember(r.Context(), actor, p.ID) {
-		writeJSONError(w, http.StatusForbidden, ErrForbidden, "not a project member")
+		writeJSONError(w, r, http.StatusForbidden, ErrForbidden, "not a project member")
 		return
 	}
 
 	rr, err := d.Repos.FindByTriple(r.Context(), p.ID, repoType, repoName)
 	if err != nil {
-		writeJSONError(w, http.StatusNotFound, ErrNotFound, "repo not found")
+		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "repo not found")
 		return
 	}
 
@@ -229,11 +229,11 @@ func (d Deps) handleGetSyncJob(w http.ResponseWriter, r *http.Request) {
 		&item.LastError, &item.PayloadJSON, &item.Log,
 		&item.CreatedAt, &item.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
-		writeJSONError(w, http.StatusNotFound, ErrNotFound, "sync job not found")
+		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "sync job not found")
 		return
 	}
 	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
 	}
 

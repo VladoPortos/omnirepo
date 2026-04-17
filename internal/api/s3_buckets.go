@@ -90,13 +90,13 @@ func (d Deps) mountS3Buckets(r chi.Router) {
 func (d Deps) resolveBucketAccess(w http.ResponseWriter, r *http.Request, writeAction bool) (int64, string, auth.Actor, bool) {
 	actor, ok := auth.ActorFromContext(r.Context())
 	if !ok {
-		writeJSONError(w, http.StatusUnauthorized, ErrUnauthenticated, "")
+		writeJSONError(w, r, http.StatusUnauthorized, ErrUnauthenticated, "")
 		return 0, "", auth.Actor{}, false
 	}
 	projectName := chi.URLParam(r, "name")
 	p, err := d.Projects.FindByName(r.Context(), projectName)
 	if err != nil {
-		writeJSONError(w, http.StatusNotFound, ErrNotFound, "project not found")
+		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "project not found")
 		return 0, "", auth.Actor{}, false
 	}
 	action := auth.ActionS3BucketRead
@@ -105,7 +105,7 @@ func (d Deps) resolveBucketAccess(w http.ResponseWriter, r *http.Request, writeA
 	}
 	if allowed, reason := auth.Can(r.Context(), actor, action,
 		auth.Target{Kind: "project", ProjectID: p.ID}); !allowed {
-			writeJSONError(w, http.StatusForbidden, ErrForbidden, reason)
+			writeJSONError(w, r, http.StatusForbidden, ErrForbidden, reason)
 			return 0, "", auth.Actor{}, false
 	}
 	return p.ID, p.Name, actor, true
@@ -120,23 +120,23 @@ func (d Deps) handleCreateS3Bucket(w http.ResponseWriter, r *http.Request) {
 	var req s3BucketCreateRequest
 	r.Body = http.MaxBytesReader(nil, r.Body, maxS3BucketsBodyBytes)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSONError(w, http.StatusBadRequest, ErrValidationFailed, err.Error())
+		writeJSONError(w, r, http.StatusBadRequest, ErrValidationFailed, err.Error())
 		return
 	}
 	name := strings.TrimSpace(req.Name)
 	if name == "" {
-		writeJSONError(w, http.StatusUnprocessableEntity, ErrValidationFailed, "name required")
+		writeJSONError(w, r, http.StatusUnprocessableEntity, ErrValidationFailed, "name required")
 		return
 	}
 
 	if err := d.S3Backend.CreateBucketForProject(name, projectID); err != nil {
 		switch {
 		case gofakes3.HasErrorCode(err, gofakes3.ErrBucketAlreadyExists):
-			writeJSONError(w, http.StatusConflict, ErrConflict, "bucket name already in use")
+			writeJSONError(w, r, http.StatusConflict, ErrConflict, "bucket name already in use")
 		case gofakes3.HasErrorCode(err, gofakes3.ErrInvalidBucketName):
-			writeJSONError(w, http.StatusUnprocessableEntity, ErrValidationFailed, err.Error())
+			writeJSONError(w, r, http.StatusUnprocessableEntity, ErrValidationFailed, err.Error())
 		default:
-			writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+			writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		}
 		return
 	}
@@ -166,7 +166,7 @@ func (d Deps) handleListS3Buckets(w http.ResponseWriter, r *http.Request) {
 	}
 	rows, err := d.S3Backend.ListBucketsForProject(r.Context(), projectID)
 	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
 	}
 	out := make([]s3BucketItem, 0, len(rows))
@@ -189,11 +189,11 @@ func (d Deps) handleGetS3Bucket(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "bucket")
 	info, found, err := d.S3Backend.GetBucketForProject(r.Context(), projectID, name)
 	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
 	}
 	if !found {
-		writeJSONError(w, http.StatusNotFound, ErrNotFound, "bucket not found")
+		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "bucket not found")
 		return
 	}
 	writeJSON(w, http.StatusOK, s3BucketItem{
@@ -212,20 +212,20 @@ func (d Deps) handleDeleteS3Bucket(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "bucket")
 	info, found, err := d.S3Backend.GetBucketForProject(r.Context(), projectID, name)
 	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
 	}
 	if !found {
-		writeJSONError(w, http.StatusNotFound, ErrNotFound, "bucket not found")
+		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "bucket not found")
 		return
 	}
 
 	if err := d.S3Backend.DeleteBucket(name); err != nil {
 		switch {
 		case gofakes3.HasErrorCode(err, gofakes3.ErrBucketNotEmpty):
-			writeJSONError(w, http.StatusConflict, ErrConflict, "bucket not empty")
+			writeJSONError(w, r, http.StatusConflict, ErrConflict, "bucket not empty")
 		default:
-			writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+			writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		}
 		return
 	}
@@ -253,11 +253,11 @@ func (d Deps) handleListS3Objects(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "bucket")
 	info, found, err := d.S3Backend.GetBucketForProject(r.Context(), projectID, name)
 	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
 	}
 	if !found {
-		writeJSONError(w, http.StatusNotFound, ErrNotFound, "bucket not found")
+		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "bucket not found")
 		return
 	}
 
@@ -273,14 +273,14 @@ func (d Deps) handleListS3Objects(w http.ResponseWriter, r *http.Request) {
 				limit = maxBucketObjectsPageSize
 			}
 		} else if convErr != nil && !errors.Is(convErr, strconv.ErrSyntax) {
-			writeJSONError(w, http.StatusBadRequest, ErrValidationFailed, "invalid limit")
+			writeJSONError(w, r, http.StatusBadRequest, ErrValidationFailed, "invalid limit")
 			return
 		}
 	}
 
 	page, err := d.S3ObjectsRepo.ListByBucket(r.Context(), info.ID, prefix, marker, limit)
 	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
 	}
 

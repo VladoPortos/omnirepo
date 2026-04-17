@@ -39,7 +39,7 @@ func (d Deps) handleListTrash(w http.ResponseWriter, r *http.Request) {
 
 	entries, err := d.Trash.List(r.Context())
 	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
 	}
 
@@ -107,18 +107,18 @@ func (d Deps) handleListTrash(w http.ResponseWriter, r *http.Request) {
 func (d Deps) handleRestoreTrash(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	if id == "" {
-		writeJSONError(w, http.StatusBadRequest, ErrValidationFailed, "missing id")
+		writeJSONError(w, r, http.StatusBadRequest, ErrValidationFailed, "missing id")
 		return
 	}
 	if d.Trash == nil {
-		writeJSONError(w, http.StatusNotFound, ErrNotFound, "trash not configured")
+		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "trash not configured")
 		return
 	}
 
 	// List entries and find matching one.
 	entries, err := d.Trash.List(r.Context())
 	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
 	}
 
@@ -139,7 +139,7 @@ func (d Deps) handleRestoreTrash(w http.ResponseWriter, r *http.Request) {
 			// Legacy pre-fix entries: no sidecar, best-effort old behavior.
 			children, rdErr := os.ReadDir(e.Path)
 			if rdErr != nil {
-				writeJSONError(w, http.StatusInternalServerError, ErrInternal, "cannot read trash entry")
+				writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "cannot read trash entry")
 				return
 			}
 			var firstContent string
@@ -152,14 +152,14 @@ func (d Deps) handleRestoreTrash(w http.ResponseWriter, r *http.Request) {
 				break
 			}
 			if firstContent == "" {
-				writeJSONError(w, http.StatusNotFound, ErrNotFound, "trash entry is empty")
+				writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "trash entry is empty")
 				return
 			}
 			childPath = filepath.Join(e.Path, firstContent)
 			dstPath = filepath.Join(d.DataRoot, "repos", firstContent)
 		}
 		if err := d.Trash.Restore(r.Context(), childPath, dstPath); err != nil {
-			writeJSONError(w, http.StatusInternalServerError, ErrInternal, "restore failed")
+			writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "restore failed")
 			return
 		}
 
@@ -181,23 +181,23 @@ func (d Deps) handleRestoreTrash(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 		return
 	}
-	writeJSONError(w, http.StatusNotFound, ErrNotFound, "trash entry not found")
+	writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "trash entry not found")
 }
 
 func (d Deps) handlePurgeTrash(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	if id == "" {
-		writeJSONError(w, http.StatusBadRequest, ErrValidationFailed, "missing id")
+		writeJSONError(w, r, http.StatusBadRequest, ErrValidationFailed, "missing id")
 		return
 	}
 	if d.Trash == nil {
-		writeJSONError(w, http.StatusNotFound, ErrNotFound, "trash not configured")
+		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "trash not configured")
 		return
 	}
 
 	entries, err := d.Trash.List(r.Context())
 	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
 	}
 
@@ -205,7 +205,7 @@ func (d Deps) handlePurgeTrash(w http.ResponseWriter, r *http.Request) {
 		dirName := filepath.Base(e.Path)
 		if dirName == id {
 			if err := os.RemoveAll(e.Path); err != nil {
-				writeJSONError(w, http.StatusInternalServerError, ErrInternal, "purge failed")
+				writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "purge failed")
 				return
 			}
 			if a, ok := auth.ActorFromContext(r.Context()); ok {
@@ -222,7 +222,7 @@ func (d Deps) handlePurgeTrash(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	writeJSONError(w, http.StatusNotFound, ErrNotFound, "trash entry not found")
+	writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "trash entry not found")
 }
 
 // trashEntryID builds a stable identifier for trash entries using the

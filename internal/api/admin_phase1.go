@@ -339,7 +339,7 @@ func (d Deps) handleLogin(w http.ResponseWriter, r *http.Request) {
 	var req LoginRequest
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8192)).Decode(&req); err != nil {
 		auth.VerifyFixedCost("")
-		writeJSONError(w, http.StatusUnauthorized, ErrUnauthenticated, "")
+		writeJSONError(w, r, http.StatusUnauthorized, ErrUnauthenticated, "")
 		return
 	}
 	// Drop the LoginValid short-circuit: a malformed login can never match
@@ -352,26 +352,26 @@ func (d Deps) handleLogin(w http.ResponseWriter, r *http.Request) {
 		// latency. Constant-time argument since req.Password is the same
 		// bytes an attacker would have sent for a real user.
 		auth.VerifyFixedCost(req.Password)
-		writeJSONError(w, http.StatusUnauthorized, ErrUnauthenticated, "")
+		writeJSONError(w, r, http.StatusUnauthorized, ErrUnauthenticated, "")
 		d.recordAudit(r, audit.Event{Kind: audit.EvtAuthLoginFailure, TargetKind: "user", TargetID: req.Login, Outcome: "user_not_found"})
 		return
 	}
 	ok, err := auth.VerifyPassword(u.PasswordHash, req.Password)
 	if err != nil || !ok {
-		writeJSONError(w, http.StatusUnauthorized, ErrUnauthenticated, "")
+		writeJSONError(w, r, http.StatusUnauthorized, ErrUnauthenticated, "")
 		uid := u.ID
 		d.recordAudit(r, audit.Event{Kind: audit.EvtAuthLoginFailure, ActorUserID: &uid, TargetKind: "user", TargetID: u.Login, Outcome: "wrong_password"})
 		return
 	}
 	tok, err := auth.GenerateSession()
 	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
 	}
 	issued := d.clock()
 	expires := issued.Add(d.sessionTTL())
 	if _, err := d.Sessions.Create(r.Context(), u.ID, tok.Prefix, tok.SHA256, issued, expires); err != nil {
-		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
 	}
 	auth.SetSessionCookie(w, tok.Plaintext, r.TLS != nil)
@@ -405,30 +405,30 @@ func (d Deps) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 	a, _ := auth.ActorFromContext(r.Context())
 	var req ChangePasswordRequest
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&req); err != nil {
-		writeJSONError(w, http.StatusBadRequest, ErrValidationFailed, "invalid JSON")
+		writeJSONError(w, r, http.StatusBadRequest, ErrValidationFailed, "invalid JSON")
 		return
 	}
 	if req.New == "" {
-		writeJSONError(w, http.StatusUnprocessableEntity, ErrValidationFailed, "new password empty")
+		writeJSONError(w, r, http.StatusUnprocessableEntity, ErrValidationFailed, "new password empty")
 		return
 	}
 	u, err := d.Users.FindByID(r.Context(), a.ID)
 	if err != nil {
-		writeJSONError(w, http.StatusUnauthorized, ErrUnauthenticated, "")
+		writeJSONError(w, r, http.StatusUnauthorized, ErrUnauthenticated, "")
 		return
 	}
 	ok, _ := auth.VerifyPassword(u.PasswordHash, req.Current)
 	if !ok {
-		writeJSONError(w, http.StatusUnauthorized, ErrUnauthenticated, "wrong current password")
+		writeJSONError(w, r, http.StatusUnauthorized, ErrUnauthenticated, "wrong current password")
 		return
 	}
 	hash, err := auth.HashPassword(req.New)
 	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
 	}
 	if err := d.Users.UpdatePasswordHash(r.Context(), a.ID, hash); err != nil {
-		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
 	}
 	// HI-01: invalidate every other session for this user. Preserves the
@@ -485,7 +485,7 @@ func (d Deps) handleMe(w http.ResponseWriter, r *http.Request) {
 func (d Deps) handleDeleteMe(w http.ResponseWriter, r *http.Request) {
 	a, _ := auth.ActorFromContext(r.Context())
 	if err := d.Users.Delete(r.Context(), a.ID); err != nil {
-		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
 	}
 	uid := a.ID
@@ -500,26 +500,26 @@ func (d Deps) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := auth.LoginValid(req.Login); err != nil {
-		writeJSONError(w, http.StatusUnprocessableEntity, ErrValidationFailed, err.Error())
+		writeJSONError(w, r, http.StatusUnprocessableEntity, ErrValidationFailed, err.Error())
 		return
 	}
 	if req.Email == "" {
-		writeJSONError(w, http.StatusUnprocessableEntity, ErrValidationFailed, "email empty")
+		writeJSONError(w, r, http.StatusUnprocessableEntity, ErrValidationFailed, "email empty")
 		return
 	}
 	otp := auth.OneTimePassword()
 	hash, err := auth.HashPassword(otp)
 	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
 	}
 	_, err = d.Users.Create(r.Context(), req.Login, req.Email, hash, false, true)
 	if err != nil {
 		if strings.Contains(err.Error(), "UNIQUE") || strings.Contains(err.Error(), "constraint") {
-			writeJSONError(w, http.StatusConflict, ErrConflict, "login exists")
+			writeJSONError(w, r, http.StatusConflict, ErrConflict, "login exists")
 			return
 		}
-		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
 	}
 	if a, ok := auth.ActorFromContext(r.Context()); ok {
@@ -533,11 +533,11 @@ func (d Deps) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 	login := chi.URLParam(r, "login")
 	u, err := d.Users.FindByLogin(r.Context(), login)
 	if err != nil {
-		writeJSONError(w, http.StatusNotFound, ErrNotFound, "user not found")
+		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "user not found")
 		return
 	}
 	if err := d.Users.Delete(r.Context(), u.ID); err != nil {
-		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
 	}
 	if a, ok := auth.ActorFromContext(r.Context()); ok {
@@ -553,7 +553,7 @@ func (d Deps) handleCreateProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := auth.ProjectNameValid(req.Name); err != nil {
-		writeJSONError(w, http.StatusUnprocessableEntity, ErrValidationFailed, err.Error())
+		writeJSONError(w, r, http.StatusUnprocessableEntity, ErrValidationFailed, err.Error())
 		return
 	}
 
@@ -577,10 +577,10 @@ func (d Deps) handleCreateProject(w http.ResponseWriter, r *http.Request) {
 	})
 	if txErr != nil {
 		if strings.Contains(txErr.Error(), "UNIQUE") || strings.Contains(txErr.Error(), "constraint") {
-			writeJSONError(w, http.StatusConflict, ErrConflict, "project exists")
+			writeJSONError(w, r, http.StatusConflict, ErrConflict, "project exists")
 			return
 		}
-		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
 	}
 	if hasActor {
@@ -594,11 +594,11 @@ func (d Deps) handleDeleteProject(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
 	p, err := d.Projects.FindByName(r.Context(), name)
 	if err != nil {
-		writeJSONError(w, http.StatusNotFound, ErrNotFound, "project not found")
+		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "project not found")
 		return
 	}
 	if err := d.Projects.SoftDelete(r.Context(), p.ID); err != nil {
-		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
 	}
 	if a, ok := auth.ActorFromContext(r.Context()); ok {
@@ -613,17 +613,17 @@ func (d Deps) handleAddMember(w http.ResponseWriter, r *http.Request) {
 	login := chi.URLParam(r, "login")
 	p, err := d.Projects.FindByName(r.Context(), name)
 	if err != nil {
-		writeJSONError(w, http.StatusNotFound, ErrNotFound, "project")
+		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "project")
 		return
 	}
 	u, err := d.Users.FindByLogin(r.Context(), login)
 	if err != nil {
-		writeJSONError(w, http.StatusNotFound, ErrNotFound, "user")
+		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "user")
 		return
 	}
 	if err := d.Members.Add(r.Context(), p.ID, u.ID); err != nil {
 		// PK-conflict → 409.
-		writeJSONError(w, http.StatusConflict, ErrConflict, "already a member")
+		writeJSONError(w, r, http.StatusConflict, ErrConflict, "already a member")
 		return
 	}
 	if a, ok := auth.ActorFromContext(r.Context()); ok {
@@ -638,16 +638,16 @@ func (d Deps) handleRemoveMember(w http.ResponseWriter, r *http.Request) {
 	login := chi.URLParam(r, "login")
 	p, err := d.Projects.FindByName(r.Context(), name)
 	if err != nil {
-		writeJSONError(w, http.StatusNotFound, ErrNotFound, "project")
+		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "project")
 		return
 	}
 	u, err := d.Users.FindByLogin(r.Context(), login)
 	if err != nil {
-		writeJSONError(w, http.StatusNotFound, ErrNotFound, "user")
+		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "user")
 		return
 	}
 	if err := d.Members.Remove(r.Context(), p.ID, u.ID); err != nil {
-		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
 	}
 	if a, ok := auth.ActorFromContext(r.Context()); ok {
@@ -667,7 +667,7 @@ func (d Deps) handleCreateRepo(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
 	p, err := d.Projects.FindByName(r.Context(), name)
 	if err != nil {
-		writeJSONError(w, http.StatusNotFound, ErrNotFound, "project")
+		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "project")
 		return
 	}
 	var req CreateRepoRequest
@@ -675,11 +675,11 @@ func (d Deps) handleCreateRepo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := auth.ProjectNameValid(req.Name); err != nil {
-		writeJSONError(w, http.StatusUnprocessableEntity, ErrValidationFailed, err.Error())
+		writeJSONError(w, r, http.StatusUnprocessableEntity, ErrValidationFailed, err.Error())
 		return
 	}
 	if _, ok := validRepoTypes[req.Type]; !ok {
-		writeJSONError(w, http.StatusUnprocessableEntity, ErrValidationFailed, "invalid type")
+		writeJSONError(w, r, http.StatusUnprocessableEntity, ErrValidationFailed, "invalid type")
 		return
 	}
 
@@ -707,10 +707,10 @@ func (d Deps) handleCreateRepo(w http.ResponseWriter, r *http.Request) {
 	})
 	if txErr != nil {
 		if strings.Contains(txErr.Error(), "UNIQUE") || strings.Contains(txErr.Error(), "constraint") {
-			writeJSONError(w, http.StatusConflict, ErrConflict, "repo exists")
+			writeJSONError(w, r, http.StatusConflict, ErrConflict, "repo exists")
 			return
 		}
-		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
 	}
 	if a, ok := auth.ActorFromContext(r.Context()); ok {
@@ -733,16 +733,16 @@ func (d Deps) handleDeleteRepo(w http.ResponseWriter, r *http.Request) {
 	repoName := chi.URLParam(r, "repo")
 	p, err := d.Projects.FindByName(r.Context(), projectName)
 	if err != nil {
-		writeJSONError(w, http.StatusNotFound, ErrNotFound, "project")
+		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "project")
 		return
 	}
 	rr, err := d.Repos.FindByTriple(r.Context(), p.ID, typ, repoName)
 	if err != nil {
-		writeJSONError(w, http.StatusNotFound, ErrNotFound, "repo")
+		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "repo")
 		return
 	}
 	if err := d.Repos.SoftDelete(r.Context(), rr.ID); err != nil {
-		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
 	}
 	// REPO-06: move on-disk tree to trash/<ts>-repo-<id>/ if it exists.
@@ -795,17 +795,17 @@ func (d Deps) handleDeleteRepo(w http.ResponseWriter, r *http.Request) {
 
 func (d Deps) handleTLSUpload(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseMultipartForm(8 << 20); err != nil {
-		writeJSONError(w, http.StatusBadRequest, ErrValidationFailed, "multipart parse: "+err.Error())
+		writeJSONError(w, r, http.StatusBadRequest, ErrValidationFailed, "multipart parse: "+err.Error())
 		return
 	}
 	certBytes, err := readFormFile(r, "cert")
 	if err != nil {
-		writeJSONError(w, http.StatusBadRequest, ErrValidationFailed, "cert: "+err.Error())
+		writeJSONError(w, r, http.StatusBadRequest, ErrValidationFailed, "cert: "+err.Error())
 		return
 	}
 	keyBytes, err := readFormFile(r, "key")
 	if err != nil {
-		writeJSONError(w, http.StatusBadRequest, ErrValidationFailed, "key: "+err.Error())
+		writeJSONError(w, r, http.StatusBadRequest, ErrValidationFailed, "key: "+err.Error())
 		return
 	}
 	// Audit finding #4: honor cfg.TLS.{cert_path,key_path} (threaded via
@@ -825,7 +825,7 @@ func (d Deps) handleTLSUpload(w http.ResponseWriter, r *http.Request) {
 		HistoryDir: filepath.Join(d.DataRoot, "certs", "uploaded"),
 	}
 	if err := omrtls.ApplyUploadAt(r.Context(), certBytes, keyBytes, layout, d.Holder); err != nil {
-		writeJSONError(w, http.StatusUnprocessableEntity, ErrValidationFailed, err.Error())
+		writeJSONError(w, r, http.StatusUnprocessableEntity, ErrValidationFailed, err.Error())
 		return
 	}
 	if a, ok := auth.ActorFromContext(r.Context()); ok {

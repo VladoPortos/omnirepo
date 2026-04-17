@@ -97,7 +97,7 @@ func (d Deps) handleListAudit(w http.ResponseWriter, r *http.Request) {
 
 	rows, err := d.DB.Reader.QueryContext(r.Context(), query, args...)
 	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
 	}
 	defer func() { _ = rows.Close() }()
@@ -121,7 +121,7 @@ func (d Deps) handleListAudit(w http.ResponseWriter, r *http.Request) {
 		if err := rows.Scan(&row.ID, &row.OccurredAt, &row.ActorLogin,
 			&row.IP, &row.UserAgent, &row.EventKind, &row.TargetKind,
 			&row.TargetID, &row.Outcome, &row.Details); err != nil {
-			writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+			writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 			return
 		}
 		items = append(items, item{
@@ -138,7 +138,7 @@ func (d Deps) handleListAudit(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	if err := rows.Err(); err != nil {
-		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
 	}
 

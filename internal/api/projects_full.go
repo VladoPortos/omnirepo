@@ -108,13 +108,13 @@ type projectBucket struct {
 func (d Deps) handleListProjects(w http.ResponseWriter, r *http.Request) {
 	actor, ok := auth.ActorFromContext(r.Context())
 	if !ok {
-		writeJSONError(w, http.StatusUnauthorized, ErrUnauthenticated, "")
+		writeJSONError(w, r, http.StatusUnauthorized, ErrUnauthenticated, "")
 		return
 	}
 
 	allProjects, err := d.Projects.ListAll(r.Context())
 	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
 	}
 
@@ -200,19 +200,19 @@ func (d Deps) handleListProjects(w http.ResponseWriter, r *http.Request) {
 func (d Deps) handleGetProject(w http.ResponseWriter, r *http.Request) {
 	actor, ok := auth.ActorFromContext(r.Context())
 	if !ok {
-		writeJSONError(w, http.StatusUnauthorized, ErrUnauthenticated, "")
+		writeJSONError(w, r, http.StatusUnauthorized, ErrUnauthenticated, "")
 		return
 	}
 
 	name := chi.URLParam(r, "name")
 	p, err := d.Projects.FindByName(r.Context(), name)
 	if err != nil {
-		writeJSONError(w, http.StatusNotFound, ErrNotFound, "project not found")
+		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "project not found")
 		return
 	}
 
 	if !d.actorIsProjectMember(r.Context(), actor, p.ID) {
-		writeJSONError(w, http.StatusForbidden, ErrForbidden, "not a project member")
+		writeJSONError(w, r, http.StatusForbidden, ErrForbidden, "not a project member")
 		return
 	}
 
@@ -271,19 +271,19 @@ func (d Deps) handleGetProject(w http.ResponseWriter, r *http.Request) {
 func (d Deps) handleProjectActivity(w http.ResponseWriter, r *http.Request) {
 	actor, ok := auth.ActorFromContext(r.Context())
 	if !ok {
-		writeJSONError(w, http.StatusUnauthorized, ErrUnauthenticated, "")
+		writeJSONError(w, r, http.StatusUnauthorized, ErrUnauthenticated, "")
 		return
 	}
 
 	name := chi.URLParam(r, "name")
 	p, err := d.Projects.FindByName(r.Context(), name)
 	if err != nil {
-		writeJSONError(w, http.StatusNotFound, ErrNotFound, "project not found")
+		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "project not found")
 		return
 	}
 
 	if !d.actorIsProjectMember(r.Context(), actor, p.ID) {
-		writeJSONError(w, http.StatusForbidden, ErrForbidden, "not a project member")
+		writeJSONError(w, r, http.StatusForbidden, ErrForbidden, "not a project member")
 		return
 	}
 
@@ -303,7 +303,7 @@ func (d Deps) handleProjectActivity(w http.ResponseWriter, r *http.Request) {
 		LIMIT 50
 	`, p.Name, escapedName+"/%")
 	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
 	}
 	defer func() { _ = rows.Close() }()
@@ -326,7 +326,7 @@ func (d Deps) handleProjectActivity(w http.ResponseWriter, r *http.Request) {
 		var details, ip, ua, outcome *string
 		if err := rows.Scan(&item.ID, &item.Action, &actorID, &item.TargetKind,
 			&item.TargetID, &outcome, &details, &ip, &ua, &item.CreatedAt); err != nil {
-			writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+			writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 			return
 		}
 		item.ActorID = actorID
@@ -339,7 +339,7 @@ func (d Deps) handleProjectActivity(w http.ResponseWriter, r *http.Request) {
 		items = append(items, item)
 	}
 	if err := rows.Err(); err != nil {
-		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
 	}
 

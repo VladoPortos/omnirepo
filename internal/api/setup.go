@@ -63,7 +63,7 @@ func (d Deps) usersEmpty(ctx context.Context) (bool, error) {
 func (d Deps) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	empty, err := d.usersEmpty(r.Context())
 	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
 	}
 	writeJSON(w, http.StatusOK, SetupStatusResponse{NeedsSetup: empty})
@@ -72,7 +72,7 @@ func (d Deps) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 func (d Deps) handleSetupSuperAdmin(w http.ResponseWriter, r *http.Request) {
 	var req SetupSuperAdminRequest
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8192)).Decode(&req); err != nil {
-		writeJSONError(w, http.StatusBadRequest, ErrValidationFailed, "invalid JSON")
+		writeJSONError(w, r, http.StatusBadRequest, ErrValidationFailed, "invalid JSON")
 		return
 	}
 
@@ -81,21 +81,21 @@ func (d Deps) handleSetupSuperAdmin(w http.ResponseWriter, r *http.Request) {
 	// These are re-asserted in the tx below so a client can't bypass them
 	// by racing past the pre-check.
 	if err := auth.LoginValid(req.Login); err != nil {
-		writeJSONError(w, http.StatusUnprocessableEntity, ErrValidationFailed, err.Error())
+		writeJSONError(w, r, http.StatusUnprocessableEntity, ErrValidationFailed, err.Error())
 		return
 	}
 	if strings.TrimSpace(req.Email) == "" {
-		writeJSONError(w, http.StatusUnprocessableEntity, ErrValidationFailed, "email empty")
+		writeJSONError(w, r, http.StatusUnprocessableEntity, ErrValidationFailed, "email empty")
 		return
 	}
 	if len(req.Password) < 8 {
-		writeJSONError(w, http.StatusUnprocessableEntity, ErrValidationFailed, "password must be at least 8 characters")
+		writeJSONError(w, r, http.StatusUnprocessableEntity, ErrValidationFailed, "password must be at least 8 characters")
 		return
 	}
 
 	hash, err := auth.HashPassword(req.Password)
 	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
 	}
 
@@ -125,17 +125,17 @@ func (d Deps) handleSetupSuperAdmin(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		if errors.Is(err, ErrSetupAlreadyDone) {
-			writeJSONError(w, http.StatusConflict, ErrConflict, "setup already completed")
+			writeJSONError(w, r, http.StatusConflict, ErrConflict, "setup already completed")
 			return
 		}
 		// Defence in depth: if somehow a row with this login already existed
 		// outside the soft-deleted window, the UNIQUE index fires. Map that
 		// to 409 with the same message rather than 500.
 		if strings.Contains(err.Error(), "UNIQUE") || strings.Contains(err.Error(), "constraint") {
-			writeJSONError(w, http.StatusConflict, ErrConflict, "setup already completed")
+			writeJSONError(w, r, http.StatusConflict, ErrConflict, "setup already completed")
 			return
 		}
-		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
 	}
 

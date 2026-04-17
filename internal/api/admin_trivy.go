@@ -81,7 +81,7 @@ func (d Deps) handleTrivyDBStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
 	}
 
@@ -112,13 +112,13 @@ func (d Deps) handleTrivyDBStatus(w http.ResponseWriter, r *http.Request) {
 func (d Deps) handleTrivyDBUpload(w http.ResponseWriter, r *http.Request) {
 	// T-05-03-01: tarball extraction security.
 	if err := r.ParseMultipartForm(512 << 20); err != nil { // 512 MiB max
-		writeJSONError(w, http.StatusBadRequest, ErrValidationFailed, "multipart parse: "+err.Error())
+		writeJSONError(w, r, http.StatusBadRequest, ErrValidationFailed, "multipart parse: "+err.Error())
 		return
 	}
 
 	f, hdr, err := r.FormFile("db")
 	if err != nil {
-		writeJSONError(w, http.StatusBadRequest, ErrValidationFailed, "missing 'db' file field")
+		writeJSONError(w, r, http.StatusBadRequest, ErrValidationFailed, "missing 'db' file field")
 		return
 	}
 	defer func() { _ = f.Close() }()
@@ -126,7 +126,7 @@ func (d Deps) handleTrivyDBUpload(w http.ResponseWriter, r *http.Request) {
 	// Validate it's gzip.
 	gzr, err := gzip.NewReader(f)
 	if err != nil {
-		writeJSONError(w, http.StatusUnprocessableEntity, ErrValidationFailed, "not a valid gzip file")
+		writeJSONError(w, r, http.StatusUnprocessableEntity, ErrValidationFailed, "not a valid gzip file")
 		return
 	}
 	defer func() { _ = gzr.Close() }()
@@ -134,7 +134,7 @@ func (d Deps) handleTrivyDBUpload(w http.ResponseWriter, r *http.Request) {
 	// Extract to temp directory under DataRoot/tmp/.
 	tmpDir, err := os.MkdirTemp(filepath.Join(d.DataRoot, "tmp"), "trivydb-*")
 	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
 	}
 	defer func() { _ = os.RemoveAll(tmpDir) }() // cleanup on failure
@@ -149,49 +149,49 @@ func (d Deps) handleTrivyDBUpload(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 		if err != nil {
-			writeJSONError(w, http.StatusUnprocessableEntity, ErrValidationFailed, "tar read error")
+			writeJSONError(w, r, http.StatusUnprocessableEntity, ErrValidationFailed, "tar read error")
 			return
 		}
 
 		// T-05-03-01: path traversal prevention.
 		clean := filepath.Clean(header.Name)
 		if strings.Contains(clean, "..") || filepath.IsAbs(clean) {
-			writeJSONError(w, http.StatusUnprocessableEntity, ErrValidationFailed, "path traversal in tar entry")
+			writeJSONError(w, r, http.StatusUnprocessableEntity, ErrValidationFailed, "path traversal in tar entry")
 			return
 		}
 
 		target := filepath.Join(tmpDir, clean)
 		// Ensure target is within tmpDir.
 		if !strings.HasPrefix(target, tmpDir+string(filepath.Separator)) && target != tmpDir {
-			writeJSONError(w, http.StatusUnprocessableEntity, ErrValidationFailed, "path escape in tar entry")
+			writeJSONError(w, r, http.StatusUnprocessableEntity, ErrValidationFailed, "path escape in tar entry")
 			return
 		}
 
 		switch header.Typeflag {
 		case tar.TypeDir:
 			if err := os.MkdirAll(target, 0o750); err != nil {
-				writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+				writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 				return
 			}
 		case tar.TypeReg:
 			if err := os.MkdirAll(filepath.Dir(target), 0o750); err != nil {
-				writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+				writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 				return
 			}
 			out, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
 			if err != nil {
-				writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+				writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 				return
 			}
 			n, copyErr := io.Copy(out, io.LimitReader(tr, maxTotalExtracted-totalSize+1))
 			_ = out.Close()
 			if copyErr != nil {
-				writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+				writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 				return
 			}
 			totalSize += n
 			if totalSize > maxTotalExtracted {
-				writeJSONError(w, http.StatusUnprocessableEntity, ErrValidationFailed, "extracted size exceeds 2 GiB limit")
+				writeJSONError(w, r, http.StatusUnprocessableEntity, ErrValidationFailed, "extracted size exceeds 2 GiB limit")
 				return
 			}
 		}
@@ -203,7 +203,7 @@ func (d Deps) handleTrivyDBUpload(w http.ResponseWriter, r *http.Request) {
 	// all if the rename then failed. SwapDir restores the old dir on failure.
 	dbDir := d.trivyDBDir()
 	if err := storage.SwapDir(tmpDir, dbDir); err != nil {
-		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "atomic swap failed")
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "atomic swap failed")
 		return
 	}
 
@@ -247,7 +247,7 @@ func (d Deps) handleTrivyDBPull(w http.ResponseWriter, r *http.Request) {
 	// Create temp cache dir for Trivy download.
 	tmpDir, err := os.MkdirTemp(filepath.Join(d.DataRoot, "tmp"), "trivypull-*")
 	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
 	}
 	defer func() { _ = os.RemoveAll(tmpDir) }()
@@ -256,7 +256,7 @@ func (d Deps) handleTrivyDBPull(w http.ResponseWriter, r *http.Request) {
 	cmd := exec.CommandContext(r.Context(), "trivy", "image", "--download-db-only", "--cache-dir", tmpDir)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		writeJSONError(w, http.StatusBadGateway, "network_unavailable",
+		writeJSONError(w, r, http.StatusBadGateway, "network_unavailable",
 			"Unable to reach the Trivy database server. Upload a DB tarball instead.")
 		return
 	}
@@ -273,7 +273,7 @@ func (d Deps) handleTrivyDBPull(w http.ResponseWriter, r *http.Request) {
 	// rationale: never leave the live DB dir missing on a failed swap.
 	dbDir := d.trivyDBDir()
 	if err := storage.SwapDir(srcDB, dbDir); err != nil {
-		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "swap failed")
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "swap failed")
 		return
 	}
 

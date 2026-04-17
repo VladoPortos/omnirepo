@@ -33,19 +33,19 @@ type patchMeRequest struct {
 func (d Deps) handlePatchMe(w http.ResponseWriter, r *http.Request) {
 	actor, ok := auth.ActorFromContext(r.Context())
 	if !ok {
-		writeJSONError(w, http.StatusUnauthorized, ErrUnauthenticated, "")
+		writeJSONError(w, r, http.StatusUnauthorized, ErrUnauthenticated, "")
 		return
 	}
 
 	var req patchMeRequest
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&req); err != nil {
-		writeJSONError(w, http.StatusBadRequest, ErrValidationFailed, "invalid JSON")
+		writeJSONError(w, r, http.StatusBadRequest, ErrValidationFailed, "invalid JSON")
 		return
 	}
 
 	u, err := d.Users.FindByID(r.Context(), actor.ID)
 	if err != nil {
-		writeJSONError(w, http.StatusUnauthorized, ErrUnauthenticated, "")
+		writeJSONError(w, r, http.StatusUnauthorized, ErrUnauthenticated, "")
 		return
 	}
 
@@ -57,7 +57,7 @@ func (d Deps) handlePatchMe(w http.ResponseWriter, r *http.Request) {
 
 	if req.Email != nil && *req.Email != u.Email {
 		if *req.Email == "" {
-			writeJSONError(w, http.StatusUnprocessableEntity, ErrValidationFailed, "email empty")
+			writeJSONError(w, r, http.StatusUnprocessableEntity, ErrValidationFailed, "email empty")
 			return
 		}
 		diff["email"] = map[string]any{"from": u.Email, "to": *req.Email}
@@ -71,7 +71,7 @@ func (d Deps) handlePatchMe(w http.ResponseWriter, r *http.Request) {
 
 	if emailPtr != nil || avatarPtr != nil {
 		if err := d.Users.UpdateProfile(r.Context(), actor.ID, emailPtr, avatarPtr); err != nil {
-			writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+			writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 			return
 		}
 	}
@@ -90,7 +90,7 @@ func (d Deps) handlePatchMe(w http.ResponseWriter, r *http.Request) {
 	// Reload user for response.
 	updated, err := d.Users.FindByID(r.Context(), actor.ID)
 	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
 	}
 

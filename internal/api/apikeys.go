@@ -53,13 +53,13 @@ type apiKeyListItem struct {
 func (d Deps) handleListAPIKeys(w http.ResponseWriter, r *http.Request) {
 	actor, ok := auth.ActorFromContext(r.Context())
 	if !ok {
-		writeJSONError(w, http.StatusUnauthorized, ErrUnauthenticated, "")
+		writeJSONError(w, r, http.StatusUnauthorized, ErrUnauthenticated, "")
 		return
 	}
 
 	keys, err := d.APIKeys.ListByUser(r.Context(), actor.ID)
 	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
 	}
 
@@ -79,29 +79,29 @@ func (d Deps) handleListAPIKeys(w http.ResponseWriter, r *http.Request) {
 func (d Deps) handleCreateAPIKey(w http.ResponseWriter, r *http.Request) {
 	actor, ok := auth.ActorFromContext(r.Context())
 	if !ok {
-		writeJSONError(w, http.StatusUnauthorized, ErrUnauthenticated, "")
+		writeJSONError(w, r, http.StatusUnauthorized, ErrUnauthenticated, "")
 		return
 	}
 
 	var req apiKeyCreateRequest
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024)).Decode(&req); err != nil {
-		writeJSONError(w, http.StatusBadRequest, ErrValidationFailed, "invalid JSON")
+		writeJSONError(w, r, http.StatusBadRequest, ErrValidationFailed, "invalid JSON")
 		return
 	}
 	if strings.TrimSpace(req.Name) == "" {
-		writeJSONError(w, http.StatusUnprocessableEntity, ErrValidationFailed, "name required")
+		writeJSONError(w, r, http.StatusUnprocessableEntity, ErrValidationFailed, "name required")
 		return
 	}
 
 	key, err := auth.GenerateAPIKey(auth.APIKeyKindUser)
 	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
 	}
 
 	id, err := d.APIKeys.CreateUserKey(r.Context(), actor.ID, req.Name, key.Prefix, key.SHA256)
 	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
 	}
 
@@ -117,30 +117,30 @@ func (d Deps) handleCreateAPIKey(w http.ResponseWriter, r *http.Request) {
 func (d Deps) handleRevokeAPIKey(w http.ResponseWriter, r *http.Request) {
 	actor, ok := auth.ActorFromContext(r.Context())
 	if !ok {
-		writeJSONError(w, http.StatusUnauthorized, ErrUnauthenticated, "")
+		writeJSONError(w, r, http.StatusUnauthorized, ErrUnauthenticated, "")
 		return
 	}
 
 	idStr := chi.URLParam(r, "id")
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil || id <= 0 {
-		writeJSONError(w, http.StatusBadRequest, ErrValidationFailed, "invalid id")
+		writeJSONError(w, r, http.StatusBadRequest, ErrValidationFailed, "invalid id")
 		return
 	}
 
 	// Verify key belongs to this user.
 	key, err := d.APIKeys.FindByID(r.Context(), id)
 	if err != nil {
-		writeJSONError(w, http.StatusNotFound, ErrNotFound, "api key not found")
+		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "api key not found")
 		return
 	}
 	if key.OwnerKind != "user" || key.OwnerUserID == nil || *key.OwnerUserID != actor.ID {
-		writeJSONError(w, http.StatusNotFound, ErrNotFound, "api key not found")
+		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "api key not found")
 		return
 	}
 
 	if err := d.APIKeys.Revoke(r.Context(), id); err != nil {
-		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
 	}
 

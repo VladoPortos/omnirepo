@@ -64,7 +64,7 @@ func (d Deps) handleToggleMaintenance(w http.ResponseWriter, r *http.Request) {
 		Enabled bool `json:"enabled"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024)).Decode(&req); err != nil {
-		writeJSONError(w, http.StatusBadRequest, ErrValidationFailed, "invalid JSON")
+		writeJSONError(w, r, http.StatusBadRequest, ErrValidationFailed, "invalid JSON")
 		return
 	}
 
@@ -74,7 +74,7 @@ func (d Deps) handleToggleMaintenance(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := d.Settings.Set(r.Context(), "maintenance_mode", val); err != nil {
-		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
 	}
 

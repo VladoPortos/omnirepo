@@ -49,28 +49,28 @@ func (d Deps) mountRepoContent(r chi.Router) {
 func (d Deps) handleListRepoContent(w http.ResponseWriter, r *http.Request) {
 	actor, ok := auth.ActorFromContext(r.Context())
 	if !ok {
-		writeJSONError(w, http.StatusUnauthorized, ErrUnauthenticated, "")
+		writeJSONError(w, r, http.StatusUnauthorized, ErrUnauthenticated, "")
 		return
 	}
 	projectName := chi.URLParam(r, "name")
 	repoType := chi.URLParam(r, "type")
 	repoName := chi.URLParam(r, "repo")
 	if _, ok := validRepoTypes[repoType]; !ok {
-		writeJSONError(w, http.StatusNotFound, ErrNotFound, "repo not found")
+		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "repo not found")
 		return
 	}
 	p, err := d.Projects.FindByName(r.Context(), projectName)
 	if err != nil || p == nil {
-		writeJSONError(w, http.StatusNotFound, ErrNotFound, "project not found")
+		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "project not found")
 		return
 	}
 	repo, err := d.Repos.FindByTriple(r.Context(), p.ID, repoType, repoName)
 	if err != nil || repo == nil {
-		writeJSONError(w, http.StatusNotFound, ErrNotFound, "repo not found")
+		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "repo not found")
 		return
 	}
 	if !d.actorIsProjectMember(r.Context(), actor, p.ID) {
-		writeJSONError(w, http.StatusForbidden, ErrForbidden, "not a project member")
+		writeJSONError(w, r, http.StatusForbidden, ErrForbidden, "not a project member")
 		return
 	}
 
@@ -99,7 +99,7 @@ func (d Deps) handleListRepoContent(w http.ResponseWriter, r *http.Request) {
 		entries = []RepoContentEntry{}
 	}
 	if qerr != nil {
-		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
 	}
 	if entries == nil {

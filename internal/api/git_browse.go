@@ -51,7 +51,7 @@ func (d Deps) mountGitBrowse(r chi.Router) {
 func (d Deps) resolveGitRepo(w http.ResponseWriter, r *http.Request) (*gogitpkg.Repository, bool) {
 	actor, ok := auth.ActorFromContext(r.Context())
 	if !ok {
-		writeJSONError(w, http.StatusUnauthorized, ErrUnauthenticated, "")
+		writeJSONError(w, r, http.StatusUnauthorized, ErrUnauthenticated, "")
 		return nil, false
 	}
 
@@ -60,18 +60,18 @@ func (d Deps) resolveGitRepo(w http.ResponseWriter, r *http.Request) (*gogitpkg.
 
 	p, err := d.Projects.FindByName(r.Context(), projectName)
 	if err != nil {
-		writeJSONError(w, http.StatusNotFound, ErrNotFound, "project not found")
+		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "project not found")
 		return nil, false
 	}
 
 	if !d.actorIsProjectMember(r.Context(), actor, p.ID) {
-		writeJSONError(w, http.StatusForbidden, ErrForbidden, "not a project member")
+		writeJSONError(w, r, http.StatusForbidden, ErrForbidden, "not a project member")
 		return nil, false
 	}
 
 	rr, err := d.Repos.FindByTriple(r.Context(), p.ID, "git", repoName)
 	if err != nil {
-		writeJSONError(w, http.StatusNotFound, ErrNotFound, "repo not found")
+		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "repo not found")
 		return nil, false
 	}
 	_ = rr
@@ -79,7 +79,7 @@ func (d Deps) resolveGitRepo(w http.ResponseWriter, r *http.Request) (*gogitpkg.
 	repoPath := filepath.Join(d.DataRoot, "repos", projectName, "git", repoName+".git")
 	repo, err := gogitpkg.PlainOpen(repoPath)
 	if err != nil {
-		writeJSONError(w, http.StatusNotFound, ErrNotFound, "git repo not accessible")
+		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "git repo not accessible")
 		return nil, false
 	}
 
@@ -109,7 +109,7 @@ func resolveRef(repo *gogitpkg.Repository, ref string) (*plumbing.Hash, error) {
 func (d Deps) handleGitRefs(w http.ResponseWriter, r *http.Request) {
 	actor, ok := auth.ActorFromContext(r.Context())
 	if !ok {
-		writeJSONError(w, http.StatusUnauthorized, ErrUnauthenticated, "")
+		writeJSONError(w, r, http.StatusUnauthorized, ErrUnauthenticated, "")
 		return
 	}
 
@@ -118,16 +118,16 @@ func (d Deps) handleGitRefs(w http.ResponseWriter, r *http.Request) {
 
 	p, err := d.Projects.FindByName(r.Context(), projectName)
 	if err != nil {
-		writeJSONError(w, http.StatusNotFound, ErrNotFound, "project not found")
+		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "project not found")
 		return
 	}
 	if !d.actorIsProjectMember(r.Context(), actor, p.ID) {
-		writeJSONError(w, http.StatusForbidden, ErrForbidden, "not a project member")
+		writeJSONError(w, r, http.StatusForbidden, ErrForbidden, "not a project member")
 		return
 	}
 	rr, err := d.Repos.FindByTriple(r.Context(), p.ID, "git", repoName)
 	if err != nil {
-		writeJSONError(w, http.StatusNotFound, ErrNotFound, "repo not found")
+		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "repo not found")
 		return
 	}
 
@@ -137,7 +137,7 @@ func (d Deps) handleGitRefs(w http.ResponseWriter, r *http.Request) {
 		SELECT name, target, type FROM git_refs WHERE repo_id=? ORDER BY name
 	`, rr.ID)
 	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
 	}
 	defer func() { _ = rows.Close() }()
@@ -151,7 +151,7 @@ func (d Deps) handleGitRefs(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var item refItem
 		if err := rows.Scan(&item.Name, &item.Target, &item.Type); err != nil {
-			writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+			writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 			return
 		}
 		items = append(items, item)
@@ -171,19 +171,19 @@ func (d Deps) handleGitTree(w http.ResponseWriter, r *http.Request) {
 
 	hash, err := resolveRef(repo, ref)
 	if err != nil {
-		writeJSONError(w, http.StatusNotFound, ErrNotFound, "ref not found")
+		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "ref not found")
 		return
 	}
 
 	commit, err := repo.CommitObject(*hash)
 	if err != nil {
-		writeJSONError(w, http.StatusNotFound, ErrNotFound, "commit not found")
+		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "commit not found")
 		return
 	}
 
 	tree, err := commit.Tree()
 	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
 	}
 
@@ -191,7 +191,7 @@ func (d Deps) handleGitTree(w http.ResponseWriter, r *http.Request) {
 	if pathParam != "" {
 		tree, err = tree.Tree(pathParam)
 		if err != nil {
-			writeJSONError(w, http.StatusNotFound, ErrNotFound, "path not found")
+			writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "path not found")
 			return
 		}
 	}
@@ -235,44 +235,44 @@ func (d Deps) handleGitBlob(w http.ResponseWriter, r *http.Request) {
 	ref := chi.URLParam(r, "ref")
 	pathParam := chi.URLParam(r, "*")
 	if pathParam == "" {
-		writeJSONError(w, http.StatusBadRequest, ErrValidationFailed, "path required")
+		writeJSONError(w, r, http.StatusBadRequest, ErrValidationFailed, "path required")
 		return
 	}
 
 	hash, err := resolveRef(repo, ref)
 	if err != nil {
-		writeJSONError(w, http.StatusNotFound, ErrNotFound, "ref not found")
+		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "ref not found")
 		return
 	}
 
 	commit, err := repo.CommitObject(*hash)
 	if err != nil {
-		writeJSONError(w, http.StatusNotFound, ErrNotFound, "commit not found")
+		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "commit not found")
 		return
 	}
 
 	file, err := commit.File(pathParam)
 	if err != nil {
-		writeJSONError(w, http.StatusNotFound, ErrNotFound, "file not found")
+		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "file not found")
 		return
 	}
 
 	if file.Size > maxBlobSize {
-		writeJSONError(w, http.StatusRequestEntityTooLarge, "too_large",
+		writeJSONError(w, r, http.StatusRequestEntityTooLarge, "too_large",
 			fmt.Sprintf("file exceeds %d byte limit", maxBlobSize))
 		return
 	}
 
 	reader, err := file.Reader()
 	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
 	}
 	defer func() { _ = reader.Close() }()
 
 	content, err := io.ReadAll(reader)
 	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
 	}
 
@@ -314,7 +314,7 @@ func (d Deps) handleGitCommits(w http.ResponseWriter, r *http.Request) {
 	ref := chi.URLParam(r, "ref")
 	hash, err := resolveRef(repo, ref)
 	if err != nil {
-		writeJSONError(w, http.StatusNotFound, ErrNotFound, "ref not found")
+		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "ref not found")
 		return
 	}
 
@@ -323,7 +323,7 @@ func (d Deps) handleGitCommits(w http.ResponseWriter, r *http.Request) {
 
 	iter, err := repo.Log(&gogitpkg.LogOptions{From: *hash})
 	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
 	}
 
@@ -373,13 +373,13 @@ func (d Deps) handleGitCommit(w http.ResponseWriter, r *http.Request) {
 	sha := chi.URLParam(r, "sha")
 	h := plumbing.NewHash(sha)
 	if h.IsZero() {
-		writeJSONError(w, http.StatusBadRequest, ErrValidationFailed, "invalid sha")
+		writeJSONError(w, r, http.StatusBadRequest, ErrValidationFailed, "invalid sha")
 		return
 	}
 
 	commit, err := repo.CommitObject(h)
 	if err != nil {
-		writeJSONError(w, http.StatusNotFound, ErrNotFound, "commit not found")
+		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "commit not found")
 		return
 	}
 
@@ -431,37 +431,37 @@ func (d Deps) handleGitBlame(w http.ResponseWriter, r *http.Request) {
 	ref := chi.URLParam(r, "ref")
 	pathParam := chi.URLParam(r, "*")
 	if pathParam == "" {
-		writeJSONError(w, http.StatusBadRequest, ErrValidationFailed, "path required")
+		writeJSONError(w, r, http.StatusBadRequest, ErrValidationFailed, "path required")
 		return
 	}
 
 	hash, err := resolveRef(repo, ref)
 	if err != nil {
-		writeJSONError(w, http.StatusNotFound, ErrNotFound, "ref not found")
+		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "ref not found")
 		return
 	}
 
 	commit, err := repo.CommitObject(*hash)
 	if err != nil {
-		writeJSONError(w, http.StatusNotFound, ErrNotFound, "commit not found")
+		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "commit not found")
 		return
 	}
 
 	// Check file size for blame limit.
 	file, err := commit.File(pathParam)
 	if err != nil {
-		writeJSONError(w, http.StatusNotFound, ErrNotFound, "file not found")
+		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "file not found")
 		return
 	}
 	if file.Size > maxBlameSize {
-		writeJSONError(w, http.StatusRequestEntityTooLarge, "too_large",
+		writeJSONError(w, r, http.StatusRequestEntityTooLarge, "too_large",
 			fmt.Sprintf("file exceeds %d byte blame limit", maxBlameSize))
 		return
 	}
 
 	result, err := gogitpkg.Blame(commit, pathParam)
 	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "blame failed")
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "blame failed")
 		return
 	}
 
@@ -494,29 +494,29 @@ func (d Deps) handleGitCompare(w http.ResponseWriter, r *http.Request) {
 	spec := chi.URLParam(r, "spec")
 	parts := strings.SplitN(spec, "...", 2)
 	if len(parts) != 2 {
-		writeJSONError(w, http.StatusBadRequest, ErrValidationFailed, "spec must be base...head")
+		writeJSONError(w, r, http.StatusBadRequest, ErrValidationFailed, "spec must be base...head")
 		return
 	}
 
 	baseHash, err := resolveRef(repo, parts[0])
 	if err != nil {
-		writeJSONError(w, http.StatusNotFound, ErrNotFound, "base ref not found")
+		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "base ref not found")
 		return
 	}
 	headHash, err := resolveRef(repo, parts[1])
 	if err != nil {
-		writeJSONError(w, http.StatusNotFound, ErrNotFound, "head ref not found")
+		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "head ref not found")
 		return
 	}
 
 	baseCommit, err := repo.CommitObject(*baseHash)
 	if err != nil {
-		writeJSONError(w, http.StatusNotFound, ErrNotFound, "base commit not found")
+		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "base commit not found")
 		return
 	}
 	headCommit, err := repo.CommitObject(*headHash)
 	if err != nil {
-		writeJSONError(w, http.StatusNotFound, ErrNotFound, "head commit not found")
+		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "head commit not found")
 		return
 	}
 

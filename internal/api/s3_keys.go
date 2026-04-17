@@ -74,18 +74,18 @@ func (d Deps) mountS3Keys(r chi.Router) {
 func (d Deps) resolveProjectAndCheckS3KeysMembership(w http.ResponseWriter, r *http.Request) (int64, string, auth.Actor, bool) {
 	actor, ok := auth.ActorFromContext(r.Context())
 	if !ok {
-		writeJSONError(w, http.StatusUnauthorized, ErrUnauthenticated, "")
+		writeJSONError(w, r, http.StatusUnauthorized, ErrUnauthenticated, "")
 		return 0, "", auth.Actor{}, false
 	}
 	projectName := chi.URLParam(r, "name")
 	p, err := d.Projects.FindByName(r.Context(), projectName)
 	if err != nil {
-		writeJSONError(w, http.StatusNotFound, ErrNotFound, "project not found")
+		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "project not found")
 		return 0, "", auth.Actor{}, false
 	}
 	if allowed, reason := auth.Can(r.Context(), actor, auth.ActionManageS3Keys,
 		auth.Target{Kind: "project", ProjectID: p.ID}); !allowed {
-		writeJSONError(w, http.StatusForbidden, ErrForbidden, reason)
+		writeJSONError(w, r, http.StatusForbidden, ErrForbidden, reason)
 		return 0, "", auth.Actor{}, false
 	}
 	return p.ID, p.Name, actor, true
@@ -100,11 +100,11 @@ func (d Deps) handleCreateS3Key(w http.ResponseWriter, r *http.Request) {
 	var req s3KeyCreateRequest
 	r.Body = http.MaxBytesReader(nil, r.Body, maxS3KeysBodyBytes)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSONError(w, http.StatusBadRequest, ErrValidationFailed, err.Error())
+		writeJSONError(w, r, http.StatusBadRequest, ErrValidationFailed, err.Error())
 		return
 	}
 	if strings.TrimSpace(req.Label) == "" {
-		writeJSONError(w, http.StatusUnprocessableEntity, ErrValidationFailed, "label required")
+		writeJSONError(w, r, http.StatusUnprocessableEntity, ErrValidationFailed, "label required")
 		return
 	}
 
@@ -117,12 +117,12 @@ func (d Deps) handleCreateS3Key(w http.ResponseWriter, r *http.Request) {
 		var err error
 		akid, secret, err = s3keys.GenerateS3AccessKey()
 		if err != nil {
-			writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+			writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 			return
 		}
 		enc, err := d.S3AEAD.Encrypt([]byte(secret))
 		if err != nil {
-			writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+			writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 			return
 		}
 		err = d.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
@@ -143,18 +143,18 @@ func (d Deps) handleCreateS3Key(w http.ResponseWriter, r *http.Request) {
 			lastErr = err
 			continue
 		}
-		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
 	}
 	if lastErr != nil && rowID == 0 {
-		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "akid collision exhausted")
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "akid collision exhausted")
 		return
 	}
 
 	// Reload to get DB-generated timestamps.
 	row, err := d.S3Keys.FindByID(r.Context(), rowID)
 	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
 	}
 
@@ -190,7 +190,7 @@ func (d Deps) handleListS3Keys(w http.ResponseWriter, r *http.Request) {
 
 	rows, err := d.S3Keys.ListByProject(r.Context(), projectID)
 	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
 	}
 
@@ -216,25 +216,25 @@ func (d Deps) handleRevokeS3Key(w http.ResponseWriter, r *http.Request) {
 	idStr := chi.URLParam(r, "id")
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil || id <= 0 {
-		writeJSONError(w, http.StatusBadRequest, ErrValidationFailed, "invalid id")
+		writeJSONError(w, r, http.StatusBadRequest, ErrValidationFailed, "invalid id")
 		return
 	}
 
 	// Verify the key belongs to this project (don't revoke other projects' keys).
 	row, err := d.S3Keys.FindByID(r.Context(), id)
 	if err != nil {
-		writeJSONError(w, http.StatusNotFound, ErrNotFound, "s3 access key not found")
+		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "s3 access key not found")
 		return
 	}
 	if row.ProjectID != projectID {
-		writeJSONError(w, http.StatusNotFound, ErrNotFound, "s3 access key not found")
+		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "s3 access key not found")
 		return
 	}
 
 	if err := d.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
 		return d.S3Keys.Revoke(r.Context(), tx, id)
 	}); err != nil {
-		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
 	}
 

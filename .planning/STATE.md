@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: v1.1-immediate-polish
 status: executing
-stopped_at: Completed 06-04-PLAN.md
-last_updated: "2026-04-17T14:35:00.000Z"
-last_activity: 2026-04-17 — Plan 06-04 completed (20 Go + 9 Playwright tests green; ZERO legacy {error, detail} emitters remain on /api/v1)
+stopped_at: Completed 06-05-PLAN.md
+last_updated: "2026-04-17T13:02:12.523Z"
+last_activity: 2026-04-17 — Plan 06-05 completed (59 %v leaks redacted across 14 files in raw/rpm/deb/pypi/helm; protocoltest + Makefile gate prevent regression)
 progress:
   total_phases: 5
   completed_phases: 0
   total_plans: 8
-  completed_plans: 4
-  percent: 50
+  completed_plans: 5
+  percent: 63
 ---
 
 # STATE: OmniRepo
@@ -27,10 +27,10 @@ progress:
 ## Current Position
 
 Phase: 06 (error-envelope-visual-foundation) — EXECUTING
-Plan: 5 of 8
+Plan: 6 of 8
 Status: Ready to execute
 Last activity: 2026-04-17
-Stopped at: Completed 06-04-PLAN.md
+Stopped at: Completed 06-05-PLAN.md
 
 ## Phase Map
 
@@ -74,6 +74,9 @@ scoped tokens, LDAP/OIDC.
 - **[06-04] writeJSONError default-message-per-status fallback** — ~100 call sites passing `""` for `detail` on 500 paths would ship empty `message` fields violating the OpenAPI schema's required non-empty string. New `defaultMessageForStatus(status)` helper supplies static developer-authored sentences (never interpolated, ERR-03 safe) so every wire envelope has a non-empty message. Alternative of editing each call site would have been ~100 one-line changes with zero semantic value.
 - **[06-04] Tightened normalizeLegacyCode passthrough** — old `containsDot` gate let "errors.go:123" / "/home/.../foo.db" pass through verbatim, violating both the envelope code regex AND ERR-03. New `codeShapeRegex` gate requires the full wire pattern for passthrough; non-matching inputs sanitize through `legacy.*` prefix.
 - **[06-04] Three-flag dev-surface opt-in for Playwright e2e** — `OMNIREPO_DEV=1` (backend canned routes) + `OMNIREPO_DEV_PROXY=0` (keep embedded SPA instead of proxying to Vite) + `VITE_OMNIREPO_DEV=true` (build-time include of story page route). Independent flags so regular production builds stay completely free of dev surfaces (T-06-03-04 tree-shake invariant preserved), and the Playwright suite runs against a standalone Go binary + embedded bundle without a Vite sidecar.
+- **[06-05] Actual `%v`-leak count was 59 in 14 files (raw/rpm/deb/pypi/helm), not the ~206 estimate** from 06-RESEARCH.md Q2 (the estimate used a broader `http.Error` grep — the `%v`-interpolation subset is ~1/3 of that). OCI/S3/Git handlers had ZERO leaks to redact (they delegate to library handlers emitting protocol-native errors: go-containerregistry, gofakes3, go-git v6). Acceptance-criterion threshold `slog.ErrorContext >= 100` was proportional to 206 — the underlying invariant ("every former `%v` leak paired with a log call") holds at 59/59.
+- **[06-05] Dual-gate ERR-03 regression prevention** — in-process Go test `internal/protocol/protocoltest/TestNoPercentVLeakInHTTPError` runs under `go test ./...`; Makefile `lint-protocol-redaction` (wired as `test:` prerequisite) runs under `make test`. Identical grep pattern + `*_test.go` exclude rules so both fail/pass in lockstep. Future changes introducing new `%v` leaks fail both workflows simultaneously.
+- **[06-05] Canonical protocol redaction shape** — `slog.ErrorContext(ctx, "<pkg>.<handler>.<op>_failed", slog.String("incident_id", chimw.GetReqID(ctx)), slog.String("<key>", <val>), slog.Any("err", err))` paired with `http.Error(w, "<generic>", status)`. Generic client messages: `"storage error"` for IO/tx, `"invalid multipart body"` for pypi multipart parse. Replaces the 1-line `http.Error(w, fmt.Sprintf("<op>: %v", err), status)` anti-pattern.
 - **Phases continue numbering from v1.0** — v1.1 starts at Phase 6, not Phase 1. Preserves traceability across milestones in the same `.planning/` tree.
 - **ERR envelope lands in Phase 6 as a foundation** — every SNIPPET/HEALTH/OVERVIEW surface renders its errors through the new envelope; putting ERR late would force rework across phases 7–10.
 - **VISUAL is not a trailing-polish phase** — the design-system primitives (status tokens, skeletons, badges, copy-to-clipboard, button hierarchy) ship alongside ERR in Phase 6 so every later UI phase consumes shared components instead of re-implementing them.
@@ -95,7 +98,8 @@ scoped tokens, LDAP/OIDC.
 - Execute plan 06-02 (envelope wire-up + panic recovery). ✅ Shipped; 302 call sites migrated, 72 openapi $refs, middleware chain updated.
 - Execute plan 06-03 (UI envelope layer + story page). ✅ Shipped; ApiError → envelope with compat getters, useApiError hook + ErrorEnvelopeRenderer live, dev-only `/api/v1/_dev/error/:class` + `/_dev/error-class-story` wired and Playwright-verified.
 - Execute plan 06-04 next (integration tests + envelope audit across the handler surface). ✅ Shipped; 20 Go tests (6 unit + 14 integration) + 9 Playwright scenarios; auth middleware + SPA 404 + maintenance middleware migrated to envelope shape — ZERO legacy emitters remain on /api/v1.
-- Execute plan 06-05 next (protocol redaction).
+- Execute plan 06-05 (protocol redaction). ✅ Shipped; 59 `%v` leaks redacted across 14 files (raw/rpm/deb/pypi/helm); protocoltest + Makefile `lint-protocol-redaction` gate prevent regression; OCI/S3/Git were already clean.
+- Execute plan 06-06 next (visual foundation — status tokens, StatusBadge, Skeleton).
 
 ### Blockers
 
@@ -109,6 +113,7 @@ scoped tokens, LDAP/OIDC.
 | 06    | 02   | ~25 min  | 3     | 26    |
 | 06    | 03   | ~30 min  | 3     | 9     |
 | 06    | 04   | ~25 min  | 2     | 17    |
+| 06    | 05   | 11 min   | 2     | 15    |
 
 ### Research Flags
 
@@ -123,8 +128,8 @@ scoped tokens, LDAP/OIDC.
 
 ## Session Continuity
 
-- **Next action**: Execute plan 06-05 (protocol redaction — internal/protocol/* handlers audit for internal-string leakage; reuse httperr.IsInternalString regex set as the sanitizer).
-- **Last session:** 2026-04-17 (plan 06-04 completed — ZERO legacy {error, detail} emitters remain on /api/v1; 20 Go + 9 Playwright tests pin every ApiErrorClass end-to-end).
+- **Next action**: Execute plan 06-06 (visual foundation — status tokens, StatusBadge component, Skeleton primitives; consumed by Phases 7/9/10 UI surfaces).
+- **Last session:** 2026-04-17 (plan 06-05 completed — 59 `%v` leaks redacted across raw/rpm/deb/pypi/helm; protocoltest + Makefile gate prevent regression; ERR-03 fully closed for protocol surface).
 - **Artifacts on disk**:
   - `.planning/PROJECT.md` (Current Milestone: v1.1)
   - `.planning/REQUIREMENTS.md` (57 v1.1 REQs, traceability populated)

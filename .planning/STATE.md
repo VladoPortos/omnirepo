@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: v1.1-immediate-polish
 status: executing
-stopped_at: Completed 06-03-PLAN.md
-last_updated: "2026-04-17T12:04:39.254Z"
-last_activity: 2026-04-17 — Plan 06-03 completed (ApiError→envelope, useApiError hook + ErrorEnvelopeRenderer, dev-only story page live and Playwright-verified)
+stopped_at: Completed 06-04-PLAN.md
+last_updated: "2026-04-17T14:35:00.000Z"
+last_activity: 2026-04-17 — Plan 06-04 completed (20 Go + 9 Playwright tests green; ZERO legacy {error, detail} emitters remain on /api/v1)
 progress:
   total_phases: 5
   completed_phases: 0
   total_plans: 8
-  completed_plans: 3
-  percent: 38
+  completed_plans: 4
+  percent: 50
 ---
 
 # STATE: OmniRepo
@@ -27,10 +27,10 @@ progress:
 ## Current Position
 
 Phase: 06 (error-envelope-visual-foundation) — EXECUTING
-Plan: 4 of 8
+Plan: 5 of 8
 Status: Ready to execute
 Last activity: 2026-04-17
-Stopped at: Completed 06-03-PLAN.md
+Stopped at: Completed 06-04-PLAN.md
 
 ## Phase Map
 
@@ -70,6 +70,10 @@ scoped tokens, LDAP/OIDC.
 - **[06-03] Dev-only `/api/v1/_dev/error/:class` routes live in `internal/api/dev_error_routes.go`** behind an `OMNIREPO_DEV` env-var gate. Wired from `app.go` (not `httpx.New`) because chi v5 panics if `Use` follows a route — `httpx` exports a named `MountDevErrorRoutes(r, fn)` helper that `app.Run` calls between the last `router.Use` and the first `router.Get`. This also keeps `httpx` free of an `internal/api` import (api → httpx already exists in `sync_actions.go`).
 - **[06-03] Dev-only React surfaces gated by `import.meta.env.DEV` at module scope** (`const X = import.meta.env.DEV ? lazy(...) : null`) so Vite statically eliminates the branch. Acceptance gate: `grep web/dist/assets/*.js` for the component name must return zero — verified for `ErrorClassStoryPage`.
 - **[06-03] Canned validation envelope ships BOTH `details.field` and `details.fields`** on the same response so `useApiError`'s dual-path normalisation is exercised on a single wire fixture. Plan 06-04 + plan 06-08 e2e tests get deterministic input for both the single-field and multi-field code paths.
+- **[06-04] ZERO legacy {error, detail} emitters remain on /api/v1** — plan 04 migrated `internal/auth/middleware/deps.go` (writeJSON401/writeJSON401Basic/writeJSON403) + `internal/httpx/spa.go` writeAPINotFound (SPA 404 for /api/*) + `internal/httpx/middleware_maintenance.go` MaintenanceMode in-scope. Every /api/v1 error response now ships ApiErrorEnvelope regardless of which middleware or handler fired it; `TestEnvelope_NoInternalLeakage_AcrossHandlers` is a meaningful whole-surface gate.
+- **[06-04] writeJSONError default-message-per-status fallback** — ~100 call sites passing `""` for `detail` on 500 paths would ship empty `message` fields violating the OpenAPI schema's required non-empty string. New `defaultMessageForStatus(status)` helper supplies static developer-authored sentences (never interpolated, ERR-03 safe) so every wire envelope has a non-empty message. Alternative of editing each call site would have been ~100 one-line changes with zero semantic value.
+- **[06-04] Tightened normalizeLegacyCode passthrough** — old `containsDot` gate let "errors.go:123" / "/home/.../foo.db" pass through verbatim, violating both the envelope code regex AND ERR-03. New `codeShapeRegex` gate requires the full wire pattern for passthrough; non-matching inputs sanitize through `legacy.*` prefix.
+- **[06-04] Three-flag dev-surface opt-in for Playwright e2e** — `OMNIREPO_DEV=1` (backend canned routes) + `OMNIREPO_DEV_PROXY=0` (keep embedded SPA instead of proxying to Vite) + `VITE_OMNIREPO_DEV=true` (build-time include of story page route). Independent flags so regular production builds stay completely free of dev surfaces (T-06-03-04 tree-shake invariant preserved), and the Playwright suite runs against a standalone Go binary + embedded bundle without a Vite sidecar.
 - **Phases continue numbering from v1.0** — v1.1 starts at Phase 6, not Phase 1. Preserves traceability across milestones in the same `.planning/` tree.
 - **ERR envelope lands in Phase 6 as a foundation** — every SNIPPET/HEALTH/OVERVIEW surface renders its errors through the new envelope; putting ERR late would force rework across phases 7–10.
 - **VISUAL is not a trailing-polish phase** — the design-system primitives (status tokens, skeletons, badges, copy-to-clipboard, button hierarchy) ship alongside ERR in Phase 6 so every later UI phase consumes shared components instead of re-implementing them.
@@ -90,8 +94,8 @@ scoped tokens, LDAP/OIDC.
 - Run `/gsd-plan-phase 6` to decompose Phase 6 into plans. ✅ Plans generated; now executing.
 - Execute plan 06-02 (envelope wire-up + panic recovery). ✅ Shipped; 302 call sites migrated, 72 openapi $refs, middleware chain updated.
 - Execute plan 06-03 (UI envelope layer + story page). ✅ Shipped; ApiError → envelope with compat getters, useApiError hook + ErrorEnvelopeRenderer live, dev-only `/api/v1/_dev/error/:class` + `/_dev/error-class-story` wired and Playwright-verified.
-- Execute plan 06-04 next (integration tests + envelope audit across the handler surface).
-- **Plan 06-04 follow-up:** migrate `internal/auth/middleware/deps.go` writeJSON401/writeJSON403 helpers to emit envelope shape, then update 3 legacy test assertions (admin_phase1_test.go:605,759; session_or_apikey_test.go:309).
+- Execute plan 06-04 next (integration tests + envelope audit across the handler surface). ✅ Shipped; 20 Go tests (6 unit + 14 integration) + 9 Playwright scenarios; auth middleware + SPA 404 + maintenance middleware migrated to envelope shape — ZERO legacy emitters remain on /api/v1.
+- Execute plan 06-05 next (protocol redaction).
 
 ### Blockers
 
@@ -104,6 +108,7 @@ scoped tokens, LDAP/OIDC.
 | 06    | 01   | ~5 min   | 3     | 7     |
 | 06    | 02   | ~25 min  | 3     | 26    |
 | 06    | 03   | ~30 min  | 3     | 9     |
+| 06    | 04   | ~25 min  | 2     | 17    |
 
 ### Research Flags
 
@@ -118,8 +123,8 @@ scoped tokens, LDAP/OIDC.
 
 ## Session Continuity
 
-- **Next action**: Execute plan 06-04 — integration tests + envelope audit across the handler surface (including migrating `internal/auth/middleware/deps.go` writeJSON401/writeJSON403 helpers to the envelope shape so the three legacy test assertions flip to `body["code"]`).
-- **Last session:** 2026-04-17T12:04:26.047Z
+- **Next action**: Execute plan 06-05 (protocol redaction — internal/protocol/* handlers audit for internal-string leakage; reuse httperr.IsInternalString regex set as the sanitizer).
+- **Last session:** 2026-04-17 (plan 06-04 completed — ZERO legacy {error, detail} emitters remain on /api/v1; 20 Go + 9 Playwright tests pin every ApiErrorClass end-to-end).
 - **Artifacts on disk**:
   - `.planning/PROJECT.md` (Current Milestone: v1.1)
   - `.planning/REQUIREMENTS.md` (57 v1.1 REQs, traceability populated)

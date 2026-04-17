@@ -602,8 +602,13 @@ func TestMCPRESTReturns403OnEveryMutation(t *testing.T) {
 			t.Errorf("%s %s: code=%d body=%+v", c.method, c.path, resp.StatusCode, body)
 			continue
 		}
-		if body["error"] != "password-change-required" {
-			t.Errorf("%s %s: error=%v", c.method, c.path, body["error"])
+		// Phase 6 / plan 04 ERR-01: auth middleware emits the canonical
+		// ApiErrorEnvelope with dotted code + class=permission.
+		if body["code"] != "auth.password_change_required" {
+			t.Errorf("%s %s: code=%v", c.method, c.path, body["code"])
+		}
+		if body["class"] != "permission" {
+			t.Errorf("%s %s: class=%v", c.method, c.path, body["class"])
 		}
 	}
 	// Allowed for MCP: change-password and logout.
@@ -756,7 +761,7 @@ func TestSuccessCriterion2(t *testing.T) {
 	// MCP user blocked.
 	bobCookie, _, _ := s.login(t, "bob", "pw-bob")
 	resp, body := s.do(t, "POST", "/api/v1/projects", bobCookie, api.CreateProjectRequest{Name: "x"})
-	if resp.StatusCode != 403 || body["error"] != "password-change-required" {
+	if resp.StatusCode != 403 || body["code"] != "auth.password_change_required" {
 		t.Fatalf("MCP REST not blocked: code=%d body=%+v", resp.StatusCode, body)
 	}
 }

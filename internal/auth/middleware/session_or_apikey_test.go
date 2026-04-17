@@ -305,7 +305,14 @@ func TestRequireCanReturns403PasswordChangeRequired(t *testing.T) {
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("status: %d, body=%q; want 403", w.Code, w.Body.String())
 	}
-	if !strings.Contains(w.Body.String(), auth.ReasonPasswordChangeRequired) {
-		t.Fatalf("body does not mention password-change-required: %q", w.Body.String())
+	// Phase 6 / plan 04: middleware now emits the ApiErrorEnvelope shape
+	// (plan 06-02 migrated handler call sites, plan 06-04 migrates the
+	// auth middleware). The stable policy reason token maps to the
+	// dotted envelope code auth.password_change_required.
+	if !strings.Contains(w.Body.String(), "auth.password_change_required") {
+		t.Fatalf("body does not mention auth.password_change_required: %q", w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `"class":"permission"`) {
+		t.Fatalf("body missing class=permission: %q", w.Body.String())
 	}
 }

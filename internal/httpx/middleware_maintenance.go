@@ -1,9 +1,9 @@
 package httpx
 
 import (
-	"encoding/json"
 	"net/http"
 
+	"github.com/dxc-internal/omnirepo/internal/httperr"
 	"github.com/dxc-internal/omnirepo/internal/metadata"
 )
 
@@ -29,13 +29,17 @@ func MaintenanceMode(settings *metadata.SettingsRepo) func(next http.Handler) ht
 			}
 			val, err := settings.Get(r.Context(), "maintenance_mode")
 			if err == nil && val == "true" {
-				w.Header().Set("Content-Type", "application/json; charset=utf-8")
+				// Phase 6 / plan 04: emit the canonical envelope so the
+				// UI can branch on class=operator_action_required and
+				// deep-link to /admin/maintenance for the operator who
+				// can un-gate the request.
 				w.Header().Set("Retry-After", "300")
-				w.WriteHeader(http.StatusServiceUnavailable)
-				_ = json.NewEncoder(w).Encode(map[string]string{
-					"error":  "maintenance",
-					"detail": "Write operations disabled during maintenance",
-				})
+				httperr.Write(w, r, httperr.OperatorRequired(
+					"maintenance.enabled",
+					"Write operations are disabled during maintenance.",
+					"/admin/maintenance",
+					"Go to Admin → Maintenance",
+				))
 				return
 			}
 			next.ServeHTTP(w, r)

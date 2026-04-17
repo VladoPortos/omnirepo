@@ -13,6 +13,8 @@ import (
 	"io/fs"
 	"net/http"
 	"strings"
+
+	"github.com/dxc-internal/omnirepo/internal/httperr"
 )
 
 // isAPILikePath reports whether a NotFound request looks like a machine-
@@ -29,12 +31,17 @@ func isAPILikePath(path string) bool {
 	return false
 }
 
-// writeAPINotFound emits the same error envelope api/errors.go uses
-// (`{"error": "...", "detail": "..."}`) so clients get a consistent shape.
-func writeAPINotFound(w http.ResponseWriter) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(http.StatusNotFound)
-	_, _ = w.Write([]byte(`{"error":"not_found","detail":"route not found"}`))
+// writeAPINotFound emits the canonical ApiErrorEnvelope for unknown
+// /api/* or /v2/* routes so machine consumers get the same shape as
+// every other /api/v1 error path (ERR-01). Class is validation (not
+// transient) because a missing route will not succeed on retry — the
+// UI renders a non-retryable alert rather than a Try again button.
+func writeAPINotFound(w http.ResponseWriter, r *http.Request) {
+	httperr.Write(w, r, httperr.Validation(
+		"resource.not_found",
+		"That route does not exist.",
+		httperr.WithStatus(http.StatusNotFound),
+	))
 }
 
 // SPAHandler returns an http.HandlerFunc that serves the SPA assets from
@@ -55,7 +62,7 @@ func SPAHandler(distFS fs.FS) http.HandlerFunc {
 		// reach here only when every mounted route has passed, so the right
 		// answer is a structured 404 JSON response.
 		if isAPILikePath(r.URL.Path) {
-			writeAPINotFound(w)
+			writeAPINotFound(w, r)
 			return
 		}
 

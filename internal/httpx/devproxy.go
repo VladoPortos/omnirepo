@@ -21,7 +21,7 @@ func DevProxy() http.Handler {
 	proxy := httputil.NewSingleHostReverseProxy(target)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if isAPILikePath(r.URL.Path) {
-			writeAPINotFound(w)
+			writeAPINotFound(w, r)
 			return
 		}
 		proxy.ServeHTTP(w, r)

@@ -15,11 +15,11 @@
 package middleware
 
 import (
-	"encoding/json"
 	"net/http"
 	"time"
 
 	"github.com/dxc-internal/omnirepo/internal/auth"
+	"github.com/dxc-internal/omnirepo/internal/httperr"
 	"github.com/dxc-internal/omnirepo/internal/metadata"
 )
 
@@ -64,27 +64,91 @@ func (d Deps) clock() time.Time {
 	return d.Clock().UTC()
 }
 
-// writeJSON401 emits a 401 with JSON body {"error":"unauthenticated"}.
-// Does NOT include WWW-Authenticate so browsers won't pop the native
-// Basic Auth dialog on /api/v1/ requests from the SPA.
-func writeJSON401(w http.ResponseWriter) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(http.StatusUnauthorized)
-	_ = json.NewEncoder(w).Encode(map[string]string{"error": "unauthenticated"})
+// writeJSON401 emits a 401 with an ApiErrorEnvelope JSON body carrying
+// code=auth.unauthenticated and class=permission. Does NOT include
+// WWW-Authenticate so browsers won't pop the native Basic Auth dialog
+// on /api/v1/ requests from the SPA. Routed through httperr.Write so
+// the envelope's incident_id is stamped from chi middleware and the
+// cause is logged (none here — caller has no cause to attach).
+//
+// Phase 6 / plan 04: legacy {"error": "unauthenticated"} body retired
+// across the auth middleware surface so every 401/403 on /api/v1/*
+// ships the canonical envelope (ERR-01, ERR-03, ERR-07).
+func writeJSON401(w http.ResponseWriter, r *http.Request) {
+	httperr.Write(w, r, httperr.Permission(
+		"auth.unauthenticated",
+		"You must be signed in to do that.",
+		httperr.WithStatus(http.StatusUnauthorized),
+	))
 }
 
 // writeJSON401Basic emits a 401 with WWW-Authenticate: Basic so CLI
 // clients (git, docker, apt, yum) retry with credentials.
-func writeJSON401Basic(w http.ResponseWriter) {
+func writeJSON401Basic(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("WWW-Authenticate", `Basic realm="omnirepo"`)
-	writeJSON401(w)
+	writeJSON401(w, r)
 }
 
-// writeJSON403 emits a 403 with JSON body {"error": reason}.
-func writeJSON403(w http.ResponseWriter, reason string) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(http.StatusForbidden)
-	_ = json.NewEncoder(w).Encode(map[string]string{"error": reason})
+// writeJSON403 emits a 403 with an ApiErrorEnvelope JSON body. The
+// reason string is the policy-engine outcome token (stable tokens
+// defined in internal/auth/policy.go as ReasonPasswordChangeRequired
+// et al.) and becomes the envelope's code with a "auth." prefix so the
+// UI can branch on it. The human-facing message comes from
+// reasonMessage, which is a developer-authored static sentence — no
+// server-internal data is ever interpolated into the wire message.
+func writeJSON403(w http.ResponseWriter, r *http.Request, reason string) {
+	httperr.Write(w, r, httperr.Permission(
+		reasonCode(reason),
+		reasonMessage(reason),
+	))
+}
+
+// reasonCode maps a policy-engine reason token to a dotted envelope
+// code. Unknown reasons get "auth.forbidden" so the wire envelope
+// always matches the schema regex.
+func reasonCode(reason string) string {
+	switch reason {
+	case auth.ReasonPasswordChangeRequired:
+		return "auth.password_change_required"
+	case auth.ReasonSuperAdminRequired:
+		return "auth.super_admin_required"
+	case auth.ReasonNotAProjectMember:
+		return "auth.not_a_project_member"
+	case auth.ReasonNotSelf:
+		return "auth.not_self"
+	case auth.ReasonRequiresAuth:
+		return "auth.requires_auth"
+	case auth.ReasonAnonymousPublicRead:
+		return "auth.anonymous_public_read"
+	case auth.ReasonUnknownAction:
+		return "auth.unknown_action"
+	default:
+		return "auth.forbidden"
+	}
+}
+
+// reasonMessage returns a user-facing static sentence for each known
+// policy reason. Values are developer-authored; never interpolated
+// from request or server state.
+func reasonMessage(reason string) string {
+	switch reason {
+	case auth.ReasonPasswordChangeRequired:
+		return "Your password must be changed before you can do that."
+	case auth.ReasonSuperAdminRequired:
+		return "This action requires a super-admin account."
+	case auth.ReasonNotAProjectMember:
+		return "You are not a member of this project."
+	case auth.ReasonNotSelf:
+		return "You can only do that for your own account."
+	case auth.ReasonRequiresAuth:
+		return "You must be signed in to do that."
+	case auth.ReasonAnonymousPublicRead:
+		return "This resource does not allow anonymous access."
+	case auth.ReasonUnknownAction:
+		return "You are not allowed to do that."
+	default:
+		return "You do not have permission to do that."
+	}
 }
 
 // RequireCan returns a chi middleware that calls auth.Can(actor, action,
@@ -107,12 +171,12 @@ func RequireCanWith(action auth.Action, resolveTarget func(r *http.Request) auth
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			actor, ok := auth.ActorFromContext(r.Context())
 			if !ok {
-				writeJSON401(w)
+				writeJSON401(w, r)
 				return
 			}
 			allowed, reason := auth.Can(r.Context(), actor, action, resolveTarget(r))
 			if !allowed {
-				writeJSON403(w, reason)
+				writeJSON403(w, r, reason)
 				return
 			}
 			next.ServeHTTP(w, r)

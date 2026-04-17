@@ -31,7 +31,7 @@ func SessionOrAPIKey(d Deps) func(http.Handler) http.Handler {
 			if bearer := stripBearer(r.Header.Get("Authorization")); bearer != "" {
 				actor, ok := authenticateAPIKey(r.Context(), d, bearer)
 				if !ok {
-					writeJSON401(w)
+					writeJSON401(w, r)
 					return
 				}
 				next.ServeHTTP(w, r.WithContext(auth.WithActor(r.Context(), actor)))
@@ -40,13 +40,13 @@ func SessionOrAPIKey(d Deps) func(http.Handler) http.Handler {
 			if c, err := r.Cookie(auth.SessionCookieName); err == nil && c.Value != "" {
 				actor, ok := authenticateSession(r.Context(), d, c.Value)
 				if !ok {
-					writeJSON401(w)
+					writeJSON401(w, r)
 					return
 				}
 				next.ServeHTTP(w, r.WithContext(auth.WithActor(r.Context(), actor)))
 				return
 			}
-			writeJSON401(w)
+			writeJSON401(w, r)
 		})
 	}
 }

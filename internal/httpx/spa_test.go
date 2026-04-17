@@ -97,8 +97,13 @@ func TestSPAHandler_APIPathReturns404JSON(t *testing.T) {
 		if !strings.HasPrefix(ct, "application/json") {
 			t.Errorf("%s content-type=%q, want application/json", path, ct)
 		}
-		if !strings.Contains(w.Body.String(), `"error":"not_found"`) {
-			t.Errorf("%s body=%q missing error envelope", path, w.Body.String())
+		// Phase 6 / plan 04: API-like NotFound paths now emit the canonical
+		// ApiErrorEnvelope (code=resource.not_found, class=validation).
+		if !strings.Contains(w.Body.String(), `"code":"resource.not_found"`) {
+			t.Errorf("%s body=%q missing envelope code", path, w.Body.String())
+		}
+		if !strings.Contains(w.Body.String(), `"class":"validation"`) {
+			t.Errorf("%s body=%q missing envelope class", path, w.Body.String())
 		}
 	}
 }

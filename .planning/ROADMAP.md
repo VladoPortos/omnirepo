@@ -30,8 +30,8 @@
   5. The admin UI renders without horizontal scroll at 1366×768 and 1440×900, and text/status color pairs pass automated WCAG AA contrast checks on the default theme.
 **Plans:** 8 plans
 Plans:
-- [ ] 06-01-PLAN.md — OpenAPI schema + internal/httperr package (envelope types + Write helper + tests)
-- [ ] 06-02-PLAN.md — Wire writeJSONError to envelope + UUID v7 incident IDs + EnvelopeRecoverer + openapi.yaml $ref migration
+- [x] 06-01-PLAN.md — OpenAPI schema + internal/httperr package (envelope types + Write helper + tests)
+- [x] 06-02-PLAN.md — Wire writeJSONError to envelope + UUID v7 incident IDs + EnvelopeRecoverer + openapi.yaml $ref migration
 - [ ] 06-03-PLAN.md — UI ApiError migration + useApiError hook + ErrorEnvelopeRenderer + dev-only error routes + ErrorClassStoryPage
 - [ ] 06-04-PLAN.md — Wave 1 verification (Go integration tests + Playwright error-envelope e2e + legacy handler test updates)
 - [ ] 06-05-PLAN.md — Protocol handler redaction sweep (29 files in internal/protocol/** + Makefile lint-protocol-redaction)

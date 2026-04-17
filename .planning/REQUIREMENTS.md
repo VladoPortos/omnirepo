@@ -52,13 +52,13 @@ prefixes (AUTH, REPO, etc.).
 
 ### ERR — Better failure messaging
 
-- [ ] **ERR-01**: REST API errors return a stable envelope `{ code, message, hint?, class, incident_id? }` where `class ∈ {validation, permission, transient, operator_action_required}`
+- [x] **ERR-01**: REST API errors return a stable envelope `{ code, message, hint?, class, incident_id? }` where `class ∈ {validation, permission, transient, operator_action_required}`
 - [ ] **ERR-02**: Web UI renders API errors using the envelope — class-appropriate icon, human-friendly message, and hint when present
-- [ ] **ERR-03**: Internal error strings (filesystem paths, driver messages, stack traces) are never returned verbatim to clients; server logs retain the internal detail keyed by request ID
+- [x] **ERR-03**: Internal error strings (filesystem paths, driver messages, stack traces) are never returned verbatim to clients; server logs retain the internal detail keyed by request ID
 - [ ] **ERR-04**: Transient errors show a "retry" affordance in the UI
-- [ ] **ERR-05**: Operator-action-required errors direct the user to the specific admin page or action (e.g. "Trivy DB missing → go to Admin → Trivy")
+- [x] **ERR-05**: Operator-action-required errors direct the user to the specific admin page or action (e.g. "Trivy DB missing → go to Admin → Trivy")
 - [ ] **ERR-06**: Validation errors highlight the offending field(s) where the UI has field context (forms, edit modals)
-- [ ] **ERR-07**: Errors recorded in the audit log receive an `incident_id` that correlates the UI message, server log line, and audit entry
+- [x] **ERR-07**: Errors recorded in the audit log receive an `incident_id` that correlates the UI message, server log line, and audit entry
 
 ### FAV — Saved filters, favorites, and recents
 
@@ -174,13 +174,13 @@ numbered 6–10 continue from v1.0's phases 1–5.
 | HEALTH-07 | Phase 9 | Pending |
 | HEALTH-08 | Phase 9 | Pending |
 | HEALTH-09 | Phase 9 | Pending |
-| ERR-01 | Phase 6 | Pending |
+| ERR-01 | Phase 6 | Complete |
 | ERR-02 | Phase 6 | Pending |
-| ERR-03 | Phase 6 | Pending |
+| ERR-03 | Phase 6 | Complete |
 | ERR-04 | Phase 6 | Pending |
-| ERR-05 | Phase 6 | Pending |
+| ERR-05 | Phase 6 | Complete |
 | ERR-06 | Phase 6 | Pending |
-| ERR-07 | Phase 6 | Pending |
+| ERR-07 | Phase 6 | Complete |
 | FAV-01 | Phase 8 | Pending |
 | FAV-02 | Phase 8 | Pending |
 | FAV-03 | Phase 8 | Pending |

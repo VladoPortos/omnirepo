@@ -1,16 +1,17 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.0
-milestone_name: milestone
+milestone: v1.1
+milestone_name: v1.1-immediate-polish
 status: executing
-last_updated: "2026-04-17T11:11:00.219Z"
-last_activity: 2026-04-17 -- Phase 6 planning complete
+stopped_at: Completed 06-02-PLAN.md
+last_updated: "2026-04-17T11:40:21.554Z"
+last_activity: 2026-04-17 — Plan 06-02 completed (envelope wire-up + panic recovery + UUID v7 incident-id shipped)
 progress:
   total_phases: 5
   completed_phases: 0
   total_plans: 8
-  completed_plans: 0
-  percent: 0
+  completed_plans: 2
+  percent: 25
 ---
 
 # STATE: OmniRepo
@@ -25,10 +26,11 @@ progress:
 
 ## Current Position
 
-Phase: 6 — Error Envelope & Visual Foundation
-Plan: —
-Status: Ready to execute
-Last activity: 2026-04-17 -- Phase 6 planning complete
+Phase: 06 (error-envelope-visual-foundation) — EXECUTING
+Plan: 3 of 8
+Status: Plans 01-02 complete; ready to execute plan 03
+Last activity: 2026-04-17 — Plan 06-02 completed (envelope wire-up + panic recovery + UUID v7 incident-id shipped)
+Stopped at: Completed 06-02-PLAN.md
 
 ## Phase Map
 
@@ -57,6 +59,13 @@ scoped tokens, LDAP/OIDC.
 
 ### Decisions for v1.1
 
+- **[06-01] oapi-codegen -generate types,skip-prune** — shared `components.schemas` (`ApiErrorEnvelope`, `ApiErrorClass`) and shared `components.responses` must survive regeneration even before plan 02 wires the `$ref`s. Without this, the generator prunes unreferenced schemas and `types_gen.go` loses them.
+- **[06-01] httperr.Envelope is a hand-written mirror, not an alias** — keeps `internal/httperr` dependency-free of `internal/api`. Struct tags and shape asserted by `TestEnvelope_JSONMarshal` — any drift from generated `ApiErrorEnvelope` shows at test time.
+- **[06-01] httperr.Internal() = ClassTransient + HTTP 500** — generic "An internal error occurred." message; cause logged via slog under incident_id and never serialized. Enforces ERR-03 at library boundary so handler call sites cannot accidentally leak.
+- **[06-02] Use `context.WithValue(ctx, chimw.RequestIDKey, idStr)` for incident-ID injection** — chi v5.2.5 does NOT export a `WithRequestID` helper (confirmed by reading `vendor/github.com/go-chi/chi/v5/middleware/request_id.go`). The direct `context.WithValue` path is idiomatic and mirrors chi's own `RequestID` middleware at line 75 of that file.
+- **[06-02] OpenAPI `default:` response `$ref` for envelope shape** — chose one `default: $ref: '#/components/responses/ValidationError'` per operation over exhaustive per-status enumeration. The v1.0 spec had only one inline 4xx block in 2666 lines; per-operation defaults document the envelope shape broadly (72 `$ref`s across 74 ops) without adding ~300 lines of repetitive YAML. Later plans can refine specific ops to enumerate 401/403/404 where deterministic.
+- **[06-02] 302 handler call sites widened mechanically via sed** — `writeJSONError(w, ` → `writeJSONError(w, r, ` across 23 handler files. Every handler had `r *http.Request` in scope; zero refactoring needed. Semantic-free migration preserves the v1.0 call convention while enabling envelope+incident_id correlation.
+- **[06-02] auth/middleware/deps.go still emits legacy `{error: ...}` shape** — out of scope for plan 06-02's file list. Deferred to plan 06-04 (integration audit / threat T-06-02-04). This is why `admin_phase1_test.go:605,759` still pass asserting `body["error"] == "password-change-required"` — the MCP 403 path is emitted by the middleware, not through `writeJSONError`.
 - **Phases continue numbering from v1.0** — v1.1 starts at Phase 6, not Phase 1. Preserves traceability across milestones in the same `.planning/` tree.
 - **ERR envelope lands in Phase 6 as a foundation** — every SNIPPET/HEALTH/OVERVIEW surface renders its errors through the new envelope; putting ERR late would force rework across phases 7–10.
 - **VISUAL is not a trailing-polish phase** — the design-system primitives (status tokens, skeletons, badges, copy-to-clipboard, button hierarchy) ship alongside ERR in Phase 6 so every later UI phase consumes shared components instead of re-implementing them.
@@ -74,11 +83,21 @@ scoped tokens, LDAP/OIDC.
 
 ### Todos
 
-- Run `/gsd-plan-phase 6` to decompose Phase 6 into plans.
+- Run `/gsd-plan-phase 6` to decompose Phase 6 into plans. ✅ Plans generated; now executing.
+- Execute plan 06-02 (envelope wire-up + panic recovery). ✅ Shipped; 302 call sites migrated, 72 openapi $refs, middleware chain updated.
+- Execute plan 06-03 next (UI shell / error-class visual tokens — depends on 06-02 wire shape being live).
+- **Plan 06-04 follow-up:** migrate `internal/auth/middleware/deps.go` writeJSON401/writeJSON403 helpers to emit envelope shape, then update 3 legacy test assertions (admin_phase1_test.go:605,759; session_or_apikey_test.go:309).
 
 ### Blockers
 
 (none)
+
+### Performance Metrics
+
+| Phase | Plan | Duration | Tasks | Files |
+|-------|------|----------|-------|-------|
+| 06    | 01   | ~5 min   | 3     | 7     |
+| 06    | 02   | ~25 min  | 3     | 26    |
 
 ### Research Flags
 
@@ -93,7 +112,8 @@ scoped tokens, LDAP/OIDC.
 
 ## Session Continuity
 
-- **Next action**: `/gsd-plan-phase 6` — decompose Phase 6 (Error Envelope & Visual Foundation) into plans, starting with the ERR envelope contract and the design-system token/component scaffolding.
+- **Next action**: Execute plan 06-03 — error-class visual tokens + UI envelope rendering (depends on the wire shape now live from 06-02).
+- **Last session:** 2026-04-17T11:40:21.552Z
 - **Artifacts on disk**:
   - `.planning/PROJECT.md` (Current Milestone: v1.1)
   - `.planning/REQUIREMENTS.md` (57 v1.1 REQs, traceability populated)

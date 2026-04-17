@@ -3,7 +3,7 @@
  * Reads URL params :name (project), :type, :repo and fetches repo detail.
  */
 
-import { useParams } from 'react-router-dom';
+import { Navigate, useParams } from 'react-router-dom';
 import { useRepo } from '@/api/queries';
 import { NotFoundPage } from '@/pages/NotFoundPage';
 import { RepoSkeleton } from './RepoPageLayout';
@@ -13,11 +13,15 @@ import { AptRepoPage } from './AptRepoPage';
 import { PypiRepoPage } from './PypiRepoPage';
 import { HelmRepoPage } from './HelmRepoPage';
 import { RawRepoPage } from './RawRepoPage';
-import { S3BucketPage } from './S3BucketPage';
 import { GitRepoPage } from './GitRepoPage';
 
 export function RepoDetailRouter() {
   const { name, type, repo } = useParams<{ name: string; type: string; repo: string }>();
+  // S3 "repos" are buckets and live in a separate table; redirect to the
+  // dedicated bucket route so the useRepo below doesn't 404.
+  if (type === 's3') {
+    return <Navigate to={`/projects/${name}/s3/${repo}`} replace />;
+  }
   const { data, isLoading, isError } = useRepo(name!, type!, repo!);
 
   if (isLoading) return <RepoSkeleton />;
@@ -36,8 +40,6 @@ export function RepoDetailRouter() {
       return <HelmRepoPage repo={data} />;
     case 'raw':
       return <RawRepoPage repo={data} />;
-    case 's3':
-      return <S3BucketPage repo={data} />;
     case 'git':
       return <GitRepoPage repo={data} />;
     default:

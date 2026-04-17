@@ -39,6 +39,10 @@ import type {
   S3Key,
   S3KeyCreate,
   S3KeyCreateResponse,
+  ProjectBucket,
+  BucketDetail,
+  BucketObjectsPage,
+  BucketCreate,
   Scan,
   ScanStatus,
 } from './types';
@@ -547,5 +551,92 @@ export function useRevokeS3Key() {
   return useMutation({
     mutationFn: (id: number) => api.del<void>(`/me/s3-keys/${id}`),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['me', 's3-keys'] }),
+  });
+}
+
+// -- Project S3 buckets (walkthrough 2026-04-17, F-S3-C / F-S3-D) --
+
+// Returns every non-deleted bucket owned by the named project, with live
+// size_bytes + object_count. Uses the new REST endpoint added this session.
+export function useProjectBuckets(projectName: string) {
+  return useQuery({
+    queryKey: ['projects', projectName, 'buckets'],
+    queryFn: () =>
+      api.get<ProjectBucket[]>(`/projects/${projectName}/s3-buckets/`),
+    staleTime: 10_000,
+  });
+}
+
+export function useBucket(projectName: string, bucketName: string) {
+  return useQuery({
+    queryKey: ['projects', projectName, 'buckets', bucketName],
+    queryFn: () =>
+      api.get<BucketDetail>(
+        `/projects/${projectName}/s3-buckets/${bucketName}`,
+      ),
+    enabled: !!projectName && !!bucketName,
+    staleTime: 10_000,
+  });
+}
+
+export function useBucketObjects(
+  projectName: string,
+  bucketName: string,
+  opts?: { prefix?: string; marker?: string; limit?: number },
+) {
+  return useQuery({
+    queryKey: [
+      'projects',
+      projectName,
+      'buckets',
+      bucketName,
+      'objects',
+      opts?.prefix ?? '',
+      opts?.marker ?? '',
+      opts?.limit ?? 0,
+    ],
+    queryFn: () => {
+      const params: Record<string, string> = {};
+      if (opts?.prefix) params.prefix = opts.prefix;
+      if (opts?.marker) params.marker = opts.marker;
+      if (opts?.limit) params.limit = String(opts.limit);
+      return api.get<BucketObjectsPage>(
+        `/projects/${projectName}/s3-buckets/${bucketName}/objects`,
+        params,
+      );
+    },
+    enabled: !!projectName && !!bucketName,
+    staleTime: 10_000,
+  });
+}
+
+export function useCreateBucket(projectName: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: BucketCreate) =>
+      api.post<ProjectBucket>(
+        `/projects/${projectName}/s3-buckets/`,
+        data,
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['projects', projectName, 'buckets'] });
+      qc.invalidateQueries({ queryKey: ['projects', projectName] });
+      qc.invalidateQueries({ queryKey: ['dashboard'] });
+      qc.invalidateQueries({ queryKey: ['dashboard', 'storage'] });
+    },
+  });
+}
+
+export function useDeleteBucket(projectName: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (bucketName: string) =>
+      api.del<void>(`/projects/${projectName}/s3-buckets/${bucketName}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['projects', projectName, 'buckets'] });
+      qc.invalidateQueries({ queryKey: ['projects', projectName] });
+      qc.invalidateQueries({ queryKey: ['dashboard'] });
+      qc.invalidateQueries({ queryKey: ['dashboard', 'storage'] });
+    },
   });
 }

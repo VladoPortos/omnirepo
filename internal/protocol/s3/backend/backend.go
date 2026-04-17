@@ -252,18 +252,30 @@ func (b *Backend) BucketExists(name string) (bool, error) {
 }
 
 // BucketInfo is the REST projection of an s3_buckets row (no deleted_at).
+// SizeBytes is the SUM(s3_objects.size_bytes) at query time — computed via
+// LEFT JOIN so empty buckets still return (0 bytes) rather than being hidden.
 type BucketInfo struct {
-	Name      string
-	CreatedAt time.Time
+	ID          int64
+	Name        string
+	SizeBytes   int64
+	ObjectCount int64
+	CreatedAt   time.Time
 }
 
 // ListBucketsForProject returns every non-deleted bucket owned by projectID,
-// ordered by name. Used by the REST /projects/{name}/s3-buckets list endpoint.
+// ordered by name. Used by the REST /projects/{name}/s3-buckets list endpoint
+// and by projectDetailResponse to surface bucket sizes in the UI.
 func (b *Backend) ListBucketsForProject(ctx context.Context, projectID int64) ([]BucketInfo, error) {
-	rows, err := b.DB.Reader.QueryContext(ctx,
-		`SELECT name, created_at FROM s3_buckets
-		 WHERE project_id=? AND deleted_at IS NULL
-		 ORDER BY name`, projectID)
+	rows, err := b.DB.Reader.QueryContext(ctx, `
+		SELECT b.id, b.name, b.created_at,
+		       COALESCE(SUM(o.size_bytes), 0) AS size_bytes,
+		       COUNT(o.id)                    AS object_count
+		FROM s3_buckets b
+		LEFT JOIN s3_objects o ON o.bucket_id = b.id
+		WHERE b.project_id = ? AND b.deleted_at IS NULL
+		GROUP BY b.id
+		ORDER BY b.name
+	`, projectID)
 	if err != nil {
 		return nil, fmt.Errorf("backend: list buckets: %w", err)
 	}
@@ -271,12 +283,34 @@ func (b *Backend) ListBucketsForProject(ctx context.Context, projectID int64) ([
 	var out []BucketInfo
 	for rows.Next() {
 		var bi BucketInfo
-		if err := rows.Scan(&bi.Name, &bi.CreatedAt); err != nil {
+		if err := rows.Scan(&bi.ID, &bi.Name, &bi.CreatedAt, &bi.SizeBytes, &bi.ObjectCount); err != nil {
 			return nil, fmt.Errorf("backend: scan bucket: %w", err)
 		}
 		out = append(out, bi)
 	}
 	return out, rows.Err()
+}
+
+// GetBucketForProject returns one bucket's info (with size+count) if it
+// belongs to projectID. Returns (_, false, nil) if not found / wrong project.
+func (b *Backend) GetBucketForProject(ctx context.Context, projectID int64, name string) (BucketInfo, bool, error) {
+	var bi BucketInfo
+	err := b.DB.Reader.QueryRowContext(ctx, `
+		SELECT b.id, b.name, b.created_at,
+		       COALESCE(SUM(o.size_bytes), 0) AS size_bytes,
+		       COUNT(o.id)                    AS object_count
+		FROM s3_buckets b
+		LEFT JOIN s3_objects o ON o.bucket_id = b.id
+		WHERE b.project_id = ? AND b.name = ? AND b.deleted_at IS NULL
+		GROUP BY b.id
+	`, projectID, name).Scan(&bi.ID, &bi.Name, &bi.CreatedAt, &bi.SizeBytes, &bi.ObjectCount)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return BucketInfo{}, false, nil
+		}
+		return BucketInfo{}, false, fmt.Errorf("backend: get bucket: %w", err)
+	}
+	return bi, true, nil
 }
 
 // DeleteBucket refuses a non-empty bucket with ErrBucketNotEmpty.

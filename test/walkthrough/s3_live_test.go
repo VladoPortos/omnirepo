@@ -214,6 +214,35 @@ func TestLiveS3_CleanupMultipartObject(t *testing.T) {
 	}
 }
 
+// TestLiveS3_SeedDemoObjects populates the walkthrough bucket with a small
+// set of objects (mixed flat keys + a nested prefix) so the UI has realistic
+// content. Skipped when env vars are missing; safe to re-run (overwrites).
+func TestLiveS3_SeedDemoObjects(t *testing.T) {
+	e := loadEnv(t)
+	c := newS3Client(t, e, 3)
+	ctx := context.Background()
+	seeds := []struct {
+		key  string
+		body string
+	}{
+		{"readme.txt", "top-level readme\n"},
+		{"config.json", `{"mode":"prod"}`},
+		{"logs/2026-04-17.log", "demo log entry\n"},
+		{"logs/2026-04-16.log", "older log\n"},
+		{"images/cover.png", "fake-png"},
+	}
+	for _, s := range seeds {
+		_, err := c.PutObject(ctx, &s3.PutObjectInput{
+			Bucket: &e.bucket,
+			Key:    aws.String(s.key),
+			Body:   bytes.NewReader([]byte(s.body)),
+		})
+		if err != nil {
+			t.Fatalf("seed %q: %v", s.key, err)
+		}
+	}
+}
+
 // TestLiveS3_SignatureHeaderVisible confirms the SigV4 Authorization header
 // is accepted (not "SignatureDoesNotMatch"). We hit PutObject and assert the
 // server-side 200/204 — the SDK only reaches success if SigV4 verified.

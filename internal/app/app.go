@@ -538,9 +538,10 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 		UpstreamCreds: upstreamCreds,
 		// Phase 04-05: S3 access-key CRUD. Reuses the same per-install
 		// AEAD master key as upstream_creds.
-		S3Keys:     metadata.NewS3KeysRepo(db),
-		S3AEAD:     aead,
-		S3Backend:  s3Be,
+		S3Keys:        metadata.NewS3KeysRepo(db),
+		S3AEAD:        aead,
+		S3Backend:     s3Be,
+		S3ObjectsRepo: metadata.NewS3ObjectsRepo(db),
 		Holder:     holder,
 		DataRoot:   cfg.DataRoot,
 		Audit:      auditLogger,

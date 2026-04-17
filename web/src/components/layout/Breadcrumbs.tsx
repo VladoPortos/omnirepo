@@ -56,8 +56,19 @@ export function Breadcrumbs() {
           </BreadcrumbLink>
         </BreadcrumbItem>
         {segments.map((segment, index) => {
-          const path = '/' + segments.slice(0, index + 1).join('/');
+          let path = '/' + segments.slice(0, index + 1).join('/');
           const isLast = index === segments.length - 1;
+          // `/projects/:name/s3` is not a real route (buckets live at
+          // /projects/:name/s3/:bucket); clicking the 's3' crumb should
+          // bring the user back to the project page with the S3 tab.
+          if (
+            segment === 's3' &&
+            segments[0] === 'projects' &&
+            segments.length >= 2 &&
+            !isLast
+          ) {
+            path = `/projects/${segments[1]}`;
+          }
 
           return (
             <span key={path} className="contents">

@@ -74,6 +74,10 @@ type projectDetailResponse struct {
 	CreatedAt     time.Time        `json:"created_at"`
 	Members       []projectMember  `json:"members"`
 	Repos         []projectRepo    `json:"repos"`
+	// Buckets is the S3 bucket list for this project, with live
+	// size_bytes / object_count (F-S3-B, walkthrough 2026-04-17). Absent
+	// when the S3 backend is not wired into Deps.
+	Buckets       []projectBucket  `json:"buckets"`
 }
 
 type projectMember struct {
@@ -91,6 +95,14 @@ type projectRepo struct {
 	AutoScan      bool      `json:"auto_scan"`
 	PublicRead    bool      `json:"public_read"`
 	CreatedAt     time.Time `json:"created_at"`
+}
+
+type projectBucket struct {
+	ID          int64     `json:"id"`
+	Name        string    `json:"name"`
+	SizeBytes   int64     `json:"size_bytes"`
+	ObjectCount int64     `json:"object_count"`
+	CreatedAt   time.Time `json:"created_at"`
 }
 
 func (d Deps) handleListProjects(w http.ResponseWriter, r *http.Request) {
@@ -149,6 +161,16 @@ func (d Deps) handleListProjects(w http.ResponseWriter, r *http.Request) {
 		var totalSize int64
 		for _, rr := range repos {
 			totalSize += sizes[rr.ID]
+		}
+		// F-S3-B: fold S3 bucket bytes into the project total so the
+		// dashboard card and the list card agree (both charge the
+		// project for bucket bytes, per-bucket breakdown is in detail).
+		if d.S3Backend != nil {
+			if buckets, berr := d.S3Backend.ListBucketsForProject(r.Context(), p.ID); berr == nil {
+				for _, b := range buckets {
+					totalSize += b.SizeBytes
+				}
+			}
 		}
 
 		items = append(items, projectListItem{
@@ -222,9 +244,27 @@ func (d Deps) handleGetProject(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	// F-S3-B: surface S3 buckets alongside repos so the Overview storage
+	// card and the S3 tab can both read from one response.
+	bucketItems := make([]projectBucket, 0)
+	if d.S3Backend != nil {
+		if rows, err := d.S3Backend.ListBucketsForProject(r.Context(), p.ID); err == nil {
+			for _, b := range rows {
+				bucketItems = append(bucketItems, projectBucket{
+					ID:          b.ID,
+					Name:        b.Name,
+					SizeBytes:   b.SizeBytes,
+					ObjectCount: b.ObjectCount,
+					CreatedAt:   b.CreatedAt,
+				})
+			}
+		}
+	}
+
 	writeJSON(w, http.StatusOK, projectDetailResponse{
 		ID: p.ID, Name: p.Name, DescriptionMD: p.DescriptionMD,
 		CreatedAt: p.CreatedAt, Members: members, Repos: repoItems,
+		Buckets: bucketItems,
 	})
 }
 

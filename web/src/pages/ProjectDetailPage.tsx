@@ -36,10 +36,13 @@ import {
   useProjectActivity,
   useCreateRepo,
   useDeleteProject,
+  useProjectBuckets,
+  useCreateBucket,
+  useDeleteBucket,
 } from '@/api/queries';
 import { formatBytes, formatDate } from '@/lib/format';
 import { ApiError } from '@/api/client';
-import type { RepoType, ProjectRepo } from '@/api/types';
+import type { RepoType, ProjectRepo, ProjectBucket } from '@/api/types';
 
 const REPO_TYPES: { value: RepoType; label: string }[] = [
   { value: 'docker', label: 'Docker' },
@@ -95,8 +98,14 @@ export function ProjectDetailPage() {
   }, [project]);
 
   const totalSize = useMemo(() => {
-    return project?.repos?.reduce((sum, r) => sum + r.size_bytes, 0) ?? 0;
+    const repoBytes =
+      project?.repos?.reduce((sum, r) => sum + r.size_bytes, 0) ?? 0;
+    const bucketBytes =
+      project?.buckets?.reduce((sum, b) => sum + b.size_bytes, 0) ?? 0;
+    return repoBytes + bucketBytes;
   }, [project]);
+
+  const bucketCount = project?.buckets?.length ?? 0;
 
   const handleCreateRepo = async (e: FormEvent) => {
     e.preventDefault();
@@ -310,8 +319,11 @@ export function ProjectDetailPage() {
                   total={Math.max(totalSize * 2, 1073741824)}
                 />
                 <p className="mt-3 text-xs text-muted-foreground">
-                  {project.repos?.length ?? 0} repositories,{' '}
-                  {formatBytes(totalSize)} total
+                  {project.repos?.length ?? 0} repositories
+                  {bucketCount > 0
+                    ? `, ${bucketCount} S3 bucket${bucketCount === 1 ? '' : 's'}`
+                    : ''}
+                  , {formatBytes(totalSize)} total
                 </p>
               </CardContent>
             </Card>
@@ -356,46 +368,45 @@ export function ProjectDetailPage() {
 
         {/* Type tabs */}
         {REPO_TYPES.map((rt) => {
-          // ME-09: S3 is not createable via the repo dialog — buckets are
-          // managed as a separate resource. Hide the create buttons for S3
-          // but still surface the tab so users can see existing buckets.
-          const canCreate = rt.value !== 's3';
+          // S3 tab has its own data source (buckets, not repos) and its
+          // own Create dialog — render a dedicated component.
+          if (rt.value === 's3') {
+            return (
+              <TabsContent key="s3" value="s3">
+                <S3BucketsTab projectName={name} />
+              </TabsContent>
+            );
+          }
           return (
           <TabsContent key={rt.value} value={rt.value}>
             <div className="mt-4 space-y-4">
               <div className="flex items-center justify-between">
-                <h2 className="text-lg font-semibold">{rt.label} {rt.value === 's3' ? 'Buckets' : 'Repositories'}</h2>
-                {canCreate && (
-                  <Button
-                    size="sm"
-                    onClick={() => openCreateDialog(rt.value)}
-                  >
-                    <Plus className="mr-1.5 size-4" />
-                    Create Repository
-                  </Button>
-                )}
+                <h2 className="text-lg font-semibold">{rt.label} Repositories</h2>
+                <Button
+                  size="sm"
+                  onClick={() => openCreateDialog(rt.value)}
+                >
+                  <Plus className="mr-1.5 size-4" />
+                  Create Repository
+                </Button>
               </div>
 
               {reposByType[rt.value].length === 0 ? (
                 <div className="flex flex-col items-center justify-center rounded-lg border border-dashed p-12 text-center">
                   <FolderGit2 className="size-12 text-muted-foreground/50" />
                   <h3 className="mt-4 text-lg font-semibold">
-                    No {rt.value === 's3' ? 'buckets' : 'repositories'}
+                    No repositories
                   </h3>
                   <p className="mt-2 max-w-md text-sm text-muted-foreground">
-                    {canCreate
-                      ? `Create your first ${rt.label.toLowerCase()} repository`
-                      : 'S3 buckets are provisioned separately via the S3 API.'}
+                    Create your first {rt.label.toLowerCase()} repository
                   </p>
-                  {canCreate && (
-                    <Button
-                      className="mt-6"
-                      onClick={() => openCreateDialog(rt.value)}
-                    >
-                      <Plus className="mr-1.5 size-4" />
-                      Create Repository
-                    </Button>
-                  )}
+                  <Button
+                    className="mt-6"
+                    onClick={() => openCreateDialog(rt.value)}
+                  >
+                    <Plus className="mr-1.5 size-4" />
+                    Create Repository
+                  </Button>
                 </div>
               ) : (
                 <div className="space-y-2">
@@ -494,6 +505,205 @@ export function ProjectDetailPage() {
               </Button>
             </DialogFooter>
           </form>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
+// S3BucketsTab renders the S3 tab: bucket list from the dedicated buckets
+// endpoint (repos table doesn't include buckets), a "Create Bucket" dialog,
+// and per-bucket navigation to the detail/object-browser page.
+function S3BucketsTab({ projectName }: { projectName: string }) {
+  const { data: buckets, isLoading, isError } = useProjectBuckets(projectName);
+  const createBucket = useCreateBucket(projectName);
+  const deleteBucket = useDeleteBucket(projectName);
+
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [bucketName, setBucketName] = useState('');
+  const [createError, setCreateError] = useState('');
+
+  const [deleteTarget, setDeleteTarget] = useState<ProjectBucket | null>(null);
+  const [deleteError, setDeleteError] = useState('');
+
+  const onCreate = async (e: FormEvent) => {
+    e.preventDefault();
+    setCreateError('');
+    try {
+      await createBucket.mutateAsync({ name: bucketName.trim() });
+      toast.success(`Bucket "${bucketName}" created.`);
+      setBucketName('');
+      setDialogOpen(false);
+    } catch (err) {
+      setCreateError(err instanceof ApiError ? err.detail : 'Failed to create bucket.');
+    }
+  };
+
+  const onDelete = async () => {
+    if (!deleteTarget) return;
+    setDeleteError('');
+    try {
+      await deleteBucket.mutateAsync(deleteTarget.name);
+      toast.success(`Bucket "${deleteTarget.name}" deleted.`);
+      setDeleteTarget(null);
+    } catch (err) {
+      setDeleteError(err instanceof ApiError ? err.detail : 'Failed to delete bucket.');
+    }
+  };
+
+  return (
+    <div className="mt-4 space-y-4">
+      <div className="flex items-center justify-between">
+        <h2 className="text-lg font-semibold">S3 Buckets</h2>
+        <Button size="sm" onClick={() => setDialogOpen(true)}>
+          <Plus className="mr-1.5 size-4" />
+          Create Bucket
+        </Button>
+      </div>
+
+      {isLoading ? (
+        <Skeleton className="h-24 w-full" />
+      ) : isError ? (
+        <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
+          Failed to load buckets.
+        </div>
+      ) : (buckets?.length ?? 0) === 0 ? (
+        <div className="flex flex-col items-center justify-center rounded-lg border border-dashed p-12 text-center">
+          <FolderGit2 className="size-12 text-muted-foreground/50" />
+          <h3 className="mt-4 text-lg font-semibold">No buckets</h3>
+          <p className="mt-2 max-w-md text-sm text-muted-foreground">
+            Create your first S3 bucket. Buckets are addressable at
+            <code className="ml-1 rounded bg-muted px-1 py-0.5 font-mono text-xs">
+              /s3/{'{'}bucket{'}'}/{'{'}key{'}'}
+            </code>{' '}
+            and require SigV4-signed requests.
+          </p>
+          <Button className="mt-6" onClick={() => setDialogOpen(true)}>
+            <Plus className="mr-1.5 size-4" />
+            Create Bucket
+          </Button>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {(buckets ?? []).map((b) => (
+            <motion.div
+              key={b.id}
+              initial={{ opacity: 0, y: 4 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.15 }}
+            >
+              <Card className="transition-all duration-150 hover:-translate-y-0.5 hover:shadow-md">
+                <CardContent className="flex items-center justify-between py-3">
+                  <Link
+                    to={`/projects/${projectName}/s3/${b.name}`}
+                    className="flex flex-1 items-center gap-3 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-md"
+                  >
+                    <TypeBadge type="s3" />
+                    <div>
+                      <p className="font-medium">{b.name}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {b.object_count} object{b.object_count === 1 ? '' : 's'} ·{' '}
+                        {formatBytes(b.size_bytes)}
+                      </p>
+                    </div>
+                  </Link>
+                  <div className="flex items-center gap-4 text-xs text-muted-foreground">
+                    <span>Created {formatDate(b.created_at)}</span>
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      title="Delete bucket"
+                      onClick={() => {
+                        setDeleteError('');
+                        setDeleteTarget(b);
+                      }}
+                    >
+                      <Trash2 className="size-4" />
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+            </motion.div>
+          ))}
+        </div>
+      )}
+
+      {/* Create bucket dialog */}
+      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+        <DialogContent>
+          <form onSubmit={onCreate}>
+            <DialogHeader>
+              <DialogTitle>Create S3 Bucket</DialogTitle>
+            </DialogHeader>
+            <div className="space-y-4 py-4">
+              {createError && (
+                <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
+                  {createError}
+                </div>
+              )}
+              <div className="space-y-2">
+                <Label htmlFor="bucket-name">Bucket name</Label>
+                <Input
+                  id="bucket-name"
+                  value={bucketName}
+                  onChange={(e) => setBucketName(e.target.value)}
+                  placeholder="my-bucket"
+                  required
+                  autoFocus
+                />
+                <p className="text-xs text-muted-foreground">
+                  Lowercase letters, digits, hyphens, and dots. 3–63 chars.
+                </p>
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" type="button" onClick={() => setDialogOpen(false)}>
+                Cancel
+              </Button>
+              <Button type="submit" disabled={createBucket.isPending || !bucketName.trim()}>
+                {createBucket.isPending ? 'Creating...' : 'Create Bucket'}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete bucket confirm */}
+      <Dialog open={!!deleteTarget} onOpenChange={(v) => !v && setDeleteTarget(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete bucket &quot;{deleteTarget?.name}&quot;?</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <p className="text-sm text-muted-foreground">
+              The bucket must be empty. Objects are hard-deleted (no trash),
+              so delete them first if you need them preserved.
+            </p>
+            {deleteTarget && deleteTarget.object_count > 0 && (
+              <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
+                Bucket still holds {deleteTarget.object_count} object
+                {deleteTarget.object_count === 1 ? '' : 's'} (
+                {formatBytes(deleteTarget.size_bytes)}). Delete will fail with 409.
+              </div>
+            )}
+            {deleteError && (
+              <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
+                {deleteError}
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteTarget(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={deleteBucket.isPending}
+              onClick={onDelete}
+            >
+              {deleteBucket.isPending ? 'Deleting...' : 'Delete Bucket'}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

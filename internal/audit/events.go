@@ -133,9 +133,11 @@ const (
 	EvtS3AccessKeyRevoked EventKind = "s3.access-key.revoke"
 
 	// S3 bucket provisioning (walkthrough 2026-04-17). Emitted by the
-	// REST endpoint that creates an s3_buckets row + on-disk directory.
-	// Details: {project, name}. No secrets.
+	// REST endpoint that creates/deletes an s3_buckets row + on-disk dir.
+	// Details: {project, name}. Delete additionally carries
+	// size_bytes_at_delete so post-mortem work can reason about drops.
 	EvtS3BucketCreated EventKind = "s3.bucket.create"
+	EvtS3BucketDeleted EventKind = "s3.bucket.delete"
 
 	// Phase 4 Plan 10 — Git refs walker (D-37). Emitted by the
 	// post-ReceivePack hook after a successful git_refs sync.

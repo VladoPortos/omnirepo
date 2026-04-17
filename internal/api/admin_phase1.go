@@ -48,6 +48,12 @@ type Deps struct {
 	// buckets; see internal/api/s3_buckets.go.
 	S3Backend *s3backend.Backend
 
+	// S3ObjectsRepo is used by the bucket-objects browsing endpoint
+	// (`GET /api/v1/projects/{name}/s3-buckets/{bucket}/objects`). It
+	// reads rows from the s3_objects table backing the same bucket that
+	// gofakes3 writes through S3Backend. Required when S3Backend is set.
+	S3ObjectsRepo *metadata.S3ObjectsRepo
+
 	Holder   *omrtls.CertHolder
 	DataRoot string
 	Audit    audit.Logger

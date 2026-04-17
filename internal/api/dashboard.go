@@ -419,6 +419,34 @@ func (d Deps) handleStorageDetail(w http.ResponseWriter, r *http.Request) {
 		_ = rows.Err()
 	}
 
+	// S3 buckets as type="s3" rows (F-S3-B). Every non-deleted bucket is
+	// surfaced, even if it currently has zero objects — the dashboard's
+	// aggregate already charges them, so hiding empty buckets would make
+	// the math inconsistent.
+	bktArgs := make([]any, len(scopeArgs))
+	copy(bktArgs, scopeArgs)
+	bktRows, bErr := d.DB.Reader.QueryContext(r.Context(), `
+		SELECT p.name, b.name, COALESCE(SUM(o.size_bytes), 0) AS bytes
+		FROM s3_buckets b
+		JOIN projects p ON p.id = b.project_id
+		LEFT JOIN s3_objects o ON o.bucket_id = b.id
+		WHERE b.deleted_at IS NULL`+strings.Replace(scopeClause, "r.project_id", "b.project_id", 1)+`
+		GROUP BY b.id
+		ORDER BY bytes DESC
+	`, bktArgs...)
+	if bErr == nil {
+		defer func() { _ = bktRows.Close() }()
+		for bktRows.Next() {
+			var rr storageRepoRow
+			rr.Type = "s3"
+			if err := bktRows.Scan(&rr.Project, &rr.Name, &rr.SizeBytes); err != nil {
+				break
+			}
+			repos = append(repos, rr)
+		}
+		_ = bktRows.Err()
+	}
+
 	writeJSON(w, http.StatusOK, storageDetailResponse{
 		TotalBytes: totalBytes,
 		UsedBytes:  usedBytes,

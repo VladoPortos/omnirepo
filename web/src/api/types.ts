@@ -145,6 +145,44 @@ export interface ProjectDetail {
   created_at: string;
   members: ProjectMember[];
   repos: ProjectRepo[];
+  buckets: ProjectBucket[];
+}
+
+// Bucket as projected into the project detail response. `size_bytes` is
+// live-computed (SUM s3_objects.size_bytes); `object_count` mirrors it.
+export interface ProjectBucket {
+  id: number;
+  name: string;
+  size_bytes: number;
+  object_count: number;
+  created_at: string;
+}
+
+// BucketDetail matches the GET /s3-buckets/{bucket} response.
+export interface BucketDetail {
+  name: string;
+  size_bytes: number;
+  object_count: number;
+  created_at: string;
+}
+
+export interface BucketObjectItem {
+  key: string;
+  size_bytes: number;
+  etag: string;
+  content_type?: string;
+  sha256?: string;
+  last_modified: string;
+}
+
+export interface BucketObjectsPage {
+  items: BucketObjectItem[];
+  next_marker?: string;
+  truncated: boolean;
+}
+
+export interface BucketCreate {
+  name: string;
 }
 
 export interface ProjectCreate {

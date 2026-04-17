@@ -1,21 +1,28 @@
-// Package api — S3 bucket provisioning (walkthrough 2026-04-17).
+// Package api — S3 bucket provisioning + browsing (walkthrough 2026-04-17).
 //
-// Without this endpoint the S3 protocol's CreateBucket path is disabled
+// Without these endpoints the S3 protocol's CreateBucket path is disabled
 // (DefaultProjectID=0 by design, so gofakes3 CreateBucket returns
 // "bucket provisioning is administrative; use the REST API") and there is
-// no other operator-facing way to create a bucket in production. Conformance
-// tests worked around the gap by inserting directly into SQLite; that is not
-// a path real users can take.
+// no operator-facing way to create, list, or browse a bucket's contents in
+// production — conformance tests bypass all of that with direct SQLite hits.
 //
-// Endpoints live under /api/v1/projects/{name}/s3-buckets. Both require
-// session-or-API-key auth plus project-member authorization via
-// auth.ActionS3BucketWrite (same membership model as create-repo; super-admin
-// bypass applies).
+// Endpoints live under /api/v1/projects/{name}/s3-buckets. All require
+// session-or-API-key auth plus project authorization:
+//
+//   - POST   /                          ActionS3BucketWrite (create)
+//   - GET    /                          ActionS3BucketRead  (list)
+//   - GET    /{bucket}                  ActionS3BucketRead  (detail+size)
+//   - DELETE /{bucket}                  ActionS3BucketWrite (empty-only)
+//   - GET    /{bucket}/objects          ActionS3BucketRead  (paginated list)
+//
+// Super-admin bypass applies to all actions.
 package api
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -28,13 +35,38 @@ import (
 
 const maxS3BucketsBodyBytes = 16 * 1024
 
+// maxBucketObjectsPage caps the page size of the objects-list endpoint. The
+// underlying repo already clamps to 1000 (AWS default) but the UI uses a
+// smaller default for responsiveness.
+const (
+	defaultBucketObjectsPageSize = 100
+	maxBucketObjectsPageSize     = 1000
+)
+
 type s3BucketCreateRequest struct {
 	Name string `json:"name"`
 }
 
 type s3BucketItem struct {
-	Name      string    `json:"name"`
-	CreatedAt time.Time `json:"created_at"`
+	Name        string    `json:"name"`
+	SizeBytes   int64     `json:"size_bytes"`
+	ObjectCount int64     `json:"object_count"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+
+type s3ObjectItem struct {
+	Key         string    `json:"key"`
+	SizeBytes   int64     `json:"size_bytes"`
+	ETag        string    `json:"etag"`
+	ContentType string    `json:"content_type,omitempty"`
+	SHA256      string    `json:"sha256,omitempty"`
+	LastModified time.Time `json:"last_modified"`
+}
+
+type s3ObjectsPage struct {
+	Items      []s3ObjectItem `json:"items"`
+	NextMarker string         `json:"next_marker,omitempty"`
+	Truncated  bool           `json:"truncated"`
 }
 
 // mountS3Buckets installs the s3-buckets endpoints. nil-safe — if the backend
@@ -46,12 +78,16 @@ func (d Deps) mountS3Buckets(r chi.Router) {
 	r.Route("/projects/{name}/s3-buckets", func(r chi.Router) {
 		r.Post("/", d.handleCreateS3Bucket)
 		r.Get("/", d.handleListS3Buckets)
+		r.Get("/{bucket}", d.handleGetS3Bucket)
+		r.Delete("/{bucket}", d.handleDeleteS3Bucket)
+		r.Get("/{bucket}/objects", d.handleListS3Objects)
 	})
 }
 
-// resolveProjectAndCheckBucketAccess returns the project id on success and
-// writes the appropriate 401/403/404 on failure. Shared by create and list.
-func (d Deps) resolveProjectAndCheckBucketAccess(w http.ResponseWriter, r *http.Request) (int64, string, auth.Actor, bool) {
+// resolveBucketAccess returns the project id on success and writes the
+// appropriate 401/403/404 on failure. The read flag determines which action
+// is enforced via auth.Can.
+func (d Deps) resolveBucketAccess(w http.ResponseWriter, r *http.Request, writeAction bool) (int64, string, auth.Actor, bool) {
 	actor, ok := auth.ActorFromContext(r.Context())
 	if !ok {
 		writeJSONError(w, http.StatusUnauthorized, ErrUnauthenticated, "")
@@ -63,16 +99,20 @@ func (d Deps) resolveProjectAndCheckBucketAccess(w http.ResponseWriter, r *http.
 		writeJSONError(w, http.StatusNotFound, ErrNotFound, "project not found")
 		return 0, "", auth.Actor{}, false
 	}
-	if allowed, reason := auth.Can(r.Context(), actor, auth.ActionS3BucketWrite,
+	action := auth.ActionS3BucketRead
+	if writeAction {
+		action = auth.ActionS3BucketWrite
+	}
+	if allowed, reason := auth.Can(r.Context(), actor, action,
 		auth.Target{Kind: "project", ProjectID: p.ID}); !allowed {
-		writeJSONError(w, http.StatusForbidden, ErrForbidden, reason)
-		return 0, "", auth.Actor{}, false
+			writeJSONError(w, http.StatusForbidden, ErrForbidden, reason)
+			return 0, "", auth.Actor{}, false
 	}
 	return p.ID, p.Name, actor, true
 }
 
 func (d Deps) handleCreateS3Bucket(w http.ResponseWriter, r *http.Request) {
-	projectID, projectName, actor, ok := d.resolveProjectAndCheckBucketAccess(w, r)
+	projectID, projectName, actor, ok := d.resolveBucketAccess(w, r, true)
 	if !ok {
 		return
 	}
@@ -120,7 +160,7 @@ func (d Deps) handleCreateS3Bucket(w http.ResponseWriter, r *http.Request) {
 }
 
 func (d Deps) handleListS3Buckets(w http.ResponseWriter, r *http.Request) {
-	projectID, _, _, ok := d.resolveProjectAndCheckBucketAccess(w, r)
+	projectID, _, _, ok := d.resolveBucketAccess(w, r, false)
 	if !ok {
 		return
 	}
@@ -131,7 +171,133 @@ func (d Deps) handleListS3Buckets(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]s3BucketItem, 0, len(rows))
 	for _, b := range rows {
-		out = append(out, s3BucketItem{Name: b.Name, CreatedAt: b.CreatedAt})
+		out = append(out, s3BucketItem{
+			Name:        b.Name,
+			SizeBytes:   b.SizeBytes,
+			ObjectCount: b.ObjectCount,
+			CreatedAt:   b.CreatedAt,
+		})
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+func (d Deps) handleGetS3Bucket(w http.ResponseWriter, r *http.Request) {
+	projectID, _, _, ok := d.resolveBucketAccess(w, r, false)
+	if !ok {
+		return
+	}
+	name := chi.URLParam(r, "bucket")
+	info, found, err := d.S3Backend.GetBucketForProject(r.Context(), projectID, name)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+		return
+	}
+	if !found {
+		writeJSONError(w, http.StatusNotFound, ErrNotFound, "bucket not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, s3BucketItem{
+		Name:        info.Name,
+		SizeBytes:   info.SizeBytes,
+		ObjectCount: info.ObjectCount,
+		CreatedAt:   info.CreatedAt,
+	})
+}
+
+func (d Deps) handleDeleteS3Bucket(w http.ResponseWriter, r *http.Request) {
+	projectID, projectName, actor, ok := d.resolveBucketAccess(w, r, true)
+	if !ok {
+		return
+	}
+	name := chi.URLParam(r, "bucket")
+	info, found, err := d.S3Backend.GetBucketForProject(r.Context(), projectID, name)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+		return
+	}
+	if !found {
+		writeJSONError(w, http.StatusNotFound, ErrNotFound, "bucket not found")
+		return
+	}
+
+	if err := d.S3Backend.DeleteBucket(name); err != nil {
+		switch {
+		case gofakes3.HasErrorCode(err, gofakes3.ErrBucketNotEmpty):
+			writeJSONError(w, http.StatusConflict, ErrConflict, "bucket not empty")
+		default:
+			writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+		}
+		return
+	}
+
+	uid := actor.ID
+	d.recordAudit(r, audit.Event{
+		Kind:        audit.EvtS3BucketDeleted,
+		ActorUserID: &uid,
+		TargetKind:  "s3_bucket",
+		TargetID:    name,
+		Details: map[string]any{
+			"project": projectName,
+			"name":    name,
+			"size_bytes_at_delete": info.SizeBytes,
+		},
+	})
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (d Deps) handleListS3Objects(w http.ResponseWriter, r *http.Request) {
+	projectID, _, _, ok := d.resolveBucketAccess(w, r, false)
+	if !ok {
+		return
+	}
+	name := chi.URLParam(r, "bucket")
+	info, found, err := d.S3Backend.GetBucketForProject(r.Context(), projectID, name)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+		return
+	}
+	if !found {
+		writeJSONError(w, http.StatusNotFound, ErrNotFound, "bucket not found")
+		return
+	}
+
+	q := r.URL.Query()
+	prefix := q.Get("prefix")
+	marker := q.Get("marker")
+
+	limit := defaultBucketObjectsPageSize
+	if lim := q.Get("limit"); lim != "" {
+		if n, convErr := strconv.Atoi(lim); convErr == nil && n > 0 {
+			limit = n
+			if limit > maxBucketObjectsPageSize {
+				limit = maxBucketObjectsPageSize
+			}
+		} else if convErr != nil && !errors.Is(convErr, strconv.ErrSyntax) {
+			writeJSONError(w, http.StatusBadRequest, ErrValidationFailed, "invalid limit")
+			return
+		}
+	}
+
+	page, err := d.S3ObjectsRepo.ListByBucket(r.Context(), info.ID, prefix, marker, limit)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+		return
+	}
+
+	items := make([]s3ObjectItem, 0, len(page.Objects))
+	for _, o := range page.Objects {
+		items = append(items, s3ObjectItem{
+			Key:          o.Key,
+			SizeBytes:    o.SizeBytes,
+			ETag:         o.ETag,
+			ContentType:  o.ContentType,
+			SHA256:       o.SHA256,
+			LastModified: o.CreatedAt,
+		})
+	}
+	writeJSON(w, http.StatusOK, s3ObjectsPage{
+		Items:      items,
+		NextMarker: page.NextToken,
+		Truncated:  page.IsTruncated,
+	})
 }

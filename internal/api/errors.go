@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"regexp"
 
 	"github.com/dxc-internal/omnirepo/internal/httperr"
 )
@@ -85,12 +86,24 @@ var legacyCodeMap = map[string]string{
 	ErrInternal:               "api.internal",
 }
 
+// codeShapeRegex is the exact wire-envelope code pattern. Used by
+// normalizeLegacyCode to decide whether an already-dotted code is safe
+// to pass through verbatim. Any code that fails this regex (including
+// codes that contain a "." but also carry internal markers like
+// "errors.go:123" or "runtime.gopanic") is forced through the sanitize
+// path so the output never leaks internals and always matches the
+// envelope schema (ERR-03).
+var codeShapeRegex = regexp.MustCompile(`^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$`)
+
 // normalizeLegacyCode converts legacy dashed or single-word codes to
 // the dotted form required by the ApiErrorEnvelope schema. Codes that
-// already contain a "." are passed through unchanged (post-Phase 6
-// callers supply dotted codes directly). Unknown codes are prefixed
-// "legacy." to preserve client-visible stability during the migration
-// window.
+// already match the wire envelope code regex are passed through
+// unchanged (post-Phase 6 callers supply dotted codes directly).
+// Unknown codes are prefixed "legacy." to preserve client-visible
+// stability during the migration window. The output is ALWAYS a valid
+// envelope code and MUST NOT contain internal-leakage substrings
+// (file paths, source locations, stack markers, driver strings) —
+// see httperr.IsInternalString.
 func normalizeLegacyCode(code string) string {
 	if code == "" {
 		return "api.unknown"
@@ -98,7 +111,11 @@ func normalizeLegacyCode(code string) string {
 	if mapped, ok := legacyCodeMap[code]; ok {
 		return mapped
 	}
-	if containsDot(code) {
+	// Pass through only when the input already matches the wire shape.
+	// A permissive "contains '.'" check lets malformed internals like
+	// "errors.go:123" or "/home/…/foo.db" reach the wire body (ERR-03
+	// regression gate in errors_envelope_test.go).
+	if codeShapeRegex.MatchString(code) {
 		return code
 	}
 	return "legacy." + sanitizeCode(code)
@@ -116,8 +133,9 @@ func containsDot(s string) bool {
 // sanitizeCode lowercases and replaces dashes/spaces with underscores
 // to satisfy the ApiErrorEnvelope code regex. Characters that are
 // neither alphanumeric, underscore, nor the transformable set are
-// dropped. Codes that would start with a digit (or come out empty) get
-// a stable `x_` prefix so the result is always a valid local segment.
+// dropped. Codes that would start with anything other than a lowercase
+// letter (empty, digit, or underscore) get a stable `x_` prefix so the
+// result is always a valid local segment matching ^[a-z][a-z0-9_]*$.
 func sanitizeCode(s string) string {
 	out := make([]byte, 0, len(s))
 	for i := 0; i < len(s); i++ {
@@ -131,7 +149,7 @@ func sanitizeCode(s string) string {
 			out = append(out, '_')
 		}
 	}
-	if len(out) == 0 || (out[0] >= '0' && out[0] <= '9') {
+	if len(out) == 0 || !(out[0] >= 'a' && out[0] <= 'z') {
 		out = append([]byte("x_"), out...)
 	}
 	return string(out)

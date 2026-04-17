@@ -23,13 +23,18 @@ func TestNormalizeLegacyCode(t *testing.T) {
 		{"validation_failed", "validation.failed"},
 		{"conflict", "resource.conflict"},
 		{"internal", "api.internal"},
-		// Already dotted — pass through unchanged.
+		// Already wire-shaped — pass through unchanged.
 		{"repo.not_found", "repo.not_found"},
 		{"user.email_required", "user.email_required"},
 		// Unknown single-word codes get prefixed with legacy.
 		{"bananas", "legacy.bananas"},
 		{"Unknown-Code", "legacy.unknown_code"},
 		{"weird Code", "legacy.weird_code"},
+		// Multi-dot / malformed-dotted codes DO NOT pass through — they
+		// violate the wire envelope regex (exactly one '.'). Bridge
+		// forces them through the sanitize path to keep the emitted
+		// envelope schema-valid (Phase 6 / plan 04 ERR-03 gate).
+		{"some.dotted.code", "legacy.somedottedcode"},
 	}
 	for _, tc := range cases {
 		got := normalizeLegacyCode(tc.in)

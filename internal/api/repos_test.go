@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/dxc-internal/omnirepo/internal/api"
@@ -244,6 +245,33 @@ func TestRepoWipe_NotFound404(t *testing.T) {
 	resp, _ := s.do(t, "POST", "/api/v1/projects/pr/repos/raw/ghost/wipe", cookie, nil)
 	if resp.StatusCode != 404 {
 		t.Fatalf("expected 404, got %d", resp.StatusCode)
+	}
+}
+
+// TestCreateRepo_InvalidName_ErrorSaysRepoNotProject locks the fix for the
+// phase-6 walkthrough copy bug: the repo-create validator error must refer
+// to the *repo* name, not the project name. The UI echoes this wire message
+// verbatim in the validation envelope; reusing `ProjectNameValid` leaked
+// "invalid project name ..." into the Create Repository dialog.
+func TestCreateRepo_InvalidName_ErrorSaysRepoNotProject(t *testing.T) {
+	s := newTestServer(t)
+	seedTestUser(t, s.db, "super", "s@x", true, false)
+	cookie, _, _ := s.login(t, "super", "pw-super")
+	if resp, body := s.do(t, "POST", "/api/v1/projects", cookie,
+		api.CreateProjectRequest{Name: "proj"}); resp.StatusCode != 200 {
+		t.Fatalf("create project: %d %+v", resp.StatusCode, body)
+	}
+	resp, body := s.do(t, "POST", "/api/v1/projects/proj/repos", cookie,
+		api.CreateRepoRequest{Name: "BAD NAME!!", Type: "docker"})
+	if resp.StatusCode != 422 {
+		t.Fatalf("bad repo name code=%d body=%+v, want 422", resp.StatusCode, body)
+	}
+	msg, _ := body["message"].(string)
+	if !strings.Contains(msg, "invalid repo name") {
+		t.Fatalf("error message should mention 'invalid repo name', got %q", msg)
+	}
+	if strings.Contains(msg, "invalid project name") {
+		t.Fatalf("error message must not mention 'invalid project name', got %q", msg)
 	}
 }
 

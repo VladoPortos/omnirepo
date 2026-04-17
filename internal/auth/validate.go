@@ -30,6 +30,19 @@ func ProjectNameValid(name string) error {
 	return nil
 }
 
+// RepoNameValid returns nil when name is a legal OmniRepo repo slug. Repos
+// share the same regex as projects (see ProjectNameRegex) but are not subject
+// to the reserved-prefix check — repo names live under /projects/<p>/repos/...,
+// never at the top level, so "docker", "api", etc. are all fine. A separate
+// function is kept so validation error messages surface the right resource
+// kind ("invalid repo name ..." instead of "invalid project name ...").
+func RepoNameValid(name string) error {
+	if !ProjectNameRegex.MatchString(name) {
+		return fmt.Errorf("invalid repo name %q: must match %s", name, ProjectNameRegex.String())
+	}
+	return nil
+}
+
 // LoginValid returns nil when login matches LoginRegex. Reserved-prefix
 // rejection does not apply to logins — they never appear as top-level URL
 // segments. Reserved names ARE still rejected downstream by project create

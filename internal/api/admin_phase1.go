@@ -674,7 +674,7 @@ func (d Deps) handleCreateRepo(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSONBody(w, r, maxAdminJSONBodyBytes, &req) {
 		return
 	}
-	if err := auth.ProjectNameValid(req.Name); err != nil {
+	if err := auth.RepoNameValid(req.Name); err != nil {
 		writeJSONError(w, r, http.StatusUnprocessableEntity, ErrValidationFailed, err.Error())
 		return
 	}

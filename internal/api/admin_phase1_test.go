@@ -50,7 +50,12 @@ func seedTestUser(t *testing.T, db *metadata.DB, login, email string, isSuper, m
 	return id, pw
 }
 
-func newTestServer(t *testing.T) *testServer {
+// testServerOpt mutates Deps before the router is mounted. Used by tests that
+// need to override default Deps fields (e.g. TrivyDBDir) without each call
+// site re-building the whole server.
+type testServerOpt func(*api.Deps)
+
+func newTestServer(t *testing.T, opts ...testServerOpt) *testServer {
 	t.Helper()
 	db := sqlitetest.New(t)
 	dataRoot := t.TempDir()
@@ -86,6 +91,9 @@ func newTestServer(t *testing.T) *testServer {
 		Audit:    auditLogger,
 		Trash:    storage.NewTrash(filepath.Join(dataRoot, "trash")),
 		Locks:    storage.NewLocks(),
+	}
+	for _, opt := range opts {
+		opt(&deps)
 	}
 
 	mux := chi.NewRouter()
@@ -650,6 +658,61 @@ func TestTLSUpload(t *testing.T) {
 		`SELECT COUNT(*) FROM audit_log WHERE event_kind='tls.cert.uploaded'`).Scan(&n)
 	if n == 0 {
 		t.Fatalf("no tls.cert.uploaded audit")
+	}
+}
+
+// TestTLSUpload_HonorsCustomPaths pins audit finding #4: when Deps.TLSCertPath
+// / Deps.TLSKeyPath are set (from cfg.TLS.*), the admin upload must write
+// there — not the legacy DataRoot/certs/server.{crt,key} — so operator config
+// doesn't silently diverge from where app boot reads the live cert.
+func TestTLSUpload_HonorsCustomPaths(t *testing.T) {
+	extRoot := t.TempDir()
+	customCert := filepath.Join(extRoot, "tls", "omnirepo.crt")
+	customKey := filepath.Join(extRoot, "tls", "omnirepo.key")
+
+	s := newTestServer(t, func(d *api.Deps) {
+		d.TLSCertPath = customCert
+		d.TLSKeyPath = customKey
+	})
+	seedTestUser(t, s.db, "super", "s@x", true, false)
+	cookie, _, _ := s.login(t, "super", "pw-super")
+
+	certPEM, keyPEM, err := omrtls.GenerateSelfSigned([]string{"custom.example"}, time.Hour, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	w := multipart.NewWriter(&buf)
+	certPart, _ := w.CreateFormFile("cert", "server.crt")
+	_, _ = certPart.Write(certPEM)
+	keyPart, _ := w.CreateFormFile("key", "server.key")
+	_, _ = keyPart.Write(keyPEM)
+	_ = w.Close()
+
+	req, _ := http.NewRequest("POST", s.ts.URL+"/api/v1/admin/tls/upload", &buf)
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	req.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: cookie})
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != 200 {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("code=%d body=%s", resp.StatusCode, body)
+	}
+
+	// Live cert must land at the custom path.
+	got, err := os.ReadFile(customCert)
+	if err != nil {
+		t.Fatalf("custom cert not written: %v", err)
+	}
+	if string(got) != string(certPEM) {
+		t.Fatal("custom cert content mismatch")
+	}
+	// Legacy path must NOT exist.
+	if _, err := os.Stat(filepath.Join(s.dataRoot, "certs", "server.crt")); !os.IsNotExist(err) {
+		t.Fatalf("legacy path was written: err=%v", err)
 	}
 }
 

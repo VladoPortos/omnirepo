@@ -6,8 +6,8 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"io"
+	"log/slog"
 	"mime"
 	"net/http"
 	"path/filepath"
@@ -17,6 +17,7 @@ import (
 	"github.com/dxc-internal/omnirepo/internal/auth"
 	"github.com/dxc-internal/omnirepo/internal/metadata"
 )
+
 
 // put handles PUT /<project>/raw/<repo>/<path...>.
 //
@@ -65,7 +66,12 @@ func (h *Handler) put(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
 			return
 		}
-		http.Error(w, fmt.Sprintf("storage: %v", err), http.StatusInternalServerError)
+		// Audit finding #9: never surface internal driver/path messages to
+		// the client — log them server-side and return an opaque 500.
+		slog.ErrorContext(r.Context(), "raw.put.storage_failed",
+			"project", res.project.Name, "repo", res.repo.Name,
+			"path", res.relPath, "err", err)
+		http.Error(w, "internal", http.StatusInternalServerError)
 		return
 	}
 
@@ -97,7 +103,11 @@ func (h *Handler) put(w http.ResponseWriter, r *http.Request) {
 		// file back so we don't leak an orphan the metadata layer has no row
 		// for. Best-effort: if the delete itself fails, log via audit below.
 		_ = h.pathStore.Delete(r.Context(), storageKey)
-		http.Error(w, fmt.Sprintf("commit: %v", err), http.StatusInternalServerError)
+		// Audit finding #9.
+		slog.ErrorContext(r.Context(), "raw.put.commit_failed",
+			"project", res.project.Name, "repo", res.repo.Name,
+			"path", res.relPath, "err", err)
+		http.Error(w, "internal", http.StatusInternalServerError)
 		return
 	}
 

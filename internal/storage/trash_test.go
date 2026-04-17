@@ -51,6 +51,12 @@ func TestTrashMoveRestore(t *testing.T) {
 		t.Fatal("MovedAt zero")
 	}
 
+	// Audit finding #2: Move must persist the original path so Restore can
+	// put the tree back at the exact pre-delete location.
+	if entries[0].OriginalPath != srcDir {
+		t.Fatalf("OriginalPath = %q, want %q", entries[0].OriginalPath, srcDir)
+	}
+
 	// Restore
 	if err := tr.Restore(context.Background(), trashPath, srcDir); err != nil {
 		t.Fatalf("Restore: %v", err)
@@ -61,5 +67,35 @@ func TestTrashMoveRestore(t *testing.T) {
 	entries, _ = tr.List(context.Background())
 	if len(entries) != 0 {
 		t.Fatalf("List after Restore len=%d want 0", len(entries))
+	}
+}
+
+// TestTrashListHandlesMissingSidecar proves backward compat: legacy entries
+// written before the audit-#2 fix have no sidecar; List must still return
+// them (with OriginalPath empty) so admin trash UI can still show and purge
+// them.
+func TestTrashListHandlesMissingSidecar(t *testing.T) {
+	root := t.TempDir()
+	trashRoot := filepath.Join(root, "trash")
+
+	// Simulate a legacy holder without a sidecar.
+	holder := filepath.Join(trashRoot, "1700000000-repo-7")
+	if err := os.MkdirAll(filepath.Join(holder, "legacy-repo-name"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+
+	tr := storage.NewTrash(trashRoot)
+	entries, err := tr.List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("len=%d want 1", len(entries))
+	}
+	if entries[0].Kind != "repo" || entries[0].OriginalID != 7 {
+		t.Fatalf("holder parse wrong: %+v", entries[0])
+	}
+	if entries[0].OriginalPath != "" {
+		t.Fatalf("legacy OriginalPath = %q, want empty", entries[0].OriginalPath)
 	}
 }

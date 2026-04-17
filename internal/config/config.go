@@ -141,7 +141,21 @@ type ServerConfig struct {
 	// Phase 4 Plan 03 / D-26: "gogit" (pure Go, go-git v6) is the default;
 	// "gitkit" shells out to the `git` binary as the documented fallback.
 	// Validator rejects any other value with a clear error.
-	GitBackend string `koanf:"git_backend"`
+	GitBackend string         `koanf:"git_backend"`
+	Timeouts   ServerTimeouts `koanf:"timeouts"`
+}
+
+// ServerTimeouts configures defensive timeouts on the http.Server listeners.
+// Slowloris/header-drip protection needs ReadHeaderTimeout; long-running
+// uploads (OCI blob pushes, RPM/deb/pypi/raw uploads, Git packs, S3 PUT) mean
+// ReadTimeout and WriteTimeout must stay unset/0 or they'll starve legitimate
+// traffic. IdleTimeout reaps leaked keep-alive sockets.
+type ServerTimeouts struct {
+	ReadHeader time.Duration `koanf:"read_header"`
+	Idle       time.Duration `koanf:"idle"`
+	// Read/Write left unset intentionally — see struct doc.
+	Read  time.Duration `koanf:"read"`
+	Write time.Duration `koanf:"write"`
 }
 
 type TLSConfig struct {
@@ -188,6 +202,11 @@ func Defaults() Config {
 			HTTPSPort:         8443,
 			ExternalHostnames: []string{},
 			GitBackend:        "gogit",
+			Timeouts: ServerTimeouts{
+				ReadHeader: 30 * time.Second,
+				Idle:       120 * time.Second,
+				// Read/Write = 0 (unlimited) — artifact uploads can run minutes.
+			},
 		},
 		Repos: ReposConfig{
 			Git: GitReposConfig{

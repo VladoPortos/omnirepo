@@ -6,6 +6,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 )
 
@@ -40,4 +41,31 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 	if body != nil {
 		_ = json.NewEncoder(w).Encode(body)
 	}
+}
+
+// maxAdminJSONBodyBytes is the default cap for small admin JSON POST/PATCH
+// bodies (create project, create repo, create user, etc.). Larger payloads
+// (e.g. description_md in repo PATCH) already use repos.maxRepoPatchBodyBytes.
+// Audit finding #10.
+const maxAdminJSONBodyBytes int64 = 64 << 10 // 64 KiB
+
+// decodeJSONBody wraps r.Body with http.MaxBytesReader(limit) and decodes it
+// into out. On overflow it writes 413 + validation_failed; on malformed JSON
+// it writes 400. Returns true on success. Callers just `return` on false.
+//
+// Audit finding #10: standardizes body-size defense so new handlers don't
+// forget MaxBytesReader and existing unbounded JSON decodes (handleCreateUser,
+// handleCreateProject, handleCreateRepo) cannot force unbounded buffering.
+func decodeJSONBody(w http.ResponseWriter, r *http.Request, limit int64, out any) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, limit)
+	if err := json.NewDecoder(r.Body).Decode(out); err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			writeJSONError(w, http.StatusRequestEntityTooLarge, ErrValidationFailed, "request body too large")
+			return false
+		}
+		writeJSONError(w, http.StatusBadRequest, ErrValidationFailed, "invalid JSON")
+		return false
+	}
+	return true
 }

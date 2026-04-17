@@ -4,6 +4,7 @@ package jobs
 
 import (
 	"math/rand"
+	"sync"
 	"time"
 )
 
@@ -28,9 +29,13 @@ var backoffSchedule = []time.Duration{
 // meaningfully stretching retry tail).
 const jitterFraction = 0.10
 
-// backoffRand is swappable in tests via SetBackoffRand to get deterministic
-// jitter. Not exported in the public API; tests in this package use it.
-var backoffRand = rand.New(rand.NewSource(time.Now().UnixNano()))
+// backoffRand supplies jitter for Backoff. math/rand.Rand is NOT safe for
+// concurrent use, and Backoff is called from N worker goroutines on retry
+// (see pool.markFailed), so all access goes through backoffRandMu.
+var (
+	backoffRandMu sync.Mutex
+	backoffRand   = rand.New(rand.NewSource(time.Now().UnixNano()))
+)
 
 // Backoff returns the next-run delay for the given attempt count (1-based:
 // attempts==1 means "this was the first failure"). ±10% jitter is applied.
@@ -45,6 +50,9 @@ func Backoff(attempts int) time.Duration {
 	}
 	base := backoffSchedule[idx]
 	// Symmetric jitter in [-jitterFraction, +jitterFraction].
-	j := (backoffRand.Float64()*2 - 1) * jitterFraction
+	backoffRandMu.Lock()
+	r := backoffRand.Float64()
+	backoffRandMu.Unlock()
+	j := (r*2 - 1) * jitterFraction
 	return base + time.Duration(float64(base)*j)
 }

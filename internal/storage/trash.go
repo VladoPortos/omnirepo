@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -11,12 +12,31 @@ import (
 	"time"
 )
 
+// trashMetaFile is the sidecar JSON name written inside each trash holder
+// directory so Restore can reconstruct the exact pre-delete path. Audit
+// finding #2: without this, Restore stripped to basename and could collide
+// with or overwrite unrelated content.
+const trashMetaFile = "omnirepo-trash.json"
+
 // TrashEntry describes one soft-deleted tree under the trash root.
 type TrashEntry struct {
-	Path       string    // absolute path on disk
-	MovedAt    time.Time // parsed from the directory name unix-ts prefix
-	Kind       string    // "repo", "project", "user", "s3-bucket", ...
-	OriginalID int64     // numeric id from the caller
+	Path         string    // absolute path on disk (the holder dir)
+	MovedAt      time.Time // parsed from the directory name unix-ts prefix
+	Kind         string    // "repo", "project", "user", "s3-bucket", ...
+	OriginalID   int64     // numeric id from the caller
+	OriginalPath string    // original on-disk path (pre-move). Empty for
+	// legacy entries written before audit finding #2 fix; callers MUST
+	// fall back for those.
+}
+
+// trashMetadata is the on-disk shape of the sidecar written by Move and
+// read by List. Keep field names stable — existing trash entries on disk
+// are forwards-compatible only so long as this struct does not rename.
+type trashMetadata struct {
+	OriginalPath string `json:"original_path"`
+	Kind         string `json:"kind"`
+	OriginalID   int64  `json:"original_id"`
+	MovedAtUnix  int64  `json:"moved_at_unix"`
 }
 
 // Trash is the soft-delete primitive (D-31). Move renames a tree into
@@ -45,7 +65,8 @@ func (t *trashImpl) Move(ctx context.Context, srcPath, kind string, id int64) (s
 	if kind == "" {
 		return "", errors.New("trash: kind must not be empty")
 	}
-	holder := fmt.Sprintf("%d-%s-%d", time.Now().Unix(), kind, id)
+	now := time.Now()
+	holder := fmt.Sprintf("%d-%s-%d", now.Unix(), kind, id)
 	dstDir := filepath.Join(t.root, holder)
 	if err := os.MkdirAll(dstDir, 0o750); err != nil {
 		return "", fmt.Errorf("trash: mkdir: %w", err)
@@ -53,6 +74,20 @@ func (t *trashImpl) Move(ctx context.Context, srcPath, kind string, id int64) (s
 	dst := filepath.Join(dstDir, filepath.Base(srcPath))
 	if err := os.Rename(srcPath, dst); err != nil {
 		return "", fmt.Errorf("trash: rename: %w", err)
+	}
+	// Sidecar metadata — written after the rename so a failed Move doesn't
+	// leave a stale metadata file behind. Best-effort: trash restore falls
+	// back to basename-only behavior if the sidecar is missing, which
+	// preserves the legacy invariant for callers that might still
+	// rely on the old shape (no regressions on read).
+	meta := trashMetadata{
+		OriginalPath: srcPath,
+		Kind:         kind,
+		OriginalID:   id,
+		MovedAtUnix:  now.Unix(),
+	}
+	if b, err := json.Marshal(meta); err == nil {
+		_ = os.WriteFile(filepath.Join(dstDir, trashMetaFile), b, 0o640)
 	}
 	return dst, nil
 }
@@ -67,8 +102,12 @@ func (t *trashImpl) Restore(ctx context.Context, trashPath, dstPath string) erro
 	if err := os.Rename(trashPath, dstPath); err != nil {
 		return fmt.Errorf("trash: restore rename: %w", err)
 	}
-	// Remove now-empty holder directory (best-effort).
-	_ = os.Remove(filepath.Dir(trashPath))
+	// Remove the sidecar and then the holder dir (both best-effort). The
+	// sidecar cleanup must precede os.Remove, which only succeeds on empty
+	// dirs.
+	holderDir := filepath.Dir(trashPath)
+	_ = os.Remove(filepath.Join(holderDir, trashMetaFile))
+	_ = os.Remove(holderDir)
 	return nil
 }
 
@@ -93,6 +132,23 @@ func (t *trashImpl) List(ctx context.Context) ([]TrashEntry, error) {
 			continue
 		}
 		parsed.Path = filepath.Join(t.root, e.Name())
+		// Overlay sidecar metadata when present. Legacy entries (pre-#2)
+		// have no sidecar and leave OriginalPath empty.
+		if b, rerr := os.ReadFile(filepath.Join(parsed.Path, trashMetaFile)); rerr == nil {
+			var m trashMetadata
+			if json.Unmarshal(b, &m) == nil {
+				parsed.OriginalPath = m.OriginalPath
+				// Sidecar kind/id override the holder-name parse in case
+				// the holder name was constructed before the kind format
+				// stabilized.
+				if m.Kind != "" {
+					parsed.Kind = m.Kind
+				}
+				if m.OriginalID != 0 {
+					parsed.OriginalID = m.OriginalID
+				}
+			}
+		}
 		out = append(out, parsed)
 	}
 	return out, nil

@@ -28,20 +28,29 @@ func NewProjectsRepo(db *DB) *ProjectsRepo { return &ProjectsRepo{db: db} }
 func (r *ProjectsRepo) Create(ctx context.Context, name, descriptionMD string) (int64, error) {
 	var id int64
 	err := r.db.WriteTx(ctx, func(tx *sql.Tx) error {
-		res, execErr := tx.ExecContext(ctx, `
-			INSERT INTO projects(name, description_md) VALUES (?, ?)
-		`, name, descriptionMD)
-		if execErr != nil {
-			return fmt.Errorf("projects: create %q: %w", name, execErr)
-		}
-		lid, lidErr := res.LastInsertId()
-		if lidErr != nil {
-			return fmt.Errorf("projects: last insert id: %w", lidErr)
-		}
-		id = lid
-		return nil
+		var insErr error
+		id, insErr = r.CreateInTx(ctx, tx, name, descriptionMD)
+		return insErr
 	})
 	return id, err
+}
+
+// CreateInTx is the tx-scoped form of Create. Audit finding #7: callers
+// that need to compose the project insert with a follow-up mutation (e.g.
+// adding the creator as a member) can do so in a single writer tx so
+// either both rows commit or neither does, eliminating orphan projects.
+func (r *ProjectsRepo) CreateInTx(ctx context.Context, tx *sql.Tx, name, descriptionMD string) (int64, error) {
+	res, execErr := tx.ExecContext(ctx, `
+		INSERT INTO projects(name, description_md) VALUES (?, ?)
+	`, name, descriptionMD)
+	if execErr != nil {
+		return 0, fmt.Errorf("projects: create %q: %w", name, execErr)
+	}
+	lid, lidErr := res.LastInsertId()
+	if lidErr != nil {
+		return 0, fmt.Errorf("projects: last insert id: %w", lidErr)
+	}
+	return lid, nil
 }
 
 // FindByName returns the live project with matching name. Returns ErrNotFound

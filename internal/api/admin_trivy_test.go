@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/dxc-internal/omnirepo/internal/api"
 	"github.com/dxc-internal/omnirepo/internal/auth"
 )
 
@@ -164,6 +165,72 @@ func createFakeTarGz(t *testing.T, files map[string]string) []byte {
 		t.Fatal(err)
 	}
 	return buf.Bytes()
+}
+
+// TestAdminTrivy_HonorsCustomDBDir pins audit finding #4: when
+// Deps.TrivyDBDir is set (sourced from cfg.Trivy.DBPath), the admin handlers
+// must use it instead of the hardcoded DataRoot/trivy/db, so operator config
+// overrides don't diverge from what the scan runner reads.
+func TestAdminTrivy_HonorsCustomDBDir(t *testing.T) {
+	customRoot := t.TempDir()
+	customDB := filepath.Join(customRoot, "trivy-elsewhere", "db")
+
+	s := newTestServer(t, func(d *api.Deps) {
+		d.TrivyDBDir = customDB
+	})
+	_, pw := seedTestUser(t, s.db, "root", "r@x", true, false)
+	cookie, _, _ := s.login(t, "root", pw)
+
+	// Seed the custom dir with a file so status reports baked-in.
+	if err := os.MkdirAll(customDB, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(customDB, "metadata.json"), []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	resp, body := s.do(t, "GET", "/api/v1/admin/trivy/db/status", cookie, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status code=%d", resp.StatusCode)
+	}
+	if body["source"] != "baked-in" {
+		t.Fatalf("expected source=baked-in from custom dir, got %v", body["source"])
+	}
+
+	// Confirm default DataRoot/trivy/db is NOT where the file lived — it has
+	// no trivy dir at all, proving admin_trivy actually read from the custom
+	// path rather than the legacy hardcoded fallback.
+	defaultDB := filepath.Join(s.dataRoot, "trivy", "db")
+	if _, err := os.Stat(defaultDB); !os.IsNotExist(err) {
+		t.Fatalf("legacy default dir was accessed: stat err=%v", err)
+	}
+
+	// Upload: the new DB should land at customDB, not the legacy default.
+	tarBuf := createFakeTarGz(t, map[string]string{
+		"new-marker": "v2",
+	})
+	var upBody bytes.Buffer
+	w := multipart.NewWriter(&upBody)
+	part, _ := w.CreateFormFile("db", "trivy-db.tar.gz")
+	_, _ = part.Write(tarBuf)
+	_ = w.Close()
+	req, _ := http.NewRequest("POST", s.ts.URL+"/api/v1/admin/trivy/db", &upBody)
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	req.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: cookie})
+	upResp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = upResp.Body.Close() }()
+	if upResp.StatusCode != http.StatusOK {
+		t.Fatalf("upload code=%d", upResp.StatusCode)
+	}
+	if _, err := os.Stat(filepath.Join(customDB, "new-marker")); err != nil {
+		t.Fatalf("new DB did not land at customDB: %v", err)
+	}
+	if _, err := os.Stat(defaultDB); !os.IsNotExist(err) {
+		t.Fatalf("upload wrote to legacy default path: err=%v", err)
+	}
 }
 
 // createTarGzWithTraversal builds a tar.gz with a "../" path traversal entry.

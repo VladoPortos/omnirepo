@@ -9,10 +9,31 @@ import (
 	"time"
 )
 
-// ApplyUpload accepts an admin-supplied cert+key pair, validates them,
-// archives a timestamped copy under <dataRoot>/certs/uploaded/<ts>/, atomically
-// replaces the live files under <dataRoot>/certs/server.{crt,key}, and
-// finally calls holder.Swap so the next TLS handshake presents the new cert.
+// UploadLayout carries the filesystem paths ApplyUploadAt writes to. All
+// fields must be set (absolute paths). Audit finding #4 — made explicit so
+// admin-uploaded certs always land where cfg.TLS.* says they should.
+type UploadLayout struct {
+	CertPath   string // final live cert destination
+	KeyPath    string // final live key destination
+	HistoryDir string // parent directory for timestamped rollback archives
+}
+
+// ApplyUpload is a thin compatibility wrapper that derives the historical
+// <dataRoot>/certs/{server.crt,server.key,uploaded} layout and delegates to
+// ApplyUploadAt. New code should call ApplyUploadAt directly with explicit
+// paths so cfg.TLS.{cert_path,key_path} are honored.
+func ApplyUpload(ctx context.Context, certPEM, keyPEM []byte, dataRoot string, holder *CertHolder) error {
+	return ApplyUploadAt(ctx, certPEM, keyPEM, UploadLayout{
+		CertPath:   filepath.Join(dataRoot, "certs", "server.crt"),
+		KeyPath:    filepath.Join(dataRoot, "certs", "server.key"),
+		HistoryDir: filepath.Join(dataRoot, "certs", "uploaded"),
+	}, holder)
+}
+
+// ApplyUploadAt accepts an admin-supplied cert+key pair, validates them,
+// archives a timestamped copy under layout.HistoryDir/<ts>/, atomically
+// replaces the live files at layout.CertPath / layout.KeyPath, and finally
+// calls holder.Swap so the next TLS handshake presents the new cert.
 //
 // Atomicity (WR-03): both live files are written to `.new` staging paths
 // FIRST (with fsync), then renamed into place. If EITHER staging write fails
@@ -25,18 +46,12 @@ import (
 // have already been swapped for the current process; a crashed restart sees
 // a mismatched pair on disk and the startup Swap will fail loudly, but no
 // earlier partially-written state can be observed.
-//
-// Order:
-//  1. Validate pair in a scratch holder — never touch disk if the pair is
-//     malformed.
-//  2. Stage both files as <live>/server.crt.new + server.key.new with
-//     fsync. Bail and clean up on any error.
-//  3. Archive a timestamped copy under certs/uploaded/<ts>/ for rollback.
-//  4. Rename both staged files into place (cert first, key second).
-//  5. Swap the live holder.
-func ApplyUpload(ctx context.Context, certPEM, keyPEM []byte, dataRoot string, holder *CertHolder) error {
+func ApplyUploadAt(ctx context.Context, certPEM, keyPEM []byte, layout UploadLayout, holder *CertHolder) error {
 	if holder == nil {
 		return fmt.Errorf("tls: apply upload: nil holder")
+	}
+	if layout.CertPath == "" || layout.KeyPath == "" || layout.HistoryDir == "" {
+		return fmt.Errorf("tls: apply upload: empty path in layout")
 	}
 	if err := ctx.Err(); err != nil {
 		return err
@@ -47,12 +62,14 @@ func ApplyUpload(ctx context.Context, certPEM, keyPEM []byte, dataRoot string, h
 		return err
 	}
 
-	live := filepath.Join(dataRoot, "certs")
-	if err := os.MkdirAll(live, 0o750); err != nil {
-		return fmt.Errorf("tls: apply upload: mkdir live: %w", err)
+	crtFinal := layout.CertPath
+	keyFinal := layout.KeyPath
+	if err := os.MkdirAll(filepath.Dir(crtFinal), 0o750); err != nil {
+		return fmt.Errorf("tls: apply upload: mkdir cert parent: %w", err)
 	}
-	crtFinal := filepath.Join(live, "server.crt")
-	keyFinal := filepath.Join(live, "server.key")
+	if err := os.MkdirAll(filepath.Dir(keyFinal), 0o750); err != nil {
+		return fmt.Errorf("tls: apply upload: mkdir key parent: %w", err)
+	}
 	crtStage := crtFinal + ".new"
 	keyStage := keyFinal + ".new"
 
@@ -75,7 +92,7 @@ func ApplyUpload(ctx context.Context, certPEM, keyPEM []byte, dataRoot string, h
 
 	// 3. Archive a timestamped rollback copy.
 	ts := time.Now().UTC().Format("20060102T150405Z")
-	histDir := filepath.Join(dataRoot, "certs", "uploaded", ts)
+	histDir := filepath.Join(layout.HistoryDir, ts)
 	if err := os.MkdirAll(histDir, 0o750); err != nil {
 		return stageFail(fmt.Errorf("tls: apply upload: mkdir history: %w", err))
 	}
@@ -106,7 +123,7 @@ func ApplyUpload(ctx context.Context, certPEM, keyPEM []byte, dataRoot string, h
 		return fmt.Errorf("tls: apply upload: rename key: %w", err)
 	}
 	// Parent-dir fsync for rename durability (ext4/xfs/btrfs on Linux).
-	if pf, err := os.Open(live); err == nil {
+	if pf, err := os.Open(filepath.Dir(crtFinal)); err == nil {
 		_ = pf.Sync()
 		_ = pf.Close()
 	}

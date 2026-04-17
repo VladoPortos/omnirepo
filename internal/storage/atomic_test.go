@@ -76,6 +76,112 @@ func TestWriteAndRenameFailureCleansTemp(t *testing.T) {
 	}
 }
 
+// TestSwapDirHappyPath pins the successful rename-aside → rename-in →
+// remove-backup dance.
+func TestSwapDirHappyPath(t *testing.T) {
+	root := t.TempDir()
+	src := filepath.Join(root, "new")
+	dst := filepath.Join(root, "live")
+	if err := os.MkdirAll(filepath.Join(src, "inner"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "inner", "marker"), []byte("NEW"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dst, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dst, "old"), []byte("OLD"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := storage.SwapDir(src, dst); err != nil {
+		t.Fatalf("SwapDir: %v", err)
+	}
+
+	got, err := os.ReadFile(filepath.Join(dst, "inner", "marker"))
+	if err != nil {
+		t.Fatalf("read post-swap marker: %v", err)
+	}
+	if string(got) != "NEW" {
+		t.Fatalf("dst marker = %q, want NEW", got)
+	}
+	// Old file should be gone.
+	if _, err := os.Stat(filepath.Join(dst, "old")); !os.IsNotExist(err) {
+		t.Fatalf("old file survived swap: err=%v", err)
+	}
+	// No .old-* backup should linger.
+	entries, _ := os.ReadDir(root)
+	for _, e := range entries {
+		if e.Name() != "live" {
+			t.Fatalf("stray entry after swap: %s", e.Name())
+		}
+	}
+}
+
+// TestSwapDirRestoresOldOnFailure proves the fix for audit finding #6:
+// if rename-in fails after the old dir is moved aside, the old dir MUST be
+// restored so the live location is never missing. Forcing a failure: the
+// source dir doesn't exist, so os.Rename returns ENOENT after the backup
+// step.
+func TestSwapDirRestoresOldOnFailure(t *testing.T) {
+	root := t.TempDir()
+	dst := filepath.Join(root, "live")
+	if err := os.MkdirAll(dst, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dst, "marker"), []byte("OLD"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+
+	// Non-existent src forces the rename-in step to fail.
+	err := storage.SwapDir(filepath.Join(root, "does-not-exist"), dst)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+
+	// Old dir must still be at dst.
+	got, readErr := os.ReadFile(filepath.Join(dst, "marker"))
+	if readErr != nil {
+		t.Fatalf("old dir not restored: %v", readErr)
+	}
+	if string(got) != "OLD" {
+		t.Fatalf("old marker = %q, want OLD", got)
+	}
+	// No .old-* backup should linger.
+	entries, _ := os.ReadDir(root)
+	for _, e := range entries {
+		if e.Name() != "live" {
+			t.Fatalf("stray entry after failed swap: %s", e.Name())
+		}
+	}
+}
+
+// TestSwapDirNoPriorDst covers the fresh-install case where dst doesn't yet
+// exist. SwapDir should just rename src into place without any backup.
+func TestSwapDirNoPriorDst(t *testing.T) {
+	root := t.TempDir()
+	src := filepath.Join(root, "new")
+	dst := filepath.Join(root, "live")
+	if err := os.MkdirAll(src, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "m"), []byte("hi"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := storage.SwapDir(src, dst); err != nil {
+		t.Fatalf("SwapDir: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(dst, "m"))
+	if err != nil {
+		t.Fatalf("read post-swap: %v", err)
+	}
+	if string(got) != "hi" {
+		t.Fatalf("content = %q, want hi", got)
+	}
+}
+
 func TestWriteAndRenameDoesNotCorruptExistingDst(t *testing.T) {
 	root := t.TempDir()
 	tmpDir := filepath.Join(root, "tmp")

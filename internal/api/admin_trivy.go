@@ -24,7 +24,19 @@ import (
 	"github.com/dxc-internal/omnirepo/internal/audit"
 	"github.com/dxc-internal/omnirepo/internal/auth"
 	authmw "github.com/dxc-internal/omnirepo/internal/auth/middleware"
+	"github.com/dxc-internal/omnirepo/internal/storage"
 )
+
+// trivyDBDir resolves the directory the admin handlers use for the Trivy
+// scanner DB. Operator overrides via cfg.Trivy.DBPath come in through
+// Deps.TrivyDBDir; the fallback matches the historical hardcoded layout so
+// existing installs and tests keep working.
+func (d Deps) trivyDBDir() string {
+	if d.TrivyDBDir != "" {
+		return d.TrivyDBDir
+	}
+	return filepath.Join(d.DataRoot, "trivy", "db")
+}
 
 // mountAdminTrivy installs Trivy DB admin endpoints on r.
 func (d Deps) mountAdminTrivy(r chi.Router) {
@@ -37,7 +49,7 @@ func (d Deps) mountAdminTrivy(r chi.Router) {
 }
 
 func (d Deps) handleTrivyDBStatus(w http.ResponseWriter, r *http.Request) {
-	dbDir := filepath.Join(d.DataRoot, "trivy", "db")
+	dbDir := d.trivyDBDir()
 
 	// Check trivy_db_meta table for the latest row.
 	var version, source, appliedAt string
@@ -185,16 +197,13 @@ func (d Deps) handleTrivyDBUpload(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Atomic swap: rename tmpDir to DataRoot/trivy/db/.
-	dbDir := filepath.Join(d.DataRoot, "trivy", "db")
-	if err := os.MkdirAll(filepath.Dir(dbDir), 0o750); err != nil {
-		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
-		return
-	}
-	// Remove old DB directory first.
-	_ = os.RemoveAll(dbDir)
-	if err := os.Rename(tmpDir, dbDir); err != nil {
-		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "atomic swap failed: "+err.Error())
+	// Atomic swap: rename-aside old dir, rename-in new dir, remove old on
+	// success. Audit finding #6: the previous implementation RemoveAll'd the
+	// old DB before the rename, which could leave the scanner with no DB at
+	// all if the rename then failed. SwapDir restores the old dir on failure.
+	dbDir := d.trivyDBDir()
+	if err := storage.SwapDir(tmpDir, dbDir); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "atomic swap failed")
 		return
 	}
 
@@ -260,13 +269,10 @@ func (d Deps) handleTrivyDBPull(w http.ResponseWriter, r *http.Request) {
 		srcDB = tmpDir
 	}
 
-	dbDir := filepath.Join(d.DataRoot, "trivy", "db")
-	if err := os.MkdirAll(filepath.Dir(dbDir), 0o750); err != nil {
-		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
-		return
-	}
-	_ = os.RemoveAll(dbDir)
-	if err := os.Rename(srcDB, dbDir); err != nil {
+	// Atomic swap (audit finding #6). See handleTrivyDBUpload for the same
+	// rationale: never leave the live DB dir missing on a failed swap.
+	dbDir := d.trivyDBDir()
+	if err := storage.SwapDir(srcDB, dbDir); err != nil {
 		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "swap failed")
 		return
 	}

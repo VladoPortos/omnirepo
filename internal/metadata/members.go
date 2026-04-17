@@ -21,14 +21,21 @@ func NewMembersRepo(db *DB) *MembersRepo { return &MembersRepo{db: db} }
 // surface the PK-conflict error from SQLite.
 func (r *MembersRepo) Add(ctx context.Context, projectID, userID int64) error {
 	return r.db.WriteTx(ctx, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `
-			INSERT INTO project_members(project_id, user_id) VALUES (?, ?)
-		`, projectID, userID)
-		if err != nil {
-			return fmt.Errorf("members: add (%d,%d): %w", projectID, userID, err)
-		}
-		return nil
+		return r.AddInTx(ctx, tx, projectID, userID)
 	})
+}
+
+// AddInTx is the tx-scoped form of Add. Audit finding #7: lets callers
+// compose membership insertion with another mutation (e.g. the project
+// insert in handleCreateProject) so either both rows commit together or
+// the whole operation rolls back.
+func (r *MembersRepo) AddInTx(ctx context.Context, tx *sql.Tx, projectID, userID int64) error {
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO project_members(project_id, user_id) VALUES (?, ?)
+	`, projectID, userID); err != nil {
+		return fmt.Errorf("members: add (%d,%d): %w", projectID, userID, err)
+	}
+	return nil
 }
 
 // Remove deletes the row; no error if the row is absent.

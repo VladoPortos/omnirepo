@@ -59,11 +59,10 @@ func (d Deps) handleSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Filter by project membership for non-super-admin actors.
-	// Build a set of project names the actor can see.
+	// Filter by project visibility (audit finding #8 — now handles
+	// project-scoped API keys too). nil = super-admin, no filter.
 	var memberProjectNames map[string]struct{}
-	if !actor.IsSuperAdmin {
-		ids, _ := d.Members.ListProjectIDsForUser(r.Context(), actor.ID)
+	if ids := visibleProjectIDs(r.Context(), d.Members, actor); ids != nil {
 		memberProjectNames = make(map[string]struct{}, len(ids))
 		for _, pid := range ids {
 			p, err := d.Projects.FindByID(r.Context(), pid)

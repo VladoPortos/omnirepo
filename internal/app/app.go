@@ -208,8 +208,23 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 	}
 
 	// 4. TLS: first-boot self-signed if no live cert, otherwise load existing.
-	certPath := filepath.Join(cfg.DataRoot, "certs", "server.crt")
-	keyPath := filepath.Join(cfg.DataRoot, "certs", "server.key")
+	// Audit finding #4: honor cfg.TLS.CertPath / cfg.TLS.KeyPath when set so
+	// operator config overrides aren't silently dropped. Fall back to the
+	// legacy DataRoot/certs/server.{crt,key} layout when unset.
+	certPath := cfg.TLS.CertPath
+	if certPath == "" {
+		certPath = filepath.Join(cfg.DataRoot, "certs", "server.crt")
+	}
+	keyPath := cfg.TLS.KeyPath
+	if keyPath == "" {
+		keyPath = filepath.Join(cfg.DataRoot, "certs", "server.key")
+	}
+	if err := os.MkdirAll(filepath.Dir(certPath), 0o750); err != nil {
+		return fmt.Errorf("app.Run: mkdir cert dir: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(keyPath), 0o750); err != nil {
+		return fmt.Errorf("app.Run: mkdir key dir: %w", err)
+	}
 	holder := omrtls.NewCertHolder()
 	if _, err := os.Stat(certPath); errors.Is(err, os.ErrNotExist) {
 		hosts := append([]string{omrtls.Hostname()}, cfg.Server.ExternalHostnames...)
@@ -465,6 +480,12 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 			return nil, err
 		}
 		// Phase 4 Plan 10: Git bare-repo lifecycle (D-38).
+		//
+		// Audit finding #7: InitBare creates the `.git` dir on disk inside
+		// the hook, but the outer tx can still roll back if a later step
+		// (ReplaceAll here, or any future addition) fails. Clean the
+		// freshly-initialised dir up on any error return so the filesystem
+		// doesn't hold an orphan that has no repos row.
 		if repoType == "git" {
 			repoPath := filepath.Join(cfg.DataRoot, "repos", projectName, "git", repoName+".git")
 			if err := gitpkg.InitBare(repoPath, "main"); err != nil {
@@ -474,6 +495,7 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 				{Name: "HEAD", Target: "refs/heads/main", Type: metadata.GitRefSymbolic},
 			}
 			if err := gitRefsRepo.ReplaceAll(ctx, tx, repoID, seed); err != nil {
+				_ = os.RemoveAll(repoPath)
 				return nil, err
 			}
 		}
@@ -542,12 +564,15 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 		S3AEAD:        aead,
 		S3Backend:     s3Be,
 		S3ObjectsRepo: metadata.NewS3ObjectsRepo(db),
-		Holder:     holder,
-		DataRoot:   cfg.DataRoot,
-		Audit:      auditLogger,
-		Trash:      storage.NewTrash(filepath.Join(cfg.DataRoot, "trash")),
-		Locks:      storage.NewLocks(),
-		SessionTTL: cfg.Auth.SessionTTL,
+		Holder:      holder,
+		DataRoot:    cfg.DataRoot,
+		TrivyDBDir:  cfg.Trivy.DBPath,
+		TLSCertPath: cfg.TLS.CertPath,
+		TLSKeyPath:  cfg.TLS.KeyPath,
+		Audit:       auditLogger,
+		Trash:       storage.NewTrash(filepath.Join(cfg.DataRoot, "trash")),
+		Locks:       storage.NewLocks(),
+		SessionTTL:  cfg.Auth.SessionTTL,
 
 		RepoCreateHook: composedRepoCreateHook,
 		// Plan 02-09: scan REST endpoints.
@@ -674,9 +699,24 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 		httpsLn = ln
 	}
 
-	httpSrv := &http.Server{Handler: router}
+	// Defensive HTTP timeouts (audit finding #5 / gosec G112).
+	// ReadHeaderTimeout is the slowloris defense; IdleTimeout reaps leaked
+	// keep-alive sockets. Read/Write are deliberately taken from config and
+	// default to 0 (unlimited) because large artifact pushes (OCI blobs,
+	// RPM/deb/pypi/raw uploads, git packs, S3 PUT) routinely run minutes.
+	httpSrv := &http.Server{
+		Handler:           router,
+		ReadHeaderTimeout: cfg.Server.Timeouts.ReadHeader,
+		ReadTimeout:       cfg.Server.Timeouts.Read,
+		WriteTimeout:      cfg.Server.Timeouts.Write,
+		IdleTimeout:       cfg.Server.Timeouts.Idle,
+	}
 	httpsSrv := &http.Server{
-		Handler: router,
+		Handler:           router,
+		ReadHeaderTimeout: cfg.Server.Timeouts.ReadHeader,
+		ReadTimeout:       cfg.Server.Timeouts.Read,
+		WriteTimeout:      cfg.Server.Timeouts.Write,
+		IdleTimeout:       cfg.Server.Timeouts.Idle,
 		TLSConfig: &stdtls.Config{
 			GetCertificate: holder.Get,
 			MinVersion:     stdtls.VersionTLS12,

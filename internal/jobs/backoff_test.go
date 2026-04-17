@@ -1,6 +1,7 @@
 package jobs
 
 import (
+	"sync"
 	"testing"
 	"time"
 )
@@ -45,4 +46,26 @@ func TestMaxAttemptsConst(t *testing.T) {
 	if MaxAttempts != 5 {
 		t.Fatalf("MaxAttempts=%d want 5", MaxAttempts)
 	}
+}
+
+// TestBackoffConcurrent exercises Backoff from many goroutines to prove it is
+// safe under -race. Worker pools call Backoff from separate goroutines on
+// retry (pool.go: markFailed), and math/rand.Rand is not safe for concurrent
+// use — without synchronization the race detector flags this loop.
+func TestBackoffConcurrent(t *testing.T) {
+	const (
+		workers       = 16
+		callsPerGroup = 200
+	)
+	var wg sync.WaitGroup
+	wg.Add(workers)
+	for w := 0; w < workers; w++ {
+		go func() {
+			defer wg.Done()
+			for i := 0; i < callsPerGroup; i++ {
+				_ = Backoff((i % 6) + 1)
+			}
+		}()
+	}
+	wg.Wait()
 }

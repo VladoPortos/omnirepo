@@ -111,10 +111,11 @@ func (d Deps) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	var scopeClause string
 	var scopeArgs []any
 
-	if !actor.IsSuperAdmin {
-		ids, _ := d.Members.ListProjectIDsForUser(r.Context(), actor.ID)
+	// Audit finding #8: visibleProjectIDs handles super-admins,
+	// user actors, AND project-scoped API keys uniformly.
+	if ids := visibleProjectIDs(r.Context(), d.Members, actor); ids != nil {
 		if len(ids) == 0 {
-			// No memberships: return zeros.
+			// No visible projects: return zeros.
 			writeJSON(w, http.StatusOK, dashboardResponse{
 				RecentActivity: make([]activityRow, 0),
 			})

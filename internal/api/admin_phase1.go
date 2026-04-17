@@ -60,6 +60,19 @@ type Deps struct {
 	Trash    storage.Trash
 	Locks    storage.Locks
 
+	// TrivyDBDir is the directory admin_trivy reads/writes. When empty,
+	// falls back to DataRoot/trivy/db. Set by app.Run from cfg.Trivy.DBPath
+	// so operator overrides line up with the runner (internal/scan).
+	// Audit finding #4.
+	TrivyDBDir string
+
+	// TLSCertPath / TLSKeyPath are where the admin TLS upload endpoint
+	// persists live certs. When empty, fall back to DataRoot/certs/server.*.
+	// Set by app.Run from cfg.TLS.* so operator overrides work. Audit
+	// finding #4.
+	TLSCertPath string
+	TLSKeyPath  string
+
 	// ScanDeps is the Plan 02-09 scan REST surface dependency bundle.
 	// nil-safe — when nil, scan endpoints are not mounted.
 	ScanDeps *ScansDeps
@@ -483,8 +496,7 @@ func (d Deps) handleDeleteMe(w http.ResponseWriter, r *http.Request) {
 
 func (d Deps) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 	var req CreateUserRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSONError(w, http.StatusBadRequest, ErrValidationFailed, "invalid JSON")
+	if !decodeJSONBody(w, r, maxAdminJSONBodyBytes, &req) {
 		return
 	}
 	if err := auth.LoginValid(req.Login); err != nil {
@@ -537,30 +549,43 @@ func (d Deps) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 
 func (d Deps) handleCreateProject(w http.ResponseWriter, r *http.Request) {
 	var req CreateProjectRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSONError(w, http.StatusBadRequest, ErrValidationFailed, "invalid JSON")
+	if !decodeJSONBody(w, r, maxAdminJSONBodyBytes, &req) {
 		return
 	}
 	if err := auth.ProjectNameValid(req.Name); err != nil {
 		writeJSONError(w, http.StatusUnprocessableEntity, ErrValidationFailed, err.Error())
 		return
 	}
-	id, err := d.Projects.Create(r.Context(), req.Name, req.DescriptionMD)
-	if err != nil {
-		if strings.Contains(err.Error(), "UNIQUE") || strings.Contains(err.Error(), "constraint") {
+
+	// Audit finding #7: project insert and creator-membership insert must
+	// commit or roll back together — otherwise a failed Members.Add left
+	// an orphan project that nobody could delete.
+	var id int64
+	actor, hasActor := auth.ActorFromContext(r.Context())
+	txErr := d.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
+		var insErr error
+		id, insErr = d.Projects.CreateInTx(r.Context(), tx, req.Name, req.DescriptionMD)
+		if insErr != nil {
+			return insErr
+		}
+		if hasActor && actor.ID != 0 {
+			if err := d.Members.AddInTx(r.Context(), tx, id, actor.ID); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if txErr != nil {
+		if strings.Contains(txErr.Error(), "UNIQUE") || strings.Contains(txErr.Error(), "constraint") {
 			writeJSONError(w, http.StatusConflict, ErrConflict, "project exists")
 			return
 		}
 		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
 		return
 	}
-	if a, ok := auth.ActorFromContext(r.Context()); ok {
-		uid := a.ID
+	if hasActor {
+		uid := actor.ID
 		d.recordAudit(r, audit.Event{Kind: audit.EvtProjectCreated, ActorUserID: &uid, TargetKind: "project", TargetID: req.Name})
-		if err := d.Members.Add(r.Context(), id, a.ID); err != nil {
-			writeJSONError(w, http.StatusInternalServerError, ErrInternal, "project created but membership failed")
-			return
-		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"id": id, "name": req.Name})
 }
@@ -646,8 +671,7 @@ func (d Deps) handleCreateRepo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req CreateRepoRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSONError(w, http.StatusBadRequest, ErrValidationFailed, "invalid JSON")
+	if !decodeJSONBody(w, r, maxAdminJSONBodyBytes, &req) {
 		return
 	}
 	if err := auth.ProjectNameValid(req.Name); err != nil {
@@ -740,8 +764,16 @@ func (d Deps) handleDeleteRepo(w http.ResponseWriter, r *http.Request) {
 		onDiskSafe = false
 	}
 	if onDiskSafe && d.Trash != nil {
+		// Audit finding #3: git repos live at `.../<repo>.git`, not
+		// `.../<repo>` — without the suffix the bare repo dir was leaked on
+		// disk and the trash/restore flow was unreliable for type=git.
 		onDisk := filepath.Join(d.DataRoot, "repos", projectName, typ, repoName)
-		if _, err := d.Trash.Move(r.Context(), onDisk, "repo", rr.ID); err != nil {
+		trashKind := "repo"
+		if typ == "git" {
+			onDisk += ".git"
+			trashKind = "git-repo"
+		}
+		if _, err := d.Trash.Move(r.Context(), onDisk, trashKind, rr.ID); err != nil {
 			// Tree may not exist for a freshly-created empty repo; that's not a failure.
 			// Use errors.Is(os.ErrNotExist) instead of string-matching — rename
 			// error wrapping via fmt.Errorf(..., %w) preserves the sentinel.
@@ -776,7 +808,23 @@ func (d Deps) handleTLSUpload(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusBadRequest, ErrValidationFailed, "key: "+err.Error())
 		return
 	}
-	if err := omrtls.ApplyUpload(r.Context(), certBytes, keyBytes, d.DataRoot, d.Holder); err != nil {
+	// Audit finding #4: honor cfg.TLS.{cert_path,key_path} (threaded via
+	// Deps.TLSCertPath/TLSKeyPath) so admin upload writes where app boot
+	// reads. Fall back to the legacy DataRoot/certs layout when unset.
+	certFinal := d.TLSCertPath
+	if certFinal == "" {
+		certFinal = filepath.Join(d.DataRoot, "certs", "server.crt")
+	}
+	keyFinal := d.TLSKeyPath
+	if keyFinal == "" {
+		keyFinal = filepath.Join(d.DataRoot, "certs", "server.key")
+	}
+	layout := omrtls.UploadLayout{
+		CertPath:   certFinal,
+		KeyPath:    keyFinal,
+		HistoryDir: filepath.Join(d.DataRoot, "certs", "uploaded"),
+	}
+	if err := omrtls.ApplyUploadAt(r.Context(), certBytes, keyBytes, layout, d.Holder); err != nil {
 		writeJSONError(w, http.StatusUnprocessableEntity, ErrValidationFailed, err.Error())
 		return
 	}

@@ -80,6 +80,51 @@ func TestCreateBucket_HappyPath(t *testing.T) {
 	}
 }
 
+// TestCreateBucket_MkdirFailureCompensatesDBRow pins audit finding #7: when
+// the on-disk mkdir fails AFTER the DB insert commits, the backend must
+// compensate by soft-deleting the row so the name doesn't stay permanently
+// reserved to a bucket with no directory. Without the compensation, a
+// failed mkdir left a zombie row blocking all future CreateBucket calls
+// with the same name.
+func TestCreateBucket_MkdirFailureCompensatesDBRow(t *testing.T) {
+	f := newFixture(t)
+
+	// Force mkdir to fail: pre-create dataRoot/s3 as a regular FILE so
+	// MkdirAll cannot create a child directory inside it.
+	s3Path := filepath.Join(f.dataRoot, "s3")
+	if err := os.WriteFile(s3Path, []byte("not a dir"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+
+	err := f.b.CreateBucket("zombie-name")
+	if err == nil {
+		t.Fatal("expected mkdir failure, got nil")
+	}
+	if !strings.Contains(err.Error(), "mkdir") {
+		t.Fatalf("expected mkdir error, got: %v", err)
+	}
+
+	// Compensation must have flipped deleted_at on the row so the name
+	// is free to re-create. Count only LIVE rows.
+	var live int
+	if err := f.db.Reader.QueryRow(
+		`SELECT COUNT(*) FROM s3_buckets WHERE name='zombie-name' AND deleted_at IS NULL`,
+	).Scan(&live); err != nil {
+		t.Fatal(err)
+	}
+	if live != 0 {
+		t.Fatalf("live bucket row still present after mkdir failure: %d", live)
+	}
+
+	// Remove the blocker and retry — the name must now be reusable.
+	if err := os.Remove(s3Path); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.b.CreateBucket("zombie-name"); err != nil {
+		t.Fatalf("recreate after compensation: %v", err)
+	}
+}
+
 func TestCreateBucket_ReservedAndInvalidNames(t *testing.T) {
 	f := newFixture(t)
 	cases := []struct{ name, label string }{

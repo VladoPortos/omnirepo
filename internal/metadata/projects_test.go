@@ -2,6 +2,7 @@ package metadata_test
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"strings"
 	"testing"
@@ -28,6 +29,38 @@ func TestProjectsRepo_CreateAndFind(t *testing.T) {
 	}
 	if got.Name != "dxc" || got.DescriptionMD != "desc" {
 		t.Fatalf("unexpected: %+v", got)
+	}
+}
+
+// TestProjectsRepo_CreateInTxRollsBackWithMembers pins audit finding #7:
+// when CreateInTx + MembersRepo.AddInTx are composed inside a single writer
+// tx, a failure in the second step must leave the DB with NO project row
+// (no orphan). Pre-fix, Projects.Create and Members.Add were independent
+// transactions and a failure in the second left an orphan project.
+func TestProjectsRepo_CreateInTxRollsBackWithMembers(t *testing.T) {
+	db := sqlitetest.New(t)
+	projects := metadata.NewProjectsRepo(db)
+	members := metadata.NewMembersRepo(db)
+	ctx := context.Background()
+
+	// Compose project insert + membership insert in a single writer tx
+	// where the membership step deliberately fails (userID=0 violates the
+	// FK to users.id). The whole tx must roll back.
+	err := db.WriteTx(ctx, func(tx *sql.Tx) error {
+		id, insErr := projects.CreateInTx(ctx, tx, "doomed", "")
+		if insErr != nil {
+			return insErr
+		}
+		// userID=9999 does not exist — FK violation aborts the tx.
+		return members.AddInTx(ctx, tx, id, 9999)
+	})
+	if err == nil {
+		t.Fatal("expected tx error from FK failure")
+	}
+
+	// Project must NOT exist post-rollback.
+	if _, ferr := projects.FindByName(ctx, "doomed"); !errors.Is(ferr, metadata.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound after rollback, got %v", ferr)
 	}
 }
 

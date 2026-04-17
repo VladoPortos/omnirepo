@@ -7,10 +7,13 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
+	"time"
 )
 
 // WriteAndRename writes r to a uniquely named temp file inside tmpDir, fsyncs
@@ -77,4 +80,47 @@ func WriteAndRename(ctx context.Context, tmpDir, dstPath string, r io.Reader) (i
 	}
 
 	return n, nil
+}
+
+// SwapDir replaces dstDir with srcDir using a three-rename dance so a failure
+// mid-swap never leaves dstDir missing:
+//
+//  1. If dstDir exists, rename it to a sibling backup path.
+//  2. Rename srcDir → dstDir.
+//  3. Remove the backup.
+//
+// If step 2 fails, the backup is renamed back to dstDir before returning the
+// error. The caller is responsible for making sure srcDir and dstDir live on
+// the same filesystem (otherwise os.Rename falls back to copy-and-errors).
+//
+// This is the safe replacement for "os.RemoveAll(dst); os.Rename(src, dst)"
+// used by destructive swap-in-place code paths.
+func SwapDir(srcDir, dstDir string) error {
+	if srcDir == "" || dstDir == "" {
+		return errors.New("storage: SwapDir: src/dst must be non-empty")
+	}
+	if err := os.MkdirAll(filepath.Dir(dstDir), 0o750); err != nil {
+		return fmt.Errorf("storage: swap dst parent mkdir: %w", err)
+	}
+	var backup string
+	if _, err := os.Stat(dstDir); err == nil {
+		backup = dstDir + ".old-" + strconv.FormatInt(time.Now().UnixNano(), 10)
+		if err := os.Rename(dstDir, backup); err != nil {
+			return fmt.Errorf("storage: swap backup rename: %w", err)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("storage: swap stat dst: %w", err)
+	}
+	if err := os.Rename(srcDir, dstDir); err != nil {
+		// Best-effort restore the previous dir so the live location never
+		// ends up missing on a failed swap.
+		if backup != "" {
+			_ = os.Rename(backup, dstDir)
+		}
+		return fmt.Errorf("storage: swap rename: %w", err)
+	}
+	if backup != "" {
+		_ = os.RemoveAll(backup)
+	}
+	return nil
 }

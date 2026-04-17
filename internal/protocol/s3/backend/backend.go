@@ -212,6 +212,12 @@ func (b *Backend) CreateBucket(name string) error {
 // CreateBucketForProject is the REST-side entry point for bucket creation.
 // Validates the name, inserts the s3_buckets row inside a writer tx, and
 // creates the on-disk directory. Returns ErrBucketAlreadyExists on conflict.
+//
+// Audit finding #7: mkdir failure AFTER the DB row committed used to leave
+// a bucket row with no on-disk directory — unreachable from subsequent
+// object writes but blocking name reuse. We now compensate: if mkdir
+// fails, soft-delete the bucket row so the name frees up and the caller
+// sees a clean 500 instead of a half-created state.
 func (b *Backend) CreateBucketForProject(name string, projectID int64) error {
 	if err := validateBucketName(name); err != nil {
 		return err
@@ -220,6 +226,7 @@ func (b *Backend) CreateBucketForProject(name string, projectID int64) error {
 		return errors.New("backend: projectID required")
 	}
 	ctx := context.Background()
+	var bucketID int64
 	if err := b.DB.WriteTx(ctx, func(tx *sql.Tx) error {
 		var existing int64
 		if err := tx.QueryRowContext(ctx,
@@ -229,17 +236,30 @@ func (b *Backend) CreateBucketForProject(name string, projectID int64) error {
 		} else if !errors.Is(err, sql.ErrNoRows) {
 			return fmt.Errorf("backend: precheck: %w", err)
 		}
-		_, err := tx.ExecContext(ctx,
+		res, err := tx.ExecContext(ctx,
 			`INSERT INTO s3_buckets(name, project_id) VALUES (?, ?)`, name, projectID,
 		)
 		if err != nil {
 			return fmt.Errorf("backend: insert bucket: %w", err)
 		}
+		lid, _ := res.LastInsertId()
+		bucketID = lid
 		return nil
 	}); err != nil {
 		return err
 	}
 	if err := os.MkdirAll(b.bucketRoot(name), 0o750); err != nil {
+		// Compensate: hard-delete the row we just committed so the name
+		// is free to re-create (the UNIQUE(name) constraint is not
+		// partial on deleted_at, so a soft-delete would leave a zombie
+		// row blocking the name). Safe because no objects can exist
+		// without the backing dir we failed to create.
+		_ = b.DB.WriteTx(ctx, func(tx *sql.Tx) error {
+			_, delErr := tx.ExecContext(ctx,
+				`DELETE FROM s3_buckets WHERE id=?`, bucketID,
+			)
+			return delErr
+		})
 		return fmt.Errorf("backend: mkdir bucket root: %w", err)
 	}
 	return nil

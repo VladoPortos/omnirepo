@@ -45,6 +45,27 @@ func TestDefaults(t *testing.T) {
 	}
 }
 
+// TestServerTimeoutDefaults pins the Slowloris/header-drip defense values
+// (audit finding #5). ReadHeader must be non-zero so http.Server defends
+// against header-slow clients; Idle must be non-zero so leaked keep-alives
+// get reaped. Read/Write are intentionally 0 — artifact pushes can run
+// minutes and must not be capped here.
+func TestServerTimeoutDefaults(t *testing.T) {
+	d := config.Defaults()
+	if d.Server.Timeouts.ReadHeader != 30*time.Second {
+		t.Errorf("Server.Timeouts.ReadHeader = %s, want 30s", d.Server.Timeouts.ReadHeader)
+	}
+	if d.Server.Timeouts.Idle != 120*time.Second {
+		t.Errorf("Server.Timeouts.Idle = %s, want 120s", d.Server.Timeouts.Idle)
+	}
+	if d.Server.Timeouts.Read != 0 {
+		t.Errorf("Server.Timeouts.Read = %s, want 0 (unlimited)", d.Server.Timeouts.Read)
+	}
+	if d.Server.Timeouts.Write != 0 {
+		t.Errorf("Server.Timeouts.Write = %s, want 0 (unlimited)", d.Server.Timeouts.Write)
+	}
+}
+
 func TestLoadYAML(t *testing.T) {
 	cfg, err := config.Load("testdata/omnirepo.example.yaml")
 	if err != nil {

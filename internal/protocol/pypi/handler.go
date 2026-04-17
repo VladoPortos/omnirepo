@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -385,7 +386,9 @@ func (h *Handler) getSimpleIndex(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write(data)
 		return
 	} else if !errors.Is(err, os.ErrNotExist) {
-		http.Error(w, fmt.Sprintf("read index: %v", err), http.StatusInternalServerError)
+		// Audit finding #9: don't leak filesystem paths / driver text.
+		slog.ErrorContext(r.Context(), "pypi.read_index_failed", "err", err)
+		http.Error(w, "internal", http.StatusInternalServerError)
 		return
 	}
 	// Fall back to synthetic empty index so fresh repos serve cleanly.
@@ -453,7 +456,9 @@ func (h *Handler) getProjectIndex(w http.ResponseWriter, r *http.Request) {
 			}
 			return
 		}
-		http.Error(w, fmt.Sprintf("read project index: %v", err), http.StatusInternalServerError)
+		// Audit finding #9.
+		slog.ErrorContext(r.Context(), "pypi.read_project_index_failed", "err", err)
+		http.Error(w, "internal", http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", ct)
@@ -486,7 +491,9 @@ func (h *Handler) getPackage(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}
-		http.Error(w, fmt.Sprintf("stat: %v", err), http.StatusInternalServerError)
+		// Audit finding #9.
+		slog.ErrorContext(r.Context(), "pypi.stat_failed", "err", err)
+		http.Error(w, "internal", http.StatusInternalServerError)
 		return
 	}
 	if h.severityGate != nil {
@@ -504,7 +511,9 @@ func (h *Handler) getPackage(w http.ResponseWriter, r *http.Request) {
 	}
 	f, err := os.Open(abs)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("open: %v", err), http.StatusInternalServerError)
+		// Audit finding #9.
+		slog.ErrorContext(r.Context(), "pypi.open_failed", "err", err)
+		http.Error(w, "internal", http.StatusInternalServerError)
 		return
 	}
 	defer func() { _ = f.Close() }()

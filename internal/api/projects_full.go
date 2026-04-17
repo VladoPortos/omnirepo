@@ -118,10 +118,10 @@ func (d Deps) handleListProjects(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Filter to actor's projects unless super-admin.
+	// Filter to visible projects (audit finding #8 — now handles
+	// project-scoped API keys). nil = super-admin, no filter.
 	var memberSet map[int64]struct{}
-	if !actor.IsSuperAdmin {
-		ids, _ := d.Members.ListProjectIDsForUser(r.Context(), actor.ID)
+	if ids := visibleProjectIDs(r.Context(), d.Members, actor); ids != nil {
 		memberSet = make(map[int64]struct{}, len(ids))
 		for _, pid := range ids {
 			memberSet[pid] = struct{}{}

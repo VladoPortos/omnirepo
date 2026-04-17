@@ -124,43 +124,62 @@ func (d Deps) handleRestoreTrash(w http.ResponseWriter, r *http.Request) {
 
 	for _, e := range entries {
 		dirName := filepath.Base(e.Path)
-		if dirName == id {
-			// For repo trash entries, find the inner content path.
+		if dirName != id {
+			continue
+		}
+		// Audit finding #2: prefer the sidecar-persisted OriginalPath so the
+		// restore lands at the exact pre-delete location. Previous behavior
+		// reconstructed only the basename, losing project/type context and
+		// risking collision with unrelated content.
+		var childPath, dstPath string
+		if e.OriginalPath != "" {
+			childPath = filepath.Join(e.Path, filepath.Base(e.OriginalPath))
+			dstPath = e.OriginalPath
+		} else {
+			// Legacy pre-fix entries: no sidecar, best-effort old behavior.
 			children, rdErr := os.ReadDir(e.Path)
 			if rdErr != nil {
 				writeJSONError(w, http.StatusInternalServerError, ErrInternal, "cannot read trash entry")
 				return
 			}
-			if len(children) == 0 {
+			var firstContent string
+			for _, c := range children {
+				// Skip the sidecar (defensive; legacy entries won't have it).
+				if c.Name() == "omnirepo-trash.json" {
+					continue
+				}
+				firstContent = c.Name()
+				break
+			}
+			if firstContent == "" {
 				writeJSONError(w, http.StatusNotFound, ErrNotFound, "trash entry is empty")
 				return
 			}
-			// Restore first child (the moved tree).
-			childPath := filepath.Join(e.Path, children[0].Name())
-			dstPath := filepath.Join(d.DataRoot, "repos", children[0].Name())
-			if err := d.Trash.Restore(r.Context(), childPath, dstPath); err != nil {
-				writeJSONError(w, http.StatusInternalServerError, ErrInternal, "restore failed: "+err.Error())
-				return
-			}
-
-			// Also restore DB soft-deleted repo if applicable.
-			if e.Kind == "repo" && e.OriginalID != 0 {
-				_ = d.Repos.Restore(r.Context(), e.OriginalID)
-			}
-
-			if a, ok := auth.ActorFromContext(r.Context()); ok {
-				uid := a.ID
-				d.recordAudit(r, audit.Event{
-					Kind:        audit.EvtRepoUpdated,
-					ActorUserID: &uid,
-					TargetKind:  "trash",
-					TargetID:    id,
-					Outcome:     "restored",
-				})
-			}
-			writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+			childPath = filepath.Join(e.Path, firstContent)
+			dstPath = filepath.Join(d.DataRoot, "repos", firstContent)
+		}
+		if err := d.Trash.Restore(r.Context(), childPath, dstPath); err != nil {
+			writeJSONError(w, http.StatusInternalServerError, ErrInternal, "restore failed")
 			return
 		}
+
+		// Also restore DB soft-deleted repo if applicable.
+		if (e.Kind == "repo" || e.Kind == "git-repo") && e.OriginalID != 0 {
+			_ = d.Repos.Restore(r.Context(), e.OriginalID)
+		}
+
+		if a, ok := auth.ActorFromContext(r.Context()); ok {
+			uid := a.ID
+			d.recordAudit(r, audit.Event{
+				Kind:        audit.EvtRepoUpdated,
+				ActorUserID: &uid,
+				TargetKind:  "trash",
+				TargetID:    id,
+				Outcome:     "restored",
+			})
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+		return
 	}
 	writeJSONError(w, http.StatusNotFound, ErrNotFound, "trash entry not found")
 }

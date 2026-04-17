@@ -14,6 +14,7 @@ package api
 
 import (
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -27,6 +28,11 @@ import (
 
 	"github.com/dxc-internal/omnirepo/internal/auth"
 )
+
+// errStopWalk halts an object walk once the caller has collected enough
+// results. It is returned from ForEach callbacks and matched with
+// errors.Is so real iterator errors are never silently swallowed.
+var errStopWalk = errors.New("git-browse: stop walk")
 
 // maxBlobSize is the maximum file size served by the blob endpoint (T-05-04-02).
 const maxBlobSize = 5 * 1024 * 1024 // 5 MB
@@ -339,7 +345,7 @@ func (d Deps) handleGitCommits(w http.ResponseWriter, r *http.Request) {
 	pastCursor := cursor == ""
 	items := make([]commitItem, 0, pp.Limit)
 	var nextCursor string
-	_ = iter.ForEach(func(c *object.Commit) error {
+	if err := iter.ForEach(func(c *object.Commit) error {
 		if !pastCursor {
 			if c.Hash.String() == cursor {
 				pastCursor = true
@@ -349,7 +355,7 @@ func (d Deps) handleGitCommits(w http.ResponseWriter, r *http.Request) {
 		if len(items) >= pp.Limit {
 			// We have one extra — use it as the next cursor indicator.
 			nextCursor = c.Hash.String()
-			return fmt.Errorf("stop")
+			return errStopWalk
 		}
 		items = append(items, commitItem{
 			SHA:     c.Hash.String(),
@@ -359,7 +365,10 @@ func (d Deps) handleGitCommits(w http.ResponseWriter, r *http.Request) {
 			Message: strings.TrimSpace(c.Message),
 		})
 		return nil
-	})
+	}); err != nil && !errors.Is(err, errStopWalk) {
+		writeJSONError(w, r, http.StatusInternalServerError, "git.commits_walk_failed", "Failed to walk commits.")
+		return
+	}
 
 	writeJSON(w, http.StatusOK, map[string]any{"items": items, "next_cursor": nextCursor})
 }

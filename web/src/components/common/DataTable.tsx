@@ -57,6 +57,7 @@ interface DataTableProps<T> {
    * chrome.
    */
   stickyFirstColumn?: boolean;
+  onRowClick?: (row: T) => void;
 }
 
 export function DataTable<T>({
@@ -69,6 +70,7 @@ export function DataTable<T>({
   skeletonRows = 5,
   emptyMessage = 'No data found.',
   stickyFirstColumn = false,
+  onRowClick,
 }: DataTableProps<T>) {
   const handleSort = (columnId: string) => {
     if (!onSort) return;
@@ -155,7 +157,11 @@ export function DataTable<T>({
                 </TableRow>
               )
             : data.map((row, i) => (
-                <TableRow key={i}>
+                <TableRow
+                  key={i}
+                  onClick={onRowClick ? () => onRowClick(row) : undefined}
+                  className={onRowClick ? 'cursor-pointer' : undefined}
+                >
                   {columns.map((col, ci) => (
                     <TableCell
                       key={col.id}

@@ -388,13 +388,11 @@ export default function AuditPage() {
 
       <DataTable
         columns={columns}
-        data={(data?.items ?? []).map((item) => ({
-          ...item,
-          _onClick: () => setSelectedEvent(item),
-        }))}
+        data={data?.items ?? []}
         loading={isLoading}
         emptyMessage="No audit events found matching your filters."
         stickyFirstColumn
+        onRowClick={setSelectedEvent}
         pagination={
           data?.next_cursor
             ? {
@@ -410,7 +408,6 @@ export default function AuditPage() {
         }
       />
 
-      {/* Make rows clickable - wrap DataTable in a click handler */}
       {data?.items && data.items.length > 0 && (
         <div className="text-xs text-muted-foreground text-center -mt-4">
           Click a row in the table to view full details.

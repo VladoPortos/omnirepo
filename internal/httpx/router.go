@@ -17,17 +17,9 @@ import (
 
 // Deps is the dependency bundle the router needs at construction time.
 // Phase 1 only plumbs Config; later plans add Auth, DB, CertHolder, Audit.
-//
-// Phase 6 / plan 03: MountDevErrorRoutes is an optional hook used by
-// app.Run to register api.MountDevErrorRoutes onto the router when
-// OMNIREPO_DEV=1. The hook pattern avoids a direct internal/httpx →
-// internal/api import cycle (api already imports httpx in
-// sync_actions.go). When nil, New() is a no-op for this hook — the
-// production default.
 type Deps struct {
-	Config              config.Config
-	Settings            *metadata.SettingsRepo
-	MountDevErrorRoutes func(chi.Router)
+	Config   config.Config
+	Settings *metadata.SettingsRepo
 }
 
 // New constructs the OmniRepo chi router with the D-27 global middleware chain.
@@ -48,15 +40,33 @@ func New(d Deps) chi.Router {
 	r.Use(AuditEnter)
 	r.Use(MaintenanceMode(d.Settings))
 	r.Use(AuditExit)
-	// Phase 6 / plan 03: opt-in dev-only canned error routes. app.Run
-	// passes api.MountDevErrorRoutes in here; the function itself is a
-	// no-op unless OMNIREPO_DEV=1 at process start. Kept behind a hook
-	// on Deps so internal/httpx does not import internal/api (api →
-	// httpx already exists, so the reverse edge would cycle).
-	if d.MountDevErrorRoutes != nil {
-		d.MountDevErrorRoutes(r)
-	}
 	return r
+}
+
+// MountDevErrorRoutes is a type alias for the hook signature that
+// app.Run uses to register api.MountDevErrorRoutes onto the router AFTER
+// all middleware has been installed (chi panics when a Use call follows
+// a route registration). Keeping the reference here documents the
+// integration point and gives callers a single place to look up the
+// expected signature. The concrete implementation lives in
+// internal/api/dev_error_routes.go (Phase 6 / plan 03 / T-06-03-04).
+//
+// Usage pattern from app.Run:
+//
+//	router := httpx.New(httpx.Deps{...})
+//	router.Use(otherMiddleware) // must complete before first route
+//	httpx.MountDevErrorRoutes(router, api.MountDevErrorRoutes)
+type MountDevErrorRoutesFn = func(chi.Router)
+
+// MountDevErrorRoutes invokes fn against r only if fn is non-nil.
+// Exists so app.Run can wire api.MountDevErrorRoutes through a named
+// helper without creating an internal/httpx → internal/api import
+// cycle (api → httpx already exists in sync_actions.go).
+func MountDevErrorRoutes(r chi.Router, fn MountDevErrorRoutesFn) {
+	if fn == nil {
+		return
+	}
+	fn(r)
 }
 
 // NewBareRouter returns a chi router without any middleware. Intended for

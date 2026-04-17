@@ -354,16 +354,19 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 	// dispatcher against handler registration.
 
 	// 6. Router with global middleware + system routes.
-	router := httpx.New(httpx.Deps{
-		Config:              cfg,
-		Settings:            metadata.NewSettingsRepo(db),
-		MountDevErrorRoutes: api.MountDevErrorRoutes,
-	})
+	router := httpx.New(httpx.Deps{Config: cfg, Settings: metadata.NewSettingsRepo(db)})
 
 	// 6a. S3 virtual-host rewrite (Phase 04-07, D-23). MUST be registered
 	// as global middleware BEFORE any routes so chi's route matching sees
 	// the rewritten path (/s3/<bucket>/<key>) for virtual-host requests.
 	router.Use(s3handler.VHostRewrite(cfg.Server.ExternalHostnames))
+
+	// 6b. Phase 6 / plan 03: opt-in dev-only canned error routes for the
+	// UI story page. Registered AFTER all Use() calls (chi panics when
+	// Use follows a route) and no-ops unless OMNIREPO_DEV=1 at process
+	// start — production binaries never expose the /_dev path
+	// (T-06-03-04).
+	httpx.MountDevErrorRoutes(router, api.MountDevErrorRoutes)
 
 	router.Get("/healthz", httpx.Healthz())
 	router.Get("/readyz", httpx.Readyz(httpx.ReadyzDeps{DB: db, Holder: holder}))

@@ -4,7 +4,7 @@ BENCH_DURATION ?= 30s
 BENCH_WORKERS ?= 16
 
 .PHONY: dev build test test-airgap bench-sqlite bench-git-fixture bench-git \
-	vendor lint seed grep-cdn \
+	vendor lint seed grep-cdn lint-protocol-redaction \
 	conformance conformance-oci conformance-rpm conformance-deb \
 	conformance-pypi conformance-helm conformance-s3 conformance-git \
 	test-git-conformance conformance-all \
@@ -13,7 +13,7 @@ BENCH_WORKERS ?= 16
 build:
 	$(GO) build -mod=vendor -o bin/omnirepo ./cmd/omnirepo
 
-test:
+test: lint-protocol-redaction
 	$(GO) test -mod=vendor ./...
 	$(MAKE) test-airgap
 
@@ -74,6 +74,31 @@ grep-cdn:
 		internal/protocol/rpm internal/protocol/deb internal/protocol/pypi internal/protocol/helm 2>/dev/null \
 		|| (echo "ERROR: external https URL leaked into Phase 3 handler code" && exit 1); \
 	echo "grep-cdn: clean"
+
+# lint-protocol-redaction enforces ERR-03 for the protocol handler tree:
+# no http.Error call site may emit a %v-interpolated Go error value to
+# the wire body. Real errors MUST be logged via slog.ErrorContext keyed
+# by middleware.GetReqID (X-Incident-Id) and the client MUST receive
+# a static generic message. *_test.go is excluded so test fixtures can
+# legitimately stage leak-before-fix behavior.
+#
+# Sister check: internal/protocol/protocoltest/TestNoPercentVLeakInHTTPError
+# runs the same grep in-process, so `go test ./...` fails the same way
+# this target does.
+lint-protocol-redaction:
+	@set -e; \
+	echo "lint-protocol-redaction: scanning internal/protocol/ for http.Error leaks"; \
+	matches=$$(grep -rnE --include='*.go' --exclude='*_test.go' 'http\.Error\([^)]*%v' internal/protocol/ 2>/dev/null || true); \
+	if [ -n "$$matches" ]; then \
+		echo "ERROR: protocol handler emits %v-interpolated error to client (ERR-03 leak):"; \
+		echo "$$matches"; \
+		echo ""; \
+		echo "Fix: redact the interpolation. Log the real error via slog.ErrorContext"; \
+		echo "with slog.Any(\"err\", err) + slog.String(\"incident_id\", chimw.GetReqID(r.Context()))"; \
+		echo "then call http.Error(w, \"<generic message>\", <status>)."; \
+		exit 1; \
+	fi; \
+	echo "lint-protocol-redaction: clean"
 
 # conformance-oci runs the OCI Distribution conformance suite. Gated behind
 # the `conformance` build tag so default `make test` never requires crane.

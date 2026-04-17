@@ -132,6 +132,11 @@ const (
 	EvtS3AccessKeyCreated EventKind = "s3.access-key.create"
 	EvtS3AccessKeyRevoked EventKind = "s3.access-key.revoke"
 
+	// S3 bucket provisioning (walkthrough 2026-04-17). Emitted by the
+	// REST endpoint that creates an s3_buckets row + on-disk directory.
+	// Details: {project, name}. No secrets.
+	EvtS3BucketCreated EventKind = "s3.bucket.create"
+
 	// Phase 4 Plan 10 — Git refs walker (D-37). Emitted by the
 	// post-ReceivePack hook after a successful git_refs sync.
 	// Details: {repo_id, ref_count, project}.

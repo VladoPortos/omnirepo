@@ -522,6 +522,10 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 		helmRegistry: helmRegistry,
 	}.wireSync()
 
+	// S3 backend is constructed here (ahead of the 6e mount site below) so
+	// api.Deps can expose it for the REST bucket-provision endpoint.
+	s3Be := s3backend.New(cfg.DataRoot, db, sharedLocks)
+
 	api.Mount(router, api.Deps{
 		DB:            db,
 		Users:         metadata.NewUsersRepo(db),
@@ -536,6 +540,7 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 		// AEAD master key as upstream_creds.
 		S3Keys:     metadata.NewS3KeysRepo(db),
 		S3AEAD:     aead,
+		S3Backend:  s3Be,
 		Holder:     holder,
 		DataRoot:   cfg.DataRoot,
 		Audit:      auditLogger,
@@ -628,8 +633,9 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 	// 6e. S3-compatible handler (Phase 04-07). SigV4 → auth.Can → gofakes3.
 	// Uses the same per-install AEAD key as upstream_creds for S3 access-key
 	// secret decryption, and the shared locks for per-bucket serialization.
+	// s3Be is constructed above so the REST bucket-provision endpoint in
+	// api.Deps can share the same backend instance.
 	s3Service := s3keys.NewService(metadata.NewS3KeysRepo(db), aead)
-	s3Be := s3backend.New(cfg.DataRoot, db, sharedLocks)
 	s3Deps := &s3handler.Deps{
 		Service:   s3Service,
 		Backend:   s3Be,

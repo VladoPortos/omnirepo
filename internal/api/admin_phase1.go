@@ -19,6 +19,7 @@ import (
 	authmw "github.com/dxc-internal/omnirepo/internal/auth/middleware"
 	omrcrypto "github.com/dxc-internal/omnirepo/internal/crypto"
 	"github.com/dxc-internal/omnirepo/internal/metadata"
+	s3backend "github.com/dxc-internal/omnirepo/internal/protocol/s3/backend"
 	"github.com/dxc-internal/omnirepo/internal/storage"
 	omrtls "github.com/dxc-internal/omnirepo/internal/tls"
 )
@@ -40,6 +41,12 @@ type Deps struct {
 	// are not mounted.
 	S3Keys *metadata.S3KeysRepo
 	S3AEAD *omrcrypto.AEAD
+
+	// S3Backend is the gofakes3-backed bucket/object store. nil-safe —
+	// when nil, the REST bucket-provisioning routes are not mounted.
+	// Walkthrough 2026-04-17: operators need a non-test path to create
+	// buckets; see internal/api/s3_buckets.go.
+	S3Backend *s3backend.Backend
 
 	Holder   *omrtls.CertHolder
 	DataRoot string
@@ -215,6 +222,11 @@ func Mount(r chi.Router, d Deps) {
 			// (ActionManageS3Keys) so route-level RequireCanWith is not
 			// needed — same pattern as upstream_creds.
 			d.mountS3Keys(r)
+
+			// Walkthrough 2026-04-17: S3 bucket provisioning (create/list).
+			// gofakes3's CreateBucket path is disabled in production; this
+			// is the operator-facing route that was previously missing.
+			d.mountS3Buckets(r)
 
 			// Phase 02-09: scan REST endpoints (manual rescan, scan list,
 			// scan detail, vulnerabilities, SBOM download). Mount only when

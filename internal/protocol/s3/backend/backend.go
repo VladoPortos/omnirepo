@@ -251,6 +251,34 @@ func (b *Backend) BucketExists(name string) (bool, error) {
 	return ok, err
 }
 
+// BucketInfo is the REST projection of an s3_buckets row (no deleted_at).
+type BucketInfo struct {
+	Name      string
+	CreatedAt time.Time
+}
+
+// ListBucketsForProject returns every non-deleted bucket owned by projectID,
+// ordered by name. Used by the REST /projects/{name}/s3-buckets list endpoint.
+func (b *Backend) ListBucketsForProject(ctx context.Context, projectID int64) ([]BucketInfo, error) {
+	rows, err := b.DB.Reader.QueryContext(ctx,
+		`SELECT name, created_at FROM s3_buckets
+		 WHERE project_id=? AND deleted_at IS NULL
+		 ORDER BY name`, projectID)
+	if err != nil {
+		return nil, fmt.Errorf("backend: list buckets: %w", err)
+	}
+	defer rows.Close()
+	var out []BucketInfo
+	for rows.Next() {
+		var bi BucketInfo
+		if err := rows.Scan(&bi.Name, &bi.CreatedAt); err != nil {
+			return nil, fmt.Errorf("backend: scan bucket: %w", err)
+		}
+		out = append(out, bi)
+	}
+	return out, rows.Err()
+}
+
 // DeleteBucket refuses a non-empty bucket with ErrBucketNotEmpty.
 func (b *Backend) DeleteBucket(name string) error {
 	ctx := context.Background()

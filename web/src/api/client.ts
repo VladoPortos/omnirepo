@@ -125,6 +125,47 @@ export function envelopeFromError(err: unknown, fallback: string): ApiErrorEnvel
 }
 
 /**
+ * fieldErrorsFromEnvelope lifts the field-level messages off a validation
+ * envelope into a flat `Record<fieldId, message>` that forms can index
+ * into to drive aria-invalid on the corresponding <Input>. Mirrors the
+ * shape produced by useApiError but works against a plain envelope
+ * (e.g. the local-state envelope from a failed mutation catch block)
+ * where useApiError can't bind to a TanStack query/mutation handle.
+ *
+ * Returns an empty object for any non-validation class OR a validation
+ * envelope that carries no field pointer — callers can always pass
+ * `fieldErrors[id]` without null checks.
+ */
+export function fieldErrorsFromEnvelope(
+  env: ApiErrorEnvelope | null | undefined,
+): Record<string, string> {
+  if (!env || env.class !== 'validation') return {};
+  if (env.details?.fields) return env.details.fields;
+  if (env.details?.field) return { [env.details.field]: env.message };
+  return {};
+}
+
+/**
+ * envelopeHasFieldPointer returns true when the envelope carries enough
+ * information for a form to light up a specific <Input>. Used by the
+ * envelope renderer to pick between the "Check the highlighted field."
+ * default hint (field pointer present) and the generic "Please review
+ * the form." fallback (no pointer — a standalone error without an
+ * input to blame would otherwise invite the user to look for a
+ * highlight that isn't there).
+ */
+export function envelopeHasFieldPointer(
+  env: ApiErrorEnvelope | null | undefined,
+): boolean {
+  if (!env || env.class !== 'validation') return false;
+  if (env.details?.field) return true;
+  if (env.details?.fields && Object.keys(env.details.fields).length > 0) {
+    return true;
+  }
+  return false;
+}
+
+/**
  * synthesizeEnvelope turns a non-envelope body (legacy {error, detail}
  * from a stale server, middleware still on the old shape, or a fetch
  * that produced no JSON at all) into a minimal valid envelope so the

@@ -273,6 +273,13 @@ func TestCreateRepo_InvalidName_ErrorSaysRepoNotProject(t *testing.T) {
 	if strings.Contains(msg, "invalid project name") {
 		t.Fatalf("error message must not mention 'invalid project name', got %q", msg)
 	}
+	// Envelope must also carry details.field: "name" so the UI can
+	// highlight the Repository Name <Input> on the dialog — the second
+	// half of the phase-6 walkthrough ERR-06 fix.
+	details, _ := body["details"].(map[string]any)
+	if field, _ := details["field"].(string); field != "name" {
+		t.Fatalf("envelope should carry details.field=\"name\", got %+v", body)
+	}
 }
 
 // ---- helpers ----

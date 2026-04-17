@@ -125,7 +125,7 @@ func (d Deps) handleCreateS3Bucket(w http.ResponseWriter, r *http.Request) {
 	}
 	name := strings.TrimSpace(req.Name)
 	if name == "" {
-		writeJSONError(w, r, http.StatusUnprocessableEntity, ErrValidationFailed, "name required")
+		writeFieldValidationError(w, r, ErrValidationFailed, "name", "name required")
 		return
 	}
 
@@ -134,7 +134,7 @@ func (d Deps) handleCreateS3Bucket(w http.ResponseWriter, r *http.Request) {
 		case gofakes3.HasErrorCode(err, gofakes3.ErrBucketAlreadyExists):
 			writeJSONError(w, r, http.StatusConflict, ErrConflict, "bucket name already in use")
 		case gofakes3.HasErrorCode(err, gofakes3.ErrInvalidBucketName):
-			writeJSONError(w, r, http.StatusUnprocessableEntity, ErrValidationFailed, err.Error())
+			writeFieldValidationError(w, r, ErrValidationFailed, "name", err.Error())
 		default:
 			writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		}

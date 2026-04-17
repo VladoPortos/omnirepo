@@ -11,7 +11,12 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { useAuth } from '@/hooks/useAuth';
-import { envelopeFromError, localEnvelope, type ApiErrorEnvelope } from '@/api/client';
+import {
+  envelopeFromError,
+  localEnvelope,
+  fieldErrorsFromEnvelope,
+  type ApiErrorEnvelope,
+} from '@/api/client';
 import { ErrorEnvelopeRenderer } from '@/components/common/ErrorEnvelope';
 
 export function ChangePasswordPage() {
@@ -21,18 +26,27 @@ export function ChangePasswordPage() {
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [errorEnvelope, setErrorEnvelope] = useState<ApiErrorEnvelope | null>(null);
+  const fieldErrors = fieldErrorsFromEnvelope(errorEnvelope);
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setErrorEnvelope(null);
 
     if (newPassword !== confirmPassword) {
-      setErrorEnvelope(localEnvelope('Passwords do not match.'));
+      setErrorEnvelope(
+        localEnvelope('Passwords do not match.', {
+          details: { field: 'confirm-password' },
+        }),
+      );
       return;
     }
 
     if (newPassword.length < 8) {
-      setErrorEnvelope(localEnvelope('Password must be at least 8 characters.'));
+      setErrorEnvelope(
+        localEnvelope('Password must be at least 8 characters.', {
+          details: { field: 'new-password' },
+        }),
+      );
       return;
     }
 
@@ -80,6 +94,7 @@ export function ChangePasswordPage() {
                   onChange={(e) => setCurrent(e.target.value)}
                   autoComplete="current-password"
                   required
+                  aria-invalid={!!fieldErrors['current-password'] || undefined}
                 />
               </div>
               <div className="space-y-2">
@@ -91,6 +106,7 @@ export function ChangePasswordPage() {
                   onChange={(e) => setNewPassword(e.target.value)}
                   autoComplete="new-password"
                   required
+                  aria-invalid={!!fieldErrors['new-password'] || undefined}
                 />
               </div>
               <div className="space-y-2">
@@ -102,6 +118,7 @@ export function ChangePasswordPage() {
                   onChange={(e) => setConfirmPassword(e.target.value)}
                   autoComplete="new-password"
                   required
+                  aria-invalid={!!fieldErrors['confirm-password'] || undefined}
                 />
               </div>
               <Button

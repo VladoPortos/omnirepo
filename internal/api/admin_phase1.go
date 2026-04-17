@@ -553,7 +553,7 @@ func (d Deps) handleCreateProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := auth.ProjectNameValid(req.Name); err != nil {
-		writeJSONError(w, r, http.StatusUnprocessableEntity, ErrValidationFailed, err.Error())
+		writeFieldValidationError(w, r, ErrValidationFailed, "name", err.Error())
 		return
 	}
 
@@ -675,11 +675,11 @@ func (d Deps) handleCreateRepo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := auth.RepoNameValid(req.Name); err != nil {
-		writeJSONError(w, r, http.StatusUnprocessableEntity, ErrValidationFailed, err.Error())
+		writeFieldValidationError(w, r, ErrValidationFailed, "name", err.Error())
 		return
 	}
 	if _, ok := validRepoTypes[req.Type]; !ok {
-		writeJSONError(w, r, http.StatusUnprocessableEntity, ErrValidationFailed, "invalid type")
+		writeFieldValidationError(w, r, ErrValidationFailed, "type", "invalid type")
 		return
 	}
 

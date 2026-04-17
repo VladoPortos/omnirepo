@@ -18,7 +18,12 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { useSetupStatus, useSetupSuperAdmin } from '@/api/queries';
-import { ApiError, localEnvelope, type ApiErrorEnvelope } from '@/api/client';
+import {
+  ApiError,
+  localEnvelope,
+  fieldErrorsFromEnvelope,
+  type ApiErrorEnvelope,
+} from '@/api/client';
 import { ErrorEnvelopeRenderer } from '@/components/common/ErrorEnvelope';
 import type { SetupStatusResponse } from '@/api/types';
 
@@ -42,6 +47,13 @@ export function SetupPage() {
   // suppresses the short-circuit for the winning tab.
   const [submitted, setSubmitted] = useState(false);
 
+  // fieldErrors = {inputId -> message} derived from the current envelope.
+  // Drives aria-invalid on the offending <Input> so the "Check the
+  // highlighted field." hint from ErrorEnvelopeRenderer has something
+  // visible to highlight. Re-computed each render — cheap, and avoids
+  // staleness when the envelope is cleared between submissions.
+  const fieldErrors = fieldErrorsFromEnvelope(errorEnvelope);
+
   if (isLoading) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-background">
@@ -63,11 +75,19 @@ export function SetupPage() {
     setErrorEnvelope(null);
 
     if (password.length < 8) {
-      setErrorEnvelope(localEnvelope('Password must be at least 8 characters.'));
+      setErrorEnvelope(
+        localEnvelope('Password must be at least 8 characters.', {
+          details: { field: 'setup-password' },
+        }),
+      );
       return;
     }
     if (password !== confirm) {
-      setErrorEnvelope(localEnvelope('Passwords do not match.'));
+      setErrorEnvelope(
+        localEnvelope('Passwords do not match.', {
+          details: { field: 'setup-confirm' },
+        }),
+      );
       return;
     }
 
@@ -170,6 +190,7 @@ export function SetupPage() {
                   autoComplete="new-password"
                   minLength={8}
                   required
+                  aria-invalid={!!fieldErrors['setup-password'] || undefined}
                 />
               </div>
               <div className="space-y-2">
@@ -183,6 +204,7 @@ export function SetupPage() {
                   autoComplete="new-password"
                   minLength={8}
                   required
+                  aria-invalid={!!fieldErrors['setup-confirm'] || undefined}
                 />
               </div>
               <Button

@@ -19,7 +19,11 @@ import {
 
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
-import type { ApiErrorClass, ApiErrorEnvelope } from '@/api/client';
+import {
+  envelopeHasFieldPointer,
+  type ApiErrorClass,
+  type ApiErrorEnvelope,
+} from '@/api/client';
 
 import { CopyButton } from './CopyButton';
 
@@ -73,13 +77,22 @@ const classStyles: Record<ApiErrorClass, ClassStyle> = {
   },
 };
 
-/** Default hints per class, pulled verbatim from UI-SPEC §Copywriting. */
+/**
+ * Default hints per class. Validation has two default hints: the
+ * UI-SPEC copy "Check the highlighted field." applies only when the
+ * envelope actually carries a field pointer (details.field or
+ * details.fields). Validation envelopes that are global — missing
+ * name, form-wide rule — fall back to "Please review the form." so the
+ * user isn't told to look for a highlight that isn't there. See
+ * envelopeHasFieldPointer in @/api/client.
+ */
 const defaultHints: Record<ApiErrorClass, string> = {
-  validation: 'Check the highlighted field.',
+  validation: 'Please review the form.',
   permission: "You don't have access. Ask a project owner.",
   transient: 'Please try again.',
   operator_action_required: 'An administrator must fix this first.',
 };
+const validationHintWithFieldPointer = 'Check the highlighted field.';
 
 /**
  * operatorDefaultLabels — fallback CTA label by code prefix when the
@@ -117,7 +130,11 @@ export function ErrorEnvelopeRenderer({
   const style = classStyles[envelope.class];
   const Icon = style.icon;
   const iconSize = mode === 'page' ? 'size-6' : 'size-4';
-  const hint = envelope.hint ?? defaultHints[envelope.class];
+  const hint =
+    envelope.hint ??
+    (envelope.class === 'validation' && envelopeHasFieldPointer(envelope)
+      ? validationHintWithFieldPointer
+      : defaultHints[envelope.class]);
 
   return (
     <div

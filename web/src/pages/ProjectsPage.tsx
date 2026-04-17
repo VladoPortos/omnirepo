@@ -35,7 +35,11 @@ import {
 import { SkeletonTable } from '@/components/common/SkeletonTable';
 import { useProjects, useCreateProject } from '@/api/queries';
 import { formatBytes, formatDate } from '@/lib/format';
-import { envelopeFromError, type ApiErrorEnvelope } from '@/api/client';
+import {
+  envelopeFromError,
+  fieldErrorsFromEnvelope,
+  type ApiErrorEnvelope,
+} from '@/api/client';
 import { ErrorEnvelopeRenderer } from '@/components/common/ErrorEnvelope';
 
 export function ProjectsPage() {
@@ -48,6 +52,7 @@ export function ProjectsPage() {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [errorEnvelope, setErrorEnvelope] = useState<ApiErrorEnvelope | null>(null);
+  const fieldErrors = fieldErrorsFromEnvelope(errorEnvelope);
 
   // Open create dialog when arriving from dashboard with ?create=1.
   useEffect(() => {
@@ -110,6 +115,7 @@ export function ProjectsPage() {
                     placeholder="my-project"
                     required
                     autoFocus
+                    aria-invalid={!!fieldErrors['name'] || !!fieldErrors['project-name'] || undefined}
                   />
                   <p className="text-xs text-muted-foreground">
                     URL-safe slug (lowercase letters, numbers, hyphens)

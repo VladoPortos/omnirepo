@@ -111,6 +111,30 @@ func writeEnvelope(w http.ResponseWriter, r *http.Request, e *httperr.Error) {
 	httperr.Write(w, r, e)
 }
 
+// writeFieldValidationError is the 422+details.field variant of
+// writeJSONError. Lets handlers that validate a single slug field
+// (create project / create repo / create bucket) tell the UI which
+// <Input> to highlight. The envelope's class is always "validation"
+// and the status is 422 — mirrors the existing ErrValidationFailed
+// conventions so wire compatibility is preserved. Field is the
+// form input id or dotted DTO path (e.g. "name", "user.email") —
+// whichever the UI uses to index its fieldErrors map.
+func writeFieldValidationError(w http.ResponseWriter, r *http.Request, code, field, detail string) {
+	if detail == "" {
+		detail = defaultMessageForStatus(http.StatusUnprocessableEntity)
+	}
+	e := &httperr.Error{
+		Envelope: httperr.Envelope{
+			Code:    normalizeLegacyCode(code),
+			Message: detail,
+			Class:   httperr.ClassValidation,
+			Details: map[string]any{"field": field},
+		},
+		Status: http.StatusUnprocessableEntity,
+	}
+	httperr.Write(w, r, e)
+}
+
 // legacyCodeMap translates the v1.0 hand-written ErrCode constants to
 // the dotted form required by the ApiErrorEnvelope schema
 // (^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$).

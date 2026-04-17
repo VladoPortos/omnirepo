@@ -41,7 +41,11 @@ import {
   useDeleteBucket,
 } from '@/api/queries';
 import { formatBytes, formatDate } from '@/lib/format';
-import { envelopeFromError, type ApiErrorEnvelope } from '@/api/client';
+import {
+  envelopeFromError,
+  fieldErrorsFromEnvelope,
+  type ApiErrorEnvelope,
+} from '@/api/client';
 import { ErrorEnvelopeRenderer } from '@/components/common/ErrorEnvelope';
 import type { RepoType, ProjectRepo, ProjectBucket } from '@/api/types';
 
@@ -78,6 +82,7 @@ export function ProjectDetailPage() {
     activeTab !== 'overview' ? (activeTab as RepoType) : 'docker',
   );
   const [createError, setCreateError] = useState<ApiErrorEnvelope | null>(null);
+  const createFieldErrors = fieldErrorsFromEnvelope(createError);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState('');
   const [deleteError, setDeleteError] = useState<ApiErrorEnvelope | null>(null);
@@ -485,6 +490,11 @@ export function ProjectDetailPage() {
                   placeholder="my-repo"
                   required
                   autoFocus
+                  aria-invalid={
+                    !!createFieldErrors['name'] ||
+                    !!createFieldErrors['repo-name'] ||
+                    undefined
+                  }
                 />
               </div>
             </div>
@@ -514,6 +524,7 @@ function S3BucketsTab({ projectName }: { projectName: string }) {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [bucketName, setBucketName] = useState('');
   const [createError, setCreateError] = useState<ApiErrorEnvelope | null>(null);
+  const createFieldErrors = fieldErrorsFromEnvelope(createError);
 
   const [deleteTarget, setDeleteTarget] = useState<ProjectBucket | null>(null);
   const [deleteError, setDeleteError] = useState<ApiErrorEnvelope | null>(null);
@@ -640,6 +651,11 @@ function S3BucketsTab({ projectName }: { projectName: string }) {
                   placeholder="my-bucket"
                   required
                   autoFocus
+                  aria-invalid={
+                    !!createFieldErrors['name'] ||
+                    !!createFieldErrors['bucket-name'] ||
+                    undefined
+                  }
                 />
                 <p className="text-xs text-muted-foreground">
                   Lowercase letters, digits, hyphens, and dots. 3–63 chars.

@@ -143,13 +143,70 @@ endpoints to support the dashboard").
 
 ## Traceability
 
-Filled automatically by `gsd-roadmapper` once `ROADMAP.md` is generated.
-Every REQ-ID above must appear in exactly one phase's `Requirements:`
-list in `ROADMAP.md` before execution begins.
+Every REQ-ID is mapped to exactly one phase in `ROADMAP.md`. Phases
+numbered 6–10 continue from v1.0's phases 1–5.
 
 | REQ-ID | Phase | Status |
 |--------|-------|--------|
-| _(roadmapper will populate this table)_ |
+| SNIPPET-01 | Phase 7 | Pending |
+| SNIPPET-02 | Phase 7 | Pending |
+| SNIPPET-03 | Phase 7 | Pending |
+| SNIPPET-04 | Phase 7 | Pending |
+| SNIPPET-05 | Phase 7 | Pending |
+| SNIPPET-06 | Phase 7 | Pending |
+| SNIPPET-07 | Phase 7 | Pending |
+| SNIPPET-08 | Phase 7 | Pending |
+| SNIPPET-09 | Phase 7 | Pending |
+| EMPTY-01 | Phase 7 | Pending |
+| EMPTY-02 | Phase 7 | Pending |
+| EMPTY-03 | Phase 7 | Pending |
+| EMPTY-04 | Phase 7 | Pending |
+| EMPTY-05 | Phase 7 | Pending |
+| EMPTY-06 | Phase 7 | Pending |
+| EMPTY-07 | Phase 7 | Pending |
+| EMPTY-08 | Phase 7 | Pending |
+| HEALTH-01 | Phase 9 | Pending |
+| HEALTH-02 | Phase 9 | Pending |
+| HEALTH-03 | Phase 9 | Pending |
+| HEALTH-04 | Phase 9 | Pending |
+| HEALTH-05 | Phase 9 | Pending |
+| HEALTH-06 | Phase 9 | Pending |
+| HEALTH-07 | Phase 9 | Pending |
+| HEALTH-08 | Phase 9 | Pending |
+| HEALTH-09 | Phase 9 | Pending |
+| ERR-01 | Phase 6 | Pending |
+| ERR-02 | Phase 6 | Pending |
+| ERR-03 | Phase 6 | Pending |
+| ERR-04 | Phase 6 | Pending |
+| ERR-05 | Phase 6 | Pending |
+| ERR-06 | Phase 6 | Pending |
+| ERR-07 | Phase 6 | Pending |
+| FAV-01 | Phase 8 | Pending |
+| FAV-02 | Phase 8 | Pending |
+| FAV-03 | Phase 8 | Pending |
+| FAV-04 | Phase 8 | Pending |
+| FAV-05 | Phase 8 | Pending |
+| FAV-06 | Phase 8 | Pending |
+| FAV-07 | Phase 8 | Pending |
+| OVERVIEW-01 | Phase 10 | Pending |
+| OVERVIEW-02 | Phase 10 | Pending |
+| OVERVIEW-03 | Phase 10 | Pending |
+| OVERVIEW-04 | Phase 10 | Pending |
+| OVERVIEW-05 | Phase 10 | Pending |
+| OVERVIEW-06 | Phase 10 | Pending |
+| OVERVIEW-07 | Phase 10 | Pending |
+| OVERVIEW-08 | Phase 10 | Pending |
+| VISUAL-01 | Phase 6 | Pending |
+| VISUAL-02 | Phase 6 | Pending |
+| VISUAL-03 | Phase 6 | Pending |
+| VISUAL-04 | Phase 6 | Pending |
+| VISUAL-05 | Phase 6 | Pending |
+| VISUAL-06 | Phase 6 | Pending |
+| VISUAL-07 | Phase 6 | Pending |
+| VISUAL-08 | Phase 6 | Pending |
+| VISUAL-09 | Phase 6 | Pending |
+
+**Coverage:** 57/57 REQ-IDs mapped to exactly one phase.
 
 ---
 

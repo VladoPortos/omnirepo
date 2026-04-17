@@ -1,17 +1,24 @@
-// Package api — admin GC endpoint (Phase 02-12, D-37, OPS-06).
+// Package api — admin GC endpoints (Phase 02-12, D-37, OPS-06).
 //
 // POST /api/v1/admin/gc — super-admin only. Validates that no GC job is
 // currently pending or running (returns 409 already_running if so),
 // otherwise enqueues a sync_jobs row with kind="gc" and returns 202 with
 // the job id. The actual mark-and-sweep runs asynchronously on the sync
 // pool (see internal/jobs/gc.go).
+//
+// GET /api/v1/admin/gc/status — super-admin only. Returns the most recent
+// GC job's state plus any post-run metrics parsed out of sync_jobs.log
+// (e.g. bytes_freed). Status is "idle" when no GC has ever run.
 package api
 
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -29,13 +36,16 @@ type GCDeps struct {
 	SyncKick func() // sync pool kick; nil-safe
 }
 
-// mountAdminGC installs POST /admin/gc on r. No-op when GCDeps is nil.
+// mountAdminGC installs POST /admin/gc and GET /admin/gc/status on r.
+// No-op when GCDeps is nil.
 func (d Deps) mountAdminGC(r chi.Router) {
 	if d.GCDeps == nil || d.GCDeps.SyncJobs == nil {
 		return
 	}
 	r.With(authmw.RequireCan(auth.ActionTriggerGC)).
 		Post("/admin/gc", d.handleTriggerGC)
+	r.With(authmw.RequireCan(auth.ActionTriggerGC)).
+		Get("/admin/gc/status", d.handleGCStatus)
 }
 
 // gcAlreadyRunningCount returns the number of pending/running GC rows.
@@ -100,4 +110,83 @@ func (d Deps) handleTriggerGC(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
 	_, _ = w.Write([]byte(`{"job_id":` + strconv.FormatInt(jobID, 10) + `}`))
+}
+
+// gcStatusResponse mirrors GCStatusResponse in openapi.yaml. "idle" means
+// no GC has ever been enqueued (no sync_jobs row with kind='gc').
+type gcStatusResponse struct {
+	Status     string     `json:"status"`
+	JobID      *int64     `json:"job_id,omitempty"`
+	StartedAt  *time.Time `json:"started_at,omitempty"`
+	FinishedAt *time.Time `json:"finished_at,omitempty"`
+	BytesFreed *int64     `json:"bytes_freed,omitempty"`
+}
+
+// handleGCStatus returns the most recent GC job's state. The internal
+// sync_jobs statuses map 1:1 to the OpenAPI GCStatusResponseStatus enum,
+// plus "idle" when no row exists. bytes_freed (and other metrics the jobs
+// package may grow later) are parsed out of the sync_jobs.log JSON column.
+func (d Deps) handleGCStatus(w http.ResponseWriter, r *http.Request) {
+	var (
+		id          int64
+		status      string
+		leasedAt    sql.NullTime
+		updatedAt   time.Time
+		createdAt   time.Time
+		logPayload  string
+	)
+	err := d.DB.Reader.QueryRowContext(r.Context(), `
+		SELECT id, status, leased_at, updated_at, created_at, log
+		FROM sync_jobs
+		WHERE kind = ?
+		ORDER BY id DESC
+		LIMIT 1
+	`, jobs.GCJobKind).Scan(&id, &status, &leasedAt, &updatedAt, &createdAt, &logPayload)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeJSON(w, http.StatusOK, gcStatusResponse{Status: "idle"})
+			return
+		}
+		writeJSONError(w, http.StatusInternalServerError, ErrInternal, "")
+		return
+	}
+
+	resp := gcStatusResponse{
+		Status: status,
+		JobID:  &id,
+	}
+
+	// Prefer leased_at for started_at (actual pickup time); fall back to
+	// created_at when the job is still pending.
+	switch status {
+	case "pending":
+		// Not started yet — started_at stays nil.
+	default:
+		if leasedAt.Valid {
+			t := leasedAt.Time
+			resp.StartedAt = &t
+		} else {
+			t := createdAt
+			resp.StartedAt = &t
+		}
+	}
+
+	// For terminal states, updated_at is when the sync pool wrote the final
+	// row — a good enough finished_at.
+	if status == "done" || status == "failed" {
+		t := updatedAt
+		resp.FinishedAt = &t
+	}
+
+	// Parse metrics out of the log JSON. Missing fields silently stay nil.
+	if logPayload != "" {
+		var metrics struct {
+			BytesFreed *int64 `json:"bytes_freed,omitempty"`
+		}
+		if err := json.Unmarshal([]byte(logPayload), &metrics); err == nil {
+			resp.BytesFreed = metrics.BytesFreed
+		}
+	}
+
+	writeJSON(w, http.StatusOK, resp)
 }

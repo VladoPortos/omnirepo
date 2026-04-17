@@ -160,3 +160,112 @@ func TestAdminGC_AlreadyRunning_409(t *testing.T) {
 		t.Fatalf("code=%d want 409 body=%v", resp.StatusCode, body)
 	}
 }
+
+// TestAdminGCStatus_Idle_WhenNoJobs returns status=idle when no gc rows.
+func TestAdminGCStatus_Idle_WhenNoJobs(t *testing.T) {
+	s := newGCRESTServer(t)
+	_, pw := seedTestUser(t, s.db, "root", "r@x", true, false)
+	cookie, _, _ := s.login(t, "root", pw)
+
+	resp, body := s.do(t, "GET", "/api/v1/admin/gc/status", cookie, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("code=%d body=%v", resp.StatusCode, body)
+	}
+	if body["status"] != "idle" {
+		t.Fatalf("status=%v want idle", body["status"])
+	}
+	if _, has := body["job_id"]; has {
+		t.Fatalf("idle response should omit job_id: %v", body)
+	}
+}
+
+// TestAdminGCStatus_Pending_ReflectsLatest enqueues a gc row and confirms
+// status=pending + job_id surface in the response.
+func TestAdminGCStatus_Pending_ReflectsLatest(t *testing.T) {
+	s := newGCRESTServer(t)
+	_, pw := seedTestUser(t, s.db, "root", "r@x", true, false)
+	cookie, _, _ := s.login(t, "root", pw)
+
+	// Drop one pending gc row directly (avoids racing with the pool).
+	syncRepo := metadata.NewSyncJobsRepo(s.db)
+	var jobID int64
+	if err := s.db.WriteTx(context.Background(), func(tx *sql.Tx) error {
+		id, err := syncRepo.Enqueue(context.Background(), tx, jobs.GCJobKind, 0, 0, "{}")
+		jobID = id
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	resp, body := s.do(t, "GET", "/api/v1/admin/gc/status", cookie, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("code=%d body=%v", resp.StatusCode, body)
+	}
+	if body["status"] != "pending" {
+		t.Fatalf("status=%v want pending", body["status"])
+	}
+	if int64(body["job_id"].(float64)) != jobID {
+		t.Fatalf("job_id=%v want %d", body["job_id"], jobID)
+	}
+	// pending means no lease yet → no started_at, no finished_at.
+	if _, has := body["started_at"]; has {
+		t.Fatalf("pending must omit started_at: %v", body)
+	}
+	if _, has := body["finished_at"]; has {
+		t.Fatalf("pending must omit finished_at: %v", body)
+	}
+}
+
+// TestAdminGCStatus_Done_ParsesMetrics asserts bytes_freed is extracted
+// from sync_jobs.log for a completed job.
+func TestAdminGCStatus_Done_ParsesMetrics(t *testing.T) {
+	s := newGCRESTServer(t)
+	_, pw := seedTestUser(t, s.db, "root", "r@x", true, false)
+	cookie, _, _ := s.login(t, "root", pw)
+
+	// Insert a completed gc row with a realistic log payload.
+	if _, err := s.db.Writer.ExecContext(context.Background(), `
+		INSERT INTO sync_jobs(kind, status, payload_json, leased_at, log)
+		VALUES (?, 'done', '{}', CURRENT_TIMESTAMP,
+		        '{"blobs_deleted":3,"bytes_freed":4096,"trash_entries_deleted":2}')
+	`, jobs.GCJobKind); err != nil {
+		t.Fatal(err)
+	}
+
+	resp, body := s.do(t, "GET", "/api/v1/admin/gc/status", cookie, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("code=%d body=%v", resp.StatusCode, body)
+	}
+	if body["status"] != "done" {
+		t.Fatalf("status=%v want done", body["status"])
+	}
+	if body["bytes_freed"] == nil || int64(body["bytes_freed"].(float64)) != 4096 {
+		t.Fatalf("bytes_freed=%v want 4096", body["bytes_freed"])
+	}
+	if _, has := body["started_at"]; !has {
+		t.Fatalf("done state must include started_at: %v", body)
+	}
+	if _, has := body["finished_at"]; !has {
+		t.Fatalf("done state must include finished_at: %v", body)
+	}
+}
+
+// TestAdminGCStatus_NonSuperAdmin_403 matches POST /admin/gc auth model.
+func TestAdminGCStatus_NonSuperAdmin_403(t *testing.T) {
+	s := newGCRESTServer(t)
+	_, pw := seedTestUser(t, s.db, "alice", "a@x", false, false)
+	cookie, _, _ := s.login(t, "alice", pw)
+	resp, _ := s.do(t, "GET", "/api/v1/admin/gc/status", cookie, nil)
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("code=%d want 403", resp.StatusCode)
+	}
+}
+
+// TestAdminGCStatus_Unauthenticated_401 matches POST /admin/gc auth model.
+func TestAdminGCStatus_Unauthenticated_401(t *testing.T) {
+	s := newGCRESTServer(t)
+	resp, _ := s.do(t, "GET", "/api/v1/admin/gc/status", "", nil)
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("code=%d want 401", resp.StatusCode)
+	}
+}

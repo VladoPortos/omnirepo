@@ -88,7 +88,7 @@ prefixes (AUTH, REPO, etc.).
 - [x] **VISUAL-03**: Loading states use skeleton placeholders in known-shape surfaces (tables, cards, detail panels) rather than blank regions or spinners
 - [x] **VISUAL-04**: Copy-to-clipboard affordances exist on URLs, commands, digests, and shown-once API keys
 - [x] **VISUAL-05**: Primary and destructive buttons are visually distinct — destructive actions are clearly marked and never share identical weight with primary actions
-- [ ] **VISUAL-06**: UI renders cleanly at laptop resolutions (1366×768 and 1440×900) without horizontal scroll on admin pages
+- [x] **VISUAL-06**: UI renders cleanly at laptop resolutions (1366×768 and 1440×900) without horizontal scroll on admin pages
 - [x] **VISUAL-07**: Spacing and typography hierarchy on admin pages follow a consistent scale across headings, body, and metadata
 - [ ] **VISUAL-08**: Text colors and status colors meet WCAG AA contrast on the default theme
 - [ ] **VISUAL-09**: Severity treatment for scan findings is consistent across scan summary, detail page, and drawer views
@@ -201,7 +201,7 @@ numbered 6–10 continue from v1.0's phases 1–5.
 | VISUAL-03 | Phase 6 | Complete |
 | VISUAL-04 | Phase 6 | Complete |
 | VISUAL-05 | Phase 6 | Complete |
-| VISUAL-06 | Phase 6 | Pending |
+| VISUAL-06 | Phase 6 | Complete |
 | VISUAL-07 | Phase 6 | Complete |
 | VISUAL-08 | Phase 6 | Pending |
 | VISUAL-09 | Phase 6 | Pending |

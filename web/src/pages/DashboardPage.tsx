@@ -21,6 +21,8 @@ import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Progress } from '@/components/ui/progress';
 import { SeverityBadge } from '@/components/common/SeverityBadge';
+import { SkeletonCard } from '@/components/common/SkeletonCard';
+import { SkeletonMetric } from '@/components/common/SkeletonMetric';
 import { useDashboard, useDashboardStorage } from '@/api/queries';
 import { formatBytes, formatDate } from '@/lib/format';
 import type { StorageRepoRow, DashboardVulnRow } from '@/api/types';
@@ -56,6 +58,37 @@ export function DashboardPage() {
     (findings?.high ?? 0) +
     (findings?.medium ?? 0) +
     (findings?.low ?? 0);
+
+  // Full-page loading state uses the Phase 6 canonical Skeleton* primitives
+  // (VISUAL-03). Once any dashboard slice resolves, we fall through to the
+  // real layout below where per-slice micro-skeletons handle independently
+  // loading tiles (storage, activity, severity lists).
+  if (isLoading && storageLoading) {
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center justify-between">
+          <h1 className="text-[28px] font-semibold leading-tight">Dashboard</h1>
+        </div>
+
+        {/* Row 1: 3 metric tiles + 1 findings tile */}
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          <SkeletonMetric />
+          <SkeletonMetric />
+          <SkeletonMetric />
+          <SkeletonCard rows={2} />
+        </div>
+
+        {/* Row 2: Storage breakdown */}
+        <SkeletonCard rows={4} />
+
+        {/* Row 3: Activity + severity */}
+        <div className="grid gap-6 lg:grid-cols-2">
+          <SkeletonCard rows={5} />
+          <SkeletonCard rows={3} />
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -96,23 +129,23 @@ export function DashboardPage() {
             animate="visible"
             variants={cardVariants}
           >
-            <Card className="h-full">
-              <CardHeader>
-                <div className="flex items-center justify-between">
-                  <CardTitle className="text-sm font-medium text-muted-foreground">
-                    {card.title}
-                  </CardTitle>
-                  <card.icon className="size-4 text-muted-foreground" />
-                </div>
-              </CardHeader>
-              <CardContent>
-                {isLoading ? (
-                  <Skeleton className="h-8 w-16" />
-                ) : (
+            {isLoading ? (
+              <SkeletonMetric />
+            ) : (
+              <Card className="h-full">
+                <CardHeader>
+                  <div className="flex items-center justify-between">
+                    <CardTitle className="text-sm font-medium text-muted-foreground">
+                      {card.title}
+                    </CardTitle>
+                    <card.icon className="size-4 text-muted-foreground" />
+                  </div>
+                </CardHeader>
+                <CardContent>
                   <p className="text-3xl font-bold tabular-nums">{card.value}</p>
-                )}
-              </CardContent>
-            </Card>
+                </CardContent>
+              </Card>
+            )}
           </motion.div>
         ))}
 
@@ -123,80 +156,75 @@ export function DashboardPage() {
           animate="visible"
           variants={cardVariants}
         >
-          <Card className="h-full">
-            <CardHeader>
-              <div className="flex items-center justify-between">
-                <CardTitle className="text-sm font-medium text-muted-foreground">
-                  Scan Findings
-                </CardTitle>
-                <ShieldAlert className="size-4 text-muted-foreground" />
-              </div>
-            </CardHeader>
-            <CardContent>
-              {isLoading ? (
-                <Skeleton className="h-8 w-32" />
-              ) : (
-                <>
-                  <p className="text-3xl font-bold tabular-nums">{totalFindings}</p>
-                  {totalFindings > 0 && (
-                    <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1">
-                      {(findings?.critical ?? 0) > 0 && (
-                        <span className="flex items-center gap-1 text-sm">
-                          <SeverityBadge severity="critical" />
-                          <span className="tabular-nums">{findings!.critical}</span>
-                        </span>
-                      )}
-                      {(findings?.high ?? 0) > 0 && (
-                        <span className="flex items-center gap-1 text-sm">
-                          <SeverityBadge severity="high" />
-                          <span className="tabular-nums">{findings!.high}</span>
-                        </span>
-                      )}
-                      {(findings?.medium ?? 0) > 0 && (
-                        <span className="flex items-center gap-1 text-sm">
-                          <SeverityBadge severity="medium" />
-                          <span className="tabular-nums">{findings!.medium}</span>
-                        </span>
-                      )}
-                      {(findings?.low ?? 0) > 0 && (
-                        <span className="flex items-center gap-1 text-sm">
-                          <SeverityBadge severity="low" />
-                          <span className="tabular-nums">{findings!.low}</span>
-                        </span>
-                      )}
-                    </div>
-                  )}
-                </>
-              )}
-            </CardContent>
-          </Card>
+          {isLoading ? (
+            <SkeletonCard rows={2} />
+          ) : (
+            <Card className="h-full">
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <CardTitle className="text-sm font-medium text-muted-foreground">
+                    Scan Findings
+                  </CardTitle>
+                  <ShieldAlert className="size-4 text-muted-foreground" />
+                </div>
+              </CardHeader>
+              <CardContent>
+                <p className="text-3xl font-bold tabular-nums">{totalFindings}</p>
+                {totalFindings > 0 && (
+                  <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1">
+                    {(findings?.critical ?? 0) > 0 && (
+                      <span className="flex items-center gap-1 text-sm">
+                        <SeverityBadge severity="critical" />
+                        <span className="tabular-nums">{findings!.critical}</span>
+                      </span>
+                    )}
+                    {(findings?.high ?? 0) > 0 && (
+                      <span className="flex items-center gap-1 text-sm">
+                        <SeverityBadge severity="high" />
+                        <span className="tabular-nums">{findings!.high}</span>
+                      </span>
+                    )}
+                    {(findings?.medium ?? 0) > 0 && (
+                      <span className="flex items-center gap-1 text-sm">
+                        <SeverityBadge severity="medium" />
+                        <span className="tabular-nums">{findings!.medium}</span>
+                      </span>
+                    )}
+                    {(findings?.low ?? 0) > 0 && (
+                      <span className="flex items-center gap-1 text-sm">
+                        <SeverityBadge severity="low" />
+                        <span className="tabular-nums">{findings!.low}</span>
+                      </span>
+                    )}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          )}
         </motion.div>
       </div>
 
       {/* Row 2: Full-width storage breakdown */}
       <motion.div custom={4} initial="hidden" animate="visible" variants={cardVariants}>
-        <Card>
-          <CardHeader>
-            <div className="flex items-center gap-2">
-              <HardDrive className="size-4 text-muted-foreground" />
-              <CardTitle>Storage</CardTitle>
-            </div>
-          </CardHeader>
-          <CardContent>
-            {storageLoading ? (
-              <div className="space-y-4">
-                <Skeleton className="h-4 w-48" />
-                <Skeleton className="h-3 w-full" />
+        {storageLoading ? (
+          <SkeletonCard rows={4} />
+        ) : (
+          <Card>
+            <CardHeader>
+              <div className="flex items-center gap-2">
+                <HardDrive className="size-4 text-muted-foreground" />
+                <CardTitle>Storage</CardTitle>
               </div>
-            ) : (
+            </CardHeader>
+            <CardContent>
               <StorageBreakdown
                 totalBytes={storageData?.total_bytes ?? 0}
                 usedBytes={storageData?.used_bytes ?? 0}
                 repos={storageData?.repos ?? []}
               />
-            )}
-          </CardContent>
-        </Card>
+            </CardContent>
+          </Card>
+        )}
       </motion.div>
 
       {/* Row 3: Activity feed + high severity findings */}

@@ -1,18 +1,20 @@
 /**
  * Projects list page per D-04.
- * Project cards with member/repo counts, empty state, create dialog.
+ * Project table with member/repo counts, empty state, create dialog.
+ * Phase 6 / plan 07: migrated from card grid to a sticky-first-column
+ * table layout so SkeletonTable adoption, overflow-x-auto horizontal
+ * scroll containment (VISUAL-06), and sticky-first-column behavior all
+ * land on a canonical user-facing surface. See
+ * .planning/phases/06-error-envelope-visual-foundation/06-07-PLAN.md.
  */
 
 import { useEffect, useState, type FormEvent } from 'react';
-import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { motion } from 'framer-motion';
-import { Plus, FolderGit2, Users } from 'lucide-react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { Plus, FolderGit2 } from 'lucide-react';
 import { toast } from 'sonner';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Skeleton } from '@/components/ui/skeleton';
 import { Textarea } from '@/components/ui/textarea';
 import {
   Dialog,
@@ -22,18 +24,18 @@ import {
   DialogFooter,
   DialogTrigger,
 } from '@/components/ui/dialog';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
+import { SkeletonTable } from '@/components/common/SkeletonTable';
 import { useProjects, useCreateProject } from '@/api/queries';
 import { formatBytes, formatDate } from '@/lib/format';
 import { ApiError } from '@/api/client';
-
-const cardVariants = {
-  hidden: { opacity: 0, y: 12 },
-  visible: (i: number) => ({
-    opacity: 1,
-    y: 0,
-    transition: { delay: i * 0.04, duration: 0.2, ease: 'easeOut' as const },
-  }),
-};
 
 export function ProjectsPage() {
   const navigate = useNavigate();
@@ -139,21 +141,13 @@ export function ProjectsPage() {
         </Dialog>
       </div>
 
-      {/* Projects grid */}
+      {/* Loading / empty / populated */}
       {isLoading ? (
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-          {Array.from({ length: 6 }).map((_, i) => (
-            <Card key={i}>
-              <CardHeader>
-                <Skeleton className="h-5 w-32" />
-              </CardHeader>
-              <CardContent>
-                <Skeleton className="h-4 w-full" />
-                <Skeleton className="mt-2 h-4 w-24" />
-              </CardContent>
-            </Card>
-          ))}
-        </div>
+        <SkeletonTable
+          rows={6}
+          columns={6}
+          widths={['w-40', 'w-full', 'w-20', 'w-20', 'w-24', 'w-32']}
+        />
       ) : projects.length === 0 ? (
         <div className="flex flex-col items-center justify-center rounded-lg border border-dashed p-12 text-center">
           <FolderGit2 className="size-12 text-muted-foreground/50" />
@@ -170,48 +164,57 @@ export function ProjectsPage() {
           </Button>
         </div>
       ) : (
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-          {projects.map((project, i) => (
-            <motion.div
-              key={project.id}
-              custom={i}
-              initial="hidden"
-              animate="visible"
-              variants={cardVariants}
-            >
-              <Link
-                to={`/projects/${project.name}`}
-                className="block focus:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-xl"
-              >
-                <Card className="transition-all duration-150 hover:-translate-y-0.5 hover:shadow-md">
-                  <CardHeader>
-                    <CardTitle className="text-base">{project.name}</CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    {project.description_md && (
-                      <p className="mb-3 line-clamp-2 text-sm text-muted-foreground">
-                        {project.description_md}
-                      </p>
-                    )}
-                    <div className="flex items-center gap-4 text-xs text-muted-foreground">
-                      <span className="inline-flex items-center gap-1">
-                        <Users className="size-3.5" />
-                        {project.member_count} member{project.member_count !== 1 ? 's' : ''}
-                      </span>
-                      <span className="inline-flex items-center gap-1">
-                        <FolderGit2 className="size-3.5" />
-                        {project.repo_count} repo{project.repo_count !== 1 ? 's' : ''}
-                      </span>
-                      <span>{formatBytes(project.size_bytes)}</span>
-                    </div>
-                    <p className="mt-2 text-xs text-muted-foreground">
-                      Created {formatDate(project.created_at)}
-                    </p>
-                  </CardContent>
-                </Card>
-              </Link>
-            </motion.div>
-          ))}
+        /*
+         * Admin-table pattern (VISUAL-06): outer overflow-x-auto wrapper
+         * contains horizontal scroll INSIDE the table rather than pushing
+         * the whole page. First TableHead + first TableCell per row
+         * carry `sticky left-0 z-10 bg-card` so the project name stays
+         * visible while the operator scans numeric columns on a
+         * 1366×768 laptop. Phase 6 / plan 07 canonical reference
+         * implementation — mirrored by plan 07 task 2 across admin
+         * pages with 6+ columns.
+         */
+        <div className="overflow-x-auto rounded-lg border">
+          <Table className="min-w-full">
+            <TableHeader>
+              <TableRow>
+                <TableHead className="sticky left-0 z-10 bg-card">Name</TableHead>
+                <TableHead>Description</TableHead>
+                <TableHead className="text-right">Members</TableHead>
+                <TableHead className="text-right">Repos</TableHead>
+                <TableHead className="text-right">Size</TableHead>
+                <TableHead>Created</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {projects.map((project) => (
+                <TableRow
+                  key={project.id}
+                  className="cursor-pointer"
+                  onClick={() => navigate(`/projects/${project.name}`)}
+                >
+                  <TableCell className="sticky left-0 z-10 bg-card font-medium">
+                    {project.name}
+                  </TableCell>
+                  <TableCell className="max-w-md truncate text-sm text-muted-foreground">
+                    {project.description_md || '—'}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {project.member_count}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {project.repo_count}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums text-muted-foreground">
+                    {formatBytes(project.size_bytes)}
+                  </TableCell>
+                  <TableCell className="text-xs text-muted-foreground">
+                    {formatDate(project.created_at)}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
         </div>
       )}
     </div>

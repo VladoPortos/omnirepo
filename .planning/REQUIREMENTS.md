@@ -38,18 +38,6 @@ prefixes (AUTH, REPO, etc.).
 - [ ] **EMPTY-07**: When no saved filters, favorites, or recents exist on a given surface, the UI shows guidance text rather than a silent empty section
 - [ ] **EMPTY-08**: When search returns no results, the UI shows "try a different term" guidance with example queries
 
-### HEALTH — Health / status dashboard
-
-- [ ] **HEALTH-01**: User (admin) can open a dedicated "Health" / "System Status" page in the UI
-- [ ] **HEALTH-02**: Health page shows disk usage (used / free / total) for the data volume, with a visual warning band at a configurable threshold
-- [ ] **HEALTH-03**: Health page shows the SQLite DB size plus growth trend over the last 7 and 30 days
-- [ ] **HEALTH-04**: Health page shows current background-job status — running / queued / failed counts and a link to recent runs
-- [ ] **HEALTH-05**: Health page shows Trivy DB freshness (last update timestamp, age, stale/fresh indicator)
-- [ ] **HEALTH-06**: Health page shows TLS certificate expiry summary (days remaining; warning under configurable threshold)
-- [ ] **HEALTH-07**: Health page shows long-running task history — last N (default 20) tasks with duration and, if failed, failure reason
-- [ ] **HEALTH-08**: User can manually refresh the health page (one-click) and the page optionally auto-refreshes on a visible interval
-- [ ] **HEALTH-09**: REST endpoints expose each health metric as JSON under `/api/v1/admin/health/*` (disk, db, jobs, trivy, tls, tasks, summary)
-
 ### ERR — Better failure messaging
 
 - [x] **ERR-01**: REST API errors return a stable envelope `{ code, message, hint?, class, incident_id? }` where `class ∈ {validation, permission, transient, operator_action_required}`
@@ -59,27 +47,6 @@ prefixes (AUTH, REPO, etc.).
 - [x] **ERR-05**: Operator-action-required errors direct the user to the specific admin page or action (e.g. "Trivy DB missing → go to Admin → Trivy")
 - [x] **ERR-06**: Validation errors highlight the offending field(s) where the UI has field context (forms, edit modals)
 - [x] **ERR-07**: Errors recorded in the audit log receive an `incident_id` that correlates the UI message, server log line, and audit entry
-
-### FAV — Saved filters, favorites, and recents
-
-- [ ] **FAV-01**: User can save a named filter on any table that supports filtering (projects, repos, artifacts, audit log, search results)
-- [ ] **FAV-02**: User can pin a project as a favorite, surfaced in the top nav or sidebar for that user
-- [ ] **FAV-03**: User can pin a repo as a favorite, surfaced alongside favorite projects
-- [ ] **FAV-04**: System tracks and displays each user's last N visited projects and repos ("Recently visited")
-- [ ] **FAV-05**: Saved filters and favorites persist per-user across sessions — stored server-side, survive browser-data reset
-- [ ] **FAV-06**: User can rename and delete their saved filters
-- [ ] **FAV-07**: User can reorder their favorites (drag-and-drop or explicit up/down controls)
-
-### OVERVIEW — Better repository overview pages
-
-- [ ] **OVERVIEW-01**: Every repo page has an "Overview" tab (default landing tab) that presents a control-center layout
-- [ ] **OVERVIEW-02**: Overview shows the copyable client snippets for this repo type (reuses SNIPPET-\* implementations)
-- [ ] **OVERVIEW-03**: Overview shows the latest artifacts (top 5–10) with timestamp and actor
-- [ ] **OVERVIEW-04**: Overview shows recent uploads separately from "latest" — scoped by recency (last N hours / days)
-- [ ] **OVERVIEW-05**: Overview shows sync status summary for repo types that support sync (PyPI / Helm / RPM / APT): last sync outcome, time, item counts
-- [ ] **OVERVIEW-06**: Overview shows scan status summary — last scan run, severity counts, a "run scan" CTA if stale
-- [ ] **OVERVIEW-07**: Overview shows visibility + policy placeholders — current `public_read` flag, a placeholder row for v2.0 immutability work
-- [ ] **OVERVIEW-08**: Overview shows last-modified actors (recent audit entries filtered to this repo) with links into the full audit log
 
 ### VISUAL — Visual language and polish
 
@@ -95,7 +62,56 @@ prefixes (AUTH, REPO, etc.).
 
 ---
 
-## Future Requirements (deferred beyond v1.1)
+## Deferred to v1.2 (dropped from v1.1 on 2026-04-17)
+
+On 2026-04-17 the user decided v1.1 should ship as a tight polish milestone
+after Phase 7. Phases 8 (FAV), 9 (HEALTH), and 10 (OVERVIEW) were removed
+from v1.1's active scope and deferred to v1.2. The REQ wording below is
+preserved verbatim so the v1.2 planner can pick them up as-is (or refine).
+These 24 REQs stay in the traceability table below under the "Deferred to
+v1.2" column, not as v1.1 coverage.
+
+### HEALTH — Health / status dashboard (deferred to v1.2)
+
+- [ ] **HEALTH-01**: User (admin) can open a dedicated "Health" / "System Status" page in the UI
+- [ ] **HEALTH-02**: Health page shows disk usage (used / free / total) for the data volume, with a visual warning band at a configurable threshold
+- [ ] **HEALTH-03**: Health page shows the SQLite DB size plus growth trend over the last 7 and 30 days
+- [ ] **HEALTH-04**: Health page shows current background-job status — running / queued / failed counts and a link to recent runs
+- [ ] **HEALTH-05**: Health page shows Trivy DB freshness (last update timestamp, age, stale/fresh indicator)
+- [ ] **HEALTH-06**: Health page shows TLS certificate expiry summary (days remaining; warning under configurable threshold)
+- [ ] **HEALTH-07**: Health page shows long-running task history — last N (default 20) tasks with duration and, if failed, failure reason
+- [ ] **HEALTH-08**: User can manually refresh the health page (one-click) and the page optionally auto-refreshes on a visible interval
+- [ ] **HEALTH-09**: REST endpoints expose each health metric as JSON under `/api/v1/admin/health/*` (disk, db, jobs, trivy, tls, tasks, summary)
+
+### FAV — Saved filters, favorites, and recents (deferred to v1.2)
+
+- [ ] **FAV-01**: User can save a named filter on any table that supports filtering (projects, repos, artifacts, audit log, search results)
+- [ ] **FAV-02**: User can pin a project as a favorite, surfaced in the top nav or sidebar for that user
+- [ ] **FAV-03**: User can pin a repo as a favorite, surfaced alongside favorite projects
+- [ ] **FAV-04**: System tracks and displays each user's last N visited projects and repos ("Recently visited")
+- [ ] **FAV-05**: Saved filters and favorites persist per-user across sessions — stored server-side, survive browser-data reset
+- [ ] **FAV-06**: User can rename and delete their saved filters
+- [ ] **FAV-07**: User can reorder their favorites (drag-and-drop or explicit up/down controls)
+
+### OVERVIEW — Better repository overview pages (deferred to v1.2)
+
+- [ ] **OVERVIEW-01**: Every repo page has an "Overview" tab (default landing tab) that presents a control-center layout
+- [ ] **OVERVIEW-02**: Overview shows the copyable client snippets for this repo type (reuses SNIPPET-\* implementations)
+- [ ] **OVERVIEW-03**: Overview shows the latest artifacts (top 5–10) with timestamp and actor
+- [ ] **OVERVIEW-04**: Overview shows recent uploads separately from "latest" — scoped by recency (last N hours / days)
+- [ ] **OVERVIEW-05**: Overview shows sync status summary for repo types that support sync (PyPI / Helm / RPM / APT): last sync outcome, time, item counts
+- [ ] **OVERVIEW-06**: Overview shows scan status summary — last scan run, severity counts, a "run scan" CTA if stale
+- [ ] **OVERVIEW-07**: Overview shows visibility + policy placeholders — current `public_read` flag, a placeholder row for v2.0 immutability work
+- [ ] **OVERVIEW-08**: Overview shows last-modified actors (recent audit entries filtered to this repo) with links into the full audit log
+
+### Parked for v1.2 planning (not yet REQs)
+
+- **Avatar style picker** — DiceBear already in deps (`@dicebear/core` + `@dicebear/collection` v9.2.2); current UI only uses `initials`. Swap to user-choosable style (avataaars / bottts / personas / lorelei / notionists / pixel-art). Needs picker in profile settings + seed column on users table + migration.
+- **Tamagotchi ASCII pet** — fun/morale feature. See `ROADMAP.md` backlog entry 999.1.
+
+---
+
+## Future Requirements (deferred beyond v1.2)
 
 From `improvements.md` "Phase 2: Operational Maturity":
 
@@ -143,11 +159,31 @@ endpoints to support the dashboard").
 
 ## Traceability
 
-Every REQ-ID is mapped to exactly one phase in `ROADMAP.md`. Phases
-numbered 6–10 continue from v1.0's phases 1–5.
+Every active v1.1 REQ-ID is mapped to exactly one phase in `ROADMAP.md`.
+Deferred REQs carry a "v1.2" target and will re-map to concrete phases when
+the v1.2 ROADMAP is created. Phases numbered 6–7 continue from v1.0's
+phases 1–5.
+
+### Active v1.1 (33 REQs)
 
 | REQ-ID | Phase | Status |
 |--------|-------|--------|
+| ERR-01 | Phase 6 | Complete |
+| ERR-02 | Phase 6 | Complete |
+| ERR-03 | Phase 6 | Complete |
+| ERR-04 | Phase 6 | Complete |
+| ERR-05 | Phase 6 | Complete |
+| ERR-06 | Phase 6 | Complete |
+| ERR-07 | Phase 6 | Complete |
+| VISUAL-01 | Phase 6 | Complete |
+| VISUAL-02 | Phase 6 | Complete |
+| VISUAL-03 | Phase 6 | Complete |
+| VISUAL-04 | Phase 6 | Complete |
+| VISUAL-05 | Phase 6 | Complete |
+| VISUAL-06 | Phase 6 | Complete |
+| VISUAL-07 | Phase 6 | Complete |
+| VISUAL-08 | Phase 6 | Complete |
+| VISUAL-09 | Phase 6 | Complete |
 | SNIPPET-01 | Phase 7 | Pending |
 | SNIPPET-02 | Phase 7 | Pending |
 | SNIPPET-03 | Phase 7 | Pending |
@@ -165,48 +201,38 @@ numbered 6–10 continue from v1.0's phases 1–5.
 | EMPTY-06 | Phase 7 | Pending |
 | EMPTY-07 | Phase 7 | Pending |
 | EMPTY-08 | Phase 7 | Pending |
-| HEALTH-01 | Phase 9 | Pending |
-| HEALTH-02 | Phase 9 | Pending |
-| HEALTH-03 | Phase 9 | Pending |
-| HEALTH-04 | Phase 9 | Pending |
-| HEALTH-05 | Phase 9 | Pending |
-| HEALTH-06 | Phase 9 | Pending |
-| HEALTH-07 | Phase 9 | Pending |
-| HEALTH-08 | Phase 9 | Pending |
-| HEALTH-09 | Phase 9 | Pending |
-| ERR-01 | Phase 6 | Complete |
-| ERR-02 | Phase 6 | Complete |
-| ERR-03 | Phase 6 | Complete |
-| ERR-04 | Phase 6 | Complete |
-| ERR-05 | Phase 6 | Complete |
-| ERR-06 | Phase 6 | Complete |
-| ERR-07 | Phase 6 | Complete |
-| FAV-01 | Phase 8 | Pending |
-| FAV-02 | Phase 8 | Pending |
-| FAV-03 | Phase 8 | Pending |
-| FAV-04 | Phase 8 | Pending |
-| FAV-05 | Phase 8 | Pending |
-| FAV-06 | Phase 8 | Pending |
-| FAV-07 | Phase 8 | Pending |
-| OVERVIEW-01 | Phase 10 | Pending |
-| OVERVIEW-02 | Phase 10 | Pending |
-| OVERVIEW-03 | Phase 10 | Pending |
-| OVERVIEW-04 | Phase 10 | Pending |
-| OVERVIEW-05 | Phase 10 | Pending |
-| OVERVIEW-06 | Phase 10 | Pending |
-| OVERVIEW-07 | Phase 10 | Pending |
-| OVERVIEW-08 | Phase 10 | Pending |
-| VISUAL-01 | Phase 6 | Complete |
-| VISUAL-02 | Phase 6 | Complete |
-| VISUAL-03 | Phase 6 | Complete |
-| VISUAL-04 | Phase 6 | Complete |
-| VISUAL-05 | Phase 6 | Complete |
-| VISUAL-06 | Phase 6 | Complete |
-| VISUAL-07 | Phase 6 | Complete |
-| VISUAL-08 | Phase 6 | Complete |
-| VISUAL-09 | Phase 6 | Complete |
 
-**Coverage:** 57/57 REQ-IDs mapped to exactly one phase.
+### Deferred to v1.2 (24 REQs — re-map at v1.2 planning)
+
+| REQ-ID | Target | Status |
+|--------|--------|--------|
+| HEALTH-01 | v1.2 | Deferred |
+| HEALTH-02 | v1.2 | Deferred |
+| HEALTH-03 | v1.2 | Deferred |
+| HEALTH-04 | v1.2 | Deferred |
+| HEALTH-05 | v1.2 | Deferred |
+| HEALTH-06 | v1.2 | Deferred |
+| HEALTH-07 | v1.2 | Deferred |
+| HEALTH-08 | v1.2 | Deferred |
+| HEALTH-09 | v1.2 | Deferred |
+| FAV-01 | v1.2 | Deferred |
+| FAV-02 | v1.2 | Deferred |
+| FAV-03 | v1.2 | Deferred |
+| FAV-04 | v1.2 | Deferred |
+| FAV-05 | v1.2 | Deferred |
+| FAV-06 | v1.2 | Deferred |
+| FAV-07 | v1.2 | Deferred |
+| OVERVIEW-01 | v1.2 | Deferred |
+| OVERVIEW-02 | v1.2 | Deferred |
+| OVERVIEW-03 | v1.2 | Deferred |
+| OVERVIEW-04 | v1.2 | Deferred |
+| OVERVIEW-05 | v1.2 | Deferred |
+| OVERVIEW-06 | v1.2 | Deferred |
+| OVERVIEW-07 | v1.2 | Deferred |
+| OVERVIEW-08 | v1.2 | Deferred |
+
+**Coverage:** 33/33 active v1.1 REQ-IDs mapped to exactly one v1.1 phase;
+24 REQ-IDs deferred to v1.2 with phase mapping TBD.
 
 ---
 

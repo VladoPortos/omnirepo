@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: v1.1-immediate-polish
-status: verifying
-stopped_at: Completed 06-08-PLAN.md — Phase 6 test gates in place
-last_updated: "2026-04-17T14:13:23.692Z"
-last_activity: 2026-04-17 — Plan 06-08 completed (Phase 6 test gates: WCAG AA contrast hard-gate via scripts/check-contrast.mjs, typography + 6px spacing carve-out greps, visual-foundation snapshot + responsive 1366×768 + a11y-audit axe-core Playwright specs, @axe-core/playwright devDep-only gate, tsconfig noEmit:true root-fix; --status-disabled-foreground Rule-1 darkened to pass AA; make test + 3 new Playwright specs all green; Phase 6 closes).
+status: ready-to-plan
+stopped_at: v1.1 rescoped — Phase 6 shipped; Phase 7 ready to plan
+last_updated: "2026-04-17T17:30:00.000Z"
+last_activity: 2026-04-17
 progress:
-  total_phases: 5
+  total_phases: 2
   completed_phases: 1
   total_plans: 8
   completed_plans: 8
-  percent: 100
+  percent: 50
 ---
 
 # STATE: OmniRepo
@@ -21,26 +21,25 @@ progress:
 ## Project Reference
 
 - **Core value**: A single container that hosts every artifact type a corporate team produces or consumes — Docker images, Linux packages, Python wheels, Helm charts, raw blobs, S3 objects, Git repos — with vulnerability scanning, project-scoped access control, and zero outbound network calls at runtime.
-- **Current focus**: v1.1 "Immediate Product Polish" — UI/UX quality-of-life pass (client snippets, empty states, health dashboard, failure messaging, saved filters, repo overview pages, visual-language polish). No core protocol reworks; additive backend endpoints only where needed to power the new UI.
-- **Granularity**: coarse (5 phases, numbered 6 through 10, continuing from v1.0's last phase 5)
+- **Current focus**: v1.1 "Immediate Product Polish" — UI/UX quality-of-life pass. **Rescoped 2026-04-17**: ships after 2 phases (Phase 6 done, Phase 7 tight polish). HEALTH / FAV / OVERVIEW deferred to v1.2. No core protocol reworks; no new backend endpoints beyond what Phase 6 already shipped.
+- **Granularity**: tight (2 phases, numbered 6 and 7, continuing from v1.0's last phase 5)
 
 ## Current Position
 
-Phase: 06 (error-envelope-visual-foundation) — EXECUTING
-Plan: 8 of 8
-Status: Phase complete — ready for verification
+Phase: 7
+Plan: Not started
+Status: Phase 6 shipped; rescope applied to ROADMAP.md + REQUIREMENTS.md — ready to plan Phase 7 (Snippet Polish, Dashboard Cards & Empty States)
 Last activity: 2026-04-17
-Stopped at: Completed 06-08-PLAN.md — Phase 6 test gates in place
+Stopped at: v1.1 rescope applied; ready for /gsd-plan-phase 7
 
 ## Phase Map
 
 | Phase | Name | Requirements | Depends on |
 |-------|------|--------------|------------|
-| 6 | Error Envelope & Visual Foundation | 16 (ERR-01..07, VISUAL-01..09) | Nothing beyond v1.0 |
-| 7 | Client Snippets & Empty States | 17 (SNIPPET-01..09, EMPTY-01..08) | Phase 6 |
-| 8 | Favorites, Saved Filters & Recents | 7 (FAV-01..07) | Phase 6 |
-| 9 | Health & Status Dashboard | 9 (HEALTH-01..09) | Phase 6 |
-| 10 | Repository Overview Pages | 8 (OVERVIEW-01..08) | Phases 6, 7, 9 |
+| 6 | Error Envelope & Visual Foundation | 16 (ERR-01..07, VISUAL-01..09) — ✅ DONE | Nothing beyond v1.0 |
+| 7 | Snippet Polish, Dashboard Cards & Empty States | 17 (SNIPPET-01..09, EMPTY-01..08) | Phase 6 |
+
+**Deferred to v1.2** (dropped from v1.1 2026-04-17): HEALTH-01..09, FAV-01..07, OVERVIEW-01..08. See `REQUIREMENTS.md` "Deferred to v1.2" section and `ROADMAP.md` "Deferred to v1.2" block.
 
 ## Scope reference
 
@@ -119,7 +118,36 @@ scoped tokens, LDAP/OIDC.
 - Execute plan 06-06 (visual foundation — status tokens, StatusBadge, Skeleton). ✅ Shipped; 6 status-token triples in :root + .dark + @theme inline; StatusBadge (6 variants × 2 sizes + iconOnly); 4 Skeleton variants (Card/Table/Detail/Metric); CopyInline with optional masking; CopyButton aria-live upgrade; reduced-motion rule; Geist purge; dev-only /_dev/primitives-story verified via Playwright in both light and dark.
 - Execute plan 06-07 (apply primitives to canonical pages + sticky-first-column admin tables + StatusBadge story page). ✅ Shipped; DashboardPage consumes SkeletonCard + SkeletonMetric (7 role=status regions on cold load); ProjectsPage migrated to sticky-first-column table with SkeletonTable on load; DataTable grew `stickyFirstColumn` prop enabled on 3 admin pages (Users/Audit/Trash) + 5 repo pages (Apt/Docker/Helm/Pypi/Rpm); /_dev/status-badge-story renders 24-variant matrix, production tree-shake verified; Playwright drove dashboard + projects (loaded + loading) + admin/users + admin/audit at 1366×768 with zero page-horizontal-scroll and zero console errors.
 - Execute plan 06-08 (Phase 6 test gates). ✅ Shipped; 5 hard lint gates wired into `make test` (lint-protocol-redaction + check-contrast + lint-typography + lint-spacing-carveout + lint-axe-devdep, all clean); 3 new Playwright specs (visual-foundation snapshot of 24-variant StatusBadge matrix + responsive 1366×768 across 6 admin routes + a11y-audit via axe-core across 5 pages), 13/13 pass in 7.6s; @axe-core/playwright in devDeps only; tsconfig noEmit:true deferred-fix landed; --status-disabled-foreground Rule-1 auto-fix so every status passes WCAG AA. Full `make test` green in ~30s. Phase 6 complete — every ERR-01..07 + VISUAL-01..09 requirement now has at least one automated test gate.
-- Phase 6 verification (post-execution). Run `codex:rescue` / Codex review flow per global CLAUDE.md. Transition to Phase 7 (Client Snippets & Empty States).
+- Phase 6 verification (post-execution). Run `codex:rescue` / Codex review flow per global CLAUDE.md. Transition to Phase 7 (Client Snippets & Empty States). ✅ Shipped; Playwright walkthrough surfaced 5 findings (hydration warning, duplicate breadcrumb key, repo-validator wording, spurious project-bucket refetch, ERR-06 field highlight). All 5 resolved as atomic commits `2fd7ba5..0c79ef1`, Codex-reviewed and real-issue items absorbed (encodeURIComponent on route params + Playwright spec for aria-invalid + defensive setup-email/login bindings). Full `go test ./...` + `make test` + `npm run build` green. Phase 6 fully shipped.
+- Transition to Phase 7 (Client Snippets & Empty States). Run `/gsd-plan-phase 7` to generate plans. ⚠️ SCOPE CHANGED 2026-04-17 session — rescope applied, see below.
+
+### Phase 7 rescope (2026-04-17 — APPLIED)
+
+**User decision 2026-04-17:** v1.1 ships after one more tight polish phase.
+Phases 8, 9, 10 were dropped from v1.1 and moved to a future v1.2 milestone
+(user will plan v1.2 from scratch after v1.1 ships).
+
+**Rescope applied 2026-04-17** to `.planning/ROADMAP.md` and
+`.planning/REQUIREMENTS.md`. Phase 7 is now ready for `/gsd-plan-phase 7`
+with the tight scope below.
+
+**Phase 7 scope (APPLIED):**
+
+- **Snippet audit** — verify `web/src/lib/snippets.ts` + `SnippetPanel` per repo type. Code-level verification 2026-04-17 confirmed real gaps: APT uses deprecated `apt-key add` and hard-codes `stable main`; Helm missing `helm push`; S3 missing region; Git/RAW missing auth hints. Accuracy/polish pass, not a rebuild.
+- **Dashboard summary cards** — additive composition cards on existing `DashboardPage` using already-available v1.0 signal (audit log, storage endpoint, jobs endpoint, TLS admin endpoint, Trivy admin endpoint). Phase 6 primitives (StatusBadge + SkeletonCard) for rendering. **No new `/api/v1/admin/health/*` endpoints** — those are v1.2 Health page work.
+- **EMPTY-01..08** — shared `EmptyState` component; code-level verification 2026-04-17 confirmed no shared component exists today and only 4 ad-hoc inline empty-state strings live across ProjectsPage/SearchPage/ProjectDetailPage/DashboardPage. EMPTY REQ wording preserved.
+- **Walkthrough micro-fixes** — user names specific items at plan time; ship as atomic commits within the phase.
+
+**Dropped from v1.1 → deferred to v1.2** (REQs preserved under REQUIREMENTS.md "Deferred to v1.2"):
+
+- HEALTH-01..09 — dedicated Health/Status page + new `/api/v1/admin/health/*` endpoints.
+- FAV-01..07 — favorites, saved filters, recently-visited (cross-session persistence).
+- OVERVIEW-01..08 — repo overview control-center tab.
+
+**Also parked for v1.2 (not yet REQs):**
+
+- Avatar style picker — DiceBear is already in our deps (`@dicebear/core` + `@dicebear/collection` v9.2.2). Current UI uses only the `initials` collection. Swap to a user-choosable style. ~4-hour feature: picker in profile settings + seed column on users table + migration.
+- Tamagotchi ASCII pet in bottom-right — backlog item 999.1 in ROADMAP.md. Fun/morale feature.
 
 ### Blockers
 
@@ -151,12 +179,12 @@ scoped tokens, LDAP/OIDC.
 
 ## Session Continuity
 
-- **Next action**: Execute plan 06-08 (Phase 6 test gates — check-contrast.mjs WCAG gate, lint-typography + lint-spacing-carveout greps, visual-foundation/responsive/a11y-audit Playwright specs, @axe-core devDep gate, and the deferred `tsconfig noEmit: true` infra fix inherited from 06-06/06-07).
-- **Last session:** 2026-04-17T14:13:23.690Z
+- **Next action**: Run `/gsd-plan-phase 7` to generate plans for the rescoped Phase 7 (Snippet Polish, Dashboard Cards & Empty States). ROADMAP.md + REQUIREMENTS.md already reflect the tight scope.
+- **Last session:** 2026-04-17T17:30:00.000Z
 - **Artifacts on disk**:
-  - `.planning/PROJECT.md` (Current Milestone: v1.1)
-  - `.planning/REQUIREMENTS.md` (57 v1.1 REQs, traceability populated)
-  - `.planning/ROADMAP.md` (v1.1 roadmap: phases 6–10)
+  - `.planning/PROJECT.md` (Current Milestone: v1.1, Phase 6 progress paragraph added)
+  - `.planning/REQUIREMENTS.md` (33 active v1.1 REQs + 24 deferred v1.2 REQs; traceability split by target milestone)
+  - `.planning/ROADMAP.md` (v1.1 roadmap: phases 6–7; phases 8/9/10 in "Deferred to v1.2" block)
   - `.planning/STATE.md` (this file)
   - `.planning/milestones/v1.0-ROADMAP.md` + `v1.0-REQUIREMENTS.md` (archived)
   - `.planning/v1.0-MILESTONE-AUDIT.md` (v1.0 audit report)
@@ -164,4 +192,4 @@ scoped tokens, LDAP/OIDC.
   - `improvements.md` (repo root — v2.0 product-direction brief; v1.1 scope source)
 
 ---
-*v1.1 milestone roadmap approved — ready to plan Phase 6*
+*v1.1 rescoped 2026-04-17 — Phase 6 shipped; ready to plan Phase 7*

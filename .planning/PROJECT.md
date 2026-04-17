@@ -30,6 +30,17 @@ with AES-GCM key storage, and the multi-stage Docker image with baked
 Trivy DB. Full archive: `milestones/v1.0-ROADMAP.md` and
 `milestones/v1.0-REQUIREMENTS.md`.
 
+**v1.1 progress:** Phase 6 (Error Envelope & Visual Foundation) complete
+2026-04-17 — every `/api/v1` handler emits the `ApiErrorEnvelope` shape
+with UUID-v7 incident-id correlation, the UI renders all 4 error classes
+through a shared component, protocol handlers no longer leak `%v`
+internals, and the visual-foundation primitives (status tokens,
+StatusBadge, Skeletons, CopyInline, a11y-upgraded CopyButton,
+reduced-motion) ship with six automated regression gates covering
+WCAG AA contrast, typography, spacing, responsive layout, and axe-core
+a11y audits. 16/16 must-haves verified. ERR-01..07 + VISUAL-01..09
+closed.
+
 ## Current Milestone: v1.1 Immediate Product Polish
 
 **Goal:** Make OmniRepo easier to operate, faster to navigate, and clearer
@@ -37,36 +48,35 @@ under failure — a UI/UX-first pass that turns a functional v1.0 into a
 product that feels deliberate in daily use. No core protocol reworks; only
 additive backend endpoints where needed to power the new UI surfaces.
 
-**Target features** (mapped 1:1 to `improvements.md` "Phase 1: Immediate
-Product Polish" plus the tightly-related UI sections):
+**Target features** (rescoped 2026-04-17 — v1.1 ships after 2 phases):
 
-- Client configuration snippets on every repo page — copyable examples
-  for `docker login`/pull/push, `pip` / `.pypirc`, APT source lines, RPM
-  repo config, Helm `repo add`/push/pull, Git clone/fetch, and S3 CLI
-  and SDK usage.
-- Context-aware empty states — replace blank screens with guided next
-  steps (create first repo, add members, upload first artifact, enable
-  scanning, configure TLS).
-- Health / status dashboard — disk usage + free-space warnings, DB size
-  and growth, queue depth + background-job status, Trivy DB freshness,
-  TLS certificate expiry, repo-sync freshness, and long-running task
-  history with duration + failure reason.
-- Better failure messaging — replace vague errors with actionable
-  guidance; differentiate validation / permission / transient /
-  operator-action-required failures; stable external error envelopes
-  (no raw internal messages leaked).
-- Saved filters, favorites, recents — save common searches and table
-  filters; pin favorite projects and repos; recently visited items.
-- Better repository overview pages — control-center layout: quick usage
-  commands, latest artifacts, recent uploads, sync status, scan status
-  summary, visibility / policy placeholders, last-modified actors.
-- UI visual language + polish — consistent color semantics for
-  healthy / warning / failure / disabled / maintenance; loading
-  skeletons; copy-to-clipboard affordances for URLs, commands, digests,
-  and keys; status-badge consistency; button priority for destructive
-  vs primary actions; responsive for laptop-sized admin screens.
+*Phase 6 (✅ shipped 2026-04-17):*
 
-**Explicitly NOT in v1.1** (deferred to v1.5 / v2.0 per the
+- Better failure messaging — stable `ApiErrorEnvelope` (`{code, message, hint?, class, incident_id?}`) across every `/api/v1` handler with UUID-v7 incident-id correlation; UI renders all 4 error classes through a shared component; protocol handlers no longer leak `%v` internals.
+- UI visual language + polish — consistent color semantics for healthy / warning / failure / disabled / maintenance; loading skeletons (Card/Table/Detail/Metric); copy-to-clipboard affordances for URLs, commands, digests, and keys; status-badge consistency (StatusBadge); responsive for laptop-sized admin screens; WCAG AA contrast + axe-core a11y gates.
+
+*Phase 7 (in progress — tight polish):*
+
+- Client configuration snippets — accuracy pass on the existing per-protocol snippet generators (docker/pip/apt/rpm/helm/git/s3/raw) that shipped in v1.0; fix deprecated `apt-key`, complete Helm push, S3 region, Git/RAW auth hints.
+- Dashboard summary cards — additive composition cards (health-summary / recent-failures / storage-growth / expiring-certs / queues / audit-highlights) on the existing `DashboardPage` using already-available v1.0 signal. No new backend endpoints.
+- Context-aware empty states — shared `EmptyState` component covering EMPTY-01..08 (zero-repos project, zero-members project, zero-artifacts repo with inline snippet, never-scanned repo, no-TLS, empty trash, empty filters/favorites/recents, no-results search).
+- Walkthrough micro-fixes — atomic-commit polish items surfaced during UI screen-driving.
+
+**Deferred to v1.2** (dropped from v1.1 on 2026-04-17 — see
+`.planning/REQUIREMENTS.md` "Deferred to v1.2" section for the 24 REQs):
+
+- Health / status dashboard — dedicated admin Health page with disk /
+  DB / jobs / Trivy / TLS / tasks cards backed by new
+  `/api/v1/admin/health/*` endpoints (HEALTH-01..09). Phase 7's
+  dashboard-cards track partially addresses the "quick health glance"
+  need via composition; the dedicated page + new endpoints are v1.2.
+- Saved filters, favorites, recents — per-user persistence with new
+  SQLite migration (FAV-01..07).
+- Better repository overview pages — default-landing control-center
+  Overview tab reusing snippets + scan + sync + visibility summaries
+  (OVERVIEW-01..08).
+
+**Explicitly NOT in v1.1 or v1.2** (deferred further per the
 `improvements.md` prioritization):
 
 - Retention, quotas, capacity management

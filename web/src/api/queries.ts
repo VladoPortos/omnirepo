@@ -563,6 +563,12 @@ export function useProjectBuckets(projectName: string) {
     queryKey: ['projects', projectName, 'buckets'],
     queryFn: () =>
       api.get<ProjectBucket[]>(`/projects/${projectName}/s3-buckets/`),
+    // Defend against a brief mount where useParams() returns '' —
+    // firing the listing with an empty path segment resolves to
+    // /projects//s3-buckets/, which chi serves as 404 and used to
+    // surface as a noisy console error on bucket-detail loads where
+    // this hook is transitively reached via query-cache warmups.
+    enabled: !!projectName,
     staleTime: 10_000,
   });
 }

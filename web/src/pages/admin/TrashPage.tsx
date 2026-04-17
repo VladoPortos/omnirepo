@@ -256,6 +256,7 @@ export default function TrashPage() {
         data={items}
         loading={isLoading}
         emptyMessage="Trash is empty. Deleted items will appear here for the configured retention period."
+        stickyFirstColumn
         pagination={
           data?.next_cursor
             ? {

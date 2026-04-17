@@ -258,6 +258,7 @@ export default function UsersPage() {
         data={data?.items ?? []}
         loading={isLoading}
         emptyMessage="No users found."
+        stickyFirstColumn
         pagination={
           data?.next_cursor
             ? {

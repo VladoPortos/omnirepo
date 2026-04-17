@@ -47,6 +47,16 @@ interface DataTableProps<T> {
   onSort?: (column: string, direction: SortDirection) => void;
   skeletonRows?: number;
   emptyMessage?: string;
+  /**
+   * When true, wrap the table in `<div class="overflow-x-auto
+   * rounded-lg border">` and pin the first column to the left via
+   * `sticky left-0 z-10 bg-card` so horizontal scroll at 1366×768 stays
+   * inside the container instead of pushing the whole page (VISUAL-06 /
+   * Phase 6 plan 07 admin-table pattern). Consumers with 6+ columns opt
+   * in; narrow tables (<6 cols) leave it off to avoid unnecessary
+   * chrome.
+   */
+  stickyFirstColumn?: boolean;
 }
 
 export function DataTable<T>({
@@ -58,6 +68,7 @@ export function DataTable<T>({
   onSort,
   skeletonRows = 5,
   emptyMessage = 'No data found.',
+  stickyFirstColumn = false,
 }: DataTableProps<T>) {
   const handleSort = (columnId: string) => {
     if (!onSort) return;
@@ -81,65 +92,99 @@ export function DataTable<T>({
     );
   };
 
-  return (
-    <div className="space-y-2">
-      <Table>
-        <TableHeader>
-          <TableRow>
-            {columns.map((col) => (
-              <TableHead key={col.id} className={col.className}>
-                {col.sortable && onSort ? (
-                  <button
-                    className="inline-flex items-center gap-1 hover:text-foreground"
-                    onClick={() => handleSort(col.id)}
+  // When stickyFirstColumn is active, the first column's header and
+  // body cells carry `sticky left-0 z-10 bg-card` so they stay fixed
+  // while the remaining columns scroll horizontally inside the
+  // overflow-x-auto wrapper. The first-column sticky class is merged
+  // (not replaced) so column-specific className props still apply.
+  const stickyCellClass = 'sticky left-0 z-10 bg-card';
+  const firstColClassName = (colClass?: string) =>
+    stickyFirstColumn
+      ? colClass
+        ? `${stickyCellClass} ${colClass}`
+        : stickyCellClass
+      : colClass;
+
+  const tableContent = (
+    <Table className={stickyFirstColumn ? 'min-w-full' : undefined}>
+      <TableHeader>
+        <TableRow>
+          {columns.map((col, ci) => (
+            <TableHead
+              key={col.id}
+              className={ci === 0 ? firstColClassName(col.className) : col.className}
+            >
+              {col.sortable && onSort ? (
+                <button
+                  className="inline-flex items-center gap-1 hover:text-foreground"
+                  onClick={() => handleSort(col.id)}
+                >
+                  {col.name}
+                  {getSortIcon(col.id)}
+                </button>
+              ) : (
+                col.name
+              )}
+            </TableHead>
+          ))}
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {loading
+          ? Array.from({ length: skeletonRows }).map((_, i) => (
+              <TableRow key={`skeleton-${i}`}>
+                {columns.map((col, ci) => (
+                  <TableCell
+                    key={col.id}
+                    className={ci === 0 ? firstColClassName() : undefined}
                   >
-                    {col.name}
-                    {getSortIcon(col.id)}
-                  </button>
-                ) : (
-                  col.name
-                )}
-              </TableHead>
-            ))}
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {loading
-            ? Array.from({ length: skeletonRows }).map((_, i) => (
-                <TableRow key={`skeleton-${i}`}>
-                  {columns.map((col) => (
-                    <TableCell key={col.id}>
-                      <Skeleton className="h-4 w-full max-w-[120px]" />
+                    <Skeleton className="h-4 w-full max-w-[120px]" />
+                  </TableCell>
+                ))}
+              </TableRow>
+            ))
+          : data.length === 0
+            ? (
+                <TableRow>
+                  <TableCell
+                    colSpan={columns.length}
+                    className="h-24 text-center text-muted-foreground"
+                  >
+                    {emptyMessage}
+                  </TableCell>
+                </TableRow>
+              )
+            : data.map((row, i) => (
+                <TableRow key={i}>
+                  {columns.map((col, ci) => (
+                    <TableCell
+                      key={col.id}
+                      className={
+                        ci === 0
+                          ? firstColClassName(col.className)
+                          : col.className
+                      }
+                    >
+                      {col.render
+                        ? col.render(row)
+                        : col.accessor
+                          ? String(col.accessor(row) ?? '')
+                          : null}
                     </TableCell>
                   ))}
                 </TableRow>
-              ))
-            : data.length === 0
-              ? (
-                  <TableRow>
-                    <TableCell
-                      colSpan={columns.length}
-                      className="h-24 text-center text-muted-foreground"
-                    >
-                      {emptyMessage}
-                    </TableCell>
-                  </TableRow>
-                )
-              : data.map((row, i) => (
-                  <TableRow key={i}>
-                    {columns.map((col) => (
-                      <TableCell key={col.id} className={col.className}>
-                        {col.render
-                          ? col.render(row)
-                          : col.accessor
-                            ? String(col.accessor(row) ?? '')
-                            : null}
-                      </TableCell>
-                    ))}
-                  </TableRow>
-                ))}
-        </TableBody>
-      </Table>
+              ))}
+      </TableBody>
+    </Table>
+  );
+
+  return (
+    <div className="space-y-2">
+      {stickyFirstColumn ? (
+        <div className="overflow-x-auto rounded-lg border">{tableContent}</div>
+      ) : (
+        tableContent
+      )}
 
       {pagination && pagination.hasMore && !loading && (
         <div className="flex justify-center pt-2">

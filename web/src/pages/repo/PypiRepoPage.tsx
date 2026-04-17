@@ -183,6 +183,7 @@ export function PypiRepoPage({ repo }: PypiRepoPageProps) {
           sort={sort}
           onSort={(col, dir) => setSort({ column: col, direction: dir })}
           emptyMessage="No Python packages found. Upload a wheel or sdist to get started."
+          stickyFirstColumn
         />
 
         {/* Expanded project files */}

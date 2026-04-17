@@ -138,6 +138,7 @@ export function RpmRepoPage({ repo }: RpmRepoPageProps) {
           sort={sort}
           onSort={(col, dir) => setSort({ column: col, direction: dir })}
           emptyMessage="No RPM packages found. Upload an .rpm file to get started."
+          stickyFirstColumn
         />
 
         {/* Selected package detail */}

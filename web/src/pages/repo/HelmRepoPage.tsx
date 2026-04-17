@@ -177,6 +177,7 @@ export function HelmRepoPage({ repo }: HelmRepoPageProps) {
           sort={sort}
           onSort={(col, dir) => setSort({ column: col, direction: dir })}
           emptyMessage="No Helm charts found. Upload a chart .tgz to get started."
+          stickyFirstColumn
         />
 
         {/* Expanded chart versions */}

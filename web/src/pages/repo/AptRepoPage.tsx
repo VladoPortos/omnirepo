@@ -180,6 +180,7 @@ export function AptRepoPage({ repo }: AptRepoPageProps) {
           sort={sort}
           onSort={(col, dir) => setSort({ column: col, direction: dir })}
           emptyMessage="No .deb packages found. Upload a package to get started."
+          stickyFirstColumn
         />
       </div>
 

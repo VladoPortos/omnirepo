@@ -188,6 +188,7 @@ export function DockerRepoPage({ repo }: DockerRepoPageProps) {
           sort={sort}
           onSort={(col, dir) => setSort({ column: col, direction: dir })}
           emptyMessage="No tags found. Push an image to get started."
+          stickyFirstColumn
         />
 
         {/* Expanded tag detail */}

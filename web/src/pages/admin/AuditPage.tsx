@@ -394,6 +394,7 @@ export default function AuditPage() {
         }))}
         loading={isLoading}
         emptyMessage="No audit events found matching your filters."
+        stickyFirstColumn
         pagination={
           data?.next_cursor
             ? {

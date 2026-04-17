@@ -65,9 +65,16 @@ func TestWrite_SerializesEnvelopeOnly(t *testing.T) {
 }
 
 func TestWrite_IncidentIDFromChiMiddleware(t *testing.T) {
+	// Use a channel to capture the request-id chi assigned to the request
+	// context so we can assert the envelope carries the same value. chi's
+	// RequestID middleware seeds ctx via middleware.GetReqID but does not
+	// echo it in a response header, so we compare via shared channel.
+	gotReqID := make(chan string, 1)
+
 	r := chi.NewRouter()
 	r.Use(chimw.RequestID)
 	r.Get("/t", func(w http.ResponseWriter, req *http.Request) {
+		gotReqID <- chimw.GetReqID(req.Context())
 		e := httperr.Permission("auth.forbidden", "You do not have permission to view this.")
 		httperr.Write(w, req, e)
 	})
@@ -81,9 +88,9 @@ func TestWrite_IncidentIDFromChiMiddleware(t *testing.T) {
 	}
 	defer resp.Body.Close()
 
-	reqIDHeader := resp.Header.Get("X-Request-Id")
-	if reqIDHeader == "" {
-		t.Fatal("X-Request-Id response header missing (chi middleware did not set it)")
+	assigned := <-gotReqID
+	if assigned == "" {
+		t.Fatal("chi RequestID middleware produced empty request id")
 	}
 
 	m := decodeBody(t, resp.Body)
@@ -91,8 +98,8 @@ func TestWrite_IncidentIDFromChiMiddleware(t *testing.T) {
 	if !ok {
 		t.Fatalf("incident_id not string, got %T: %v", m["incident_id"], m["incident_id"])
 	}
-	if got != reqIDHeader {
-		t.Errorf("incident_id = %q, X-Request-Id = %q", got, reqIDHeader)
+	if got != assigned {
+		t.Errorf("incident_id = %q, chi request id = %q", got, assigned)
 	}
 }
 

@@ -11,7 +11,8 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { useAuth } from '@/hooks/useAuth';
-import { ApiError } from '@/api/client';
+import { envelopeFromError, localEnvelope, type ApiErrorEnvelope } from '@/api/client';
+import { ErrorEnvelopeRenderer } from '@/components/common/ErrorEnvelope';
 
 export function ChangePasswordPage() {
   const navigate = useNavigate();
@@ -19,19 +20,19 @@ export function ChangePasswordPage() {
   const [current, setCurrent] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  const [error, setError] = useState('');
+  const [errorEnvelope, setErrorEnvelope] = useState<ApiErrorEnvelope | null>(null);
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
-    setError('');
+    setErrorEnvelope(null);
 
     if (newPassword !== confirmPassword) {
-      setError('Passwords do not match.');
+      setErrorEnvelope(localEnvelope('Passwords do not match.'));
       return;
     }
 
     if (newPassword.length < 8) {
-      setError('Password must be at least 8 characters.');
+      setErrorEnvelope(localEnvelope('Password must be at least 8 characters.'));
       return;
     }
 
@@ -42,11 +43,9 @@ export function ChangePasswordPage() {
       });
       navigate('/');
     } catch (err) {
-      if (err instanceof ApiError) {
-        setError(err.detail || 'Failed to change password.');
-      } else {
-        setError('Unable to reach the server. Check your connection and try again.');
-      }
+      setErrorEnvelope(
+        envelopeFromError(err, 'Unable to reach the server. Check your connection and try again.'),
+      );
     }
   };
 
@@ -69,10 +68,8 @@ export function ChangePasswordPage() {
               Your password must be changed before you can continue.
             </div>
             <form onSubmit={handleSubmit} className="space-y-4">
-              {error && (
-                <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
-                  {error}
-                </div>
+              {errorEnvelope && (
+                <ErrorEnvelopeRenderer envelope={errorEnvelope} />
               )}
               <div className="space-y-2">
                 <Label htmlFor="current-password">Current Password</Label>

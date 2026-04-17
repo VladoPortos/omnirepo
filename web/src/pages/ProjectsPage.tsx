@@ -35,7 +35,8 @@ import {
 import { SkeletonTable } from '@/components/common/SkeletonTable';
 import { useProjects, useCreateProject } from '@/api/queries';
 import { formatBytes, formatDate } from '@/lib/format';
-import { ApiError } from '@/api/client';
+import { envelopeFromError, type ApiErrorEnvelope } from '@/api/client';
+import { ErrorEnvelopeRenderer } from '@/components/common/ErrorEnvelope';
 
 export function ProjectsPage() {
   const navigate = useNavigate();
@@ -46,7 +47,7 @@ export function ProjectsPage() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
-  const [error, setError] = useState('');
+  const [errorEnvelope, setErrorEnvelope] = useState<ApiErrorEnvelope | null>(null);
 
   // Open create dialog when arriving from dashboard with ?create=1.
   useEffect(() => {
@@ -62,7 +63,7 @@ export function ProjectsPage() {
 
   const handleCreate = async (e: FormEvent) => {
     e.preventDefault();
-    setError('');
+    setErrorEnvelope(null);
     try {
       const result = await createProject.mutateAsync({
         name,
@@ -74,11 +75,7 @@ export function ProjectsPage() {
       setDescription('');
       navigate(`/projects/${result.name}`);
     } catch (err) {
-      if (err instanceof ApiError) {
-        setError(err.detail);
-      } else {
-        setError('Failed to create project.');
-      }
+      setErrorEnvelope(envelopeFromError(err, 'Failed to create project.'));
     }
   };
 
@@ -98,10 +95,11 @@ export function ProjectsPage() {
                 <DialogTitle>Create Project</DialogTitle>
               </DialogHeader>
               <div className="space-y-4 py-4">
-                {error && (
-                  <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
-                    {error}
-                  </div>
+                {errorEnvelope && (
+                  <ErrorEnvelopeRenderer
+                    envelope={errorEnvelope}
+                    onRetry={() => handleCreate(new Event('submit') as unknown as FormEvent)}
+                  />
                 )}
                 <div className="space-y-2">
                   <Label htmlFor="project-name">Project Name</Label>

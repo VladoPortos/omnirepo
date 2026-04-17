@@ -49,7 +49,8 @@ import {
   useDeleteBucket,
 } from '@/api/queries';
 import { formatBytes, formatDate } from '@/lib/format';
-import { ApiError } from '@/api/client';
+import { envelopeFromError, type ApiErrorEnvelope } from '@/api/client';
+import { ErrorEnvelopeRenderer } from '@/components/common/ErrorEnvelope';
 import { useNavigate } from 'react-router-dom';
 
 // Row represents one element rendered in the object/prefix table. For a
@@ -116,7 +117,7 @@ export function S3BucketPage() {
   const [prefix, setPrefix] = useState('');
   const [filter, setFilter] = useState('');
   const [deleteOpen, setDeleteOpen] = useState(false);
-  const [deleteError, setDeleteError] = useState('');
+  const [deleteError, setDeleteError] = useState<ApiErrorEnvelope | null>(null);
 
   const bucketQ = useBucket(name, bucket);
   // Fetch ALL objects under `prefix` — the folding logic needs every row to
@@ -157,13 +158,13 @@ export function S3BucketPage() {
   };
 
   const onDeleteBucket = async () => {
-    setDeleteError('');
+    setDeleteError(null);
     try {
       await deleteBucket.mutateAsync(bucket);
       toast.success(`Bucket "${bucket}" deleted.`);
       navigate(`/projects/${name}`);
     } catch (err) {
-      setDeleteError(err instanceof ApiError ? err.detail : 'Failed to delete bucket.');
+      setDeleteError(envelopeFromError(err, 'Failed to delete bucket.'));
     }
   };
 
@@ -187,7 +188,7 @@ export function S3BucketPage() {
           size="sm"
           className="text-destructive hover:bg-destructive/10"
           onClick={() => {
-            setDeleteError('');
+            setDeleteError(null);
             setDeleteOpen(true);
           }}
         >
@@ -383,9 +384,7 @@ export function S3BucketPage() {
               </div>
             )}
             {deleteError && (
-              <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
-                {deleteError}
-              </div>
+              <ErrorEnvelopeRenderer envelope={deleteError} />
             )}
           </div>
           <DialogFooter>

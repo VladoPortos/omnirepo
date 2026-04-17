@@ -88,6 +88,43 @@ export class ApiError extends Error {
 }
 
 /**
+ * localEnvelope builds a client-side envelope for UI surfaces that need
+ * to show an error that never came from the server — local form
+ * validation ("passwords do not match"), network failures ("unable to
+ * reach the server"), or UX-substituted messages that mask the raw API
+ * reason. Gives these paths the same ErrorEnvelopeRenderer visual
+ * treatment as server envelopes without inventing a parallel renderer.
+ */
+export function localEnvelope(
+  message: string,
+  opts?: {
+    class?: ApiErrorClass;
+    code?: string;
+    hint?: string;
+    details?: ApiErrorDetails;
+  },
+): ApiErrorEnvelope {
+  return {
+    code: opts?.code ?? 'ui.local',
+    message,
+    class: opts?.class ?? 'validation',
+    hint: opts?.hint,
+    details: opts?.details,
+  };
+}
+
+/**
+ * envelopeFromError extracts an ApiErrorEnvelope from an unknown thrown
+ * value. Returns the server envelope when the error is an ApiError;
+ * otherwise synthesizes a transient-class envelope from the fallback
+ * message. Useful in catch blocks that want one-liner handling.
+ */
+export function envelopeFromError(err: unknown, fallback: string): ApiErrorEnvelope {
+  if (err instanceof ApiError) return err.envelope;
+  return localEnvelope(fallback, { class: 'transient', code: 'ui.network' });
+}
+
+/**
  * synthesizeEnvelope turns a non-envelope body (legacy {error, detail}
  * from a stale server, middleware still on the old shape, or a fetch
  * that produced no JSON at all) into a minimal valid envelope so the

@@ -41,7 +41,8 @@ import {
   useDeleteBucket,
 } from '@/api/queries';
 import { formatBytes, formatDate } from '@/lib/format';
-import { ApiError } from '@/api/client';
+import { envelopeFromError, type ApiErrorEnvelope } from '@/api/client';
+import { ErrorEnvelopeRenderer } from '@/components/common/ErrorEnvelope';
 import type { RepoType, ProjectRepo, ProjectBucket } from '@/api/types';
 
 const REPO_TYPES: { value: RepoType; label: string }[] = [
@@ -76,10 +77,10 @@ export function ProjectDetailPage() {
   const [repoType, setRepoType] = useState<RepoType>(
     activeTab !== 'overview' ? (activeTab as RepoType) : 'docker',
   );
-  const [createError, setCreateError] = useState('');
+  const [createError, setCreateError] = useState<ApiErrorEnvelope | null>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState('');
-  const [deleteError, setDeleteError] = useState('');
+  const [deleteError, setDeleteError] = useState<ApiErrorEnvelope | null>(null);
 
   // Group repos by type
   const reposByType = useMemo(() => {
@@ -109,7 +110,7 @@ export function ProjectDetailPage() {
 
   const handleCreateRepo = async (e: FormEvent) => {
     e.preventDefault();
-    setCreateError('');
+    setCreateError(null);
     try {
       await createRepo.mutateAsync({
         projectName: name,
@@ -123,11 +124,7 @@ export function ProjectDetailPage() {
       setRepoName('');
       setActiveTab(repoType);
     } catch (err) {
-      if (err instanceof ApiError) {
-        setCreateError(err.detail);
-      } else {
-        setCreateError('Failed to create repository.');
-      }
+      setCreateError(envelopeFromError(err, 'Failed to create repository.'));
     }
   };
 
@@ -181,7 +178,7 @@ export function ProjectDetailPage() {
           size="sm"
           className="text-destructive hover:bg-destructive/10"
           onClick={() => {
-            setDeleteError('');
+            setDeleteError(null);
             setDeleteConfirm('');
             setDeleteOpen(true);
           }}
@@ -203,9 +200,7 @@ export function ProjectDetailPage() {
               by an administrator until then.
             </p>
             {deleteError && (
-              <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
-                {deleteError}
-              </div>
+              <ErrorEnvelopeRenderer envelope={deleteError} />
             )}
             <div className="space-y-2">
               <Label htmlFor="delete-confirm">
@@ -233,8 +228,7 @@ export function ProjectDetailPage() {
                   setDeleteOpen(false);
                   navigate('/projects');
                 } catch (err) {
-                  if (err instanceof ApiError) setDeleteError(err.detail);
-                  else setDeleteError('Failed to delete project.');
+                  setDeleteError(envelopeFromError(err, 'Failed to delete project.'));
                 }
               }}
             >
@@ -462,9 +456,7 @@ export function ProjectDetailPage() {
             </DialogHeader>
             <div className="space-y-4 py-4">
               {createError && (
-                <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
-                  {createError}
-                </div>
+                <ErrorEnvelopeRenderer envelope={createError} />
               )}
               <div className="space-y-2">
                 <Label htmlFor="repo-type">Type</Label>
@@ -521,33 +513,33 @@ function S3BucketsTab({ projectName }: { projectName: string }) {
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [bucketName, setBucketName] = useState('');
-  const [createError, setCreateError] = useState('');
+  const [createError, setCreateError] = useState<ApiErrorEnvelope | null>(null);
 
   const [deleteTarget, setDeleteTarget] = useState<ProjectBucket | null>(null);
-  const [deleteError, setDeleteError] = useState('');
+  const [deleteError, setDeleteError] = useState<ApiErrorEnvelope | null>(null);
 
   const onCreate = async (e: FormEvent) => {
     e.preventDefault();
-    setCreateError('');
+    setCreateError(null);
     try {
       await createBucket.mutateAsync({ name: bucketName.trim() });
       toast.success(`Bucket "${bucketName}" created.`);
       setBucketName('');
       setDialogOpen(false);
     } catch (err) {
-      setCreateError(err instanceof ApiError ? err.detail : 'Failed to create bucket.');
+      setCreateError(envelopeFromError(err, 'Failed to create bucket.'));
     }
   };
 
   const onDelete = async () => {
     if (!deleteTarget) return;
-    setDeleteError('');
+    setDeleteError(null);
     try {
       await deleteBucket.mutateAsync(deleteTarget.name);
       toast.success(`Bucket "${deleteTarget.name}" deleted.`);
       setDeleteTarget(null);
     } catch (err) {
-      setDeleteError(err instanceof ApiError ? err.detail : 'Failed to delete bucket.');
+      setDeleteError(envelopeFromError(err, 'Failed to delete bucket.'));
     }
   };
 
@@ -614,7 +606,7 @@ function S3BucketsTab({ projectName }: { projectName: string }) {
                       size="icon-sm"
                       title="Delete bucket"
                       onClick={() => {
-                        setDeleteError('');
+                        setDeleteError(null);
                         setDeleteTarget(b);
                       }}
                     >
@@ -637,9 +629,7 @@ function S3BucketsTab({ projectName }: { projectName: string }) {
             </DialogHeader>
             <div className="space-y-4 py-4">
               {createError && (
-                <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
-                  {createError}
-                </div>
+                <ErrorEnvelopeRenderer envelope={createError} />
               )}
               <div className="space-y-2">
                 <Label htmlFor="bucket-name">Bucket name</Label>
@@ -687,9 +677,7 @@ function S3BucketsTab({ projectName }: { projectName: string }) {
               </div>
             )}
             {deleteError && (
-              <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
-                {deleteError}
-              </div>
+              <ErrorEnvelopeRenderer envelope={deleteError} />
             )}
           </div>
           <DialogFooter>

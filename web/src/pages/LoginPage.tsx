@@ -12,7 +12,8 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { useAuth } from '@/hooks/useAuth';
-import { ApiError } from '@/api/client';
+import { ApiError, localEnvelope, type ApiErrorEnvelope } from '@/api/client';
+import { ErrorEnvelopeRenderer } from '@/components/common/ErrorEnvelope';
 
 export function LoginPage() {
   const navigate = useNavigate();
@@ -21,11 +22,11 @@ export function LoginPage() {
   const { login } = useAuth();
   const [loginValue, setLoginValue] = useState('');
   const [password, setPassword] = useState('');
-  const [error, setError] = useState('');
+  const [errorEnvelope, setErrorEnvelope] = useState<ApiErrorEnvelope | null>(null);
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
-    setError('');
+    setErrorEnvelope(null);
 
     try {
       const result = await login.mutateAsync({
@@ -38,14 +39,20 @@ export function LoginPage() {
         navigate('/');
       }
     } catch (err) {
-      if (err instanceof ApiError) {
-        if (err.status === 401 || err.status === 403) {
-          setError('Invalid login or password. Please try again.');
-        } else {
-          setError('Unable to reach the server. Check your connection and try again.');
-        }
+      if (err instanceof ApiError && (err.status === 401 || err.status === 403)) {
+        setErrorEnvelope(
+          localEnvelope('Invalid login or password. Please try again.', {
+            class: 'permission',
+            code: 'auth.invalid_credentials',
+          }),
+        );
       } else {
-        setError('Unable to reach the server. Check your connection and try again.');
+        setErrorEnvelope(
+          localEnvelope(
+            'Unable to reach the server. Check your connection and try again.',
+            { class: 'transient', code: 'ui.network' },
+          ),
+        );
       }
     }
   };
@@ -66,15 +73,13 @@ export function LoginPage() {
           </CardHeader>
           <CardContent>
             <form onSubmit={handleSubmit} className="space-y-4">
-              {setupDone && !error && (
+              {setupDone && !errorEnvelope && (
                 <div className="rounded-md bg-green-500/10 p-3 text-sm text-green-600 dark:text-green-400">
                   Super-admin account created. Sign in to continue.
                 </div>
               )}
-              {error && (
-                <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
-                  {error}
-                </div>
+              {errorEnvelope && (
+                <ErrorEnvelopeRenderer envelope={errorEnvelope} />
               )}
               <div className="space-y-2">
                 <Label htmlFor="login">Login</Label>

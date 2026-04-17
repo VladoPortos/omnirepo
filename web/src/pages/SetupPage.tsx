@@ -18,7 +18,8 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { useSetupStatus, useSetupSuperAdmin } from '@/api/queries';
-import { ApiError } from '@/api/client';
+import { ApiError, localEnvelope, type ApiErrorEnvelope } from '@/api/client';
+import { ErrorEnvelopeRenderer } from '@/components/common/ErrorEnvelope';
 import type { SetupStatusResponse } from '@/api/types';
 
 export function SetupPage() {
@@ -31,7 +32,7 @@ export function SetupPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
-  const [error, setError] = useState('');
+  const [errorEnvelope, setErrorEnvelope] = useState<ApiErrorEnvelope | null>(null);
   // After a successful submission we want the explicit navigate('/login',
   // {state: {setupDone: true}}) to take effect. Previously, the mutation's
   // onSuccess flipped needs_setup to false which re-rendered this component
@@ -59,14 +60,14 @@ export function SetupPage() {
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
-    setError('');
+    setErrorEnvelope(null);
 
     if (password.length < 8) {
-      setError('Password must be at least 8 characters.');
+      setErrorEnvelope(localEnvelope('Password must be at least 8 characters.'));
       return;
     }
     if (password !== confirm) {
-      setError('Passwords do not match.');
+      setErrorEnvelope(localEnvelope('Passwords do not match.'));
       return;
     }
 
@@ -87,12 +88,22 @@ export function SetupPage() {
           navigate('/login', { replace: true });
           return;
         } else if (err.status === 422) {
-          setError(err.detail || 'One of the fields is invalid.');
+          setErrorEnvelope(err.envelope);
         } else {
-          setError('Unable to reach the server. Please try again.');
+          setErrorEnvelope(
+            localEnvelope('Unable to reach the server. Please try again.', {
+              class: 'transient',
+              code: 'ui.network',
+            }),
+          );
         }
       } else {
-        setError('Unable to reach the server. Please try again.');
+        setErrorEnvelope(
+          localEnvelope('Unable to reach the server. Please try again.', {
+            class: 'transient',
+            code: 'ui.network',
+          }),
+        );
       }
       // Mutation failed — re-allow the Navigate short-circuit for any future
       // re-render that sees needs_setup=false (e.g. another operator won the
@@ -120,10 +131,8 @@ export function SetupPage() {
           </CardHeader>
           <CardContent>
             <form onSubmit={handleSubmit} className="space-y-4">
-              {error && (
-                <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
-                  {error}
-                </div>
+              {errorEnvelope && (
+                <ErrorEnvelopeRenderer envelope={errorEnvelope} />
               )}
               <div className="space-y-2">
                 <Label htmlFor="setup-login">Login</Label>

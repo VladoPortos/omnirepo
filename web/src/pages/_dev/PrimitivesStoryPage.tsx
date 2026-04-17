@@ -33,7 +33,13 @@ const STATUSES: Array<{ variant: StatusVariant; label: string }> = [
 ];
 
 export function PrimitivesStoryPage() {
-  const [dark, setDark] = useState(false);
+  // Initialize from the actual <html> class so first click always produces a
+  // visible change. Previously this defaulted to `false` while index.html
+  // ships with class="dark", so the first click was a no-op (state flipped
+  // to true, classList.toggle('dark', true) added a class already present).
+  const [dark, setDark] = useState(() =>
+    document.documentElement.classList.contains('dark'),
+  );
 
   const toggleTheme = useCallback(() => {
     setDark((prev) => {

@@ -139,7 +139,7 @@
   --status-failure-foreground: oklch(0.5 0.22 27);
   --status-failure-border: oklch(0.88 0.09 25);
   --status-disabled: oklch(0.97 0 0);
-  --status-disabled-foreground: oklch(0.55 0 0);
+  --status-disabled-foreground: oklch(0.5 0 0);
   --status-disabled-border: oklch(0.92 0 0);
   --status-maintenance: oklch(0.96 0.03 265);
   --status-maintenance-foreground: oklch(0.48 0.17 265);
@@ -193,7 +193,7 @@
   --status-failure-foreground: oklch(0.5 0.22 27);
   --status-failure-border: oklch(0.88 0.09 25);
   --status-disabled: oklch(0.97 0 0);
-  --status-disabled-foreground: oklch(0.55 0 0);
+  --status-disabled-foreground: oklch(0.5 0 0);
   --status-disabled-border: oklch(0.92 0 0);
   --status-maintenance: oklch(0.96 0.03 265);
   --status-maintenance-foreground: oklch(0.48 0.17 265);

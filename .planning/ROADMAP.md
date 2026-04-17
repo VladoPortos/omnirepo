@@ -28,7 +28,16 @@
   3. A single source-of-truth set of status tokens (`healthy / warning / failure / disabled / maintenance`) is applied via shared components so a "stale" badge looks identical wherever it appears; Playwright snapshot tests cover the badge set.
   4. All known-shape surfaces (tables, cards, detail panels) render skeleton placeholders during load; destructive vs primary buttons are visually distinct; URLs, commands, digests, and shown-once API keys expose a copy-to-clipboard affordance with visible confirmation.
   5. The admin UI renders without horizontal scroll at 1366×768 and 1440×900, and text/status color pairs pass automated WCAG AA contrast checks on the default theme.
-**Plans**: TBD
+**Plans:** 8 plans
+Plans:
+- [ ] 06-01-PLAN.md — OpenAPI schema + internal/httperr package (envelope types + Write helper + tests)
+- [ ] 06-02-PLAN.md — Wire writeJSONError to envelope + UUID v7 incident IDs + EnvelopeRecoverer + openapi.yaml $ref migration
+- [ ] 06-03-PLAN.md — UI ApiError migration + useApiError hook + ErrorEnvelopeRenderer + dev-only error routes + ErrorClassStoryPage
+- [ ] 06-04-PLAN.md — Wave 1 verification (Go integration tests + Playwright error-envelope e2e + legacy handler test updates)
+- [ ] 06-05-PLAN.md — Protocol handler redaction sweep (29 files in internal/protocol/** + Makefile lint-protocol-redaction)
+- [ ] 06-06-PLAN.md — Visual primitives (status tokens in index.css + StatusBadge + 4 Skeleton* + CopyInline + CopyButton aria-live + Geist cleanup + reduced-motion)
+- [ ] 06-07-PLAN.md — Canonical skeleton adoption (Dashboard/Projects) + sticky-first-column tables + StatusBadgeStoryPage
+- [ ] 06-08-PLAN.md — Test gates (check-contrast.mjs + lint-typography + lint-spacing-carveout + visual-foundation/responsive/a11y-audit Playwright specs + @axe-core devDep gate)
 **UI hint**: yes
 
 #### Phase 7: Client Snippets & Empty States
@@ -87,7 +96,7 @@
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 6. Error Envelope & Visual Foundation | 0/0 | Not started | — |
+| 6. Error Envelope & Visual Foundation | 0/8 | Not started | — |
 | 7. Client Snippets & Empty States | 0/0 | Not started | — |
 | 8. Favorites, Saved Filters & Recents | 0/0 | Not started | — |
 | 9. Health & Status Dashboard | 0/0 | Not started | — |

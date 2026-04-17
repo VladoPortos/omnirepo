@@ -1,23 +1,16 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.1
-milestone_name: immediate-product-polish
-status: Roadmap approved — awaiting phase 6 discuss/plan
-last_updated: "2026-04-17T09:30:00Z"
+milestone: v1.0
+milestone_name: milestone
+status: executing
+last_updated: "2026-04-17T11:11:00.219Z"
+last_activity: 2026-04-17 -- Phase 6 planning complete
 progress:
   total_phases: 5
   completed_phases: 0
-  total_plans: 0
+  total_plans: 8
   completed_plans: 0
   percent: 0
-previous_milestone:
-  version: v1.0
-  shipped_at: "2026-04-17T03:40:00Z"
-  git_tag: v1.0
-  archived_artifacts:
-    roadmap: milestones/v1.0-ROADMAP.md
-    requirements: milestones/v1.0-REQUIREMENTS.md
-    audit: v1.0-MILESTONE-AUDIT.md
 ---
 
 # STATE: OmniRepo
@@ -34,8 +27,8 @@ previous_milestone:
 
 Phase: 6 — Error Envelope & Visual Foundation
 Plan: —
-Status: Not started (awaiting discuss/plan)
-Last activity: 2026-04-17 — v1.1 roadmap approved, 57/57 requirements mapped to phases 6–10
+Status: Ready to execute
+Last activity: 2026-04-17 -- Phase 6 planning complete
 
 ## Phase Map
 
@@ -93,6 +86,7 @@ scoped tokens, LDAP/OIDC.
   because the document is already a researched product-direction brief.
   If phase planning surfaces unknowns, `/gsd-research-phase` or the
   research step inside `/gsd-plan-phase` is still available.
+
 - **Error envelope shape (Phase 6)** — worth a short spike inside plan-phase
   to confirm the envelope is compatible with existing OpenAPI 3.1 components
   and the oapi-codegen types pipeline.

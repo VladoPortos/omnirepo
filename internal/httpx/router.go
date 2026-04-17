@@ -25,11 +25,17 @@ type Deps struct {
 // New constructs the OmniRepo chi router with the D-27 global middleware chain.
 // Downstream plans mount protocol routers on the returned router through
 // MountReserved (for project paths) or direct chi.Mount (for reserved paths).
+//
+// Phase 6 / ERR-07: chi's default request-id generator is replaced with
+// IncidentIDMiddleware (UUID v7) and chi's default panic recoverer with
+// EnvelopeRecoverer (httperr.Internal envelope on panic). Ordering matters —
+// IncidentIDMiddleware must run first so EnvelopeRecoverer's slog record
+// and envelope body carry the same incident_id.
 func New(d Deps) chi.Router {
 	r := chi.NewRouter()
-	r.Use(middleware.RequestID)
+	r.Use(IncidentIDMiddleware)
 	r.Use(middleware.RealIP)
-	r.Use(middleware.Recoverer)
+	r.Use(EnvelopeRecoverer)
 	r.Use(StructuredLogger(d.Config))
 	r.Use(AuditEnter)
 	r.Use(MaintenanceMode(d.Settings))

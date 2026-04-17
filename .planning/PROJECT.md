@@ -30,23 +30,78 @@ with AES-GCM key storage, and the multi-stage Docker image with baked
 Trivy DB. Full archive: `milestones/v1.0-ROADMAP.md` and
 `milestones/v1.0-REQUIREMENTS.md`.
 
-## Next Milestone Goals
+## Current Milestone: v1.1 Immediate Product Polish
 
-_Not yet scoped._ Candidates to triage during `/gsd-new-milestone`
-questioning (derived from v1.0 close):
+**Goal:** Make OmniRepo easier to operate, faster to navigate, and clearer
+under failure — a UI/UX-first pass that turns a functional v1.0 into a
+product that feels deliberate in daily use. No core protocol reworks; only
+additive backend endpoints where needed to power the new UI surfaces.
 
-- **Billing / quota groundwork** — if introduced, the Docker shared-blob
-  storage overestimate in `repoSizeExpr` needs closing.
-- **Protocol hardening** — DEB `resolveDebPoolPath` edge cases for
-  exotic pool layouts; real-world repos may trip this on day two.
-- **Deferred v1 items** — the Out-of-Scope list below already flags
-  upstream/proxy repos, scheduled sync, webhooks, SSH for Git, TOTP 2FA,
-  scoped tokens, retention policies, email, LDAP/OIDC, artifact signing,
-  cross-instance replication — any of these are live candidates for v1.1+.
+**Target features** (mapped 1:1 to `improvements.md` "Phase 1: Immediate
+Product Polish" plus the tightly-related UI sections):
 
-Start the scoping pass with `/gsd-new-milestone` — it walks questioning →
-research → requirements → roadmap and recreates a fresh
-`.planning/REQUIREMENTS.md`.
+- Client configuration snippets on every repo page — copyable examples
+  for `docker login`/pull/push, `pip` / `.pypirc`, APT source lines, RPM
+  repo config, Helm `repo add`/push/pull, Git clone/fetch, and S3 CLI
+  and SDK usage.
+- Context-aware empty states — replace blank screens with guided next
+  steps (create first repo, add members, upload first artifact, enable
+  scanning, configure TLS).
+- Health / status dashboard — disk usage + free-space warnings, DB size
+  and growth, queue depth + background-job status, Trivy DB freshness,
+  TLS certificate expiry, repo-sync freshness, and long-running task
+  history with duration + failure reason.
+- Better failure messaging — replace vague errors with actionable
+  guidance; differentiate validation / permission / transient /
+  operator-action-required failures; stable external error envelopes
+  (no raw internal messages leaked).
+- Saved filters, favorites, recents — save common searches and table
+  filters; pin favorite projects and repos; recently visited items.
+- Better repository overview pages — control-center layout: quick usage
+  commands, latest artifacts, recent uploads, sync status, scan status
+  summary, visibility / policy placeholders, last-modified actors.
+- UI visual language + polish — consistent color semantics for
+  healthy / warning / failure / disabled / maintenance; loading
+  skeletons; copy-to-clipboard affordances for URLs, commands, digests,
+  and keys; status-badge consistency; button priority for destructive
+  vs primary actions; responsive for laptop-sized admin screens.
+
+**Explicitly NOT in v1.1** (deferred to v1.5 / v2.0 per the
+`improvements.md` prioritization):
+
+- Retention, quotas, capacity management
+- Promotion / release pipeline model
+- Policy engine, immutable releases, bulk administration
+- Notification hooks, backup / recovery UX, audit-trail enrichment
+- Job-model refactor (touched only as read-only visibility, not rebuilt)
+- Air-gap export / import bundles, cross-instance replication
+- HA direction, SBOM / provenance surfaces, scoped tokens, LDAP / OIDC
+
+**Invariants carried forward from v1.0:**
+
+- Single Go binary, local filesystem only, zero outbound network at
+  runtime.
+- `make grep-cdn` stays green — no runtime CDN for fonts, icons, or
+  scripts. Any new UI assets ship embedded via `//go:embed`.
+- Stack stays on Go 1.25 + React 19 + Vite + Tailwind 4; no major
+  framework upgrades in v1.1.
+
+## Evolution
+
+This document evolves at phase transitions and milestone boundaries.
+
+**After each phase transition** (via `/gsd-transition`):
+1. Requirements invalidated? → Move to Out of Scope with reason
+2. Requirements validated? → Move to Validated with phase reference
+3. New requirements emerged? → Add to Active
+4. Decisions to log? → Add to Key Decisions
+5. "What This Is" still accurate? → Update if drifted
+
+**After each milestone** (via `/gsd-complete-milestone`):
+1. Full review of all sections
+2. Core Value check — still the right priority?
+3. Audit Out of Scope — reasons still valid?
+4. Update Context with current state
 
 ## Archived context (v1.0 scoping)
 
@@ -125,4 +180,4 @@ air-gap invariants all delivered as captured in
 </details>
 
 ---
-*Last updated: 2026-04-17 after v1.0 milestone archival*
+*Last updated: 2026-04-17 — v1.1 "Immediate Product Polish" milestone scoped (post-v1.0)*

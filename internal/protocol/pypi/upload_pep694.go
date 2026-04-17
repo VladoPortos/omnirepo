@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -17,6 +18,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	chimw "github.com/go-chi/chi/v5/middleware"
 
 	"github.com/dxc-internal/omnirepo/internal/audit"
 	"github.com/dxc-internal/omnirepo/internal/auth"
@@ -298,12 +300,20 @@ func (h *Handler) handleUploadFile(w http.ResponseWriter, r *http.Request) {
 	defer func() { _ = r.Body.Close() }()
 	tmpDir := filepath.Join(h.repoRoot, ".tmp-pypi-uploads")
 	if err := os.MkdirAll(tmpDir, 0o750); err != nil {
-		http.Error(w, fmt.Sprintf("mkdir tmp: %v", err), http.StatusInternalServerError)
+		slog.ErrorContext(r.Context(), "pypi.pep694.mkdir_tmp_failed",
+			slog.String("incident_id", chimw.GetReqID(r.Context())),
+			slog.Any("err", err),
+		)
+		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
 	tf, err := os.CreateTemp(tmpDir, "pep694-*")
 	if err != nil {
-		http.Error(w, fmt.Sprintf("tmp: %v", err), http.StatusInternalServerError)
+		slog.ErrorContext(r.Context(), "pypi.pep694.tmp_create_failed",
+			slog.String("incident_id", chimw.GetReqID(r.Context())),
+			slog.Any("err", err),
+		)
+		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
 	tmpPath := tf.Name()
@@ -317,7 +327,13 @@ func (h *Handler) handleUploadFile(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
 			return
 		}
-		http.Error(w, fmt.Sprintf("write tmp: %v", err), http.StatusInternalServerError)
+		slog.ErrorContext(r.Context(), "pypi.pep694.tmp_write_failed",
+			slog.String("incident_id", chimw.GetReqID(r.Context())),
+			slog.String("tmp_path", tmpPath),
+			slog.String("filename", filename),
+			slog.Any("err", err),
+		)
+		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
 	digest := "sha256:" + hex.EncodeToString(hasher.Sum(nil))
@@ -424,12 +440,22 @@ func (h *Handler) handleCommit(w http.ResponseWriter, r *http.Request) {
 	for _, f := range files {
 		body, err := os.ReadFile(f.TmpPath)
 		if err != nil {
-			http.Error(w, fmt.Sprintf("read staged %s: %v", f.Parsed.Filename, err), http.StatusInternalServerError)
+			slog.ErrorContext(r.Context(), "pypi.pep694.read_staged_failed",
+				slog.String("incident_id", chimw.GetReqID(r.Context())),
+				slog.String("filename", f.Parsed.Filename),
+				slog.Any("err", err),
+			)
+			http.Error(w, "storage error", http.StatusInternalServerError)
 			return
 		}
 		storageKey := packageStorageKey(res.project.Name, res.repo.Name, f.Parsed.Filename)
 		if _, err := h.pathStore.Put(r.Context(), storageKey, bytes.NewReader(body)); err != nil {
-			http.Error(w, fmt.Sprintf("storage %s: %v", f.Parsed.Filename, err), http.StatusInternalServerError)
+			slog.ErrorContext(r.Context(), "pypi.pep694.storage_failed",
+				slog.String("incident_id", chimw.GetReqID(r.Context())),
+				slog.String("filename", f.Parsed.Filename),
+				slog.Any("err", err),
+			)
+			http.Error(w, "storage error", http.StatusInternalServerError)
 			return
 		}
 		if err := h.commitPyPIRow(r, res, f.Parsed); err != nil {
@@ -437,7 +463,12 @@ func (h *Handler) handleCommit(w http.ResponseWriter, r *http.Request) {
 			// we don't leak orphans. Previously-committed files in this loop
 			// are already durable and intentionally left alone.
 			_ = h.pathStore.Delete(r.Context(), storageKey)
-			http.Error(w, fmt.Sprintf("commit %s: %v", f.Parsed.Filename, err), http.StatusInternalServerError)
+			slog.ErrorContext(r.Context(), "pypi.pep694.commit_failed",
+				slog.String("incident_id", chimw.GetReqID(r.Context())),
+				slog.String("filename", f.Parsed.Filename),
+				slog.Any("err", err),
+			)
+			http.Error(w, "storage error", http.StatusInternalServerError)
 			return
 		}
 		committed = append(committed, f.Parsed.Filename)

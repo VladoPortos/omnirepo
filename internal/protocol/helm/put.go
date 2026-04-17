@@ -6,12 +6,14 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+
+	chimw "github.com/go-chi/chi/v5/middleware"
 
 	"github.com/dxc-internal/omnirepo/internal/audit"
 	"github.com/dxc-internal/omnirepo/internal/auth"
@@ -77,7 +79,12 @@ func (h *Handler) putChart(w http.ResponseWriter, r *http.Request, res resolved)
 			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
 			return
 		}
-		http.Error(w, fmt.Sprintf("read body: %v", err), http.StatusInternalServerError)
+		slog.ErrorContext(r.Context(), "helm.put.read_body_failed",
+			slog.String("incident_id", chimw.GetReqID(r.Context())),
+			slog.String("filename", res.filename),
+			slog.Any("err", err),
+		)
+		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
 
@@ -85,23 +92,41 @@ func (h *Handler) putChart(w http.ResponseWriter, r *http.Request, res resolved)
 	// can open it; gofiles path avoids a second in-memory copy for the parser.
 	tmpDir := filepath.Join(h.repoRoot, ".tmp-helm-uploads")
 	if err := os.MkdirAll(tmpDir, 0o750); err != nil {
-		http.Error(w, fmt.Sprintf("mkdir tmp: %v", err), http.StatusInternalServerError)
+		slog.ErrorContext(r.Context(), "helm.put.mkdir_tmp_failed",
+			slog.String("incident_id", chimw.GetReqID(r.Context())),
+			slog.Any("err", err),
+		)
+		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
 	tmpF, err := os.CreateTemp(tmpDir, "helm-upload-*.tgz")
 	if err != nil {
-		http.Error(w, fmt.Sprintf("tmp: %v", err), http.StatusInternalServerError)
+		slog.ErrorContext(r.Context(), "helm.put.tmp_create_failed",
+			slog.String("incident_id", chimw.GetReqID(r.Context())),
+			slog.Any("err", err),
+		)
+		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
 	tmpPath := tmpF.Name()
 	defer func() { _ = os.Remove(tmpPath) }()
 	if _, err := tmpF.Write(buf.Bytes()); err != nil {
 		_ = tmpF.Close()
-		http.Error(w, fmt.Sprintf("tmp write: %v", err), http.StatusInternalServerError)
+		slog.ErrorContext(r.Context(), "helm.put.tmp_write_failed",
+			slog.String("incident_id", chimw.GetReqID(r.Context())),
+			slog.String("tmp_path", tmpPath),
+			slog.Any("err", err),
+		)
+		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
 	if err := tmpF.Close(); err != nil {
-		http.Error(w, fmt.Sprintf("tmp close: %v", err), http.StatusInternalServerError)
+		slog.ErrorContext(r.Context(), "helm.put.tmp_close_failed",
+			slog.String("incident_id", chimw.GetReqID(r.Context())),
+			slog.String("tmp_path", tmpPath),
+			slog.Any("err", err),
+		)
+		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
 
@@ -124,7 +149,12 @@ func (h *Handler) putChart(w http.ResponseWriter, r *http.Request, res resolved)
 	// atomic path-store Put (temp+fsync+rename inside PathStore.Put).
 	storageKey := storageKeyFor(res.project.Name, res.repo.Name, res.filename)
 	if _, err := h.pathStore.Put(r.Context(), storageKey, bytes.NewReader(buf.Bytes())); err != nil {
-		http.Error(w, fmt.Sprintf("storage: %v", err), http.StatusInternalServerError)
+		slog.ErrorContext(r.Context(), "helm.put.storage_failed",
+			slog.String("incident_id", chimw.GetReqID(r.Context())),
+			slog.String("filename", res.filename),
+			slog.Any("err", err),
+		)
+		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
 
@@ -166,7 +196,12 @@ func (h *Handler) putChart(w http.ResponseWriter, r *http.Request, res resolved)
 	}); err != nil {
 		// HI-02: roll back the chart tgz on disk when the metadata tx fails.
 		_ = h.pathStore.Delete(r.Context(), storageKey)
-		http.Error(w, fmt.Sprintf("commit: %v", err), http.StatusInternalServerError)
+		slog.ErrorContext(r.Context(), "helm.put.commit_failed",
+			slog.String("incident_id", chimw.GetReqID(r.Context())),
+			slog.String("filename", res.filename),
+			slog.Any("err", err),
+		)
+		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
 
@@ -222,7 +257,12 @@ func (h *Handler) putProvenance(w http.ResponseWriter, r *http.Request, res reso
 			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
 			return
 		}
-		http.Error(w, fmt.Sprintf("storage: %v", err), http.StatusInternalServerError)
+		slog.ErrorContext(r.Context(), "helm.provenance.storage_failed",
+			slog.String("incident_id", chimw.GetReqID(r.Context())),
+			slog.String("filename", res.filename),
+			slog.Any("err", err),
+		)
+		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
 

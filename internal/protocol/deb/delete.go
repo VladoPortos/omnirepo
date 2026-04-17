@@ -5,11 +5,13 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+
+	chimw "github.com/go-chi/chi/v5/middleware"
 
 	"github.com/dxc-internal/omnirepo/internal/audit"
 	"github.com/dxc-internal/omnirepo/internal/auth"
@@ -47,11 +49,21 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 	abs := filepath.Join(h.repoRoot, filepath.FromSlash(storageKeyForPool(res.project.Name, res.repo.Name, poolPath)))
 	if _, err := os.Stat(abs); err == nil {
 		if _, err := h.trash.Move(r.Context(), abs, "deb-package", res.repo.ID); err != nil {
-			http.Error(w, fmt.Sprintf("trash: %v", err), http.StatusInternalServerError)
+			slog.ErrorContext(r.Context(), "deb.delete.trash_failed",
+				slog.String("incident_id", chimw.GetReqID(r.Context())),
+				slog.String("filename", filename),
+				slog.Any("err", err),
+			)
+			http.Error(w, "storage error", http.StatusInternalServerError)
 			return
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
-		http.Error(w, fmt.Sprintf("stat: %v", err), http.StatusInternalServerError)
+		slog.ErrorContext(r.Context(), "deb.delete.stat_failed",
+			slog.String("incident_id", chimw.GetReqID(r.Context())),
+			slog.String("filename", filename),
+			slog.Any("err", err),
+		)
+		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
 
@@ -64,7 +76,12 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 		}
 		return h.repos.SetMetadataState(r.Context(), tx, res.repo.ID, metadata.MetadataStateDirty)
 	}); err != nil {
-		http.Error(w, fmt.Sprintf("commit: %v", err), http.StatusInternalServerError)
+		slog.ErrorContext(r.Context(), "deb.delete.commit_failed",
+			slog.String("incident_id", chimw.GetReqID(r.Context())),
+			slog.String("filename", filename),
+			slog.Any("err", err),
+		)
+		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
 
@@ -158,7 +175,11 @@ func (h *Handler) patchSuites(w http.ResponseWriter, r *http.Request) {
 	if err := h.db.WriteTx(r.Context(), func(tx *sql.Tx) error {
 		return h.aptSuites.InsertBatch(r.Context(), tx, res.repo.ID, rows)
 	}); err != nil {
-		http.Error(w, fmt.Sprintf("commit: %v", err), http.StatusInternalServerError)
+		slog.ErrorContext(r.Context(), "deb.suites.commit_failed",
+			slog.String("incident_id", chimw.GetReqID(r.Context())),
+			slog.Any("err", err),
+		)
+		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")

@@ -3,10 +3,12 @@ package helm
 import (
 	"database/sql"
 	"errors"
-	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
+
+	chimw "github.com/go-chi/chi/v5/middleware"
 
 	"github.com/dxc-internal/omnirepo/internal/audit"
 	"github.com/dxc-internal/omnirepo/internal/auth"
@@ -55,12 +57,22 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 			// File missing on disk but row exists — reconcile by dropping the
 			// row. Fall through to tx.
 		} else {
-			http.Error(w, fmt.Sprintf("stat: %v", err), http.StatusInternalServerError)
+			slog.ErrorContext(r.Context(), "helm.delete.stat_failed",
+				slog.String("incident_id", chimw.GetReqID(r.Context())),
+				slog.String("filename", res.filename),
+				slog.Any("err", err),
+			)
+			http.Error(w, "storage error", http.StatusInternalServerError)
 			return
 		}
 	} else {
 		if _, err := h.trash.Move(r.Context(), chartAbs, "helm-chart", res.repo.ID); err != nil {
-			http.Error(w, fmt.Sprintf("trash: %v", err), http.StatusInternalServerError)
+			slog.ErrorContext(r.Context(), "helm.delete.trash_failed",
+				slog.String("incident_id", chimw.GetReqID(r.Context())),
+				slog.String("filename", res.filename),
+				slog.Any("err", err),
+			)
+			http.Error(w, "storage error", http.StatusInternalServerError)
 			return
 		}
 	}
@@ -80,7 +92,12 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 		}
 		return h.repos.SetMetadataState(r.Context(), tx, res.repo.ID, metadata.MetadataStateDirty)
 	}); err != nil {
-		http.Error(w, fmt.Sprintf("commit: %v", err), http.StatusInternalServerError)
+		slog.ErrorContext(r.Context(), "helm.delete.commit_failed",
+			slog.String("incident_id", chimw.GetReqID(r.Context())),
+			slog.String("filename", res.filename),
+			slog.Any("err", err),
+		)
+		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
 

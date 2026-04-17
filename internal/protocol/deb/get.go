@@ -4,11 +4,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	chimw "github.com/go-chi/chi/v5/middleware"
 
 	"github.com/dxc-internal/omnirepo/internal/audit"
 )
@@ -98,12 +101,22 @@ func serveFile(w http.ResponseWriter, r *http.Request, abs, contentType string) 
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}
-		http.Error(w, fmt.Sprintf("stat: %v", err), http.StatusInternalServerError)
+		slog.ErrorContext(r.Context(), "deb.serve.stat_failed",
+			slog.String("incident_id", chimw.GetReqID(r.Context())),
+			slog.String("path", abs),
+			slog.Any("err", err),
+		)
+		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
 	f, err := os.Open(abs)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("open: %v", err), http.StatusInternalServerError)
+		slog.ErrorContext(r.Context(), "deb.serve.open_failed",
+			slog.String("incident_id", chimw.GetReqID(r.Context())),
+			slog.String("path", abs),
+			slog.Any("err", err),
+		)
+		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
 	defer func() { _ = f.Close() }()

@@ -8,11 +8,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"path"
 	"path/filepath"
 	"strings"
+
+	chimw "github.com/go-chi/chi/v5/middleware"
 
 	"github.com/dxc-internal/omnirepo/internal/audit"
 	"github.com/dxc-internal/omnirepo/internal/auth"
@@ -74,7 +77,12 @@ func (h *Handler) put(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
 			return
 		}
-		http.Error(w, fmt.Sprintf("read body: %v", err), http.StatusInternalServerError)
+		slog.ErrorContext(r.Context(), "deb.put.read_body_failed",
+			slog.String("incident_id", chimw.GetReqID(r.Context())),
+			slog.String("filename", filename),
+			slog.Any("err", err),
+		)
+		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
 
@@ -129,7 +137,12 @@ func (h *Handler) put(w http.ResponseWriter, r *http.Request) {
 	// Write to pool via PathStore (atomic tmp+fsync+rename underneath).
 	storageKey := storageKeyForPool(res.project.Name, res.repo.Name, poolPath)
 	if _, err := h.pathStore.Put(r.Context(), storageKey, bytes.NewReader(buf.Bytes())); err != nil {
-		http.Error(w, fmt.Sprintf("storage: %v", err), http.StatusInternalServerError)
+		slog.ErrorContext(r.Context(), "deb.put.storage_failed",
+			slog.String("incident_id", chimw.GetReqID(r.Context())),
+			slog.String("filename", filename),
+			slog.Any("err", err),
+		)
+		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
 
@@ -169,7 +182,12 @@ func (h *Handler) put(w http.ResponseWriter, r *http.Request) {
 	}); err != nil {
 		// Best-effort: attempt to remove the pool file that made it to disk.
 		_ = os.Remove(filepath.Join(h.repoRoot, filepath.FromSlash(storageKey)))
-		http.Error(w, fmt.Sprintf("commit: %v", err), http.StatusInternalServerError)
+		slog.ErrorContext(r.Context(), "deb.put.commit_failed",
+			slog.String("incident_id", chimw.GetReqID(r.Context())),
+			slog.String("filename", filename),
+			slog.Any("err", err),
+		)
+		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
 

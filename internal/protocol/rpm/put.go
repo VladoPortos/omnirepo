@@ -6,11 +6,13 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
+
+	chimw "github.com/go-chi/chi/v5/middleware"
 
 	"github.com/dxc-internal/omnirepo/internal/audit"
 	"github.com/dxc-internal/omnirepo/internal/auth"
@@ -57,29 +59,52 @@ func (h *Handler) put(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
 			return
 		}
-		http.Error(w, fmt.Sprintf("read body: %v", err), http.StatusInternalServerError)
+		slog.ErrorContext(r.Context(), "rpm.put.read_body_failed",
+			slog.String("incident_id", chimw.GetReqID(r.Context())),
+			slog.String("filename", res.filename),
+			slog.Any("err", err),
+		)
+		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
 
 	tmpDir := filepath.Join(h.repoRoot, ".tmp-rpm-uploads")
 	if err := os.MkdirAll(tmpDir, 0o750); err != nil {
-		http.Error(w, fmt.Sprintf("mkdir tmp: %v", err), http.StatusInternalServerError)
+		slog.ErrorContext(r.Context(), "rpm.put.mkdir_tmp_failed",
+			slog.String("incident_id", chimw.GetReqID(r.Context())),
+			slog.Any("err", err),
+		)
+		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
 	tmpF, err := os.CreateTemp(tmpDir, "rpm-upload-*.rpm")
 	if err != nil {
-		http.Error(w, fmt.Sprintf("tmp: %v", err), http.StatusInternalServerError)
+		slog.ErrorContext(r.Context(), "rpm.put.tmp_create_failed",
+			slog.String("incident_id", chimw.GetReqID(r.Context())),
+			slog.Any("err", err),
+		)
+		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
 	tmpPath := tmpF.Name()
 	defer func() { _ = os.Remove(tmpPath) }()
 	if _, err := tmpF.Write(buf.Bytes()); err != nil {
 		_ = tmpF.Close()
-		http.Error(w, fmt.Sprintf("tmp write: %v", err), http.StatusInternalServerError)
+		slog.ErrorContext(r.Context(), "rpm.put.tmp_write_failed",
+			slog.String("incident_id", chimw.GetReqID(r.Context())),
+			slog.String("tmp_path", tmpPath),
+			slog.Any("err", err),
+		)
+		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
 	if err := tmpF.Close(); err != nil {
-		http.Error(w, fmt.Sprintf("tmp close: %v", err), http.StatusInternalServerError)
+		slog.ErrorContext(r.Context(), "rpm.put.tmp_close_failed",
+			slog.String("incident_id", chimw.GetReqID(r.Context())),
+			slog.String("tmp_path", tmpPath),
+			slog.Any("err", err),
+		)
+		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
 
@@ -99,7 +124,12 @@ func (h *Handler) put(w http.ResponseWriter, r *http.Request) {
 
 	storageKey := storageKeyFor(res.project.Name, res.repo.Name, res.filename)
 	if _, err := h.pathStore.Put(r.Context(), storageKey, bytes.NewReader(buf.Bytes())); err != nil {
-		http.Error(w, fmt.Sprintf("storage: %v", err), http.StatusInternalServerError)
+		slog.ErrorContext(r.Context(), "rpm.put.storage_failed",
+			slog.String("incident_id", chimw.GetReqID(r.Context())),
+			slog.String("filename", res.filename),
+			slog.Any("err", err),
+		)
+		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
 
@@ -140,7 +170,12 @@ func (h *Handler) put(w http.ResponseWriter, r *http.Request) {
 	}); err != nil {
 		// HI-02: roll back the on-disk artifact when the metadata tx fails.
 		_ = h.pathStore.Delete(r.Context(), storageKey)
-		http.Error(w, fmt.Sprintf("commit: %v", err), http.StatusInternalServerError)
+		slog.ErrorContext(r.Context(), "rpm.put.commit_failed",
+			slog.String("incident_id", chimw.GetReqID(r.Context())),
+			slog.String("filename", res.filename),
+			slog.Any("err", err),
+		)
+		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
 

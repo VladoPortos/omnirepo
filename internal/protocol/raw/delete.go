@@ -3,10 +3,12 @@ package raw
 import (
 	"database/sql"
 	"errors"
-	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
+
+	chimw "github.com/go-chi/chi/v5/middleware"
 
 	"github.com/dxc-internal/omnirepo/internal/audit"
 	"github.com/dxc-internal/omnirepo/internal/auth"
@@ -47,14 +49,24 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}
-		http.Error(w, fmt.Sprintf("stat: %v", err), http.StatusInternalServerError)
+		slog.ErrorContext(r.Context(), "raw.delete.stat_failed",
+			slog.String("incident_id", chimw.GetReqID(r.Context())),
+			slog.String("path", res.relPath),
+			slog.Any("err", err),
+		)
+		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
 
 	// Soft-delete via trash. Use repo.id as the trash holder id so listing
 	// reveals which raw repo a file came from.
 	if _, err := h.trash.Move(r.Context(), absPath, "raw-file", res.repo.ID); err != nil {
-		http.Error(w, fmt.Sprintf("trash: %v", err), http.StatusInternalServerError)
+		slog.ErrorContext(r.Context(), "raw.delete.trash_failed",
+			slog.String("incident_id", chimw.GetReqID(r.Context())),
+			slog.String("path", res.relPath),
+			slog.Any("err", err),
+		)
+		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
 
@@ -64,7 +76,12 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 		}
 		return metadata.IndexArtifactDelete(r.Context(), tx, res.repo.ID, res.relPath)
 	}); err != nil {
-		http.Error(w, fmt.Sprintf("commit: %v", err), http.StatusInternalServerError)
+		slog.ErrorContext(r.Context(), "raw.delete.commit_failed",
+			slog.String("incident_id", chimw.GetReqID(r.Context())),
+			slog.String("path", res.relPath),
+			slog.Any("err", err),
+		)
+		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
 

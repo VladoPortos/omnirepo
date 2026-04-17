@@ -4,10 +4,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"html"
+	"log/slog"
 	"net/http"
 	"os"
 	"strings"
 	"time"
+
+	chimw "github.com/go-chi/chi/v5/middleware"
 )
 
 // listingItem is the JSON-encoded shape of one directory entry (D-30).
@@ -26,7 +29,12 @@ type listingItem struct {
 func (h *Handler) listDir(w http.ResponseWriter, r *http.Request, _ resolved, absDir string) {
 	entries, err := os.ReadDir(absDir)
 	if err != nil && !os.IsNotExist(err) {
-		http.Error(w, fmt.Sprintf("readdir: %v", err), http.StatusInternalServerError)
+		slog.ErrorContext(r.Context(), "raw.listing.readdir_failed",
+			slog.String("incident_id", chimw.GetReqID(r.Context())),
+			slog.String("path", absDir),
+			slog.Any("err", err),
+		)
+		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
 	items := make([]listingItem, 0, len(entries))

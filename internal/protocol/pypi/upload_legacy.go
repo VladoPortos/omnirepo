@@ -8,12 +8,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	chimw "github.com/go-chi/chi/v5/middleware"
 
 	"github.com/dxc-internal/omnirepo/internal/audit"
 	"github.com/dxc-internal/omnirepo/internal/auth"
@@ -66,7 +68,11 @@ func (h *Handler) handleLegacyUpload(w http.ResponseWriter, r *http.Request) {
 
 	tmpDir := filepath.Join(h.repoRoot, ".tmp-pypi-uploads")
 	if err := os.MkdirAll(tmpDir, 0o750); err != nil {
-		http.Error(w, fmt.Sprintf("mkdir tmp: %v", err), http.StatusInternalServerError)
+		slog.ErrorContext(r.Context(), "pypi.legacy.mkdir_tmp_failed",
+			slog.String("incident_id", chimw.GetReqID(r.Context())),
+			slog.Any("err", err),
+		)
+		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
 
@@ -95,7 +101,11 @@ func (h *Handler) handleLegacyUpload(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
 				return
 			}
-			http.Error(w, fmt.Sprintf("multipart: %v", err), http.StatusBadRequest)
+			slog.ErrorContext(r.Context(), "pypi.legacy.multipart_failed",
+				slog.String("incident_id", chimw.GetReqID(r.Context())),
+				slog.Any("err", err),
+			)
+			http.Error(w, "invalid multipart body", http.StatusBadRequest)
 			return
 		}
 		switch part.FormName() {
@@ -123,7 +133,11 @@ func (h *Handler) handleLegacyUpload(w http.ResponseWriter, r *http.Request) {
 			tf, ferr := os.CreateTemp(tmpDir, "pypi-upload-*")
 			if ferr != nil {
 				_ = part.Close()
-				http.Error(w, fmt.Sprintf("tmp: %v", ferr), http.StatusInternalServerError)
+				slog.ErrorContext(r.Context(), "pypi.legacy.tmp_create_failed",
+					slog.String("incident_id", chimw.GetReqID(r.Context())),
+					slog.Any("err", ferr),
+				)
+				http.Error(w, "storage error", http.StatusInternalServerError)
 				return
 			}
 			tmpPath = tf.Name()
@@ -137,7 +151,12 @@ func (h *Handler) handleLegacyUpload(w http.ResponseWriter, r *http.Request) {
 					http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
 					return
 				}
-				http.Error(w, fmt.Sprintf("write tmp: %v", ferr), http.StatusInternalServerError)
+				slog.ErrorContext(r.Context(), "pypi.legacy.tmp_write_failed",
+					slog.String("incident_id", chimw.GetReqID(r.Context())),
+					slog.String("tmp_path", tmpPath),
+					slog.Any("err", ferr),
+				)
+				http.Error(w, "storage error", http.StatusInternalServerError)
 				return
 			}
 			size = n
@@ -193,19 +212,34 @@ func (h *Handler) handleLegacyUpload(w http.ResponseWriter, r *http.Request) {
 	// Promote tmp file into PathStore.
 	tmpBytes, err := os.ReadFile(tmpPath)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("read tmp: %v", err), http.StatusInternalServerError)
+		slog.ErrorContext(r.Context(), "pypi.legacy.read_tmp_failed",
+			slog.String("incident_id", chimw.GetReqID(r.Context())),
+			slog.String("tmp_path", tmpPath),
+			slog.Any("err", err),
+		)
+		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
 	storageKey := packageStorageKey(res.project.Name, res.repo.Name, filename)
 	if _, err := h.pathStore.Put(r.Context(), storageKey, bytes.NewReader(tmpBytes)); err != nil {
-		http.Error(w, fmt.Sprintf("storage: %v", err), http.StatusInternalServerError)
+		slog.ErrorContext(r.Context(), "pypi.legacy.storage_failed",
+			slog.String("incident_id", chimw.GetReqID(r.Context())),
+			slog.String("filename", filename),
+			slog.Any("err", err),
+		)
+		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
 
 	if err := h.commitPyPIRow(r, res, parsed); err != nil {
 		// HI-02: roll back the on-disk artifact when metadata tx fails.
 		_ = h.pathStore.Delete(r.Context(), storageKey)
-		http.Error(w, fmt.Sprintf("commit: %v", err), http.StatusInternalServerError)
+		slog.ErrorContext(r.Context(), "pypi.legacy.commit_failed",
+			slog.String("incident_id", chimw.GetReqID(r.Context())),
+			slog.String("filename", filename),
+			slog.Any("err", err),
+		)
+		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
 
@@ -310,7 +344,12 @@ func (h *Handler) deletePackage(w http.ResponseWriter, r *http.Request) {
 		}
 		return h.repos.SetMetadataState(r.Context(), tx, res.repo.ID, metadata.MetadataStateDirty)
 	}); err != nil {
-		http.Error(w, fmt.Sprintf("commit: %v", err), http.StatusInternalServerError)
+		slog.ErrorContext(r.Context(), "pypi.delete.commit_failed",
+			slog.String("incident_id", chimw.GetReqID(r.Context())),
+			slog.String("filename", filename),
+			slog.Any("err", err),
+		)
+		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
 	if h.coalescer != nil {

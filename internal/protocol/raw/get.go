@@ -4,10 +4,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
+
+	chimw "github.com/go-chi/chi/v5/middleware"
 
 	"github.com/dxc-internal/omnirepo/internal/audit"
 	"github.com/dxc-internal/omnirepo/internal/auth"
@@ -49,7 +52,12 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}
-		http.Error(w, fmt.Sprintf("stat: %v", err), http.StatusInternalServerError)
+		slog.ErrorContext(r.Context(), "raw.get.stat_failed",
+			slog.String("incident_id", chimw.GetReqID(r.Context())),
+			slog.String("path", res.relPath),
+			slog.Any("err", err),
+		)
+		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
 	if info.IsDir() {
@@ -103,7 +111,12 @@ func (h *Handler) head(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}
-		http.Error(w, fmt.Sprintf("stat: %v", err), http.StatusInternalServerError)
+		slog.ErrorContext(r.Context(), "raw.head.stat_failed",
+			slog.String("incident_id", chimw.GetReqID(r.Context())),
+			slog.String("path", res.relPath),
+			slog.Any("err", err),
+		)
+		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
 	if info.IsDir() {
@@ -124,7 +137,12 @@ func (h *Handler) head(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) serveFile(w http.ResponseWriter, r *http.Request, absPath string, info os.FileInfo, relPath string) {
 	f, err := os.Open(absPath)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("open: %v", err), http.StatusInternalServerError)
+		slog.ErrorContext(r.Context(), "raw.get.open_failed",
+			slog.String("incident_id", chimw.GetReqID(r.Context())),
+			slog.String("path", relPath),
+			slog.Any("err", err),
+		)
+		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
 	defer func() { _ = f.Close() }()

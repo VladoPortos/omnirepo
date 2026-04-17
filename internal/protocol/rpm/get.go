@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"path"
@@ -11,8 +12,10 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/dxc-internal/omnirepo/internal/audit"
 	"github.com/go-chi/chi/v5"
+	chimw "github.com/go-chi/chi/v5/middleware"
+
+	"github.com/dxc-internal/omnirepo/internal/audit"
 )
 
 // servePublicKey GET /<project>/rpm/<repo>/public-key.asc.
@@ -58,12 +61,22 @@ func (h *Handler) serveRepodata(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}
-		http.Error(w, fmt.Sprintf("stat: %v", err), http.StatusInternalServerError)
+		slog.ErrorContext(r.Context(), "rpm.repodata.stat_failed",
+			slog.String("incident_id", chimw.GetReqID(r.Context())),
+			slog.String("path", clean),
+			slog.Any("err", err),
+		)
+		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
 	f, err := os.Open(abs)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("open: %v", err), http.StatusInternalServerError)
+		slog.ErrorContext(r.Context(), "rpm.repodata.open_failed",
+			slog.String("incident_id", chimw.GetReqID(r.Context())),
+			slog.String("path", clean),
+			slog.Any("err", err),
+		)
+		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
 	defer func() { _ = f.Close() }()
@@ -108,12 +121,22 @@ func (h *Handler) servePackage(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}
-		http.Error(w, fmt.Sprintf("stat: %v", err), http.StatusInternalServerError)
+		slog.ErrorContext(r.Context(), "rpm.package.stat_failed",
+			slog.String("incident_id", chimw.GetReqID(r.Context())),
+			slog.String("filename", res.filename),
+			slog.Any("err", err),
+		)
+		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
 	f, err := os.Open(abs)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("open: %v", err), http.StatusInternalServerError)
+		slog.ErrorContext(r.Context(), "rpm.package.open_failed",
+			slog.String("incident_id", chimw.GetReqID(r.Context())),
+			slog.String("filename", res.filename),
+			slog.Any("err", err),
+		)
+		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
 	defer func() { _ = f.Close() }()

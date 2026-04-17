@@ -75,11 +75,22 @@ const AdminMaintenancePage = lazy(() =>
   })),
 );
 
-// Dev-only error-class story page (Phase 6 / plan 03 task 3). Lazy-loaded
-// AND conditional on import.meta.env.DEV so Vite tree-shakes the import
-// entirely in production builds — verified by the absence of
-// ErrorClassStoryPage in web/dist/assets/*.js (threat T-06-03-04).
-const ErrorClassStoryPage = import.meta.env.DEV
+// Dev-only error-class story page (Phase 6 / plan 03 task 3).
+// Lazy-loaded AND conditional on either import.meta.env.DEV (Vite dev
+// server) OR import.meta.env.VITE_OMNIREPO_DEV === 'true' (production
+// build compiled with the flag — used by the Playwright e2e suite so
+// it can drive the story page against a real Go binary + embedded
+// SPA).
+//
+// Both flags are eliminated at build time: when NEITHER is truthy the
+// entire import is tree-shaken from the production bundle, which keeps
+// T-06-03-04 honest. The Playwright CI build opts in explicitly via
+// VITE_OMNIREPO_DEV=true; regular production builds do not.
+const DEV_ROUTES_ENABLED =
+  import.meta.env.DEV ||
+  (import.meta.env.VITE_OMNIREPO_DEV as unknown as string) === 'true';
+
+const ErrorClassStoryPage = DEV_ROUTES_ENABLED
   ? lazy(() =>
       import('@/pages/_dev/ErrorClassStoryPage').then((m) => ({
         default: m.ErrorClassStoryPage,
@@ -161,7 +172,7 @@ function MustChangePasswordGuard({ children }: { children: ReactNode }) {
 // mode. Conditional at module scope (not inside JSX) so the branch is
 // statically eliminated at build time.
 const devRoutes: RouteObject[] =
-  import.meta.env.DEV && ErrorClassStoryPage
+  DEV_ROUTES_ENABLED && ErrorClassStoryPage
     ? [
         {
           path: '/_dev/error-class-story',

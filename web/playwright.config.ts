@@ -15,7 +15,27 @@ export default defineConfig({
     { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
   ],
   webServer: {
-    command: 'cd .. && make build-all && DATA_ROOT=$(mktemp -d) ./bin/omnirepo serve',
+    // Phase 6 / plan 04 — three flags wire the dev-only surfaces into
+    // the e2e run:
+    //   VITE_OMNIREPO_DEV=true  — build the SPA with the dev-only
+    //                              /_dev/error-class-story route so
+    //                              Playwright can drive it
+    //   OMNIREPO_DEV=1          — register /api/v1/_dev/error/:class
+    //                              on the Go server so Live wire
+    //                              fetches succeed
+    //   OMNIREPO_DEV_PROXY=0    — keep the backend on the embedded
+    //                              SPA handler (do NOT forward /_dev
+    //                              requests to Vite on :5173, which
+    //                              isn't running in the e2e suite)
+    // All three flags are opt-in; a regular production build keeps
+    // the dev surfaces tree-shaken (T-06-03-04).
+    command:
+      'cd .. && VITE_OMNIREPO_DEV=true (cd web && npm ci --no-audit --no-fund && npm run build) && make build && DATA_ROOT=$(mktemp -d) OMNIREPO_DEV=1 OMNIREPO_DEV_PROXY=0 ./bin/omnirepo serve',
+    env: {
+      OMNIREPO_DEV: '1',
+      OMNIREPO_DEV_PROXY: '0',
+      VITE_OMNIREPO_DEV: 'true',
+    },
     url: 'https://localhost:8443/healthz',
     reuseExistingServer: !process.env.CI,
     timeout: 120000,

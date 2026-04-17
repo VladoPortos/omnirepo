@@ -31,6 +31,24 @@ func DevProxy() http.Handler {
 // IsDevMode returns true when the OMNIREPO_DEV environment variable is
 // set to "1". When true, the router should use DevProxy() instead of
 // SPAHandler for the NotFound handler.
+//
+// OMNIREPO_DEV also unlocks dev-only backend routes
+// (/api/v1/_dev/error/:class) regardless of this function's return
+// value — those are gated by api.devEnabled() which reads the same
+// env var.
+//
+// Phase 6 / plan 04: OMNIREPO_DEV_PROXY=0 lets the Playwright e2e
+// suite opt out of the Vite reverse proxy while still enabling the
+// dev-only API routes. When the flag is set to "0", IsDevMode()
+// returns false so the server falls back to SPAHandler serving the
+// embedded bundle (which must be built with VITE_OMNIREPO_DEV=true to
+// include the story page route).
 func IsDevMode() bool {
-	return os.Getenv("OMNIREPO_DEV") == "1"
+	if os.Getenv("OMNIREPO_DEV") != "1" {
+		return false
+	}
+	if os.Getenv("OMNIREPO_DEV_PROXY") == "0" {
+		return false
+	}
+	return true
 }

@@ -53,7 +53,14 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 //
 // The 5-arg signature (r added versus the v1.0 helper) is the single
 // mechanical widening plan 06-02 applies across every /api/v1 handler.
+//
+// If detail is empty the bridge fills in a generic class-appropriate
+// sentence via defaultMessageForStatus so the wire body always carries
+// a non-empty ApiErrorEnvelope.message (schema-required).
 func writeJSONError(w http.ResponseWriter, r *http.Request, status int, code, detail string) {
+	if detail == "" {
+		detail = defaultMessageForStatus(status)
+	}
 	e := &httperr.Error{
 		Envelope: httperr.Envelope{
 			Code:    normalizeLegacyCode(code),
@@ -63,6 +70,37 @@ func writeJSONError(w http.ResponseWriter, r *http.Request, status int, code, de
 		Status: status,
 	}
 	httperr.Write(w, r, e)
+}
+
+// defaultMessageForStatus returns a developer-authored, user-facing
+// sentence for a given HTTP status. Used by writeJSONError when the
+// handler passed "" as detail — typically in 500 paths where the
+// internal cause is logged via slog and not safe to serialize. The
+// sentence is static (no interpolation) so it can never leak
+// internals (ERR-03).
+func defaultMessageForStatus(status int) string {
+	switch {
+	case status == 401:
+		return "You must be signed in to do that."
+	case status == 403:
+		return "You do not have permission to do that."
+	case status == 404:
+		return "That resource does not exist."
+	case status == 409:
+		return "That conflicts with existing data."
+	case status == 413:
+		return "Request body too large."
+	case status == 422:
+		return "One or more fields are invalid."
+	case status == 429:
+		return "Too many requests — please try again shortly."
+	case status >= 500:
+		return "An internal error occurred."
+	case status >= 400:
+		return "The request was not valid."
+	default:
+		return "An error occurred."
+	}
 }
 
 // writeEnvelope is the first-class path for Phase 6+ handlers that

@@ -339,7 +339,7 @@ func (d Deps) handleLogin(w http.ResponseWriter, r *http.Request) {
 	var req LoginRequest
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8192)).Decode(&req); err != nil {
 		auth.VerifyFixedCost("")
-		writeJSONError(w, r, http.StatusUnauthorized, ErrUnauthenticated, "")
+		writeJSONError(w, r, http.StatusUnauthorized, ErrUnauthenticated, "Invalid login or password.")
 		return
 	}
 	// Drop the LoginValid short-circuit: a malformed login can never match
@@ -352,13 +352,13 @@ func (d Deps) handleLogin(w http.ResponseWriter, r *http.Request) {
 		// latency. Constant-time argument since req.Password is the same
 		// bytes an attacker would have sent for a real user.
 		auth.VerifyFixedCost(req.Password)
-		writeJSONError(w, r, http.StatusUnauthorized, ErrUnauthenticated, "")
+		writeJSONError(w, r, http.StatusUnauthorized, ErrUnauthenticated, "Invalid login or password.")
 		d.recordAudit(r, audit.Event{Kind: audit.EvtAuthLoginFailure, TargetKind: "user", TargetID: req.Login, Outcome: "user_not_found"})
 		return
 	}
 	ok, err := auth.VerifyPassword(u.PasswordHash, req.Password)
 	if err != nil || !ok {
-		writeJSONError(w, r, http.StatusUnauthorized, ErrUnauthenticated, "")
+		writeJSONError(w, r, http.StatusUnauthorized, ErrUnauthenticated, "Invalid login or password.")
 		uid := u.ID
 		d.recordAudit(r, audit.Event{Kind: audit.EvtAuthLoginFailure, ActorUserID: &uid, TargetKind: "user", TargetID: u.Login, Outcome: "wrong_password"})
 		return
@@ -414,7 +414,7 @@ func (d Deps) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 	}
 	u, err := d.Users.FindByID(r.Context(), a.ID)
 	if err != nil {
-		writeJSONError(w, r, http.StatusUnauthorized, ErrUnauthenticated, "")
+		writeJSONError(w, r, http.StatusUnauthorized, ErrUnauthenticated, "Your session is no longer valid.")
 		return
 	}
 	ok, _ := auth.VerifyPassword(u.PasswordHash, req.Current)

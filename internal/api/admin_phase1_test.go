@@ -97,9 +97,18 @@ func newTestServer(t *testing.T, opts ...testServerOpt) *testServer {
 	}
 
 	mux := chi.NewRouter()
+	// Phase 6 / plan 04 — stamp UUID v7 incident IDs on every request
+	// in the test server so integration tests can assert the
+	// ApiErrorEnvelope.incident_id ↔ X-Incident-Id response header
+	// parity (ERR-07). Production wiring lives in internal/httpx.New.
+	mux.Use(httpx.IncidentIDMiddleware)
 	mux.Get("/healthz", httpx.Healthz())
 	mux.Get("/readyz", httpx.Readyz(httpx.ReadyzDeps{DB: db, Holder: holder}))
 	api.Mount(mux, deps)
+	// Register dev error routes when OMNIREPO_DEV=1 so integration
+	// tests can exercise the canned envelopes via the test server
+	// (matches the production wiring in internal/app/app.go).
+	api.MountDevErrorRoutes(mux)
 
 	ts := httptest.NewServer(mux)
 	t.Cleanup(ts.Close)
@@ -149,6 +158,30 @@ func (s *testServer) do(t *testing.T, method, path, cookie string, body any) (*h
 	out := map[string]any{}
 	_ = json.Unmarshal(buf, &out)
 	return resp, out
+}
+
+// doRaw behaves like do but returns the raw body bytes alongside the
+// response instead of a parsed map. Needed by envelope integration
+// tests that decode the body into a typed envelope struct AND want to
+// run regex / substring assertions on the raw wire bytes.
+//
+// rawBody is a reader the caller supplies — pass strings.NewReader when
+// you want to send deliberately malformed JSON bytes that json.Marshal
+// would reject.
+func (s *testServer) doRaw(t *testing.T, method, path, cookie string, rawBody io.Reader) (*http.Response, []byte) {
+	t.Helper()
+	req, _ := http.NewRequest(method, s.ts.URL+path, rawBody)
+	req.Header.Set("Content-Type", "application/json")
+	if cookie != "" {
+		req.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: cookie})
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	buf, _ := io.ReadAll(resp.Body)
+	return resp, buf
 }
 
 // -----------------------------------------------------------------------------

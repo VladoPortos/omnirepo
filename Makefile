@@ -201,7 +201,7 @@ check-contrast:
 lint-typography:
 	@set -e; \
 	echo "lint-typography: scanning web/src/ for forbidden weight/size classes"; \
-	excludes=$$(grep -v '^\#' scripts/typography-allowlist.txt 2>/dev/null | grep -v '^$$' | awk '{print "--exclude="$$0}' | sed 's|--exclude=web/src/||' | tr '\n' ' '); \
+	excludes=$$(grep -v '^\#' scripts/typography-allowlist.txt 2>/dev/null | grep -v '^$$' | awk -F/ '{print "--exclude=" $$NF}' | tr '\n' ' '); \
 	weight_hits=$$(grep -rnE --include='*.tsx' --include='*.ts' $$excludes '\bfont-(medium|bold|light)\b' web/src/ 2>/dev/null || true); \
 	size_hits=$$(grep -rnE --include='*.tsx' --include='*.ts' $$excludes '\btext-(base|xl|3xl|4xl)\b' web/src/ 2>/dev/null || true); \
 	if [ -n "$$weight_hits" ]; then \

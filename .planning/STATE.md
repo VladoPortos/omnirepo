@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: v1.1-immediate-polish
 status: executing
-stopped_at: Completed 06-02-PLAN.md
-last_updated: "2026-04-17T11:40:21.554Z"
-last_activity: 2026-04-17 — Plan 06-02 completed (envelope wire-up + panic recovery + UUID v7 incident-id shipped)
+stopped_at: Completed 06-03-PLAN.md
+last_updated: "2026-04-17T12:04:39.254Z"
+last_activity: 2026-04-17 — Plan 06-03 completed (ApiError→envelope, useApiError hook + ErrorEnvelopeRenderer, dev-only story page live and Playwright-verified)
 progress:
   total_phases: 5
   completed_phases: 0
   total_plans: 8
-  completed_plans: 2
-  percent: 25
+  completed_plans: 3
+  percent: 38
 ---
 
 # STATE: OmniRepo
@@ -27,10 +27,10 @@ progress:
 ## Current Position
 
 Phase: 06 (error-envelope-visual-foundation) — EXECUTING
-Plan: 3 of 8
-Status: Plans 01-02 complete; ready to execute plan 03
-Last activity: 2026-04-17 — Plan 06-02 completed (envelope wire-up + panic recovery + UUID v7 incident-id shipped)
-Stopped at: Completed 06-02-PLAN.md
+Plan: 4 of 8
+Status: Ready to execute
+Last activity: 2026-04-17
+Stopped at: Completed 06-03-PLAN.md
 
 ## Phase Map
 
@@ -66,6 +66,10 @@ scoped tokens, LDAP/OIDC.
 - **[06-02] OpenAPI `default:` response `$ref` for envelope shape** — chose one `default: $ref: '#/components/responses/ValidationError'` per operation over exhaustive per-status enumeration. The v1.0 spec had only one inline 4xx block in 2666 lines; per-operation defaults document the envelope shape broadly (72 `$ref`s across 74 ops) without adding ~300 lines of repetitive YAML. Later plans can refine specific ops to enumerate 401/403/404 where deterministic.
 - **[06-02] 302 handler call sites widened mechanically via sed** — `writeJSONError(w, ` → `writeJSONError(w, r, ` across 23 handler files. Every handler had `r *http.Request` in scope; zero refactoring needed. Semantic-free migration preserves the v1.0 call convention while enabling envelope+incident_id correlation.
 - **[06-02] auth/middleware/deps.go still emits legacy `{error: ...}` shape** — out of scope for plan 06-02's file list. Deferred to plan 06-04 (integration audit / threat T-06-02-04). This is why `admin_phase1_test.go:605,759` still pass asserting `body["error"] == "password-change-required"` — the MCP 403 path is emitted by the middleware, not through `writeJSONError`.
+- **[06-03] ApiError keeps backwards-compat `.code` / `.detail` getters** reading from the envelope so the 14+ pages still using `err.detail` render unchanged. Plans 06-05+ migrate those call sites to `ErrorEnvelopeRenderer` incrementally without breaking intervening commits.
+- **[06-03] Dev-only `/api/v1/_dev/error/:class` routes live in `internal/api/dev_error_routes.go`** behind an `OMNIREPO_DEV` env-var gate. Wired from `app.go` (not `httpx.New`) because chi v5 panics if `Use` follows a route — `httpx` exports a named `MountDevErrorRoutes(r, fn)` helper that `app.Run` calls between the last `router.Use` and the first `router.Get`. This also keeps `httpx` free of an `internal/api` import (api → httpx already exists in `sync_actions.go`).
+- **[06-03] Dev-only React surfaces gated by `import.meta.env.DEV` at module scope** (`const X = import.meta.env.DEV ? lazy(...) : null`) so Vite statically eliminates the branch. Acceptance gate: `grep web/dist/assets/*.js` for the component name must return zero — verified for `ErrorClassStoryPage`.
+- **[06-03] Canned validation envelope ships BOTH `details.field` and `details.fields`** on the same response so `useApiError`'s dual-path normalisation is exercised on a single wire fixture. Plan 06-04 + plan 06-08 e2e tests get deterministic input for both the single-field and multi-field code paths.
 - **Phases continue numbering from v1.0** — v1.1 starts at Phase 6, not Phase 1. Preserves traceability across milestones in the same `.planning/` tree.
 - **ERR envelope lands in Phase 6 as a foundation** — every SNIPPET/HEALTH/OVERVIEW surface renders its errors through the new envelope; putting ERR late would force rework across phases 7–10.
 - **VISUAL is not a trailing-polish phase** — the design-system primitives (status tokens, skeletons, badges, copy-to-clipboard, button hierarchy) ship alongside ERR in Phase 6 so every later UI phase consumes shared components instead of re-implementing them.
@@ -85,7 +89,8 @@ scoped tokens, LDAP/OIDC.
 
 - Run `/gsd-plan-phase 6` to decompose Phase 6 into plans. ✅ Plans generated; now executing.
 - Execute plan 06-02 (envelope wire-up + panic recovery). ✅ Shipped; 302 call sites migrated, 72 openapi $refs, middleware chain updated.
-- Execute plan 06-03 next (UI shell / error-class visual tokens — depends on 06-02 wire shape being live).
+- Execute plan 06-03 (UI envelope layer + story page). ✅ Shipped; ApiError → envelope with compat getters, useApiError hook + ErrorEnvelopeRenderer live, dev-only `/api/v1/_dev/error/:class` + `/_dev/error-class-story` wired and Playwright-verified.
+- Execute plan 06-04 next (integration tests + envelope audit across the handler surface).
 - **Plan 06-04 follow-up:** migrate `internal/auth/middleware/deps.go` writeJSON401/writeJSON403 helpers to emit envelope shape, then update 3 legacy test assertions (admin_phase1_test.go:605,759; session_or_apikey_test.go:309).
 
 ### Blockers
@@ -98,6 +103,7 @@ scoped tokens, LDAP/OIDC.
 |-------|------|----------|-------|-------|
 | 06    | 01   | ~5 min   | 3     | 7     |
 | 06    | 02   | ~25 min  | 3     | 26    |
+| 06    | 03   | ~30 min  | 3     | 9     |
 
 ### Research Flags
 
@@ -112,8 +118,8 @@ scoped tokens, LDAP/OIDC.
 
 ## Session Continuity
 
-- **Next action**: Execute plan 06-03 — error-class visual tokens + UI envelope rendering (depends on the wire shape now live from 06-02).
-- **Last session:** 2026-04-17T11:40:21.552Z
+- **Next action**: Execute plan 06-04 — integration tests + envelope audit across the handler surface (including migrating `internal/auth/middleware/deps.go` writeJSON401/writeJSON403 helpers to the envelope shape so the three legacy test assertions flip to `body["code"]`).
+- **Last session:** 2026-04-17T12:04:26.047Z
 - **Artifacts on disk**:
   - `.planning/PROJECT.md` (Current Milestone: v1.1)
   - `.planning/REQUIREMENTS.md` (57 v1.1 REQs, traceability populated)

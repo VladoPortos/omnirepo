@@ -1052,17 +1052,9 @@ paths:
               schema:
                 $ref: '#/components/schemas/LoginResponse'
         "401":
-          description: Invalid credentials
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  error:
-                    type: string
-                  detail:
-                    type: string
-
+          $ref: '#/components/responses/PermissionError'
+        default:
+          $ref: '#/components/responses/ValidationError'
   /auth/logout:
     post:
       operationId: logout
@@ -1074,6 +1066,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/StatusOK'
+        default:
+          $ref: '#/components/responses/ValidationError'
 
   /auth/change-password:
     post:
@@ -1092,6 +1086,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/StatusOK'
+        default:
+          $ref: '#/components/responses/ValidationError'
 
   # ============================== ME ==============================
   /me:
@@ -1105,6 +1101,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/MeResponse'
+        default:
+          $ref: '#/components/responses/ValidationError'
     patch:
       operationId: updateMe
       tags: [me]
@@ -1121,6 +1119,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/MeResponse'
+        default:
+          $ref: '#/components/responses/ValidationError'
     delete:
       operationId: deleteMe
       tags: [me]
@@ -1131,6 +1131,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/StatusOK'
+        default:
+          $ref: '#/components/responses/ValidationError'
 
   # ============================== API KEYS ==============================
   /me/api-keys:
@@ -1146,6 +1148,8 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/APIKey'
+        default:
+          $ref: '#/components/responses/ValidationError'
     post:
       operationId: createAPIKey
       tags: [api-keys]
@@ -1162,6 +1166,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/APIKeyCreateResponse'
+        default:
+          $ref: '#/components/responses/ValidationError'
 
   /me/api-keys/{id}:
     delete:
@@ -1177,6 +1183,8 @@ paths:
       responses:
         "204":
           description: API key revoked
+        default:
+          $ref: '#/components/responses/ValidationError'
 
   # ============================== ME S3 KEYS ==============================
   /me/s3-keys:
@@ -1192,6 +1200,8 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/S3Key'
+        default:
+          $ref: '#/components/responses/ValidationError'
     post:
       operationId: createMyS3Key
       tags: [s3-keys]
@@ -1208,6 +1218,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/S3KeyCreateResponse'
+        default:
+          $ref: '#/components/responses/ValidationError'
 
   /me/s3-keys/{id}:
     delete:
@@ -1223,6 +1235,8 @@ paths:
       responses:
         "204":
           description: S3 key revoked
+        default:
+          $ref: '#/components/responses/ValidationError'
 
   # ============================== PROJECTS ==============================
   /projects:
@@ -1247,6 +1261,8 @@ paths:
                   next_cursor:
                     type: string
                     nullable: true
+        default:
+          $ref: '#/components/responses/ValidationError'
     post:
       operationId: createProject
       tags: [projects]
@@ -1263,6 +1279,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ProjectCreateResponse'
+        default:
+          $ref: '#/components/responses/ValidationError'
 
   /projects/{name}:
     get:
@@ -1281,6 +1299,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Project'
+        default:
+          $ref: '#/components/responses/ValidationError'
     delete:
       operationId: deleteProject
       tags: [projects]
@@ -1297,6 +1317,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/StatusOK'
+        default:
+          $ref: '#/components/responses/ValidationError'
 
   /projects/{name}/activity:
     get:
@@ -1317,6 +1339,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ActivityListResponse'
+        default:
+          $ref: '#/components/responses/ValidationError'
 
   # ============================== MEMBERS ==============================
   /projects/{name}/members/{login}:
@@ -1341,6 +1365,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/StatusOK'
+        default:
+          $ref: '#/components/responses/ValidationError'
     delete:
       operationId: removeProjectMember
       tags: [members]
@@ -1362,6 +1388,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/StatusOK'
+        default:
+          $ref: '#/components/responses/ValidationError'
 
   # ============================== REPOS ==============================
   /projects/{name}/repos:
@@ -1391,6 +1419,8 @@ paths:
                   next_cursor:
                     type: string
                     nullable: true
+        default:
+          $ref: '#/components/responses/ValidationError'
     post:
       operationId: createRepo
       tags: [repos]
@@ -1413,6 +1443,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Repo'
+        default:
+          $ref: '#/components/responses/ValidationError'
 
   /projects/{name}/repos/{type}/{repo}:
     get:
@@ -1441,6 +1473,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Repo'
+        default:
+          $ref: '#/components/responses/ValidationError'
     patch:
       operationId: patchRepo
       tags: [repos]
@@ -1473,6 +1507,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Repo'
+        default:
+          $ref: '#/components/responses/ValidationError'
     delete:
       operationId: deleteRepo
       tags: [repos]
@@ -1499,6 +1535,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/StatusOK'
+        default:
+          $ref: '#/components/responses/ValidationError'
 
   /projects/{name}/repos/{type}/{repo}/wipe:
     post:
@@ -1527,6 +1565,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/WipeResponse'
+        default:
+          $ref: '#/components/responses/ValidationError'
 
   /projects/{name}/repos/{type}/{repo}/upload:
     post:
@@ -1565,6 +1605,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/UploadResponse'
+        default:
+          $ref: '#/components/responses/ValidationError'
 
   /projects/{name}/repos/{type}/{repo}/sync:
     post:
@@ -1599,6 +1641,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SyncJob'
+        default:
+          $ref: '#/components/responses/ValidationError'
 
   /projects/{name}/repos/{type}/{repo}/sync-jobs:
     get:
@@ -1637,6 +1681,8 @@ paths:
                   next_cursor:
                     type: string
                     nullable: true
+        default:
+          $ref: '#/components/responses/ValidationError'
 
   /projects/{name}/repos/{type}/{repo}/sync-jobs/{id}:
     get:
@@ -1671,6 +1717,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SyncJob'
+        default:
+          $ref: '#/components/responses/ValidationError'
 
   # ============================== DOCKER ==============================
   /projects/{name}/repos/docker/{repo}/pull-external:
@@ -1701,6 +1749,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SyncJob'
+        default:
+          $ref: '#/components/responses/ValidationError'
 
   /projects/{name}/repos/docker/{repo}/promote:
     post:
@@ -1730,6 +1780,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/StatusOK'
+        default:
+          $ref: '#/components/responses/ValidationError'
 
   # ============================== SCANS ==============================
   /projects/{name}/repos/{type}/{repo}/scans:
@@ -1769,6 +1821,8 @@ paths:
                   next_cursor:
                     type: string
                     nullable: true
+        default:
+          $ref: '#/components/responses/ValidationError'
     post:
       operationId: rescanRepo
       tags: [scans]
@@ -1799,6 +1853,8 @@ paths:
                   scan_id:
                     type: integer
                     format: int64
+        default:
+          $ref: '#/components/responses/ValidationError'
 
   /projects/{name}/repos/{type}/{repo}/scans/{id}:
     get:
@@ -1833,6 +1889,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Scan'
+        default:
+          $ref: '#/components/responses/ValidationError'
 
   /projects/{name}/repos/{type}/{repo}/scans/{id}/sbom:
     get:
@@ -1867,6 +1925,8 @@ paths:
             application/json:
               schema:
                 type: object
+        default:
+          $ref: '#/components/responses/ValidationError'
 
   # ============================== UPSTREAM CREDS ==============================
   /projects/{name}/repos/{type}/{repo}/upstream-creds:
@@ -1898,6 +1958,8 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/UpstreamCred'
+        default:
+          $ref: '#/components/responses/ValidationError'
     post:
       operationId: createUpstreamCred
       tags: [upstream-creds]
@@ -1930,6 +1992,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/UpstreamCred'
+        default:
+          $ref: '#/components/responses/ValidationError'
 
   /projects/{name}/repos/{type}/{repo}/upstream-creds/{id}:
     delete:
@@ -1960,6 +2024,8 @@ paths:
       responses:
         "204":
           description: Credential deleted
+        default:
+          $ref: '#/components/responses/ValidationError'
 
   # ============================== S3 ACCESS KEYS ==============================
   /projects/{name}/s3-access-keys:
@@ -1981,6 +2047,8 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/S3Key'
+        default:
+          $ref: '#/components/responses/ValidationError'
     post:
       operationId: createS3AccessKey
       tags: [s3-keys]
@@ -2003,6 +2071,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/S3KeyCreateResponse'
+        default:
+          $ref: '#/components/responses/ValidationError'
 
   /projects/{name}/s3-access-keys/{id}:
     delete:
@@ -2023,6 +2093,8 @@ paths:
       responses:
         "204":
           description: S3 key revoked
+        default:
+          $ref: '#/components/responses/ValidationError'
 
   # ============================== GIT ==============================
   /projects/{name}/repos/git/{repo}/tree/{ref}/{path}:
@@ -2059,6 +2131,8 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/GitTreeEntry'
+        default:
+          $ref: '#/components/responses/ValidationError'
 
   /projects/{name}/repos/git/{repo}/blob/{ref}/{path}:
     get:
@@ -2092,6 +2166,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/GitFileContent'
+        default:
+          $ref: '#/components/responses/ValidationError'
 
   /projects/{name}/repos/git/{repo}/commits/{ref}:
     get:
@@ -2130,6 +2206,8 @@ paths:
                   next_cursor:
                     type: string
                     nullable: true
+        default:
+          $ref: '#/components/responses/ValidationError'
 
   /projects/{name}/repos/git/{repo}/commit/{sha}:
     get:
@@ -2158,6 +2236,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/GitDiff'
+        default:
+          $ref: '#/components/responses/ValidationError'
 
   /projects/{name}/repos/git/{repo}/blame/{ref}/{path}:
     get:
@@ -2191,6 +2271,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/GitBlame'
+        default:
+          $ref: '#/components/responses/ValidationError'
 
   /projects/{name}/repos/git/{repo}/compare/{base}...{head}:
     get:
@@ -2224,6 +2306,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/GitCompareResponse'
+        default:
+          $ref: '#/components/responses/ValidationError'
 
   /projects/{name}/repos/git/{repo}/refs:
     get:
@@ -2249,6 +2333,8 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/GitRef'
+        default:
+          $ref: '#/components/responses/ValidationError'
 
   # ============================== SEARCH ==============================
   /search:
@@ -2283,6 +2369,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SearchResponse'
+        default:
+          $ref: '#/components/responses/ValidationError'
 
   # ============================== ADMIN USERS ==============================
   /admin/users:
@@ -2307,6 +2395,8 @@ paths:
                   next_cursor:
                     type: string
                     nullable: true
+        default:
+          $ref: '#/components/responses/ValidationError'
     post:
       operationId: createUser
       tags: [admin]
@@ -2323,6 +2413,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/UserCreateResponse'
+        default:
+          $ref: '#/components/responses/ValidationError'
 
   /admin/users/{login}:
     get:
@@ -2341,6 +2433,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/User'
+        default:
+          $ref: '#/components/responses/ValidationError'
     patch:
       operationId: updateUser
       tags: [admin]
@@ -2363,6 +2457,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/User'
+        default:
+          $ref: '#/components/responses/ValidationError'
     delete:
       operationId: deleteUser
       tags: [admin]
@@ -2379,6 +2475,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/StatusOK'
+        default:
+          $ref: '#/components/responses/ValidationError'
 
   # ============================== ADMIN AUDIT ==============================
   /admin/audit:
@@ -2421,6 +2519,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/AuditListResponse'
+        default:
+          $ref: '#/components/responses/ValidationError'
 
   # ============================== ADMIN TLS ==============================
   /admin/tls/current:
@@ -2434,6 +2534,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/TLSCertInfo'
+        default:
+          $ref: '#/components/responses/ValidationError'
 
   /admin/tls/upload:
     post:
@@ -2459,6 +2561,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/StatusOK'
+        default:
+          $ref: '#/components/responses/ValidationError'
 
   /admin/tls/history:
     get:
@@ -2473,6 +2577,8 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/TLSHistoryEntry'
+        default:
+          $ref: '#/components/responses/ValidationError'
 
   # ============================== ADMIN TRIVY DB ==============================
   /admin/trivy/db/status:
@@ -2486,6 +2592,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/TrivyDBStatus'
+        default:
+          $ref: '#/components/responses/ValidationError'
 
   /admin/trivy/db:
     post:
@@ -2508,6 +2616,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/TrivyDBStatus'
+        default:
+          $ref: '#/components/responses/ValidationError'
 
   /admin/trivy/db/pull:
     post:
@@ -2520,6 +2630,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/StatusOK'
+        default:
+          $ref: '#/components/responses/ValidationError'
 
   # ============================== ADMIN GC ==============================
   /admin/gc:
@@ -2533,6 +2645,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/GCTriggerResponse'
+        default:
+          $ref: '#/components/responses/ValidationError'
 
   /admin/gc/status:
     get:
@@ -2545,6 +2659,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/GCStatusResponse'
+        default:
+          $ref: '#/components/responses/ValidationError'
 
   # ============================== ADMIN MAINTENANCE ==============================
   /admin/maintenance:
@@ -2558,6 +2674,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/MaintenanceStatus'
+        default:
+          $ref: '#/components/responses/ValidationError'
     post:
       operationId: toggleMaintenance
       tags: [admin]
@@ -2574,6 +2692,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/MaintenanceStatus'
+        default:
+          $ref: '#/components/responses/ValidationError'
 
   # ============================== ADMIN TRASH ==============================
   /admin/trash:
@@ -2590,6 +2710,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/TrashListResponse'
+        default:
+          $ref: '#/components/responses/ValidationError'
 
   /admin/trash/{id}/restore:
     post:
@@ -2608,6 +2730,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/StatusOK'
+        default:
+          $ref: '#/components/responses/ValidationError'
 
   /admin/trash/{id}:
     delete:
@@ -2622,6 +2746,8 @@ paths:
       responses:
         "204":
           description: Item purged permanently
+        default:
+          $ref: '#/components/responses/ValidationError'
 
   # ============================== ADMIN SETTINGS ==============================
   /admin/settings:
@@ -2635,6 +2761,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SettingsMap'
+        default:
+          $ref: '#/components/responses/ValidationError'
     patch:
       operationId: patchSettings
       tags: [admin]
@@ -2651,6 +2779,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SettingsMap'
+        default:
+          $ref: '#/components/responses/ValidationError'
 
   # ============================== DASHBOARD ==============================
   /dashboard:
@@ -2664,3 +2794,5 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/DashboardResponse'
+        default:
+          $ref: '#/components/responses/ValidationError'

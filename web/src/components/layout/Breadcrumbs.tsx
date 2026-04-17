@@ -56,11 +56,14 @@ export function Breadcrumbs() {
           </BreadcrumbLink>
         </BreadcrumbItem>
         {segments.map((segment, index) => {
-          let path = '/' + segments.slice(0, index + 1).join('/');
+          const segmentPath = '/' + segments.slice(0, index + 1).join('/');
+          let path = segmentPath;
           const isLast = index === segments.length - 1;
           // `/projects/:name/s3` is not a real route (buckets live at
           // /projects/:name/s3/:bucket); clicking the 's3' crumb should
           // bring the user back to the project page with the S3 tab.
+          // `segmentPath` stays the un-rewritten path so the React key
+          // remains unique even when two crumbs point at the same href.
           if (
             segment === 's3' &&
             segments[0] === 'projects' &&
@@ -71,7 +74,7 @@ export function Breadcrumbs() {
           }
 
           return (
-            <span key={path} className="contents">
+            <span key={segmentPath} className="contents">
               <BreadcrumbSeparator />
               <BreadcrumbItem>
                 {isLast ? (

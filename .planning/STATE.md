@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: v1.1-immediate-polish
 status: executing
-stopped_at: Completed 06-05-PLAN.md
-last_updated: "2026-04-17T13:02:12.523Z"
-last_activity: 2026-04-17 — Plan 06-05 completed (59 %v leaks redacted across 14 files in raw/rpm/deb/pypi/helm; protocoltest + Makefile gate prevent regression)
+stopped_at: Completed 06-06-PLAN.md
+last_updated: "2026-04-17T15:30:00.000Z"
+last_activity: 2026-04-17 — Plan 06-06 completed (6 OKLCH status-token triples, StatusBadge, 4 Skeleton variants, CopyInline, CopyButton aria-live upgrade; dev-only /_dev/primitives-story Playwright-verified in light+dark).
 progress:
   total_phases: 5
   completed_phases: 0
   total_plans: 8
-  completed_plans: 5
-  percent: 63
+  completed_plans: 6
+  percent: 75
 ---
 
 # STATE: OmniRepo
@@ -27,10 +27,10 @@ progress:
 ## Current Position
 
 Phase: 06 (error-envelope-visual-foundation) — EXECUTING
-Plan: 6 of 8
+Plan: 7 of 8
 Status: Ready to execute
 Last activity: 2026-04-17
-Stopped at: Completed 06-05-PLAN.md
+Stopped at: Completed 06-06-PLAN.md
 
 ## Phase Map
 
@@ -77,6 +77,12 @@ scoped tokens, LDAP/OIDC.
 - **[06-05] Actual `%v`-leak count was 59 in 14 files (raw/rpm/deb/pypi/helm), not the ~206 estimate** from 06-RESEARCH.md Q2 (the estimate used a broader `http.Error` grep — the `%v`-interpolation subset is ~1/3 of that). OCI/S3/Git handlers had ZERO leaks to redact (they delegate to library handlers emitting protocol-native errors: go-containerregistry, gofakes3, go-git v6). Acceptance-criterion threshold `slog.ErrorContext >= 100` was proportional to 206 — the underlying invariant ("every former `%v` leak paired with a log call") holds at 59/59.
 - **[06-05] Dual-gate ERR-03 regression prevention** — in-process Go test `internal/protocol/protocoltest/TestNoPercentVLeakInHTTPError` runs under `go test ./...`; Makefile `lint-protocol-redaction` (wired as `test:` prerequisite) runs under `make test`. Identical grep pattern + `*_test.go` exclude rules so both fail/pass in lockstep. Future changes introducing new `%v` leaks fail both workflows simultaneously.
 - **[06-05] Canonical protocol redaction shape** — `slog.ErrorContext(ctx, "<pkg>.<handler>.<op>_failed", slog.String("incident_id", chimw.GetReqID(ctx)), slog.String("<key>", <val>), slog.Any("err", err))` paired with `http.Error(w, "<generic>", status)`. Generic client messages: `"storage error"` for IO/tx, `"invalid multipart body"` for pypi multipart parse. Replaces the 1-line `http.Error(w, fmt.Sprintf("<op>: %v", err), status)` anti-pattern.
+- **[06-06] Status tokens as 6×3 triples in :root + .dark (mirrored)** — `--status-{variant}`, `--status-{variant}-foreground`, `--status-{variant}-border` for healthy/warning/failure/disabled/maintenance/neutral. Dark tokens mirror light values verbatim in v1.1 (no dark theme activated). Tailwind 4 `@theme inline` exposes them as `bg-status-*` / `text-status-*-foreground` / `border-status-*-border` utilities. Downstream phases MUST use only these tokens; raw Tailwind palette is forbidden in new code per UI-SPEC §Color Forbidden list.
+- **[06-06] Skeleton variants attach role="status" aria-label="Loading" only to the outer container** — inner Skeleton bars are decorative divs. T-06-06-03 mitigation: SR announces the surface once, not per bar.
+- **[06-06] CopyInline uses 8px inset (right-2 top-2)** — new placement per UI-SPEC §Spacing Exceptions. The 6px (right-1.5 top-1.5) inset is grandfathered to the two v1.0 files where it already appears (SnippetPanel, OneTimeReveal). Plan 06-08 greps new files for the 6px classes and fails.
+- **[06-06] CopyButton aria-live upgrade is purely additive** — wrap existing Tooltip return in a fragment, append `<span aria-live="polite" aria-atomic="true" className="sr-only">{copied ? 'Copied to clipboard' : ''}</span>`. Props signature unchanged; all three existing callers (SnippetPanel, OneTimeReveal, ErrorEnvelope) keep working.
+- **[06-06] @fontsource-variable/geist purged** — vestigial import in index.css + dependency in package.json; zero components referenced Geist. Inter via self-hosted .woff2 remains the single UI typeface.
+- **[06-06] PrimitivesStoryPage added to plan scope despite being out of `files_modified`** — the plan objective calls for "at least a spot Playwright visual verification"; no production consumer exists for these primitives until plan 06-07. Story page is dev-only, tree-shaken from production via the `DEV_ROUTES_ENABLED` gate (same pattern as ErrorClassStoryPage in 06-03). Provides a living reference for intended primitive usage plus a Playwright surface for 06-08's visual regression tests.
 - **Phases continue numbering from v1.0** — v1.1 starts at Phase 6, not Phase 1. Preserves traceability across milestones in the same `.planning/` tree.
 - **ERR envelope lands in Phase 6 as a foundation** — every SNIPPET/HEALTH/OVERVIEW surface renders its errors through the new envelope; putting ERR late would force rework across phases 7–10.
 - **VISUAL is not a trailing-polish phase** — the design-system primitives (status tokens, skeletons, badges, copy-to-clipboard, button hierarchy) ship alongside ERR in Phase 6 so every later UI phase consumes shared components instead of re-implementing them.
@@ -99,7 +105,8 @@ scoped tokens, LDAP/OIDC.
 - Execute plan 06-03 (UI envelope layer + story page). ✅ Shipped; ApiError → envelope with compat getters, useApiError hook + ErrorEnvelopeRenderer live, dev-only `/api/v1/_dev/error/:class` + `/_dev/error-class-story` wired and Playwright-verified.
 - Execute plan 06-04 next (integration tests + envelope audit across the handler surface). ✅ Shipped; 20 Go tests (6 unit + 14 integration) + 9 Playwright scenarios; auth middleware + SPA 404 + maintenance middleware migrated to envelope shape — ZERO legacy emitters remain on /api/v1.
 - Execute plan 06-05 (protocol redaction). ✅ Shipped; 59 `%v` leaks redacted across 14 files (raw/rpm/deb/pypi/helm); protocoltest + Makefile `lint-protocol-redaction` gate prevent regression; OCI/S3/Git were already clean.
-- Execute plan 06-06 next (visual foundation — status tokens, StatusBadge, Skeleton).
+- Execute plan 06-06 (visual foundation — status tokens, StatusBadge, Skeleton). ✅ Shipped; 6 status-token triples in :root + .dark + @theme inline; StatusBadge (6 variants × 2 sizes + iconOnly); 4 Skeleton variants (Card/Table/Detail/Metric); CopyInline with optional masking; CopyButton aria-live upgrade; reduced-motion rule; Geist purge; dev-only /_dev/primitives-story verified via Playwright in both light and dark.
+- Execute plan 06-07 next (apply primitives to canonical pages — AppShell, DashboardPage, RepoDetailRouter, RepoPageLayout, S3BucketPage, etc.).
 
 ### Blockers
 
@@ -114,6 +121,7 @@ scoped tokens, LDAP/OIDC.
 | 06    | 03   | ~30 min  | 3     | 9     |
 | 06    | 04   | ~25 min  | 2     | 17    |
 | 06    | 05   | 11 min   | 2     | 15    |
+| 06    | 06   | ~40 min  | 3     | 12    |
 
 ### Research Flags
 
@@ -128,8 +136,8 @@ scoped tokens, LDAP/OIDC.
 
 ## Session Continuity
 
-- **Next action**: Execute plan 06-06 (visual foundation — status tokens, StatusBadge component, Skeleton primitives; consumed by Phases 7/9/10 UI surfaces).
-- **Last session:** 2026-04-17 (plan 06-05 completed — 59 `%v` leaks redacted across raw/rpm/deb/pypi/helm; protocoltest + Makefile gate prevent regression; ERR-03 fully closed for protocol surface).
+- **Next action**: Execute plan 06-07 (apply Phase 6 primitives to canonical page surfaces — Dashboard, Project/Repo detail pages, AppShell nav, empty states — consumed by plans 06-08 regression gate and phases 7/9/10).
+- **Last session:** 2026-04-17T13:27:53.516Z
 - **Artifacts on disk**:
   - `.planning/PROJECT.md` (Current Milestone: v1.1)
   - `.planning/REQUIREMENTS.md` (57 v1.1 REQs, traceability populated)

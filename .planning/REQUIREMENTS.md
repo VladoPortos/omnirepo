@@ -83,13 +83,13 @@ prefixes (AUTH, REPO, etc.).
 
 ### VISUAL — Visual language and polish
 
-- [ ] **VISUAL-01**: All status indicators across the UI use a consistent color palette mapping to a named state set: healthy / warning / failure / disabled / maintenance
-- [ ] **VISUAL-02**: Status badges are consistent in shape, size, and wording across surfaces (a badge for "stale" looks the same on dashboard, repo overview, and health page)
-- [ ] **VISUAL-03**: Loading states use skeleton placeholders in known-shape surfaces (tables, cards, detail panels) rather than blank regions or spinners
-- [ ] **VISUAL-04**: Copy-to-clipboard affordances exist on URLs, commands, digests, and shown-once API keys
-- [ ] **VISUAL-05**: Primary and destructive buttons are visually distinct — destructive actions are clearly marked and never share identical weight with primary actions
+- [x] **VISUAL-01**: All status indicators across the UI use a consistent color palette mapping to a named state set: healthy / warning / failure / disabled / maintenance
+- [x] **VISUAL-02**: Status badges are consistent in shape, size, and wording across surfaces (a badge for "stale" looks the same on dashboard, repo overview, and health page)
+- [x] **VISUAL-03**: Loading states use skeleton placeholders in known-shape surfaces (tables, cards, detail panels) rather than blank regions or spinners
+- [x] **VISUAL-04**: Copy-to-clipboard affordances exist on URLs, commands, digests, and shown-once API keys
+- [x] **VISUAL-05**: Primary and destructive buttons are visually distinct — destructive actions are clearly marked and never share identical weight with primary actions
 - [ ] **VISUAL-06**: UI renders cleanly at laptop resolutions (1366×768 and 1440×900) without horizontal scroll on admin pages
-- [ ] **VISUAL-07**: Spacing and typography hierarchy on admin pages follow a consistent scale across headings, body, and metadata
+- [x] **VISUAL-07**: Spacing and typography hierarchy on admin pages follow a consistent scale across headings, body, and metadata
 - [ ] **VISUAL-08**: Text colors and status colors meet WCAG AA contrast on the default theme
 - [ ] **VISUAL-09**: Severity treatment for scan findings is consistent across scan summary, detail page, and drawer views
 
@@ -196,13 +196,13 @@ numbered 6–10 continue from v1.0's phases 1–5.
 | OVERVIEW-06 | Phase 10 | Pending |
 | OVERVIEW-07 | Phase 10 | Pending |
 | OVERVIEW-08 | Phase 10 | Pending |
-| VISUAL-01 | Phase 6 | Pending |
-| VISUAL-02 | Phase 6 | Pending |
-| VISUAL-03 | Phase 6 | Pending |
-| VISUAL-04 | Phase 6 | Pending |
-| VISUAL-05 | Phase 6 | Pending |
+| VISUAL-01 | Phase 6 | Complete |
+| VISUAL-02 | Phase 6 | Complete |
+| VISUAL-03 | Phase 6 | Complete |
+| VISUAL-04 | Phase 6 | Complete |
+| VISUAL-05 | Phase 6 | Complete |
 | VISUAL-06 | Phase 6 | Pending |
-| VISUAL-07 | Phase 6 | Pending |
+| VISUAL-07 | Phase 6 | Complete |
 | VISUAL-08 | Phase 6 | Pending |
 | VISUAL-09 | Phase 6 | Pending |
 

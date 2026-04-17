@@ -27,6 +27,60 @@ components:
   schemas:
     # -- Generic --
     # ErrorResponse is hand-written in errors.go to coexist with existing handlers.
+    # ApiErrorEnvelope is the Phase 6 canonical envelope (ERR-01); plan 02 swaps
+    # operation-level error responses to $ref the shared components.responses
+    # defined below.
+
+    ApiErrorClass:
+      type: string
+      enum: [validation, permission, transient, operator_action_required]
+      description: Stable client-facing error classification — drives UI icon/copy/CTA.
+
+    ApiErrorEnvelope:
+      type: object
+      required: [code, message, class]
+      properties:
+        code:
+          type: string
+          pattern: "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+          maxLength: 80
+          description: Stable machine identifier (e.g. "repo.not_found")
+        message:
+          type: string
+          maxLength: 280
+          description: Human-friendly single-sentence message (no internal paths)
+        hint:
+          type: string
+          maxLength: 280
+          description: Optional single-sentence remediation guidance
+        class:
+          $ref: '#/components/schemas/ApiErrorClass'
+        incident_id:
+          type: string
+          maxLength: 64
+          description: Server-generated correlation ID (UUID v7) — matches slog request_id and the X-Incident-Id response header
+        details:
+          type: object
+          additionalProperties: true
+          properties:
+            field:
+              type: string
+              description: Dot-path of the offending form field (validation class)
+            fields:
+              type: object
+              additionalProperties:
+                type: string
+              description: Map of field-path to error-code for multi-field validation failures
+            retry_after_ms:
+              type: integer
+              minimum: 0
+              description: Suggested retry delay in ms (transient class)
+            operator_route:
+              type: string
+              description: UI path (e.g. "/admin/trivy") for operator_action_required deep-link
+            operator_label:
+              type: string
+              description: CTA label for the operator deep-link (e.g. "Go to Admin → Trivy")
 
     PaginatedList:
       type: object
@@ -934,6 +988,33 @@ components:
       properties:
         status:
           type: string
+
+  responses:
+    ValidationError:
+      description: Request failed validation
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiErrorEnvelope' }
+    PermissionError:
+      description: Caller lacks permission
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiErrorEnvelope' }
+    NotFoundError:
+      description: Resource not found
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiErrorEnvelope' }
+    TransientError:
+      description: Temporary failure — retry may succeed
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiErrorEnvelope' }
+    OperatorActionRequired:
+      description: Administrator must resolve before the operation can succeed
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiErrorEnvelope' }
 
   parameters:
     limitParam:

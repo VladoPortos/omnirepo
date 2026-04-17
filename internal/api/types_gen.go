@@ -4,6 +4,8 @@
 package api
 
 import (
+	"encoding/json"
+	"fmt"
 	"time"
 
 	openapi_types "github.com/oapi-codegen/runtime/types"
@@ -13,6 +15,30 @@ const (
 	BearerAuthScopes = "bearerAuth.Scopes"
 	CookieAuthScopes = "cookieAuth.Scopes"
 )
+
+// Defines values for ApiErrorClass.
+const (
+	ApiErrorClassOperatorActionRequired ApiErrorClass = "operator_action_required"
+	ApiErrorClassPermission             ApiErrorClass = "permission"
+	ApiErrorClassTransient              ApiErrorClass = "transient"
+	ApiErrorClassValidation             ApiErrorClass = "validation"
+)
+
+// Valid indicates whether the value is a known member of the ApiErrorClass enum.
+func (e ApiErrorClass) Valid() bool {
+	switch e {
+	case ApiErrorClassOperatorActionRequired:
+		return true
+	case ApiErrorClassPermission:
+		return true
+	case ApiErrorClassTransient:
+		return true
+	case ApiErrorClassValidation:
+		return true
+	default:
+		return false
+	}
+}
 
 // Defines values for GCStatusResponseStatus.
 const (
@@ -278,6 +304,33 @@ func (e TrivyDBStatusSource) Valid() bool {
 	}
 }
 
+// Defines values for VulnerabilitySeverity.
+const (
+	CRITICAL VulnerabilitySeverity = "CRITICAL"
+	HIGH     VulnerabilitySeverity = "HIGH"
+	LOW      VulnerabilitySeverity = "LOW"
+	MEDIUM   VulnerabilitySeverity = "MEDIUM"
+	UNKNOWN  VulnerabilitySeverity = "UNKNOWN"
+)
+
+// Valid indicates whether the value is a known member of the VulnerabilitySeverity enum.
+func (e VulnerabilitySeverity) Valid() bool {
+	switch e {
+	case CRITICAL:
+		return true
+	case HIGH:
+		return true
+	case LOW:
+		return true
+	case MEDIUM:
+		return true
+	case UNKNOWN:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for SearchParamsKind.
 const (
 	SearchParamsKindArtifact SearchParamsKind = "artifact"
@@ -351,6 +404,47 @@ type ActivityEvent struct {
 type ActivityListResponse struct {
 	Items      *[]ActivityEvent `json:"items,omitempty"`
 	NextCursor *string          `json:"next_cursor,omitempty"`
+}
+
+// ApiErrorClass Stable client-facing error classification — drives UI icon/copy/CTA.
+type ApiErrorClass string
+
+// ApiErrorEnvelope defines model for ApiErrorEnvelope.
+type ApiErrorEnvelope struct {
+	// Class Stable client-facing error classification — drives UI icon/copy/CTA.
+	Class ApiErrorClass `json:"class"`
+
+	// Code Stable machine identifier (e.g. "repo.not_found")
+	Code    string                    `json:"code"`
+	Details *ApiErrorEnvelope_Details `json:"details,omitempty"`
+
+	// Hint Optional single-sentence remediation guidance
+	Hint *string `json:"hint,omitempty"`
+
+	// IncidentId Server-generated correlation ID (UUID v7) — matches slog request_id and the X-Incident-Id response header
+	IncidentId *string `json:"incident_id,omitempty"`
+
+	// Message Human-friendly single-sentence message (no internal paths)
+	Message string `json:"message"`
+}
+
+// ApiErrorEnvelope_Details defines model for ApiErrorEnvelope.Details.
+type ApiErrorEnvelope_Details struct {
+	// Field Dot-path of the offending form field (validation class)
+	Field *string `json:"field,omitempty"`
+
+	// Fields Map of field-path to error-code for multi-field validation failures
+	Fields *map[string]string `json:"fields,omitempty"`
+
+	// OperatorLabel CTA label for the operator deep-link (e.g. "Go to Admin → Trivy")
+	OperatorLabel *string `json:"operator_label,omitempty"`
+
+	// OperatorRoute UI path (e.g. "/admin/trivy") for operator_action_required deep-link
+	OperatorRoute *string `json:"operator_route,omitempty"`
+
+	// RetryAfterMs Suggested retry delay in ms (transient class)
+	RetryAfterMs         *int                   `json:"retry_after_ms,omitempty"`
+	AdditionalProperties map[string]interface{} `json:"-"`
 }
 
 // AuditEvent defines model for AuditEvent.
@@ -546,6 +640,17 @@ type MeUpdateRequest struct {
 	Email      *string `json:"email,omitempty"`
 }
 
+// MemberAction defines model for MemberAction.
+type MemberAction struct {
+	Status *string `json:"status,omitempty"`
+}
+
+// PaginatedList defines model for PaginatedList.
+type PaginatedList struct {
+	Items      *[]interface{} `json:"items,omitempty"`
+	NextCursor *string        `json:"next_cursor,omitempty"`
+}
+
 // Project defines model for Project.
 type Project struct {
 	CreatedAt     *time.Time `json:"created_at,omitempty"`
@@ -630,6 +735,13 @@ type S3KeyCreateResponse struct {
 
 	// Secret Shown once at creation time only
 	Secret *string `json:"secret,omitempty"`
+}
+
+// SBOMRef defines model for SBOMRef.
+type SBOMRef struct {
+	DownloadUrl *string `json:"download_url,omitempty"`
+	Format      *string `json:"format,omitempty"`
+	ScanId      *int64  `json:"scan_id,omitempty"`
 }
 
 // Scan defines model for Scan.
@@ -809,6 +921,22 @@ type UserUpdate struct {
 	IsSuperAdmin *bool   `json:"is_super_admin,omitempty"`
 }
 
+// Vulnerability defines model for Vulnerability.
+type Vulnerability struct {
+	CveId          *string                `json:"cve_id,omitempty"`
+	Description    *string                `json:"description,omitempty"`
+	FixedVersion   *string                `json:"fixed_version,omitempty"`
+	Id             *int64                 `json:"id,omitempty"`
+	PackageName    *string                `json:"package_name,omitempty"`
+	PackageVersion *string                `json:"package_version,omitempty"`
+	ScanId         *int64                 `json:"scan_id,omitempty"`
+	Severity       *VulnerabilitySeverity `json:"severity,omitempty"`
+	Title          *string                `json:"title,omitempty"`
+}
+
+// VulnerabilitySeverity defines model for Vulnerability.Severity.
+type VulnerabilitySeverity string
+
 // WipeResponse defines model for WipeResponse.
 type WipeResponse struct {
 	ArtifactCount *int64  `json:"artifact_count,omitempty"`
@@ -821,6 +949,21 @@ type CursorParam = string
 
 // LimitParam defines model for limitParam.
 type LimitParam = int
+
+// NotFoundError defines model for NotFoundError.
+type NotFoundError = ApiErrorEnvelope
+
+// OperatorActionRequired defines model for OperatorActionRequired.
+type OperatorActionRequired = ApiErrorEnvelope
+
+// PermissionError defines model for PermissionError.
+type PermissionError = ApiErrorEnvelope
+
+// TransientError defines model for TransientError.
+type TransientError = ApiErrorEnvelope
+
+// ValidationError defines model for ValidationError.
+type ValidationError = ApiErrorEnvelope
 
 // ListAuditEventsParams defines parameters for ListAuditEvents.
 type ListAuditEventsParams struct {
@@ -970,3 +1113,131 @@ type CreateUpstreamCredJSONRequestBody = UpstreamCredCreate
 
 // CreateS3AccessKeyJSONRequestBody defines body for CreateS3AccessKey for application/json ContentType.
 type CreateS3AccessKeyJSONRequestBody = S3KeyCreate
+
+// Getter for additional properties for ApiErrorEnvelope_Details. Returns the specified
+// element and whether it was found
+func (a ApiErrorEnvelope_Details) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for ApiErrorEnvelope_Details
+func (a *ApiErrorEnvelope_Details) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for ApiErrorEnvelope_Details to handle AdditionalProperties
+func (a *ApiErrorEnvelope_Details) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["field"]; found {
+		err = json.Unmarshal(raw, &a.Field)
+		if err != nil {
+			return fmt.Errorf("error reading 'field': %w", err)
+		}
+		delete(object, "field")
+	}
+
+	if raw, found := object["fields"]; found {
+		err = json.Unmarshal(raw, &a.Fields)
+		if err != nil {
+			return fmt.Errorf("error reading 'fields': %w", err)
+		}
+		delete(object, "fields")
+	}
+
+	if raw, found := object["operator_label"]; found {
+		err = json.Unmarshal(raw, &a.OperatorLabel)
+		if err != nil {
+			return fmt.Errorf("error reading 'operator_label': %w", err)
+		}
+		delete(object, "operator_label")
+	}
+
+	if raw, found := object["operator_route"]; found {
+		err = json.Unmarshal(raw, &a.OperatorRoute)
+		if err != nil {
+			return fmt.Errorf("error reading 'operator_route': %w", err)
+		}
+		delete(object, "operator_route")
+	}
+
+	if raw, found := object["retry_after_ms"]; found {
+		err = json.Unmarshal(raw, &a.RetryAfterMs)
+		if err != nil {
+			return fmt.Errorf("error reading 'retry_after_ms': %w", err)
+		}
+		delete(object, "retry_after_ms")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for ApiErrorEnvelope_Details to handle AdditionalProperties
+func (a ApiErrorEnvelope_Details) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	if a.Field != nil {
+		object["field"], err = json.Marshal(a.Field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'field': %w", err)
+		}
+	}
+
+	if a.Fields != nil {
+		object["fields"], err = json.Marshal(a.Fields)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'fields': %w", err)
+		}
+	}
+
+	if a.OperatorLabel != nil {
+		object["operator_label"], err = json.Marshal(a.OperatorLabel)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'operator_label': %w", err)
+		}
+	}
+
+	if a.OperatorRoute != nil {
+		object["operator_route"], err = json.Marshal(a.OperatorRoute)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'operator_route': %w", err)
+		}
+	}
+
+	if a.RetryAfterMs != nil {
+		object["retry_after_ms"], err = json.Marshal(a.RetryAfterMs)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'retry_after_ms': %w", err)
+		}
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}

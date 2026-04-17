@@ -37,7 +37,7 @@ Plans:
 - [x] 06-05-PLAN.md — Protocol handler redaction sweep (29 files in internal/protocol/** + Makefile lint-protocol-redaction)
 - [x] 06-06-PLAN.md — Visual primitives (status tokens in index.css + StatusBadge + 4 Skeleton* + CopyInline + CopyButton aria-live + Geist cleanup + reduced-motion)
 - [x] 06-07-PLAN.md — Canonical skeleton adoption (Dashboard/Projects) + sticky-first-column tables + StatusBadgeStoryPage
-- [ ] 06-08-PLAN.md — Test gates (check-contrast.mjs + lint-typography + lint-spacing-carveout + visual-foundation/responsive/a11y-audit Playwright specs + @axe-core devDep gate)
+- [x] 06-08-PLAN.md — Test gates (check-contrast.mjs + lint-typography + lint-spacing-carveout + visual-foundation/responsive/a11y-audit Playwright specs + @axe-core devDep gate)
 **UI hint**: yes
 
 #### Phase 7: Client Snippets & Empty States

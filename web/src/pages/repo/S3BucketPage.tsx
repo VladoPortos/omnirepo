@@ -204,13 +204,13 @@ export function S3BucketPage() {
             <Hash className="size-4 text-muted-foreground" />
             <div>
               <p className="text-xs text-muted-foreground">Objects</p>
-              <p className="text-lg font-semibold tabular-nums">
+              <div className="text-lg font-semibold tabular-nums">
                 {bucketQ.isLoading ? (
                   <Skeleton className="h-5 w-12" />
                 ) : (
                   bucketQ.data?.object_count ?? 0
                 )}
-              </p>
+              </div>
             </div>
           </CardContent>
         </Card>
@@ -219,13 +219,13 @@ export function S3BucketPage() {
             <HardDrive className="size-4 text-muted-foreground" />
             <div>
               <p className="text-xs text-muted-foreground">Total Size</p>
-              <p className="text-lg font-semibold">
+              <div className="text-lg font-semibold">
                 {bucketQ.isLoading ? (
                   <Skeleton className="h-5 w-16" />
                 ) : (
                   formatBytes(bucketQ.data?.size_bytes ?? 0)
                 )}
-              </p>
+              </div>
             </div>
           </CardContent>
         </Card>

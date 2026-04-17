@@ -61,7 +61,7 @@ Everything multiplexes on one HTTP/HTTPS port via a single `chi` router. Each pr
 - **React 19 + Vite 8 + Tailwind 4 + shadcn/ui** — frontend built into `web/dist/` and embedded into the Go binary.
 - **Apache-2.0-compatible dependencies only** — MinIO (AGPL) explicitly excluded; gofakes3 (MIT) used for S3 instead.
 
-See `CLAUDE.md` for the full licensing and version-pinning matrix.
+See the **[Dependencies, versions, and licenses](#dependencies-versions-and-licenses)** section below for the full matrix.
 
 ---
 
@@ -372,6 +372,113 @@ test/                     — airgap, conformance, bench harnesses
 
 ---
 
+## Dependencies, versions, and licenses
+
+Every dependency below is **Apache-2.0-compatible** — a hard constraint for
+corporate deployment. Versions are pinned in `go.mod` / `web/package.json`;
+the table is the canonical source of truth for upgrade decisions. No CDN
+fonts, icons, or Swagger assets — everything ships in the binary.
+
+### Go core (single binary, pure-Go)
+
+| Dependency | Pinned version | License | Purpose |
+|---|---|---|---|
+| Go toolchain | **1.25.x** | BSD-3 | `go-git/v6` requires Go 1.25; project baseline. Release build uses `-trimpath -ldflags="-s -w"`. |
+| `github.com/go-chi/chi/v5` | v5.2.5 | MIT | HTTP router. Every protocol handler mounts as an `http.Handler` — no adapter glue. |
+| `modernc.org/sqlite` | v1.48.2 (SQLite 3.51.x) | BSD-3 | Pure-Go SQLite with FTS5. Builds `FROM scratch`; no CGo, no `musl-dev`. |
+| `github.com/google/go-containerregistry` (`pkg/registry`) | v0.21.5 | Apache-2.0 | OCI/Docker registry `http.Handler` with pluggable CAS. |
+| `github.com/go-git/go-git/v6` | v6.0.0-alpha.1 / main (`backend/` pkg) | Apache-2.0 | Git Smart HTTP `http.Handler`; bare-repo CRUD. `sosedoff/gitkit` (MIT) kept as fallback behind the same interface. |
+| `github.com/johannesboyne/gofakes3` | v1.0.0 | MIT | S3 `http.Handler` (multipart, versioning, CORS, conditional writes). SigV4 verification added as ~200 LOC middleware. |
+| `github.com/cavaliergopher/rpm` | v1.3.0 | BSD-3 | `.rpm` header parsing. cpio payload walked by `github.com/cavaliergopher/cpio` for Trivy scan. |
+| `github.com/ProtonMail/go-crypto` | v1.4.1 | BSD-3 | OpenPGP clearsign for APT `Release` → `InRelease`. Shared transitively with `go-git/v6`. |
+| `helm.sh/helm/v3/pkg/repo` + `pkg/chart/loader` | v3.20.x | Apache-2.0 | Helm `index.yaml` regen. Staying on v3 SDK through v1.0. |
+| `github.com/knadh/koanf/v2` | v2.3.4 | MIT | YAML + env config. Modular, no global state. |
+| `github.com/golang-jwt/jwt/v5` | v5.3.1 | MIT | HS256 JWT for `/v2/token` Docker exchange. 60-min TTL; per-install secret. |
+| `golang.org/x/crypto/argon2` | tracks Go ecosystem | BSD-3 | Password hashing: `m=64MiB, t=3, p=4`. |
+| `github.com/oapi-codegen/oapi-codegen/v2` | v2.6.0 (build-time only) | Apache-2.0 | Generates Go types from the hand-written OpenAPI 3.1 spec (routes are hand-written on chi). |
+| `github.com/google/uuid` | v1.6.x | BSD-3 | Scan IDs, SBOM IDs, API-key IDs. |
+| `github.com/opencontainers/go-digest` | v1.0.0 | Apache-2.0 | Canonical `sha256:<hex>` digest parsing. |
+| PyPI PEP 503 Simple | stdlib `html/template` | — | Two HTML pages, no library needed. |
+| **Trivy** (external binary) | v0.69.3 | Apache-2.0 | Subprocess in final image. Invoked with `--skip-db-update --offline-scan`. Wrapped behind a `Runner` interface. |
+| `git` binary (fallback) | Alpine repo | GPLv2 *(not linked; invoked as subprocess only)* | Safety net behind `sosedoff/gitkit` if go-git v6 HTTP backend regresses. Default path is pure-Go. |
+
+### Frontend (bundled; zero CDN at runtime)
+
+| Dependency | Pinned version | License | Purpose |
+|---|---|---|---|
+| React | 19.2.5 | MIT | SPA framework. |
+| TypeScript | 6.0.2 | Apache-2.0 | `"moduleResolution": "bundler"`, `"jsx": "react-jsx"`. |
+| Vite | 8.0.8 | MIT | Dev server + production build. Dev proxy forwards `/api`, `/v2`, `/s3`, `/git` to the Go backend when `OMNIREPO_DEV=1`. |
+| Tailwind CSS | 4.2.2 | MIT | Requires `@tailwindcss/vite` plugin (CSS-first config). |
+| shadcn/ui CLI | shadcn@4.2.0 | MIT | Generates Radix-based components into `web/src/components/ui/`. No runtime package. |
+| Radix UI primitives | current | MIT | Accessibility primitives underneath shadcn. |
+| TanStack Query | @tanstack/react-query 5.99.x | MIT | Server-state cache. Query keys: `['projects', name, 'buckets', …]`. |
+| React Router | react-router-dom 7.14.x | MIT | Data-router API (`createBrowserRouter`). |
+| lucide-react | 1.8.0 | ISC | Tree-shaken SVG icons. |
+| @dicebear/core + @dicebear/collection | 9.4.2 | MIT | Client-side SVG avatars from a seed string. |
+| swagger-ui-dist | 5.32.3 | Apache-2.0 | Served from `/api/docs/`. Copied into `web/public/swagger/` at build time. |
+| Inter + JetBrains Mono (`.woff2`) | Inter 4.x, JetBrains Mono 2.304+ | SIL OFL 1.1 | Self-hosted fonts. |
+| Playwright | @playwright/test 1.56+ | Apache-2.0 | Developer-run E2E + pre-merge UI verification. |
+
+### Build / dev tooling
+
+| Tool | Purpose |
+|---|---|
+| `make` + `Makefile` | Orchestrates `dev`, `build`, `docker`, `test`, `e2e`, `seed`, `vendor`. |
+| `air` (cosmtrek/air) v1.49+ | Go live-reload during `make dev`. |
+| `golangci-lint` v1.62+ | `gofmt`, `govet`, `staticcheck`, `errcheck`, `gosec`, `revive`. Runs in `make test`. |
+| `go mod vendor` | `vendor/` is committed so Docker's Go-build stage works in partially air-gapped envs. |
+| `govulncheck` (`golang.org/x/vuln/cmd/govulncheck`) | Supply-chain vuln scan for OmniRepo's own Go deps. CI-gated. |
+| `trivy fs .` (in CI) | Same Trivy binary we ship — dogfooded against the repo. |
+| Docker Buildx | Multi-arch `linux/amd64` + `linux/arm64` images. |
+
+### License summary (ship-affecting)
+
+- **Apache-2.0** — go-containerregistry, go-git, Helm SDK, oapi-codegen,
+  opencontainers/go-digest, swagger-ui-dist, Trivy, Playwright, TypeScript.
+- **BSD-3-Clause** — modernc.org/sqlite, cavaliergopher/rpm,
+  ProtonMail/go-crypto, golang.org/x/crypto, google/uuid.
+- **MIT** — chi, gofakes3, koanf, golang-jwt, sosedoff/gitkit (fallback),
+  React, Vite, Tailwind, shadcn, lucide-react, @dicebear/\*, TanStack Query,
+  React Router, Radix UI.
+- **ISC** — lucide-react.
+- **SIL OFL 1.1** — Inter, JetBrains Mono (OFL permits embedding + redistribution).
+- **GPLv2** — the `git` binary in the final image; not linked, only
+  invoked as a subprocess by the optional `gitkit` fallback. The default
+  runtime path uses pure-Go `go-git` and does not execute `git`.
+
+### Explicitly not used
+
+| Rejected | Reason |
+|---|---|
+| MinIO | AGPLv3 infects the project; also uses `internal/` packages that block embedding. `gofakes3` + SigV4 middleware replaces it. |
+| `containers/image` | CGo + libgpgme/libdevmapper required. `go-containerregistry` covers both sides. |
+| `mattn/go-sqlite3` | CGo breaks `FROM scratch`. `modernc.org/sqlite` instead. |
+| `golang-jwt/jwt` v4 | EOL. v5 only. |
+| `golang.org/x/crypto/openpgp` | Removed from x/crypto. `ProtonMail/go-crypto/openpgp` is the drop-in replacement. |
+| `spf13/viper` | Heavy deps, global state, case-insensitive keys. `koanf/v2` instead. |
+| `gorilla/mux`, `gin-gonic/gin`, `labstack/echo` | Not `net/http`-native; would force adapters around every embedded registry/git/S3 handler. |
+| `bcrypt` | 72-byte input cap, no memory-hardness. Argon2id instead. |
+| Trivy imported as a Go library | ~400 transitive deps; Trivy's Go API is not stable. Subprocess it. |
+| `gocloud.dev/blob` | Adds abstraction for backends we don't support (S3/GCS/Azure). Direct filesystem under `/var/lib/omnirepo/`. |
+| CDN-hosted fonts / icons / Swagger assets | Violates air-gap invariant. Everything is embedded. |
+| LDAP / OIDC in v1 | Out of scope. Built-in users + session cookies + API keys. |
+
+### Compatibility notes
+
+- **Go 1.25 + modernc.org/sqlite v1.48 + FTS5** — FTS5 is compiled in by
+  default (v1.47+); startup verifies with `sqlite3_compileoption_used`.
+- **go-git/v6 + ProtonMail/go-crypto v1.4.1** — pinned to exactly v1.4.1
+  to avoid `go mod tidy` drift (shared transitive dep).
+- **Tailwind 4 + Vite 8 + shadcn@4** — Tailwind 4 requires
+  `@tailwindcss/vite`; do not mix with Tailwind 3 docs found online.
+- **React 19.2 + React Router 7 + TanStack Query 5** — all support
+  React 19 natively.
+- **Trivy v0.69 + baked DB** — the binary refuses a DB built by a
+  significantly newer Trivy; both are pinned in the same Docker build stage.
+
+---
+
 ## Versioning
 
 **v1.0** is the first production release. Versioning follows [semver](https://semver.org/). Breaking changes to the REST API or on-disk layout bump the major version.
@@ -380,10 +487,9 @@ test/                     — airgap, conformance, bench harnesses
 
 ## Further reading
 
-- `CLAUDE.md` — full dependency matrix, version pins, and licensing notes
-- `tools.md` — original technology blueprint and alternatives-considered table
-- `.planning/` — GSD workflow artifacts (project spec, roadmap, per-phase plans)
 - `/api/docs/` (at runtime) — Swagger UI for the REST API
+- `.planning/` — GSD workflow artifacts (project spec, roadmap, per-phase plans)
+- `tools.md` — original technology blueprint with alternatives-considered commentary
 
 ## Reporting issues
 

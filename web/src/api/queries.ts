@@ -5,6 +5,15 @@
 
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, ApiError } from './client';
+
+// enc encodes a path segment from a route-param (e.g. projectName, bucketName,
+// repoName) before interpolating into the URL. Defense-in-depth: the router
+// already constrains these slugs with regex, and the backend re-validates,
+// but any caller that forgets the guard (e.g. a new feature, a route-state
+// migration) could otherwise ship raw user input straight into the URL.
+// encodeURIComponent is a no-op for our valid-slug set [a-z0-9._-] so this
+// is free on the golden path.
+const enc = encodeURIComponent;
 import type {
   MeResponse,
   MeUpdateRequest,
@@ -62,7 +71,7 @@ export function useRepoScans(
       if (opts?.status) params.status = opts.status;
       if (opts?.limit != null) params.limit = String(opts.limit);
       return api.get<Scan[]>(
-        `/projects/${projectName}/repos/${repoType}/${repoName}/scans`,
+        `/projects/${enc(projectName)}/repos/${enc(repoType)}/${enc(repoName)}/scans`,
         params,
       );
     },
@@ -91,7 +100,7 @@ export function useRepoContent(
       if (opts?.limit != null) params.limit = String(opts.limit);
       if (opts?.offset != null) params.offset = String(opts.offset);
       return api.get<RepoContentEntry[]>(
-        `/projects/${projectName}/repos/${repoType}/${repoName}/content`,
+        `/projects/${enc(projectName)}/repos/${enc(repoType)}/${enc(repoName)}/content`,
         params,
       );
     },
@@ -204,7 +213,7 @@ export function useProjects() {
 export function useProject(name: string) {
   return useQuery({
     queryKey: ['projects', name],
-    queryFn: () => api.get<ProjectDetail>(`/projects/${name}`),
+    queryFn: () => api.get<ProjectDetail>(`/projects/${enc(name)}`),
     enabled: !!name,
   });
 }
@@ -212,7 +221,8 @@ export function useProject(name: string) {
 export function useProjectActivity(name: string) {
   return useQuery({
     queryKey: ['projects', name, 'activity'],
-    queryFn: () => api.get<{ items: ActivityItem[] }>(`/projects/${name}/activity`),
+    queryFn: () =>
+      api.get<{ items: ActivityItem[] }>(`/projects/${enc(name)}/activity`),
     enabled: !!name,
     staleTime: 15_000,
   });
@@ -233,7 +243,7 @@ export function useCreateProject() {
 export function useDeleteProject() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (name: string) => api.del<void>(`/projects/${name}`),
+    mutationFn: (name: string) => api.del<void>(`/projects/${enc(name)}`),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['projects'] });
       qc.invalidateQueries({ queryKey: ['dashboard'] });
@@ -247,7 +257,7 @@ export function useRepos(projectName: string) {
   return useQuery({
     queryKey: ['projects', projectName, 'repos'],
     queryFn: () =>
-      api.get<PaginatedResponse<Repo>>(`/projects/${projectName}/repos`),
+      api.get<PaginatedResponse<Repo>>(`/projects/${enc(projectName)}/repos`),
     enabled: !!projectName,
     staleTime: 30_000,
   });
@@ -257,7 +267,9 @@ export function useRepo(projectName: string, repoType: string, repoName: string)
   return useQuery({
     queryKey: ['projects', projectName, 'repos', repoType, repoName],
     queryFn: () =>
-      api.get<Repo>(`/projects/${projectName}/repos/${repoType}/${repoName}`),
+      api.get<Repo>(
+        `/projects/${enc(projectName)}/repos/${enc(repoType)}/${enc(repoName)}`,
+      ),
     enabled: !!projectName && !!repoType && !!repoName,
   });
 }
@@ -271,7 +283,7 @@ export function useCreateRepo() {
     }: {
       projectName: string;
       data: RepoCreate;
-    }) => api.post<Repo>(`/projects/${projectName}/repos`, data),
+    }) => api.post<Repo>(`/projects/${enc(projectName)}/repos`, data),
     onSuccess: (_data, vars) => {
       // The project detail page renders tab counts from the project summary
       // (["projects", name]), repo cards from the project repo list
@@ -297,7 +309,7 @@ export function usePatchRepo() {
       repoType: string;
       repoName: string;
       data: RepoPatch;
-    }) => api.patch<Repo>(`/projects/${projectName}/repos/${repoType}/${repoName}`, data),
+    }) => api.patch<Repo>(`/projects/${enc(projectName)}/repos/${enc(repoType)}/${enc(repoName)}`, data),
     onSuccess: (_data, vars) => {
       qc.invalidateQueries({
         queryKey: ['projects', vars.projectName, 'repos', vars.repoType, vars.repoName],
@@ -319,7 +331,7 @@ export function useDeleteRepo() {
       projectName: string;
       repoType: string;
       repoName: string;
-    }) => api.del<void>(`/projects/${projectName}/repos/${repoType}/${repoName}`),
+    }) => api.del<void>(`/projects/${enc(projectName)}/repos/${enc(repoType)}/${enc(repoName)}`),
     onSuccess: (_data, vars) => {
       qc.invalidateQueries({ queryKey: ['projects', vars.projectName] });
       qc.invalidateQueries({ queryKey: ['projects', vars.projectName, 'repos'] });
@@ -366,7 +378,7 @@ export function useGitRefs(projectName: string, repoName: string) {
     queryKey: ['projects', projectName, 'repos', repoName, 'git', 'refs'],
     queryFn: () =>
       api.get<{ items: GitRef[] }>(
-        `/projects/${projectName}/repos/git/${repoName}/refs`,
+        `/projects/${enc(projectName)}/repos/git/${enc(repoName)}/refs`,
       ),
     enabled: !!projectName && !!repoName,
     staleTime: 30_000,
@@ -383,7 +395,10 @@ export function useGitTree(
     queryKey: ['projects', projectName, 'repos', repoName, 'git', 'tree', ref, path],
     queryFn: () =>
       api.get<{ items: GitTreeEntry[] }>(
-        `/projects/${projectName}/repos/git/${repoName}/tree/${ref}/${path}`,
+        // ref and path intentionally NOT encoded — both are multi-segment
+        // (feature branches like `feat/x`, paths like `a/b/c.txt`). The
+        // backend validates both at the handler layer.
+        `/projects/${enc(projectName)}/repos/git/${enc(repoName)}/tree/${ref}/${path}`,
       ),
     enabled: !!projectName && !!repoName && !!ref,
     staleTime: 30_000,
@@ -400,7 +415,7 @@ export function useGitBlob(
     queryKey: ['projects', projectName, 'repos', repoName, 'git', 'blob', ref, path],
     queryFn: () =>
       api.get<GitFileContent>(
-        `/projects/${projectName}/repos/git/${repoName}/blob/${ref}/${path}`,
+        `/projects/${enc(projectName)}/repos/git/${enc(repoName)}/blob/${ref}/${path}`,
       ),
     enabled: !!projectName && !!repoName && !!ref && !!path,
     staleTime: 60_000,
@@ -419,7 +434,7 @@ export function useGitCommits(
     queryKey: ['projects', projectName, 'repos', repoName, 'git', 'commits', ref, cursor],
     queryFn: () =>
       api.get<PaginatedResponse<GitCommit>>(
-        `/projects/${projectName}/repos/git/${repoName}/commits/${ref}`,
+        `/projects/${enc(projectName)}/repos/git/${enc(repoName)}/commits/${ref}`,
         params,
       ),
     enabled: !!projectName && !!repoName && !!ref,
@@ -436,7 +451,7 @@ export function useGitCommitDetail(
     queryKey: ['projects', projectName, 'repos', repoName, 'git', 'commit', sha],
     queryFn: () =>
       api.get<GitDiff>(
-        `/projects/${projectName}/repos/git/${repoName}/commit/${sha}`,
+        `/projects/${enc(projectName)}/repos/git/${enc(repoName)}/commit/${enc(sha)}`,
       ),
     enabled: !!projectName && !!repoName && !!sha,
     staleTime: 120_000,
@@ -453,7 +468,7 @@ export function useGitBlame(
     queryKey: ['projects', projectName, 'repos', repoName, 'git', 'blame', ref, path],
     queryFn: () =>
       api.get<GitBlame>(
-        `/projects/${projectName}/repos/git/${repoName}/blame/${ref}/${path}`,
+        `/projects/${enc(projectName)}/repos/git/${enc(repoName)}/blame/${ref}/${path}`,
       ),
     enabled: !!projectName && !!repoName && !!ref && !!path,
     staleTime: 60_000,
@@ -470,7 +485,7 @@ export function useGitCompare(
     queryKey: ['projects', projectName, 'repos', repoName, 'git', 'compare', base, head],
     queryFn: () =>
       api.get<GitCompareResponse>(
-        `/projects/${projectName}/repos/git/${repoName}/compare/${base}...${head}`,
+        `/projects/${enc(projectName)}/repos/git/${enc(repoName)}/compare/${base}...${head}`,
       ),
     enabled: !!projectName && !!repoName && !!base && !!head,
     staleTime: 30_000,
@@ -562,7 +577,7 @@ export function useProjectBuckets(projectName: string) {
   return useQuery({
     queryKey: ['projects', projectName, 'buckets'],
     queryFn: () =>
-      api.get<ProjectBucket[]>(`/projects/${projectName}/s3-buckets/`),
+      api.get<ProjectBucket[]>(`/projects/${enc(projectName)}/s3-buckets/`),
     // Defend against a brief mount where useParams() returns '' —
     // firing the listing with an empty path segment resolves to
     // /projects//s3-buckets/, which chi serves as 404 and used to
@@ -578,7 +593,7 @@ export function useBucket(projectName: string, bucketName: string) {
     queryKey: ['projects', projectName, 'buckets', bucketName],
     queryFn: () =>
       api.get<BucketDetail>(
-        `/projects/${projectName}/s3-buckets/${bucketName}`,
+        `/projects/${enc(projectName)}/s3-buckets/${enc(bucketName)}`,
       ),
     enabled: !!projectName && !!bucketName,
     staleTime: 10_000,
@@ -607,7 +622,7 @@ export function useBucketObjects(
       if (opts?.marker) params.marker = opts.marker;
       if (opts?.limit) params.limit = String(opts.limit);
       return api.get<BucketObjectsPage>(
-        `/projects/${projectName}/s3-buckets/${bucketName}/objects`,
+        `/projects/${enc(projectName)}/s3-buckets/${enc(bucketName)}/objects`,
         params,
       );
     },
@@ -621,7 +636,7 @@ export function useCreateBucket(projectName: string) {
   return useMutation({
     mutationFn: (data: BucketCreate) =>
       api.post<ProjectBucket>(
-        `/projects/${projectName}/s3-buckets/`,
+        `/projects/${enc(projectName)}/s3-buckets/`,
         data,
       ),
     onSuccess: () => {
@@ -637,7 +652,7 @@ export function useDeleteBucket(projectName: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (bucketName: string) =>
-      api.del<void>(`/projects/${projectName}/s3-buckets/${bucketName}`),
+      api.del<void>(`/projects/${enc(projectName)}/s3-buckets/${enc(bucketName)}`),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['projects', projectName, 'buckets'] });
       qc.invalidateQueries({ queryKey: ['projects', projectName] });

@@ -165,6 +165,11 @@ export function SetupPage() {
                   autoComplete="username"
                   autoFocus
                   required
+                  aria-invalid={
+                    !!fieldErrors['setup-login'] ||
+                    !!fieldErrors['login'] ||
+                    undefined
+                  }
                 />
               </div>
               <div className="space-y-2">
@@ -177,6 +182,11 @@ export function SetupPage() {
                   placeholder="admin@example.com"
                   autoComplete="email"
                   required
+                  aria-invalid={
+                    !!fieldErrors['setup-email'] ||
+                    !!fieldErrors['email'] ||
+                    undefined
+                  }
                 />
               </div>
               <div className="space-y-2">

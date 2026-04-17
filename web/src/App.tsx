@@ -108,6 +108,17 @@ const PrimitivesStoryPage = DEV_ROUTES_ENABLED
     )
   : null;
 
+// Phase 6 / plan 06-07: StatusBadge matrix story page. Same
+// tree-shake gate — plan 06-08's Playwright suite snapshots the 24
+// badge permutations exposed by this page.
+const StatusBadgeStoryPage = DEV_ROUTES_ENABLED
+  ? lazy(() =>
+      import('@/pages/_dev/StatusBadgeStoryPage').then((m) => ({
+        default: m.StatusBadgeStoryPage,
+      })),
+    )
+  : null;
+
 // Loading fallback for lazy routes
 function LazyFallback() {
   return (
@@ -182,7 +193,10 @@ function MustChangePasswordGuard({ children }: { children: ReactNode }) {
 // mode. Conditional at module scope (not inside JSX) so the branch is
 // statically eliminated at build time.
 const devRoutes: RouteObject[] =
-  DEV_ROUTES_ENABLED && ErrorClassStoryPage && PrimitivesStoryPage
+  DEV_ROUTES_ENABLED &&
+  ErrorClassStoryPage &&
+  PrimitivesStoryPage &&
+  StatusBadgeStoryPage
     ? [
         {
           path: '/_dev/error-class-story',
@@ -197,6 +211,14 @@ const devRoutes: RouteObject[] =
           element: (
             <Suspense fallback={<div className="p-8">Loading…</div>}>
               <PrimitivesStoryPage />
+            </Suspense>
+          ),
+        },
+        {
+          path: '/_dev/status-badge-story',
+          element: (
+            <Suspense fallback={<div className="p-8">Loading…</div>}>
+              <StatusBadgeStoryPage />
             </Suspense>
           ),
         },

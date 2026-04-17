@@ -27,8 +27,8 @@ One Go binary, one HTTP/HTTPS port, one mounted volume. Drop it on a host, point
 
 - **Project-scoped access control** — flat user/project/member model with super-admin bypass. Every artifact lives under a project; project members get read+write, everyone else gets 403.
 - **API keys** — user-owned or project-owned, shown once at creation, hashed at rest, prefix-indexed for O(1) lookup.
-- **Vulnerability scanning** — embedded Trivy subprocess with an air-gapped baked DB. Per-repo `block_on_severity` gate can refuse pulls of artifacts whose latest scan found findings ≥ threshold.
-- **Built-in web UI** — React 19 + Tailwind 4 + shadcn/ui, embedded in the Go binary via `//go:embed`. Zero runtime CDN.
+- **Vulnerability scanning** — embedded Trivy subprocess with an air-gapped baked DB. Per-repo `block_on_severity` gate can refuse pulls of artifacts whose latest scan found findings ≥ threshold. RPM cpio payloads and PyPI wheel transitive deps are unpacked before the scan so Trivy sees real filesystem entries.
+- **Built-in web UI** — React 19 + Tailwind 4 + shadcn/ui, embedded in the Go binary via `//go:embed`. Zero runtime CDN. Includes a first-class S3 bucket browser (prefix drill-down, object table, delete flow).
 - **Audit log** — every auth decision, upload, admin action, and settings change recorded in SQLite with an NDJSON mirror.
 - **Air-gap by default** — no outbound network calls without an explicit admin action. Trivy DB updates only via tarball upload or admin button.
 - **Hot-reloadable TLS** — admin-uploaded certs swap into the live listener without restart.
@@ -215,14 +215,37 @@ git push omnirepo main
 
 ### 5. Create an S3 bucket
 
-Mint an S3 access key from the web UI (Profile → S3 Keys → Create). Secret is shown once.
+Buckets are project-scoped in OmniRepo, so bucket provisioning happens
+through the REST API (or the **S3** tab on the project page in the web UI) —
+the SigV4 protocol surface is only used for object operations. Two steps:
+
+**a. Provision the bucket.** Open a project, switch to the **S3** tab,
+and click **Create Bucket** — or hit the REST endpoint directly:
+
+```bash
+curl -X POST https://<host>:8443/api/v1/projects/platform/s3-buckets/ \
+  -H 'Content-Type: application/json' \
+  -b /tmp/omni.cookies \
+  -d '{"name":"my-bucket"}'
+```
+
+**b. Mint an S3 access key** for that project (UI: project page → S3 Keys,
+or `POST /api/v1/projects/<name>/s3-access-keys`). The secret is shown
+exactly once.
+
+**c. Use any AWS SDK / CLI for objects.** Path-style addressing, SigV4
+required (no anonymous access):
 
 ```bash
 aws configure set default.s3.signature_version s3v4
 AWS_ACCESS_KEY_ID=AKIA... AWS_SECRET_ACCESS_KEY=... \
-  aws --endpoint-url https://<host>:8443 s3 mb s3://my-bucket
-aws --endpoint-url https://<host>:8443 s3 cp file.bin s3://my-bucket/
+  aws --endpoint-url https://<host>:8443/s3 s3 cp file.bin s3://my-bucket/
+aws --endpoint-url https://<host>:8443/s3 s3 ls s3://my-bucket/
 ```
+
+The bucket detail page at `/projects/<project>/s3/<bucket>` lists every
+object with prefix drill-down. Deleting a bucket via the UI requires it
+to be empty; object deletes are synchronous (no trash path).
 
 ---
 
@@ -230,9 +253,12 @@ aws --endpoint-url https://<host>:8443 s3 cp file.bin s3://my-bucket/
 
 | Task | How |
 |------|-----|
-| Web UI | `https://<host>:8443/` — dashboard, projects, search, admin panels, profile |
+| Web UI | `https://<host>:8443/` — dashboard, projects, search, admin panels, profile, S3 bucket browser |
 | REST API | `/api/v1/...` — OpenAPI 3.1 spec at `/api/docs/` (Swagger UI) |
 | Health checks | `GET /healthz`, `GET /readyz` (no auth) |
+| Trigger garbage collection | `POST /api/v1/admin/gc` (super-admin). Poll `GET /api/v1/admin/gc/status` for state (`idle`/`pending`/`running`/`done`/`failed` + `bytes_freed`) |
+| Provision S3 bucket | `POST /api/v1/projects/<name>/s3-buckets/` or UI → project → S3 tab → Create Bucket |
+| Browse bucket objects | `GET /api/v1/projects/<name>/s3-buckets/<bucket>/objects?prefix=…&marker=…&limit=…` or navigate to `/projects/<name>/s3/<bucket>` in the UI |
 | Apply migrations manually | `omnirepo migrate up --config <path>` |
 | Rotate TLS cert | Upload PEM pair via Admin → TLS Certificates; hot-swapped |
 | Update Trivy DB | Upload DB tarball via Admin → Trivy Database; or enable the refresh button (requires `air_gap.allow_external_actions: true`) |
@@ -262,6 +288,16 @@ make bench              # perf benchmarks (SQLite, git clone memory, throughput)
 make conformance-all    # DinD conformance: real dnf/apt/pip/helm/git/crane clients
 make lint               # golangci-lint (errcheck, govet, ineffassign, staticcheck, unused)
 make grep-cdn           # asserts no external https:// URLs in the built SPA or handlers
+```
+
+Optional live-server walkthrough (the SigV4 + CRUD + multipart suite used
+during release verification) — skips automatically when env vars are unset:
+
+```bash
+OMNI_S3_ENDPOINT=http://localhost:8080 \
+OMNI_S3_BUCKET=my-bucket \
+OMNI_S3_AKID=AKIA... OMNI_S3_SECRET=... \
+go test -tags=walkthrough -count=1 -v ./test/walkthrough/...
 ```
 
 Frontend:

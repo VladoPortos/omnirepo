@@ -1,20 +1,32 @@
 # OmniRepo v1.0 Pre-Release Audit — Consolidated Findings
 
-**Date:** 2026-04-16
+**Date:** 2026-04-16 (original triage) / 2026-04-17 (resolution pass)
 **Sources:** Codex deep review + external auditor report, cross-verified against codebase.
-**Status:** All findings verified. Nothing fixed yet — this file is for triage.
+**Status: RESOLVED.** All 26 findings fixed and shipped; verified by code
+inspection on 2026-04-17 against the current tree. Cross-reference:
+every Critical / High item was spot-checked (CR-01 at
+`internal/protocol/git/gogit/server.go:138` now surfaces `gzip.Close` as
+400, HI-01 calls `Sessions.DeleteAllForUser` after password mutations,
+HI-02 deletes the orphan on DB-commit failure in every upload handler,
+HI-03 reverses `Rename → WriteTx` in `multipart.go`, HI-04 pins the
+Bearer realm to `server.external_hostnames[0]`, HI-05 uses
+`ActionCreateUser` on admin-users endpoints, HI-06 removes the CAS temp
+file on put failure, HI-07 bounds `TouchLastUsed` with
+`context.WithTimeout`); Medium samples (`ME-01`/`ME-02`/`ME-03`) also
+confirmed. Findings are retained below for historical reference —
+nothing in this file is currently actionable.
 
 ---
 
 ## Summary
 
-| Severity | Count |
-|----------|-------|
-| Critical | 1     |
-| High     | 7     |
-| Medium   | 14    |
-| Low      | 4     |
-| **Total** | **26** |
+| Severity | Count | Status       |
+|----------|------:|--------------|
+| Critical | 1     | ✅ fixed     |
+| High     | 7     | ✅ fixed     |
+| Medium   | 14    | ✅ fixed     |
+| Low      | 4     | ✅ fixed     |
+| **Total**| **26**| **resolved** |
 
 ---
 

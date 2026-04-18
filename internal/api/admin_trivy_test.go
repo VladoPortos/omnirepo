@@ -128,6 +128,122 @@ func TestAdminTrivy_DBUpload_PathTraversal(t *testing.T) {
 	}
 }
 
+// TestAdminTrivy_DBHistory_Empty — /admin/trivy/db/history used to 404
+// because the route was never mounted, which silently left the UI's
+// "Update History" table blank. Guard the route and shape of the
+// response so a future regression doesn't re-introduce the empty-table
+// bug.
+func TestAdminTrivy_DBHistory_Empty(t *testing.T) {
+	s := newTestServer(t)
+	_, pw := seedTestUser(t, s.db, "root", "r@x", true, false)
+	cookie, _, _ := s.login(t, "root", pw)
+
+	resp, body := s.do(t, "GET", "/api/v1/admin/trivy/db/history", cookie, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("code=%d body=%v", resp.StatusCode, body)
+	}
+	items, ok := body["items"].([]any)
+	if !ok {
+		t.Fatalf("items not an array: %T = %v", body["items"], body["items"])
+	}
+	if len(items) != 0 {
+		t.Fatalf("expected empty items, got %v", items)
+	}
+}
+
+// TestAdminTrivy_DBHistory_AfterUpload — after an upload inserts a
+// trivy_db_meta row, the history endpoint returns it. Covers the
+// upload→history round-trip the UI depends on.
+func TestAdminTrivy_DBHistory_AfterUpload(t *testing.T) {
+	s := newTestServer(t)
+	_, pw := seedTestUser(t, s.db, "root", "r@x", true, false)
+	cookie, _, _ := s.login(t, "root", pw)
+
+	tarBuf := createFakeTarGz(t, map[string]string{
+		"metadata.json": `{"version": 2}`,
+		"db/trivy.db":   "fake-db-content",
+	})
+	var body bytes.Buffer
+	w := multipart.NewWriter(&body)
+	part, _ := w.CreateFormFile("db", "trivy-db.tar.gz")
+	_, _ = part.Write(tarBuf)
+	_ = w.Close()
+	req, _ := http.NewRequest("POST", s.ts.URL+"/api/v1/admin/trivy/db", &body)
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	req.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: cookie})
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("upload code=%d", resp.StatusCode)
+	}
+
+	resp2, hbody := s.do(t, "GET", "/api/v1/admin/trivy/db/history", cookie, nil)
+	if resp2.StatusCode != http.StatusOK {
+		t.Fatalf("history code=%d", resp2.StatusCode)
+	}
+	items, _ := hbody["items"].([]any)
+	if len(items) != 1 {
+		t.Fatalf("expected 1 history row, got %v", items)
+	}
+	row := items[0].(map[string]any)
+	if row["source"] != "uploaded" {
+		t.Fatalf("row source=%v want uploaded", row["source"])
+	}
+	if _, ok := row["size_bytes"].(float64); !ok {
+		t.Fatalf("row size_bytes missing/wrong type: %T", row["size_bytes"])
+	}
+}
+
+// TestAdminTrivy_PullStatus_Idle — pull-status returns a well-formed
+// idle envelope before any pull has been triggered. The UI hook polls
+// this while the page is open, so the always-on-200 contract matters.
+func TestAdminTrivy_PullStatus_Idle(t *testing.T) {
+	s := newTestServer(t)
+	_, pw := seedTestUser(t, s.db, "root", "r@x", true, false)
+	cookie, _, _ := s.login(t, "root", pw)
+
+	resp, body := s.do(t, "GET", "/api/v1/admin/trivy/db/pull/status", cookie, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("code=%d body=%v", resp.StatusCode, body)
+	}
+	// state must be present and one of the known values.
+	state, _ := body["state"].(string)
+	switch state {
+	case "idle", "running", "success", "failure":
+	default:
+		t.Fatalf("unexpected state=%q", state)
+	}
+	// bytes_downloaded is always present, even at idle.
+	if _, ok := body["bytes_downloaded"]; !ok {
+		t.Fatalf("bytes_downloaded missing: %v", body)
+	}
+}
+
+// TestAdminTrivy_DBStatus_IncludesPath — the status response must
+// include `path` so the UI can display the on-disk location. Regression
+// guard against the pre-Phase-7 response that omitted it.
+func TestAdminTrivy_DBStatus_IncludesPath(t *testing.T) {
+	s := newTestServer(t)
+	_, pw := seedTestUser(t, s.db, "root", "r@x", true, false)
+	cookie, _, _ := s.login(t, "root", pw)
+
+	resp, body := s.do(t, "GET", "/api/v1/admin/trivy/db/status", cookie, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("code=%d", resp.StatusCode)
+	}
+	path, ok := body["path"].(string)
+	if !ok || path == "" {
+		t.Fatalf("path missing/empty: %v", body["path"])
+	}
+	// size_bytes is always present (0 for source=none).
+	if _, ok := body["size_bytes"]; !ok {
+		t.Fatalf("size_bytes missing: %v", body)
+	}
+}
+
 func TestAdminTrivy_NonSuperAdmin403(t *testing.T) {
 	s := newTestServer(t)
 	_, pw := seedTestUser(t, s.db, "alice", "a@x", false, false)

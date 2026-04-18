@@ -373,9 +373,19 @@ export interface TLSHistoryEntry {
 export interface TrivyDBStatus {
   version: string;
   age_hours: number;
-  source: 'baked-in' | 'uploaded' | 'online-pulled';
+  source: 'baked-in' | 'uploaded' | 'online-pulled' | 'none';
   stale: boolean;
-  applied_at: string;
+  applied_at?: string;
+  size_bytes?: number;
+  path?: string;
+}
+
+export interface TrivyDBPullStatus {
+  state: 'idle' | 'running' | 'success' | 'failure';
+  bytes_downloaded: number;
+  started_at?: string;
+  finished_at?: string;
+  error?: string;
 }
 
 // -- GC --

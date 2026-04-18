@@ -217,17 +217,18 @@ export function RawRepoPage({ repo }: RawRepoPageProps) {
         return (
           <div className="inline-flex items-center gap-1">
             <Button
-              variant="ghost"
-              size="icon-xs"
-              title="Rescan this file"
+              variant="outline"
+              size="sm"
+              title="Queue a fresh Trivy scan for this file"
               onClick={() => handleRescanRow(row.path)}
               disabled={busy}
             >
               {busy ? (
-                <Loader2 className="size-3.5 animate-spin" />
+                <Loader2 className="mr-1.5 size-3.5 animate-spin" />
               ) : (
-                <RefreshCw className="size-3.5" />
+                <RefreshCw className="mr-1.5 size-3.5" />
               )}
+              {busy ? 'Rescanning…' : 'Rescan'}
             </Button>
             <Button variant="ghost" size="icon-xs" title="Download">
               <Download className="size-3.5" />

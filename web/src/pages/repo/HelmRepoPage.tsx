@@ -182,23 +182,24 @@ export function HelmRepoPage({ repo }: HelmRepoPageProps) {
     {
       id: 'scan_action',
       name: '',
-      className: 'w-10 text-right',
+      className: 'w-28 text-right',
       render: (row) => {
         const latest = row.versions[0];
         const busy = rescanningID === latest.id || row.scan_severity === 'scanning';
         return (
           <Button
-            variant="ghost"
-            size="icon-xs"
+            variant="outline"
+            size="sm"
             title="Rescan latest version only (expand to rescan specific versions)"
             onClick={() => handleRescanRow(latest.id)}
             disabled={busy || !latest.id}
           >
             {busy ? (
-              <Loader2 className="size-3.5 animate-spin" />
+              <Loader2 className="mr-1.5 size-3.5 animate-spin" />
             ) : (
-              <RefreshCw className="size-3.5" />
+              <RefreshCw className="mr-1.5 size-3.5" />
             )}
+            {busy ? 'Rescanning…' : 'Rescan'}
           </Button>
         );
       },
@@ -286,17 +287,18 @@ export function HelmRepoPage({ repo }: HelmRepoPageProps) {
                       <span className="text-muted-foreground">{formatDate(v.uploaded_at)}</span>
                       <ContentScanBadge severity={v.scan_severity} />
                       <Button
-                        variant="ghost"
-                        size="icon-xs"
-                        title="Rescan this version"
+                        variant="outline"
+                        size="sm"
+                        title="Queue a fresh Trivy scan for this version"
                         onClick={() => handleRescanRow(v.id)}
                         disabled={!v.id || rescanningID === v.id || v.scan_severity === 'scanning'}
                       >
                         {rescanningID === v.id ? (
-                          <Loader2 className="size-3.5 animate-spin" />
+                          <Loader2 className="mr-1.5 size-3.5 animate-spin" />
                         ) : (
-                          <RefreshCw className="size-3.5" />
+                          <RefreshCw className="mr-1.5 size-3.5" />
                         )}
+                        {rescanningID === v.id ? 'Rescanning…' : 'Rescan'}
                       </Button>
                     </div>
                   </div>

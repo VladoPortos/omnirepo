@@ -213,23 +213,24 @@ export function PypiRepoPage({ repo }: PypiRepoPageProps) {
     {
       id: 'scan_action',
       name: '',
-      className: 'w-10 text-right',
+      className: 'w-28 text-right',
       render: (row) => {
         const latest = row.files[0];
         const busy = rescanningID === latest.id || row.scan_severity === 'scanning';
         return (
           <Button
-            variant="ghost"
-            size="icon-xs"
+            variant="outline"
+            size="sm"
             title="Rescan latest file only (expand row for per-file rescan)"
             onClick={() => handleRescanRow(latest.id)}
             disabled={busy || !latest.id}
           >
             {busy ? (
-              <Loader2 className="size-3.5 animate-spin" />
+              <Loader2 className="mr-1.5 size-3.5 animate-spin" />
             ) : (
-              <RefreshCw className="size-3.5" />
+              <RefreshCw className="mr-1.5 size-3.5" />
             )}
+            {busy ? 'Rescanning…' : 'Rescan'}
           </Button>
         );
       },

@@ -787,7 +787,11 @@ function ScanFindingsTrendCard({
               size="sm"
               className="px-0 mt-2"
               nativeButton={false}
-              render={<a href="#high-severity">View findings →</a>}
+              render={
+                <Link to="/search?kind=cve&severity=critical,high">
+                  View findings →
+                </Link>
+              }
             />
           </>
         )}

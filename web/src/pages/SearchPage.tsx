@@ -5,7 +5,7 @@
  */
 
 import { useState, useMemo, useCallback, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Search as SearchIcon, SearchX } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -105,10 +105,35 @@ function resultRoute(result: SearchResult): string {
 
 export function SearchPage() {
   const navigate = useNavigate();
-  const [query, setQuery] = useState('');
-  const [kindFilters, setKindFilters] = useState<string[]>([]);
-  const [severityFilters, setSeverityFilters] = useState<string[]>([]);
-  const [projectFilter, setProjectFilter] = useState<string>('');
+  const [searchParams] = useSearchParams();
+
+  // Deep-link pre-filters: /search?severity=critical,high&kind=cve&q=foo.
+  // Used by the dashboard "View findings →" CTA (F-T14) and anywhere else
+  // we want to land the user on a pre-narrowed result set.
+  const initialSeverity = useMemo(
+    () =>
+      (searchParams.get('severity') ?? '')
+        .split(',')
+        .map((s) => s.trim().toLowerCase())
+        .filter((s) => SEVERITY_OPTIONS.some((opt) => opt.value === s)),
+    [searchParams],
+  );
+  const initialKind = useMemo(
+    () =>
+      (searchParams.get('kind') ?? '')
+        .split(',')
+        .map((s) => s.trim().toLowerCase())
+        .filter((s) => KIND_OPTIONS.some((opt) => opt.value === s)),
+    [searchParams],
+  );
+
+  const [query, setQuery] = useState(() => searchParams.get('q') ?? '');
+  const [kindFilters, setKindFilters] = useState<string[]>(initialKind);
+  const [severityFilters, setSeverityFilters] =
+    useState<string[]>(initialSeverity);
+  const [projectFilter, setProjectFilter] = useState<string>(
+    () => searchParams.get('project') ?? '',
+  );
 
   const debouncedQuery = useDebounce(query, 300);
 

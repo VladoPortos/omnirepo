@@ -12,8 +12,12 @@ import {
   Download,
   ArrowLeft,
   Terminal,
+  RefreshCw,
+  Loader2,
 } from 'lucide-react';
+import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
+import { ContentScanBadge } from '@/components/common/ContentScanBadge';
 import {
   Breadcrumb,
   BreadcrumbList,
@@ -29,8 +33,8 @@ import { EmptyState } from '@/components/common/EmptyState';
 import { SnippetList } from '@/components/common/SnippetList';
 import { RepoPageLayout } from './RepoPageLayout';
 import { formatBytes, formatDate } from '@/lib/format';
-import { api } from '@/api/client';
-import { useRepoContent, useMe } from '@/api/queries';
+import { api, ApiError } from '@/api/client';
+import { useRepoContent, useMe, useRescanArtifact } from '@/api/queries';
 import type { Repo } from '@/api/types';
 
 interface RawFileEntry {
@@ -40,6 +44,7 @@ interface RawFileEntry {
   size: number;
   content_type: string;
   last_modified: string;
+  scan_severity: string;
 }
 
 interface RawRepoPageProps {
@@ -58,6 +63,28 @@ export function RawRepoPage({ repo }: RawRepoPageProps) {
   const hostname = window.location.host;
 
   const { data: contentRows } = useRepoContent(projectName ?? '', 'raw', repo.name);
+  // Per-file rescan. Raw uses the file path as artifact_id (see put.go),
+  // so we key busy state on path instead of a numeric id.
+  const rescanRow = useRescanArtifact(projectName ?? '', 'raw', repo.name);
+  const [rescanningPath, setRescanningPath] = useState<string | null>(null);
+  const handleRescanRow = async (path: string) => {
+    if (!path) return;
+    setRescanningPath(path);
+    try {
+      await rescanRow.mutateAsync(path);
+      toast.success('Scan queued.');
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 412) {
+        toast.error('Trivy database is not installed. See /admin/trivy.');
+      } else if (err instanceof ApiError) {
+        toast.error(err.detail || 'Rescan failed.');
+      } else {
+        toast.error('Rescan failed.');
+      }
+    } finally {
+      setRescanningPath(null);
+    }
+  };
   // RAW content endpoint returns a flat list of paths; the directory-tree
   // view is derived client-side by splitting on "/". Files at the root show
   // up directly; deeper paths collapse into synthetic folder rows.
@@ -80,6 +107,7 @@ export function RawRepoPage({ repo }: RawRepoPageProps) {
           size: row.size_bytes,
           content_type: String(row.extra?.mime ?? ''),
           last_modified: row.uploaded_at,
+          scan_severity: row.scan_severity ?? '',
         });
       } else {
         const folder = rest.slice(0, slash);
@@ -96,6 +124,9 @@ export function RawRepoPage({ repo }: RawRepoPageProps) {
       size: folderSizes.get(name) ?? 0,
       content_type: '',
       last_modified: folderLatest.get(name) ?? '',
+      // Folder rows don't carry scan state — aggregating worst-of across
+      // children is noisy when a dir has hundreds of files. Leave blank.
+      scan_severity: '',
     }));
     return [...folderRows, ...files];
   }, [contentRows, currentPath]);
@@ -166,15 +197,44 @@ export function RawRepoPage({ repo }: RawRepoPageProps) {
       accessor: (row) => formatDate(row.last_modified),
     },
     {
+      id: 'scan',
+      name: 'Scan Status',
+      render: (row) =>
+        row.is_dir ? (
+          <span className="text-xs text-muted-foreground">—</span>
+        ) : (
+          <ContentScanBadge severity={row.scan_severity} />
+        ),
+    },
+    {
       id: 'actions',
       name: '',
-      className: 'w-16',
-      render: (row) =>
-        !row.is_dir ? (
-          <Button variant="ghost" size="icon-xs" title="Download">
-            <Download className="size-3.5" />
-          </Button>
-        ) : null,
+      className: 'w-24 text-right',
+      render: (row) => {
+        if (row.is_dir) return null;
+        const busy =
+          rescanningPath === row.path || row.scan_severity === 'scanning';
+        return (
+          <div className="inline-flex items-center gap-1">
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              title="Rescan this file"
+              onClick={() => handleRescanRow(row.path)}
+              disabled={busy}
+            >
+              {busy ? (
+                <Loader2 className="size-3.5 animate-spin" />
+              ) : (
+                <RefreshCw className="size-3.5" />
+              )}
+            </Button>
+            <Button variant="ghost" size="icon-xs" title="Download">
+              <Download className="size-3.5" />
+            </Button>
+          </div>
+        );
+      },
     },
   ];
 

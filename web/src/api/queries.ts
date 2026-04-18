@@ -111,6 +111,31 @@ export function useRescanRepo(
   });
 }
 
+/**
+ * useRescanArtifact — POST /artifacts/{id}/rescan for a single row in
+ * the content table. Invalidates both repo-scans and repo-content so
+ * the UI flips the row's badge from Clean → Scanning → Clean without
+ * a manual refresh.
+ */
+export function useRescanArtifact(
+  projectName: string,
+  repoType: string,
+  repoName: string,
+) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (artifactID: string) =>
+      api.post<{ scan_id: number }>(
+        `/projects/${enc(projectName)}/repos/${enc(repoType)}/${enc(repoName)}/artifacts/${enc(artifactID)}/rescan`,
+        {},
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['repo-scans', projectName, repoType, repoName] });
+      qc.invalidateQueries({ queryKey: ['repo-content', projectName, repoType, repoName] });
+    },
+  });
+}
+
 // -- Repo content (listing artifacts uploaded to a repo) --
 
 export function useRepoContent(
@@ -131,6 +156,14 @@ export function useRepoContent(
       );
     },
     staleTime: 15_000,
+    // While any row is mid-scan (status="scanning"), poll so the severity
+    // badge lights up as scans finish — otherwise the user sees "Not
+    // scanned" frozen until they refresh.
+    refetchInterval: (query) => {
+      const data = query.state.data as RepoContentEntry[] | undefined;
+      if (!data) return false;
+      return data.some((r) => r.scan_severity === 'scanning') ? 3_000 : false;
+    },
   });
 }
 

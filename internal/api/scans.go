@@ -49,20 +49,24 @@ type ScansDeps struct {
 }
 
 // scanRowResponse is the JSON projection of a scans row (no body of vulns).
+// StartedAt and FinishedAt are pointers so json:",omitempty" actually
+// omits them when the scan is still pending/running. Otherwise the Go
+// zero time serializes to "0001-01-01T00:00:00Z", which the SPA then
+// renders as "2026 years ago".
 type scanRowResponse struct {
-	ID                  int64     `json:"id"`
-	RepoID              int64     `json:"repo_id"`
-	ArtifactKind        string    `json:"artifact_kind"`
-	ArtifactID          string    `json:"artifact_id"`
-	Status              string    `json:"status"`
-	Attempts            int64     `json:"attempts"`
-	LastError           string    `json:"last_error,omitempty"`
-	SeveritySummaryJSON string    `json:"severity_summary_json,omitempty"`
-	SBOMPath            string    `json:"sbom_path,omitempty"`
-	TrivyDBVersion      string    `json:"trivy_db_version,omitempty"`
-	CreatedAt           time.Time `json:"created_at"`
-	StartedAt           time.Time `json:"started_at,omitempty"`
-	FinishedAt          time.Time `json:"finished_at,omitempty"`
+	ID                  int64      `json:"id"`
+	RepoID              int64      `json:"repo_id"`
+	ArtifactKind        string     `json:"artifact_kind"`
+	ArtifactID          string     `json:"artifact_id"`
+	Status              string     `json:"status"`
+	Attempts            int64      `json:"attempts"`
+	LastError           string     `json:"last_error,omitempty"`
+	SeveritySummaryJSON string     `json:"severity_summary_json,omitempty"`
+	SBOMPath            string     `json:"sbom_path,omitempty"`
+	TrivyDBVersion      string     `json:"trivy_db_version,omitempty"`
+	CreatedAt           time.Time  `json:"created_at"`
+	StartedAt           *time.Time `json:"started_at,omitempty"`
+	FinishedAt          *time.Time `json:"finished_at,omitempty"`
 }
 
 type vulnRowResponse struct {
@@ -173,10 +177,12 @@ func (d Deps) handleListRepoScans(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if startedAt.Valid {
-			s.StartedAt = startedAt.Time
+			t := startedAt.Time
+			s.StartedAt = &t
 		}
 		if finishedAt.Valid {
-			s.FinishedAt = finishedAt.Time
+			t := finishedAt.Time
+			s.FinishedAt = &t
 		}
 		out = append(out, s)
 	}
@@ -566,10 +572,12 @@ func (d Deps) handleListArtifactScans(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if startedAt.Valid {
-			s.StartedAt = startedAt.Time
+			t := startedAt.Time
+			s.StartedAt = &t
 		}
 		if finishedAt.Valid {
-			s.FinishedAt = finishedAt.Time
+			t := finishedAt.Time
+			s.FinishedAt = &t
 		}
 		out = append(out, s)
 	}
@@ -616,10 +624,12 @@ func (d Deps) loadScanRowAndAuth(w http.ResponseWriter, r *http.Request) (*scanR
 		return nil, false
 	}
 	if startedAt.Valid {
-		s.StartedAt = startedAt.Time
+		t := startedAt.Time
+		s.StartedAt = &t
 	}
 	if finishedAt.Valid {
-		s.FinishedAt = finishedAt.Time
+		t := finishedAt.Time
+		s.FinishedAt = &t
 	}
 	repo, err := d.Repos.FindByID(r.Context(), s.RepoID)
 	if err != nil || repo == nil {

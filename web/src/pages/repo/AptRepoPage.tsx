@@ -7,7 +7,7 @@
 import { useState, useMemo } from 'react';
 import { useParams } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { ExternalLink, Terminal, ShieldAlert } from 'lucide-react';
+import { ExternalLink, Terminal, ShieldAlert, RefreshCw, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -22,7 +22,7 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog';
 import { DataTable, type ColumnDef, type SortState } from '@/components/common/DataTable';
-import { SeverityBadge } from '@/components/common/SeverityBadge';
+import { ContentScanBadge } from '@/components/common/ContentScanBadge';
 import { InlineSearch } from '@/components/common/InlineSearch';
 import { Dropzone } from '@/components/common/Dropzone';
 import { FilterChips } from '@/components/common/FilterChips';
@@ -30,8 +30,8 @@ import { EmptyState } from '@/components/common/EmptyState';
 import { SnippetList } from '@/components/common/SnippetList';
 import { RepoPageLayout } from './RepoPageLayout';
 import { formatBytes, formatDate } from '@/lib/format';
-import { api, envelopeFromError, type ApiErrorEnvelope } from '@/api/client';
-import { useRepoContent, useMe, useRepoScans } from '@/api/queries';
+import { api, envelopeFromError, type ApiErrorEnvelope, ApiError } from '@/api/client';
+import { useRepoContent, useMe, useRepoScans, useRescanArtifact } from '@/api/queries';
 import { ErrorEnvelopeRenderer } from '@/components/common/ErrorEnvelope';
 import type { Repo } from '@/api/types';
 
@@ -73,6 +73,26 @@ export function AptRepoPage({ repo }: AptRepoPageProps) {
   const scansCount = scansData?.length ?? 0;
   const [rescanError, setRescanError] = useState<ApiErrorEnvelope | null>(null);
   const qc = useQueryClient();
+  const rescanRow = useRescanArtifact(projectName ?? '', 'deb', repo.name);
+  const [rescanningID, setRescanningID] = useState<number | null>(null);
+  const handleRescanRow = async (id: number) => {
+    if (!id) return;
+    setRescanningID(id);
+    try {
+      await rescanRow.mutateAsync(String(id));
+      toast.success('Scan queued.');
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 412) {
+        toast.error('Trivy database is not installed. See /admin/trivy.');
+      } else if (err instanceof ApiError) {
+        toast.error(err.detail || 'Rescan failed.');
+      } else {
+        toast.error('Rescan failed.');
+      }
+    } finally {
+      setRescanningID(null);
+    }
+  };
   const rescanMutation = useMutation({
     mutationFn: async () => {
       if (!contentRows || contentRows.length === 0) {
@@ -151,12 +171,30 @@ export function AptRepoPage({ repo }: AptRepoPageProps) {
     {
       id: 'scan',
       name: 'Scan Status',
-      render: (row) =>
-        row.scan_severity ? (
-          <SeverityBadge severity={row.scan_severity} />
-        ) : (
-          <span className="text-xs text-muted-foreground">Not scanned</span>
-        ),
+      render: (row) => <ContentScanBadge severity={row.scan_severity} />,
+    },
+    {
+      id: 'scan_action',
+      name: '',
+      className: 'w-10 text-right',
+      render: (row) => {
+        const busy = rescanningID === row.id || row.scan_severity === 'scanning';
+        return (
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            title="Rescan this package"
+            onClick={() => handleRescanRow(row.id)}
+            disabled={busy || !row.id}
+          >
+            {busy ? (
+              <Loader2 className="size-3.5 animate-spin" />
+            ) : (
+              <RefreshCw className="size-3.5" />
+            )}
+          </Button>
+        );
+      },
     },
   ];
 

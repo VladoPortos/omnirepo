@@ -8,7 +8,12 @@ import { useState, useMemo } from 'react';
 import { useParams } from 'react-router-dom';
 import { ChevronDown, ChevronRight, Layers, Terminal } from 'lucide-react';
 import { DataTable, type ColumnDef, type SortState } from '@/components/common/DataTable';
-import { SeverityBadge } from '@/components/common/SeverityBadge';
+import { ContentScanBadge } from '@/components/common/ContentScanBadge';
+import { Button } from '@/components/ui/button';
+import { RefreshCw, Loader2 } from 'lucide-react';
+import { toast } from 'sonner';
+import { useRescanArtifact } from '@/api/queries';
+import { ApiError } from '@/api/client';
 import { InlineSearch } from '@/components/common/InlineSearch';
 import { Dropzone } from '@/components/common/Dropzone';
 import { EmptyState } from '@/components/common/EmptyState';
@@ -57,6 +62,28 @@ export function HelmRepoPage({ repo }: HelmRepoPageProps) {
   const hostname = window.location.host;
 
   const { data: contentRows } = useRepoContent(projectName ?? '', 'helm', repo.name);
+  // Per-row rescan: for grouped rows we rescan the latest version, which is
+  // what the row's badge summarizes anyway.
+  const rescanRow = useRescanArtifact(projectName ?? '', 'helm', repo.name);
+  const [rescanningID, setRescanningID] = useState<number | null>(null);
+  const handleRescanRow = async (id: number) => {
+    if (!id) return;
+    setRescanningID(id);
+    try {
+      await rescanRow.mutateAsync(String(id));
+      toast.success('Scan queued.');
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 412) {
+        toast.error('Trivy database is not installed. See /admin/trivy.');
+      } else if (err instanceof ApiError) {
+        toast.error(err.detail || 'Rescan failed.');
+      } else {
+        toast.error('Rescan failed.');
+      }
+    } finally {
+      setRescanningID(null);
+    }
+  };
   const chartVersions: HelmChartVersion[] = useMemo(
     () =>
       (contentRows ?? []).map((row) => ({
@@ -150,12 +177,31 @@ export function HelmRepoPage({ repo }: HelmRepoPageProps) {
     {
       id: 'scan',
       name: 'Scan Status',
-      render: (row) =>
-        row.scan_severity ? (
-          <SeverityBadge severity={row.scan_severity} />
-        ) : (
-          <span className="text-xs text-muted-foreground">Not scanned</span>
-        ),
+      render: (row) => <ContentScanBadge severity={row.scan_severity} />,
+    },
+    {
+      id: 'scan_action',
+      name: '',
+      className: 'w-10 text-right',
+      render: (row) => {
+        const latest = row.versions[0];
+        const busy = rescanningID === latest.id || row.scan_severity === 'scanning';
+        return (
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            title="Rescan latest version only (expand to rescan specific versions)"
+            onClick={() => handleRescanRow(latest.id)}
+            disabled={busy || !latest.id}
+          >
+            {busy ? (
+              <Loader2 className="size-3.5 animate-spin" />
+            ) : (
+              <RefreshCw className="size-3.5" />
+            )}
+          </Button>
+        );
+      },
     },
   ];
 
@@ -238,11 +284,20 @@ export function HelmRepoPage({ repo }: HelmRepoPageProps) {
                     <div className="flex items-center gap-3">
                       <span className="text-muted-foreground">{formatBytes(v.size)}</span>
                       <span className="text-muted-foreground">{formatDate(v.uploaded_at)}</span>
-                      {v.scan_severity ? (
-                        <SeverityBadge severity={v.scan_severity} />
-                      ) : (
-                        <span className="text-muted-foreground">Not scanned</span>
-                      )}
+                      <ContentScanBadge severity={v.scan_severity} />
+                      <Button
+                        variant="ghost"
+                        size="icon-xs"
+                        title="Rescan this version"
+                        onClick={() => handleRescanRow(v.id)}
+                        disabled={!v.id || rescanningID === v.id || v.scan_severity === 'scanning'}
+                      >
+                        {rescanningID === v.id ? (
+                          <Loader2 className="size-3.5 animate-spin" />
+                        ) : (
+                          <RefreshCw className="size-3.5" />
+                        )}
+                      </Button>
                     </div>
                   </div>
                 ))}

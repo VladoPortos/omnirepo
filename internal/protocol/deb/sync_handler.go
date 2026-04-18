@@ -257,7 +257,14 @@ func (h *SyncHandler) fetchAndCommit(ctx context.Context, projectName string, re
 	}
 
 	// Pool-relative storage key reuses the deb handler convention.
-	rest := relPoolPath(ent.Filename, ent.Control)
+	// W-03: consult dists/<suite>/Release for layout hints before falling
+	// back to filename-based inference. ent.Suite defaults to "stable"
+	// one step up if the upstream parser didn't populate it.
+	suite := ent.Suite
+	if suite == "" {
+		suite = "stable"
+	}
+	rest := relPoolPath(h.deps.RepoRoot, projectName, repo.Name, suite, ent.Filename, ent.Control)
 	storageKey := strings.Join([]string{projectName, "deb", repo.Name, rest}, "/")
 	if _, err := h.deps.Path.Put(ctx, storageKey, openBytesReader(body)); err != nil {
 		return 0, fmt.Errorf("apt_sync: store %s: %w", ent.Filename, err)
@@ -301,15 +308,16 @@ func (h *SyncHandler) fetchAndCommit(ctx context.Context, projectName string, re
 	return size, nil
 }
 
-// relPoolPath returns the per-package canonical pool/-relative path.
-// pool/main/<initial>/<package>/<filename>
-func relPoolPath(filename string, ctrl *Control) string {
-	pkg := "x"
-	if ctrl != nil && ctrl.Package != "" {
-		pkg = ctrl.Package
-	}
-	initial := pkg[:1]
-	return "pool/main/" + initial + "/" + pkg + "/" + filename
+// relPoolPath returns the per-package canonical pool/-relative path,
+// consulting the repo's dists/<suite>/Release (W-03) before falling back to
+// filename inference. Thin wrapper over ResolvePoolPath — kept to preserve
+// the call-site shape in fetchAndCommit.
+//
+// Shape: pool/<component>/<initial>/<package>/<filename>. Component comes
+// from the Release file's Components: line when available; otherwise
+// defaults to "main".
+func relPoolPath(repoRoot, projectName, repoName, suite, filename string, ctrl *Control) string {
+	return ResolvePoolPath(repoRoot, projectName, repoName, suite, filename, ctrl)
 }
 
 func downloadAndHash(ctx context.Context, client *http.Client, urlStr string, creds AuthCreds) ([]byte, int64, string, error) {

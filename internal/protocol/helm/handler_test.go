@@ -48,7 +48,13 @@ type fixture struct {
 
 	kickCounts sync.Map // repoID -> *atomic.Int64
 	registry   *regen.Registry
+	path       storage.PathStore
 }
+
+// pathStore returns the fixture's shared PathStore rooted at repoRoot — the
+// same store the Helm handler uses — so tests like oci_mirror_test.go can
+// construct a helm.Mirror that writes into the same tree.
+func (f *fixture) pathStore() storage.PathStore { return f.path }
 
 func (f *fixture) kickCount(repoID int64) int64 {
 	v, ok := f.kickCounts.Load(repoID)
@@ -130,6 +136,7 @@ func newFixture(t *testing.T) *fixture {
 	f.registry = regen.NewRegistry(10*time.Millisecond, 100*time.Millisecond, factory)
 	t.Cleanup(func() { _ = f.registry.ShutdownAll(context.Background()) })
 
+	f.path = storage.NewPathStore(repoRoot)
 	h := helm.New(helm.Deps{
 		DB:          db,
 		Users:       users,
@@ -141,7 +148,7 @@ func newFixture(t *testing.T) *fixture {
 		HelmCharts:  charts,
 		Scans:       scans,
 		Coalescer:   f.registry,
-		Path:        storage.NewPathStore(repoRoot),
+		Path:        f.path,
 		Trash:       storage.NewTrash(trashRoot),
 		Audit:       auditLogger,
 		MaxPutBytes: 1 << 20,

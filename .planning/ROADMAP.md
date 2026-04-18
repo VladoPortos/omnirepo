@@ -78,7 +78,7 @@ Plans:
 - [x] 07-06-PLAN.md — W-02 ref-counted repoSizeExpr + W-03 DEB Release-file pool-path reader
 - [x] 07-07-PLAN.md — DashboardPage Composition row (6 cards) + D-05 string migrations
 - [x] 07-08-PLAN.md — EmptyState wiring across 13 call sites (EMPTY-01..06, 08) + Playwright spec
-- [ ] 07-09-PLAN.md — Codex rescue sweep (W-01) + findings triage + phase closure
+- [x] 07-09-PLAN.md — Codex rescue sweep (W-01) + findings triage + phase closure
 **UI hint**: yes
 
 ### Deferred to v1.2 (dropped from v1.1 on 2026-04-17)

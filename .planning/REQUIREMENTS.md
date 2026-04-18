@@ -17,15 +17,15 @@ prefixes (AUTH, REPO, etc.).
 
 ### SNIPPET — Client configuration snippets
 
-- [ ] **SNIPPET-01**: User can copy a Docker `login` / `pull` / `push` snippet pre-filled with this OCI repo's URL from the repo page
-- [ ] **SNIPPET-02**: User can copy a `pip install` + `.pypirc` block pre-filled with this PyPI repo's URL
-- [ ] **SNIPPET-03**: User can copy an APT `sources.list` entry pre-filled with this APT repo's URL, suite, component, and signing-key URL
-- [ ] **SNIPPET-04**: User can copy an RPM `.repo` config pre-filled with this RPM repo's baseurl and GPG key URL
-- [ ] **SNIPPET-05**: User can copy Helm `repo add` / push / pull commands pre-filled with this Helm repo's URL
-- [ ] **SNIPPET-06**: User can copy a Git `clone` / fetch URL for this Git repo (HTTPS form, includes auth hint)
-- [ ] **SNIPPET-07**: User can copy an `aws configure` + AWS CLI + SDK code snippet for this S3 bucket (endpoint URL, region, bucket name; access-key reminder)
-- [ ] **SNIPPET-08**: User can copy a `curl -u user:key -T file URL` snippet for a RAW repo
-- [ ] **SNIPPET-09**: Every snippet supports one-click copy-to-clipboard with visible confirmation feedback
+- [x] **SNIPPET-01**: User can copy a Docker `login` / `pull` / `push` snippet pre-filled with this OCI repo's URL from the repo page
+- [x] **SNIPPET-02**: User can copy a `pip install` + `.pypirc` block pre-filled with this PyPI repo's URL
+- [x] **SNIPPET-03**: User can copy an APT `sources.list` entry pre-filled with this APT repo's URL, suite, component, and signing-key URL
+- [x] **SNIPPET-04**: User can copy an RPM `.repo` config pre-filled with this RPM repo's baseurl and GPG key URL
+- [x] **SNIPPET-05**: User can copy Helm `repo add` / push / pull commands pre-filled with this Helm repo's URL
+- [x] **SNIPPET-06**: User can copy a Git `clone` / fetch URL for this Git repo (HTTPS form, includes auth hint)
+- [x] **SNIPPET-07**: User can copy an `aws configure` + AWS CLI + SDK code snippet for this S3 bucket (endpoint URL, region, bucket name; access-key reminder)
+- [x] **SNIPPET-08**: User can copy a `curl -u user:key -T file URL` snippet for a RAW repo
+- [x] **SNIPPET-09**: Every snippet supports one-click copy-to-clipboard with visible confirmation feedback
 
 ### EMPTY — Context-aware empty states
 
@@ -187,15 +187,15 @@ phases 1–5.
 | VISUAL-07 | Phase 6 | Complete |
 | VISUAL-08 | Phase 6 | Complete |
 | VISUAL-09 | Phase 6 | Complete |
-| SNIPPET-01 | Phase 7 | Pending |
-| SNIPPET-02 | Phase 7 | Pending |
-| SNIPPET-03 | Phase 7 | Pending |
-| SNIPPET-04 | Phase 7 | Pending |
-| SNIPPET-05 | Phase 7 | Pending |
-| SNIPPET-06 | Phase 7 | Pending |
-| SNIPPET-07 | Phase 7 | Pending |
-| SNIPPET-08 | Phase 7 | Pending |
-| SNIPPET-09 | Phase 7 | Pending |
+| SNIPPET-01 | Phase 7 | Complete |
+| SNIPPET-02 | Phase 7 | Complete |
+| SNIPPET-03 | Phase 7 | Complete |
+| SNIPPET-04 | Phase 7 | Complete |
+| SNIPPET-05 | Phase 7 | Complete |
+| SNIPPET-06 | Phase 7 | Complete |
+| SNIPPET-07 | Phase 7 | Complete |
+| SNIPPET-08 | Phase 7 | Complete |
+| SNIPPET-09 | Phase 7 | Complete |
 | EMPTY-01 | Phase 7 | Pending |
 | EMPTY-02 | Phase 7 | Pending |
 | EMPTY-03 | Phase 7 | Pending |

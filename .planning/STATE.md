@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: on 2026-04-17)
 status: executing
-stopped_at: Completed 07-02-PLAN.md
-last_updated: "2026-04-18T00:18:19.773Z"
+stopped_at: Completed 07-03-PLAN.md
+last_updated: "2026-04-18T00:28:46.138Z"
 last_activity: 2026-04-18
 progress:
   total_phases: 3
   completed_phases: 1
   total_plans: 17
-  completed_plans: 10
-  percent: 59
+  completed_plans: 11
+  percent: 65
 ---
 
 # STATE: OmniRepo
@@ -27,10 +27,10 @@ progress:
 ## Current Position
 
 Phase: 07 (snippet-polish-dashboard-cards-empty-states) — EXECUTING
-Plan: 3 of 9
+Plan: 4 of 9
 Status: Ready to execute
 Last activity: 2026-04-18
-Stopped at: Completed 07-02-PLAN.md
+Stopped at: Completed 07-03-PLAN.md
 
 ## Phase Map
 
@@ -106,6 +106,12 @@ scoped tokens, LDAP/OIDC.
 - **[07-02] SnippetPanel removed from `lint-spacing-carveout --exclude` list.** Body lift normalized inset to 8px (`right-2 top-2`) in SnippetList; SnippetPanel itself no longer contains the 6px classes. OneTimeReveal.tsx + shadcn-generated ui/sidebar.tsx remain the only grandfathered files. New SnippetList.tsx + EmptyState.tsx files use 8px inset and are NOT on the allowlist (per UI-SPEC line 532).
 - **[07-02] EmptyState description typed as ReactNode, not string.** E-08 + UI-SPEC §EmptyState callsite wiring rule 2 requires embedding example chip buttons in the description region for EMPTY-08; locking the type signature here now avoids a 07-08 follow-up widening.
 - **[07-02] EmptyState disabled CTA wraps Button in `<span className="inline-block">`.** Bare disabled Button has `pointer-events-none` which would swallow hover; span forwards pointer events so the TooltipTrigger fires on hover. Tooltip API is base-ui `render=` prop, NOT shadcn/Radix `asChild`.
+- **[07-03] Git Authenticate form = `credential.helper store`, NOT `-c http.extraHeader=…`.** Both forms work against the BasicOrAPIKey middleware (API-key-as-password in any Basic-auth username field, verified in `internal/auth/middleware/basic_or_apikey.go`). Helper-store is simpler for users — one `git config` call, then `git push`/`fetch` prompts for user + key once and caches in `~/.git-credentials`. Avoids teaching the extraHeader mechanic.
+- **[07-03] Vitest 4.1.4 added as devDep; `npm test` wires `vitest run`.** Tests colocated under `web/src/lib/__tests__/`; vitest config at `web/vitest.config.ts` uses node environment + `@/` alias matching Vite config. Peer-compatible with Vite 6.3.3. Unlocks pure-TS unit testing for `web/src/lib/*` (format helpers, query-key builders, etc.) without per-phase setup cost. First consumer is `snippets.test.ts` (9 shape tests).
+- **[07-03] Defensive `default: return []` added to `getSnippets` switch.** The v1.0 implementation had no default branch, so passing an unknown RepoType returned `undefined` and would crash downstream `.map()` callers. Latent bug caught by the new "unknown RepoType" vitest case.
+- **[07-03] APT dual-signing-key variants shipped as SEPARATE labeled entries, not a single dual-purpose block.** S-01 deprecation fix (Debian 12+ / Ubuntu 22.04+ no longer ship `apt-key`). Modern variant writes to `/etc/apt/keyrings`, legacy to `/etc/apt/trusted.gpg.d`. `apt source` line shows both `deb [signed-by=…]` and plain `deb` forms side-by-side inside one `<pre>` block (commented) so copy-paste ergonomics stay intact.
+- **[07-03] Helm 4-entry snippet covers both traditional AND OCI flows.** `helm repo add (traditional)` + `helm pull (traditional)` + `helm push (OCI)` + `helm pull (OCI)`. OCI pushes will be server-side-mirrored to the traditional index in plan 07-04 or later (S-03b).
+- **[07-03] Playwright webServer shell-syntax bug discovered (pre-existing, OUT-OF-SCOPE for 07-03).** `web/playwright.config.ts` `webServer.command` uses bash subshell syntax `(cd web && …)` which `/bin/sh` rejects with `Syntax error: "(" unexpected`. Reproduces on existing specs too (not new with 07-03). Logged to `.planning/phases/07-snippet-polish-dashboard-cards-empty-states/deferred-items.md`. Snippet-copy spec parses cleanly via `--list`; full-run verification deferred.
 
 ### Decisions carried forward from v1.0
 
@@ -129,6 +135,7 @@ scoped tokens, LDAP/OIDC.
 - Phase 6 verification (post-execution). Run `codex:rescue` / Codex review flow per global CLAUDE.md. Transition to Phase 7 (Client Snippets & Empty States). ✅ Shipped; Playwright walkthrough surfaced 5 findings (hydration warning, duplicate breadcrumb key, repo-validator wording, spurious project-bucket refetch, ERR-06 field highlight). All 5 resolved as atomic commits `2fd7ba5..0c79ef1`, Codex-reviewed and real-issue items absorbed (encodeURIComponent on route params + Playwright spec for aria-invalid + defensive setup-email/login bindings). Full `go test ./...` + `make test` + `npm run build` green. Phase 6 fully shipped.
 - Transition to Phase 7 (Client Snippets & Empty States). Run `/gsd-plan-phase 7` to generate plans. ⚠️ SCOPE CHANGED 2026-04-17 session — rescope applied, see below.
 - Execute plan 07-02 (wave-0 shared primitives: EmptyState + SnippetList). ✅ Shipped; `web/src/components/common/EmptyState.tsx` (new, 136 lines, E-01 props API + E-02 layout + E-08 a11y), `web/src/components/common/SnippetList.tsx` (new, 58 lines, lifted from SnippetPanel with font-medium→font-semibold + 6px→8px inset fixes), SnippetPanel refactored to delegate body to SnippetList, CopyButton grew optional `aria-label` prop for contextual per-snippet labels, Makefile `lint-spacing-carveout` dropped SnippetPanel.tsx from the exclude list. Two atomic commits `1c3674a` (Task 1) + `7ff48e6` (Task 2). All 5 Phase 6 lint gates + `npm run build` green.
+- Execute plan 07-03 (snippet polish — getSnippets rewrite per S-01..S-09 + vitest scaffold + Playwright aria-live/clipboard spec). ✅ Shipped; `web/src/lib/snippets.ts` rewritten (docker/rpm unchanged, deb dual-signing+literal `stable main`, pypi `.pypirc`, helm 4-entry traditional+OCI, git Clone+Authenticate no-userinfo, raw `-u` on both, s3 `<region>`+credential comment); `web/vitest.config.ts` + `web/src/lib/__tests__/snippets.test.ts` (9 passing shape tests); `web/e2e/snippet-copy.spec.ts` asserts aria-live polite + clipboard round-trip. Three commits `bcd14b6` (RED tests) + `7f9e865` (GREEN impl) + `5b42059` (e2e spec). SNIPPET-01..09 now complete. Vitest 4.1.4 added as devDep. Full verification: `npm test` 9/9 green, Playwright `--list` green, make lint-spacing-carveout + lint-typography clean, `npm run build` green.
 
 ### Phase 7 rescope (2026-04-17 — APPLIED)
 
@@ -176,6 +183,7 @@ with the tight scope below.
 | Phase 06 P08 | ~35 min | 3 tasks | 11 files |
 | Phase 07 P01 | ~3 min | 2 tasks | 2 files |
 | Phase 07 P02 | ~4min | 2 tasks | 5 files |
+| Phase 07 P03 | 5m21s | 2 tasks | 6 files |
 
 ### Research Flags
 
@@ -191,7 +199,7 @@ with the tight scope below.
 ## Session Continuity
 
 - **Next action**: Run `/gsd-plan-phase 7` to generate plans for the rescoped Phase 7 (Snippet Polish, Dashboard Cards & Empty States). ROADMAP.md + REQUIREMENTS.md already reflect the tight scope.
-- **Last session:** 2026-04-18T00:18:19.770Z
+- **Last session:** 2026-04-18T00:28:46.136Z
 - **Artifacts on disk**:
   - `.planning/PROJECT.md` (Current Milestone: v1.1, Phase 6 progress paragraph added)
   - `.planning/REQUIREMENTS.md` (33 active v1.1 REQs + 24 deferred v1.2 REQs; traceability split by target milestone)

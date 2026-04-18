@@ -72,7 +72,7 @@ their own phase.
 Plans:
 - [x] 07-01-PLAN.md — Doc edits: move EMPTY-07 to v1.2 deferred + rewrite ROADMAP SC #2 (D-07)
 - [x] 07-02-PLAN.md — EmptyState + SnippetList primitives (extract from SnippetPanel)
-- [ ] 07-03-PLAN.md — snippets.ts rewrite (S-01..09) + unit tests + CopyButton aria-live e2e
+- [x] 07-03-PLAN.md — snippets.ts rewrite (S-01..09) + unit tests + CopyButton aria-live e2e
 - [ ] 07-04-PLAN.md — Helm OCI→traditional chart mirror (MirrorToTraditional + OCI post-commit hook)
 - [ ] 07-05-PLAN.md — /admin/jobs/summary endpoint + dashboard-thresholds utility + TanStack hook
 - [ ] 07-06-PLAN.md — W-02 ref-counted repoSizeExpr + W-03 DEB Release-file pool-path reader

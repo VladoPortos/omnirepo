@@ -171,7 +171,7 @@ export function S3BucketPage() {
     try {
       await deleteBucket.mutateAsync(bucket);
       toast.success(`Bucket "${bucket}" deleted.`);
-      navigate(`/projects/${name}`);
+      navigate(`/projects/${encodeURIComponent(name)}`);
     } catch (err) {
       setDeleteError(envelopeFromError(err, 'Failed to delete bucket.'));
     }
@@ -188,7 +188,7 @@ export function S3BucketPage() {
         <div>
           <h1 className="text-[28px] font-semibold leading-tight">{bucket}</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            S3 bucket in <Link className="underline" to={`/projects/${name}`}>{name}</Link>.
+            S3 bucket in <Link className="underline" to={`/projects/${encodeURIComponent(name)}`}>{name}</Link>.
             Endpoint: <code className="font-mono">/s3/{bucket}</code>
           </p>
         </div>

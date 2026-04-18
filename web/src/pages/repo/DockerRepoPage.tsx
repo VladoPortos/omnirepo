@@ -198,7 +198,7 @@ export function DockerRepoPage({ repo }: DockerRepoPageProps) {
       render: (row) => (
         <div className="flex gap-1">
           <CopyButton
-            text={`docker pull ${hostname}/${repo.name}:${row.tag}`}
+            text={`docker pull ${hostname}/${projectName}/${repo.name}:${row.tag}`}
             className="size-7"
           />
           <button

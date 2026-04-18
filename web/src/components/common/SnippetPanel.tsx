@@ -1,6 +1,9 @@
 /**
  * Sheet (slide-out panel) with protocol-aware CLI commands per D-16.
- * Each line has a CopyButton.
+ *
+ * The body — per-snippet label + <pre> + CopyButton — is rendered by the
+ * shared <SnippetList /> primitive (Phase 7 E-03) so the Sheet and the
+ * EMPTY-03 inline-snippet EmptyState surface stay in sync.
  */
 
 import {
@@ -12,10 +15,8 @@ import {
   SheetDescription,
 } from '@/components/ui/sheet';
 import { Button } from '@/components/ui/button';
-import { ScrollArea } from '@/components/ui/scroll-area';
 import { Terminal } from 'lucide-react';
-import { CopyButton } from './CopyButton';
-import { getSnippets } from '@/lib/snippets';
+import { SnippetList } from './SnippetList';
 import type { RepoType } from '@/api/types';
 
 interface SnippetPanelProps {
@@ -33,8 +34,6 @@ export function SnippetPanel({
   hostname,
   children,
 }: SnippetPanelProps) {
-  const snippets = getSnippets(repoType, projectName, repoName, hostname);
-
   return (
     <Sheet>
       <SheetTrigger
@@ -59,24 +58,13 @@ export function SnippetPanel({
             </strong>
           </SheetDescription>
         </SheetHeader>
-        <ScrollArea className="flex-1 px-4">
-          <div className="space-y-4 pb-4">
-            {snippets.map((snippet) => (
-              <div key={snippet.label} className="space-y-1.5">
-                <h4 className="text-sm font-medium">{snippet.label}</h4>
-                <div className="relative rounded-md bg-muted p-3 pr-10 font-mono text-xs">
-                  <pre className="overflow-x-auto whitespace-pre-wrap break-all">
-                    {snippet.cmd}
-                  </pre>
-                  <CopyButton
-                    text={snippet.cmd}
-                    className="absolute right-1.5 top-1.5"
-                  />
-                </div>
-              </div>
-            ))}
-          </div>
-        </ScrollArea>
+        <SnippetList
+          repoType={repoType}
+          projectName={projectName}
+          repoName={repoName}
+          hostname={hostname}
+          className="flex-1 px-4"
+        />
       </SheetContent>
     </Sheet>
   );

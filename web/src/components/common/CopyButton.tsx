@@ -14,9 +14,19 @@ import {
 interface CopyButtonProps {
   text: string;
   className?: string;
+  /**
+   * Optional contextual aria-label override. Used by SnippetList to produce
+   * per-snippet labels like "Copy Pull" / "Copy .pypirc" instead of the
+   * generic default. Falls back to "Copy to clipboard" when unset.
+   */
+  'aria-label'?: string;
 }
 
-export function CopyButton({ text, className }: CopyButtonProps) {
+export function CopyButton({
+  text,
+  className,
+  'aria-label': ariaLabel,
+}: CopyButtonProps) {
   const [copied, setCopied] = useState(false);
 
   const handleCopy = useCallback(async () => {
@@ -49,7 +59,7 @@ export function CopyButton({ text, className }: CopyButtonProps) {
               size="icon-sm"
               className={className}
               onClick={handleCopy}
-              aria-label="Copy to clipboard"
+              aria-label={ariaLabel ?? 'Copy to clipboard'}
             />
           }
         >

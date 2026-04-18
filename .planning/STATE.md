@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: on 2026-04-17)
 status: executing
-stopped_at: Completed 07-03-PLAN.md
-last_updated: "2026-04-18T00:28:46.138Z"
+stopped_at: Completed 07-04-PLAN.md
+last_updated: "2026-04-18T00:44:28.291Z"
 last_activity: 2026-04-18
 progress:
   total_phases: 3
   completed_phases: 1
   total_plans: 17
-  completed_plans: 11
-  percent: 65
+  completed_plans: 12
+  percent: 71
 ---
 
 # STATE: OmniRepo
@@ -27,10 +27,10 @@ progress:
 ## Current Position
 
 Phase: 07 (snippet-polish-dashboard-cards-empty-states) — EXECUTING
-Plan: 4 of 9
+Plan: 5 of 9
 Status: Ready to execute
 Last activity: 2026-04-18
-Stopped at: Completed 07-03-PLAN.md
+Stopped at: Completed 07-04-PLAN.md
 
 ## Phase Map
 
@@ -112,6 +112,11 @@ scoped tokens, LDAP/OIDC.
 - **[07-03] APT dual-signing-key variants shipped as SEPARATE labeled entries, not a single dual-purpose block.** S-01 deprecation fix (Debian 12+ / Ubuntu 22.04+ no longer ship `apt-key`). Modern variant writes to `/etc/apt/keyrings`, legacy to `/etc/apt/trusted.gpg.d`. `apt source` line shows both `deb [signed-by=…]` and plain `deb` forms side-by-side inside one `<pre>` block (commented) so copy-paste ergonomics stay intact.
 - **[07-03] Helm 4-entry snippet covers both traditional AND OCI flows.** `helm repo add (traditional)` + `helm pull (traditional)` + `helm push (OCI)` + `helm pull (OCI)`. OCI pushes will be server-side-mirrored to the traditional index in plan 07-04 or later (S-03b).
 - **[07-03] Playwright webServer shell-syntax bug discovered (pre-existing, OUT-OF-SCOPE for 07-03).** `web/playwright.config.ts` `webServer.command` uses bash subshell syntax `(cd web && …)` which `/bin/sh` rejects with `Syntax error: "(" unexpected`. Reproduces on existing specs too (not new with 07-03). Logged to `.planning/phases/07-snippet-polish-dashboard-cards-empty-states/deferred-items.md`. Snippet-copy spec parses cleanly via `--list`; full-run verification deferred.
+- **[07-04] OCI /v2 `resolveRepo` requireDocker gate relaxed to accept `type ∈ {docker, helm}`.** Without this change, `helm push oci://host/proj/helm/repo` 400s at the blob upload step before the mirror hook ever runs. Rule 3 (blocking) deviation absorbed inside Task 2. Existing docker-type tests continue to pass; helm-type integration tests (4 new) prove the new branch.
+- **[07-04] Helm-mirror detection is mediaType-keyed, NEVER `len(layers)==1`.** Helm v3 supports provenance layers alongside the chart layer. Detection requires (a) `config.mediaType == application/vnd.cncf.helm.config.v1+json` AND (b) first layer with `mediaType == application/vnd.cncf.helm.chart.content.v1.tar+gzip`. `TestOCIManifestPut_MirrorsHelmWithProvenanceLayer` pushes provenance FIRST to prove selection is mediaType-driven.
+- **[07-04] `oci.HelmMirrorHook` interface lives on the oci package; concrete `ociHelmMirrorAdapter` lives in `internal/app/phase3_helm.go`.** Keeps `oci` free of a `helm` import cycle while letting `app.Run` wire both CAS + helm.Mirror at construction time. New `wireHelmMirror` helper + compile-time guard `var _ oci.HelmMirrorHook = (*ociHelmMirrorAdapter)(nil)`.
+- **[07-04] Forward-compat skip behavior.** Helm-config manifest with NO chart-content layer is a silent SKIP (debug-log, not warn). Could be a malformed push or a future Helm spec variant; either way the OCI push has already committed and the mirror is a pure side-effect. No warn-spam in operator logs.
+- **[07-04] `helm.Mirror` constructed from the same deps as `helm.Handler` via the existing `wireHelm` path.** Both write paths share PathStore + coalescer + repos handles. A future reverse-mirror (traditional PUT → OCI manifest synthesis, deferred to v1.2) can plug into the same wiring harness.
 
 ### Decisions carried forward from v1.0
 
@@ -136,6 +141,7 @@ scoped tokens, LDAP/OIDC.
 - Transition to Phase 7 (Client Snippets & Empty States). Run `/gsd-plan-phase 7` to generate plans. ⚠️ SCOPE CHANGED 2026-04-17 session — rescope applied, see below.
 - Execute plan 07-02 (wave-0 shared primitives: EmptyState + SnippetList). ✅ Shipped; `web/src/components/common/EmptyState.tsx` (new, 136 lines, E-01 props API + E-02 layout + E-08 a11y), `web/src/components/common/SnippetList.tsx` (new, 58 lines, lifted from SnippetPanel with font-medium→font-semibold + 6px→8px inset fixes), SnippetPanel refactored to delegate body to SnippetList, CopyButton grew optional `aria-label` prop for contextual per-snippet labels, Makefile `lint-spacing-carveout` dropped SnippetPanel.tsx from the exclude list. Two atomic commits `1c3674a` (Task 1) + `7ff48e6` (Task 2). All 5 Phase 6 lint gates + `npm run build` green.
 - Execute plan 07-03 (snippet polish — getSnippets rewrite per S-01..S-09 + vitest scaffold + Playwright aria-live/clipboard spec). ✅ Shipped; `web/src/lib/snippets.ts` rewritten (docker/rpm unchanged, deb dual-signing+literal `stable main`, pypi `.pypirc`, helm 4-entry traditional+OCI, git Clone+Authenticate no-userinfo, raw `-u` on both, s3 `<region>`+credential comment); `web/vitest.config.ts` + `web/src/lib/__tests__/snippets.test.ts` (9 passing shape tests); `web/e2e/snippet-copy.spec.ts` asserts aria-live polite + clipboard round-trip. Three commits `bcd14b6` (RED tests) + `7f9e865` (GREEN impl) + `5b42059` (e2e spec). SNIPPET-01..09 now complete. Vitest 4.1.4 added as devDep. Full verification: `npm test` 9/9 green, Playwright `--list` green, make lint-spacing-carveout + lint-typography clean, `npm run build` green.
+- Execute plan 07-04 (Helm OCI→traditional chart mirror — S-03b backend). ✅ Shipped; new `helm.Mirror` + `NewMirror` + `(*Mirror).MirrorToTraditional` (internal/protocol/helm/oci_mirror.go, 215 lines) mirrors OCI-pushed charts into `<dataRoot>/repos/<proj>/helm/<repo>/charts/<name>-<version>.tgz` with writer-tx (helm_charts upsert + FTS + metadata_state=dirty) + HI-02 rollback + regen coalescer kick; `oci.MediaTypeHelmChartConfigV1` + `oci.MediaTypeHelmChartContentV1` constants; `oci.HelmMirrorHook` interface; post-commit hook in `manifestPut` keyed on config mediaType + first-layer mediaType (NOT index); OCI `resolveRepo` relaxed to accept type=helm on /v2 (blocking deviation); `ociHelmMirrorAdapter` in `internal/app/phase3_helm.go` streams chart blob from OCI CAS into the mirror. Three commits `2d940e6` (RED), `6b9ad13` (GREEN Task 1), `72bff2d` (Task 2 full). Four helm-side integration tests + four OCI-side integration tests all green; full `go test ./...` + `make test` + `make lint-protocol-redaction` clean. SNIPPET-05 complete.
 
 ### Phase 7 rescope (2026-04-17 — APPLIED)
 
@@ -184,6 +190,7 @@ with the tight scope below.
 | Phase 07 P01 | ~3 min | 2 tasks | 2 files |
 | Phase 07 P02 | ~4min | 2 tasks | 5 files |
 | Phase 07 P03 | 5m21s | 2 tasks | 6 files |
+| Phase 07 P04 | 11 min | 2 tasks | 10 files |
 
 ### Research Flags
 
@@ -199,7 +206,7 @@ with the tight scope below.
 ## Session Continuity
 
 - **Next action**: Run `/gsd-plan-phase 7` to generate plans for the rescoped Phase 7 (Snippet Polish, Dashboard Cards & Empty States). ROADMAP.md + REQUIREMENTS.md already reflect the tight scope.
-- **Last session:** 2026-04-18T00:28:46.136Z
+- **Last session:** 2026-04-18T00:44:28.289Z
 - **Artifacts on disk**:
   - `.planning/PROJECT.md` (Current Milestone: v1.1, Phase 6 progress paragraph added)
   - `.planning/REQUIREMENTS.md` (33 active v1.1 REQs + 24 deferred v1.2 REQs; traceability split by target milestone)

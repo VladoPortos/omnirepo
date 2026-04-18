@@ -8,6 +8,7 @@
     "build": "tsc -b && vite build",
     "lint": "eslint src/",
     "preview": "vite preview",
+    "test": "vitest run",
     "copy-swagger": "mkdir -p public/swagger && cp node_modules/swagger-ui-dist/swagger-ui-bundle.js node_modules/swagger-ui-dist/swagger-ui-standalone-preset.js node_modules/swagger-ui-dist/swagger-ui.css public/swagger/",
     "prebuild": "npm run copy-swagger"
   },
@@ -53,6 +54,7 @@
     "tailwindcss": "4.1.4",
     "typescript": "5.8.3",
     "typescript-eslint": "^8.58.2",
-    "vite": "6.3.3"
+    "vite": "6.3.3",
+    "vitest": "^4.1.4"
   }
 }

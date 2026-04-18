@@ -200,6 +200,38 @@ export function useDashboardStorage() {
   });
 }
 
+// -- Admin jobs summary (Phase 7 / D-06) --
+
+/**
+ * AdminJobsSummary mirrors the GET /api/v1/admin/jobs/summary response
+ * shape (LOCKED at D-06). Timestamps are RFC3339 strings or null when no
+ * matching sync_jobs row exists.
+ */
+export interface AdminJobsSummary {
+  running: number;
+  queued: number;
+  failed_last_24h: number;
+  last_completed_at: string | null;
+  last_failed_at: string | null;
+}
+
+/**
+ * useAdminJobsSummary — TanStack hook for the C-4 Background Jobs card.
+ *
+ * Pass `enabled = !!currentUser?.is_super_admin` so non-admins never
+ * issue a 403-generating request (the server gate is RequireCan on
+ * ActionTriggerGC). staleTime 60s per UI-SPEC §Interaction Patterns /
+ * Threshold display — counts don't need to update every request.
+ */
+export function useAdminJobsSummary(enabled: boolean) {
+  return useQuery({
+    queryKey: ['admin', 'jobs', 'summary'],
+    queryFn: () => api.get<AdminJobsSummary>('/admin/jobs/summary'),
+    staleTime: 60_000,
+    enabled,
+  });
+}
+
 // -- Projects --
 
 export function useProjects() {

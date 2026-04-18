@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: on 2026-04-17)
 status: executing
-stopped_at: Completed 07-06-PLAN.md
-last_updated: "2026-04-18T01:06:30.230Z"
+stopped_at: Completed 07-07-PLAN.md
+last_updated: "2026-04-18T01:19:15.115Z"
 last_activity: 2026-04-18
 progress:
   total_phases: 3
   completed_phases: 1
   total_plans: 17
-  completed_plans: 14
-  percent: 82
+  completed_plans: 15
+  percent: 88
 ---
 
 # STATE: OmniRepo
@@ -27,10 +27,10 @@ progress:
 ## Current Position
 
 Phase: 07 (snippet-polish-dashboard-cards-empty-states) — EXECUTING
-Plan: 7 of 9
+Plan: 8 of 9
 Status: Ready to execute
 Last activity: 2026-04-18
-Stopped at: Completed 07-06-PLAN.md
+Stopped at: Completed 07-07-PLAN.md
 
 ## Phase Map
 
@@ -127,6 +127,11 @@ scoped tokens, LDAP/OIDC.
 - **[07-06] `relPoolPath` signature extended in place**, not shimmed. The legacy two-arg form had exactly one caller (`sync_handler.fetchAndCommit:260`) which already had `h.deps.RepoRoot`, `projectName`, `repo.Name`, and `ent.Suite` in scope. Direct `(repoRoot, project, repo, suite, filename, ctrl)` signature avoids the "thin shim + parallel helper" duplication the plan offered as an alternative. `relPoolPath` is now a thin wrapper over the exported `ResolvePoolPath` purely to preserve the function-name hook.
 - **[07-06] T-07-06-01 traversal mitigation ships as first-class `isSafeComponent` helper**, not an inline check. Rejects component values containing `/`, `..`, a NUL byte, or exceeding 64 chars; failing values fall back to `"main"`. Dedicated helper yields a dedicated test (`TestResolvePoolPath_RejectsTraversalInComponent`) and a clear anchor for future reviewers. Mitigation anticipated by the threat model (`mitigate` disposition), so included in primary design rather than added as a post-hoc Rule-2 fix.
 - **[07-06] `ent.Suite` defaults to `"stable"` at the call site** when the upstream parser didn't populate it — matches `SyncPayload.Suite`'s existing default and keeps `ResolvePoolPath`'s argument signature strict (the helper doesn't second-guess an empty suite).
+- **[07-07] Phase 7 Composition row shipped on DashboardPage.** 3 user-visible cards (Storage / Recent Failures / Scan Findings Trend) + 3 admin-gated (Background Jobs / TLS / Trivy DB), StatusBadge variant via `dashboard-thresholds.ts` pure functions, cold-load via SkeletonCard, error surface via `ErrorEnvelopeRenderer mode="inline"`. D-05 migrations: two EmptyState instances (activity-empty, storage-empty) + one inline StatusBadge for the zero-CVE goal state (E-06). Added `useAdminTLSCurrent` + `useAdminTrivyDBStatus` TanStack hooks (gated on `enabled` flag so non-admin sessions never 403).
+- **[07-07] Composition card headers use `<CardAction>` slot for the right-aligned StatusBadge.** The shadcn Card primitive already declares `has-data-[slot=card-action]:grid-cols-[1fr_auto]` so the badge auto-positions to the right without inline `flex justify-between` classes — cleaner, matches the shadcn idiom.
+- **[07-07] `jobsStatusLabel` overlays 'Running' copy when `running + queued > 0`** even though `jobsVariant` returns `healthy` for jobs-moving state. D-02 locks `jobsVariant` to 3 variants (healthy/warning/failure) with no maintenance/idle split — the UI distinguishes idle vs running purely via per-card label mapping, keeping the variant enum from expanding without a CONTEXT decision.
+- **[07-07] C-6 Trivy `everInitialised = source !== 'none'`.** Baked-in DB (source='baked-in', age_hours=-1, version='unknown') counts as initialised because scans CAN run — age is just unknown. Surface 'Age unknown (baked-in)' body copy; `trivyDBVariant(0, true)` maps to healthy which matches the spirit of "DB is present". Only `source === 'none'` flips to the disabled variant with the 'Not initialised' label.
+- **[07-07] C-2 Recent Failures derived client-side from `dashboard.recent_activity[]`.** Server already scopes to `visibleProjectIDs` so no new data-scoping work needed. Detection regex: `action.toLowerCase().endsWith('.failed') OR .includes('error')`. 24h cutoff. The "View full audit log →" link is only rendered for super-admins (non-admins have no `/admin/audit` route).
 
 ### Decisions carried forward from v1.0
 
@@ -154,6 +159,7 @@ scoped tokens, LDAP/OIDC.
 - Execute plan 07-04 (Helm OCI→traditional chart mirror — S-03b backend). ✅ Shipped; new `helm.Mirror` + `NewMirror` + `(*Mirror).MirrorToTraditional` (internal/protocol/helm/oci_mirror.go, 215 lines) mirrors OCI-pushed charts into `<dataRoot>/repos/<proj>/helm/<repo>/charts/<name>-<version>.tgz` with writer-tx (helm_charts upsert + FTS + metadata_state=dirty) + HI-02 rollback + regen coalescer kick; `oci.MediaTypeHelmChartConfigV1` + `oci.MediaTypeHelmChartContentV1` constants; `oci.HelmMirrorHook` interface; post-commit hook in `manifestPut` keyed on config mediaType + first-layer mediaType (NOT index); OCI `resolveRepo` relaxed to accept type=helm on /v2 (blocking deviation); `ociHelmMirrorAdapter` in `internal/app/phase3_helm.go` streams chart blob from OCI CAS into the mirror. Three commits `2d940e6` (RED), `6b9ad13` (GREEN Task 1), `72bff2d` (Task 2 full). Four helm-side integration tests + four OCI-side integration tests all green; full `go test ./...` + `make test` + `make lint-protocol-redaction` clean. SNIPPET-05 complete.
 - Execute plan 07-05 (dashboard data sources — /admin/jobs/summary endpoint + threshold utilities). ✅ Shipped; new `internal/api/admin_jobs.go` (D-06 locked shape: running/queued/failed_last_24h/last_completed_at/last_failed_at) super-admin-gated via existing `ActionTriggerGC` + mounted next to `mountAdminGC` in `admin_phase1.go`; three handler tests green (200 super-admin/403 non-super/401 unauth); `web/src/lib/dashboard-thresholds.ts` ships six pure threshold functions (storage/failures/scanFindings/jobs/tls/trivyDB) mapping D-02 defaults to `StatusVariant` with per-function typed overrides; `jobsVariant` returns ONLY healthy/warning/failure (no new StatusBadge variants invented); 54 vitest boundary cases green; `useAdminJobsSummary(enabled)` TanStack hook + `AdminJobsSummary` interface appended to `queries.ts`. Four commits `2c16eb2` (RED Task 1), `f26f3e9` (GREEN Task 1), `84ddf51` (RED Task 2), `6fb0134` (GREEN Task 2). Full `go test ./internal/api/` + `npm run test` (63/63) + `npm run build` + `make lint-protocol-redaction` + `make lint-typography` + `make lint-spacing-carveout` clean. Plan 07-07 now has everything pre-built for the Composition row.
 - Execute plan 07-06 (walkthrough micro-fixes: W-02 docker blob ref-counting + W-03 DEB Release-aware pool-path). ✅ Shipped; `internal/api/dashboard.go:repoSizeExpr` rewritten with `CAST(SUM(b.size_bytes * 1.0 / b.distinct_repos) AS INTEGER)` ref-count sub-expression + new `TestDashboardStorage_RefCountsSharedBlobs` verifying a 2 GiB blob shared between two repos contributes ~1 GiB to each (existing `TestDashboardStorage_ReturnsRepoBreakdown` stays green unchanged — Pitfall 5 verified); new `internal/protocol/deb/pool_release.go` with `ResolvePoolPath` helper reading `dists/<suite>/Release` via `net/mail.ReadMessage` and honouring its first-listed `Components:` entry, with `isSafeComponent` traversal mitigation (T-07-06-01); `relPoolPath` signature extended in-place in `sync_handler.go` (single caller had every param in scope); 6 sub-tests for ResolvePoolPath (default/custom/missing/malformed/traversal/nil). Four commits `a094cff` (RED W-02), `04a1f19` (GREEN W-02), `03eb808` (RED W-03), `9c60eb2` (GREEN W-03). Discovered during TDD: modernc.org/sqlite returns an error on REAL→int64 Scan rather than silently truncating — the CAST in repoSizeExpr is mandatory, not cosmetic. Full `go test ./...` + `make test` + all 5 Phase 6 lint gates clean.
+- Execute plan 07-07 (DashboardPage Composition row + D-05 string migrations). ✅ Shipped; `web/src/pages/DashboardPage.tsx` grew Row 2 Composition row with 6 cards (3 user-visible: Storage/Recent Failures/Scan Findings Trend + 3 admin-gated: Background Jobs/TLS Certificate/Trivy Database) using `<CardAction>` slot for right-aligned StatusBadge, StatusBadge variants derived from `dashboard-thresholds.ts` pure functions, cold-load extended to 6 SkeletonCard slots, errors surface via `ErrorEnvelopeRenderer mode="inline"`. Three D-05 migrations: `"No recent activity." → <EmptyState icon={Activity}>`, `"No repositories with stored data." → <EmptyState icon={HardDrive}>`, `"... Looking good!" → inline <StatusBadge status="healthy" label="All clear" />` (E-06 positive goal state). Two new TanStack hooks added to queries.ts: `useAdminTLSCurrent` + `useAdminTrivyDBStatus` with `AdminTLSCurrent` / `AdminTrivyDBStatus` interfaces verified 1:1 against Go handler JSON shapes. Per-card label pure functions (`storageStatusLabel` / `failuresStatusLabel` / `scanFindingsStatusLabel` / `jobsStatusLabel` / `tlsStatusLabel` / `trivyDBStatusLabel`) keep the variant→copy mapping next to the consumer. `jobsStatusLabel` overlays "Running" when running/queued>0 even though `jobsVariant` returns healthy — D-02's 3-variant lock preserved. New `web/e2e/dashboard-composition.spec.ts` asserts 6 cards for super-admin, 3 cards for non-admin (seeds user via POST /api/v1/admin/users, drives must_change_password wall via UI), no horizontal page scroll at 1366×768 on both flows. Three commits `b3f2eb0` (Task 1 hooks), `f7b41d0` (Task 2 Composition row + migrations), `f8f7848` (Task 3 Playwright spec). Full `npm run build` + 63/63 vitest + all 5 Phase 6 lint gates green. Plan 07-07 is the Phase 7 tentpole user-visible delivery.
 
 ### Phase 7 rescope (2026-04-17 — APPLIED)
 
@@ -205,6 +211,7 @@ with the tight scope below.
 | Phase 07 P04 | 11 min | 2 tasks | 10 files |
 | Phase 07 P05 | 5m13s | 2 tasks | 6 files |
 | Phase 07 P06 | 6m16s | 2 tasks | 5 files |
+| Phase 07 P07 | ~7 min | 3 tasks | 3 files |
 
 ### Research Flags
 
@@ -220,7 +227,7 @@ with the tight scope below.
 ## Session Continuity
 
 - **Next action**: Run `/gsd-plan-phase 7` to generate plans for the rescoped Phase 7 (Snippet Polish, Dashboard Cards & Empty States). ROADMAP.md + REQUIREMENTS.md already reflect the tight scope.
-- **Last session:** 2026-04-18T01:06:30.227Z
+- **Last session:** 2026-04-18T01:19:15.113Z
 - **Artifacts on disk**:
   - `.planning/PROJECT.md` (Current Milestone: v1.1, Phase 6 progress paragraph added)
   - `.planning/REQUIREMENTS.md` (33 active v1.1 REQs + 24 deferred v1.2 REQs; traceability split by target milestone)

@@ -76,7 +76,7 @@ Plans:
 - [x] 07-04-PLAN.md — Helm OCI→traditional chart mirror (MirrorToTraditional + OCI post-commit hook)
 - [x] 07-05-PLAN.md — /admin/jobs/summary endpoint + dashboard-thresholds utility + TanStack hook
 - [x] 07-06-PLAN.md — W-02 ref-counted repoSizeExpr + W-03 DEB Release-file pool-path reader
-- [ ] 07-07-PLAN.md — DashboardPage Composition row (6 cards) + D-05 string migrations
+- [x] 07-07-PLAN.md — DashboardPage Composition row (6 cards) + D-05 string migrations
 - [ ] 07-08-PLAN.md — EmptyState wiring across 13 call sites (EMPTY-01..06, 08) + Playwright spec
 - [ ] 07-09-PLAN.md — Codex rescue sweep (W-01) + findings triage + phase closure
 **UI hint**: yes

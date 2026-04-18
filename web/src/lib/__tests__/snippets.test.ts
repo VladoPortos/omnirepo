@@ -21,13 +21,19 @@ const HOST = 'omnirepo.example';
 const P = 'acme';
 
 describe('getSnippets', () => {
-  it('docker: 3 entries — Login/Pull/Push (S-08 unchanged)', () => {
+  it('docker: 3 entries — Login/Pull/Push with 4-segment URL (F-T11)', () => {
     const s = getSnippets('docker', P, 'hub', HOST);
     expect(s).toHaveLength(3);
     expect(s.map((x) => x.label)).toEqual(['Login', 'Pull', 'Push']);
     expect(s[0].cmd).toContain(`docker login ${HOST}`);
-    expect(s[1].cmd).toContain(`docker pull ${HOST}/${P}/hub/<image>:<tag>`);
-    expect(s[2].cmd).toContain(`docker push ${HOST}/${P}/hub/<image>:<tag>`);
+    // OCI router requires 4 segments: host/project/docker/repo/image:tag —
+    // the 3-segment form (project/repo/image) returns NAME_UNKNOWN.
+    expect(s[1].cmd).toContain(
+      `docker pull ${HOST}/${P}/docker/hub/<image>:<tag>`,
+    );
+    expect(s[2].cmd).toContain(
+      `docker push ${HOST}/${P}/docker/hub/<image>:<tag>`,
+    );
   });
 
   it('rpm: 1 entry — dnf config (S-09 unchanged)', () => {

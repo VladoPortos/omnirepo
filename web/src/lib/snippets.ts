@@ -59,15 +59,20 @@ export function getSnippets(
 ): Snippet[] {
   switch (type) {
     case 'docker':
+      // F-T11: OCI router expects 4 segments —
+      //   /v2/{project}/docker/{repo}/{image}
+      // Pushing to the 3-segment shape that this snippet used to render
+      // (host/project/repo/image:tag) returns NAME_UNKNOWN because the repo
+      // lookup uses segment-3 as the repoName, dropping the {image} part.
       return [
         { label: 'Login', cmd: `docker login ${host}` },
         {
           label: 'Pull',
-          cmd: `docker pull ${host}/${project}/${repo}/<image>:<tag>`,
+          cmd: `docker pull ${host}/${project}/docker/${repo}/<image>:<tag>`,
         },
         {
           label: 'Push',
-          cmd: `docker push ${host}/${project}/${repo}/<image>:<tag>`,
+          cmd: `docker push ${host}/${project}/docker/${repo}/<image>:<tag>`,
         },
       ];
     case 'rpm':

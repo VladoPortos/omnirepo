@@ -24,6 +24,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -247,8 +248,23 @@ func (d Deps) handleRescan(w http.ResponseWriter, r *http.Request) {
 	kind := artifactKindForRepoType(repo.Type)
 	if kind == "" {
 		writeJSONError(w, r, http.StatusBadRequest, ErrValidationFailed,
-			"rescan only supported for docker + raw artifacts in Phase 2")
+			"rescan not supported for "+repo.Type+" repos")
 		return
+	}
+	// Package-style repos (rpm/deb/pypi/helm) store scans.artifact_id as the
+	// on-disk filename (auto-scan at upload time uses `res.filename`), but the
+	// REST URL pins the {id} param to the DB row's PK for stable linkability.
+	// Translate row-id → filename so the scan pool's materializePackage can
+	// find the archive on disk. Docker / raw keep the URL param as-is (digest
+	// / raw path respectively).
+	switch kind {
+	case "rpm", "deb", "pypi", "helm":
+		fn, lookupErr := d.lookupPackageFilename(r.Context(), kind, repo.ID, artifactID)
+		if lookupErr != nil {
+			writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "artifact not found")
+			return
+		}
+		artifactID = fn
 	}
 	var sid int64
 	if err := d.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
@@ -281,12 +297,63 @@ func (d Deps) handleRescan(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, map[string]any{"scan_id": sid})
 }
 
+// lookupPackageFilename resolves the on-disk filename for a package-style
+// artifact given (kind, repo_id, row-id). Returns the filename the scan
+// pipeline expects as its artifact_id token. The mapping mirrors the
+// auto-scan enqueue sites (e.g. rpm/put.go passes res.filename).
+func (d Deps) lookupPackageFilename(ctx context.Context, kind string, repoID int64, rowID string) (string, error) {
+	id, perr := strconv.ParseInt(rowID, 10, 64)
+	if perr != nil || id <= 0 {
+		return "", fmt.Errorf("invalid artifact id %q", rowID)
+	}
+	var table string
+	switch kind {
+	case "rpm":
+		table = "rpm_packages"
+	case "deb":
+		table = "deb_packages"
+	case "pypi":
+		table = "pypi_files"
+	case "helm":
+		table = "helm_charts"
+	default:
+		return "", fmt.Errorf("no package table for kind %q", kind)
+	}
+	var filename string
+	//nolint:gosec // table is whitelisted by the switch above; rowID + repoID are parameterized.
+	err := d.DB.Reader.QueryRowContext(ctx,
+		"SELECT filename FROM "+table+" WHERE id=? AND repo_id=?",
+		id, repoID,
+	).Scan(&filename)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", fmt.Errorf("artifact %d not found in repo %d", id, repoID)
+	}
+	if err != nil {
+		return "", fmt.Errorf("%s lookup: %w", table, err)
+	}
+	return filename, nil
+}
+
+// artifactKindForRepoType maps a repo.type onto the scans.artifact_kind
+// string used by the Trivy runner. For docker/raw the mapping is
+// canonical. rpm/deb/pypi/helm repos materialize the single uploaded
+// archive and run Trivy filesystem-mode over it (see
+// internal/scan/handler.go:168). Any new repo type that wants to be
+// rescannable must be mirrored here AND in the scan handler's switch.
 func artifactKindForRepoType(t string) string {
 	switch t {
 	case "docker":
 		return "docker"
 	case "raw":
 		return "raw"
+	case "rpm":
+		return "rpm"
+	case "deb":
+		return "deb"
+	case "pypi":
+		return "pypi"
+	case "helm":
+		return "helm"
 	}
 	return ""
 }

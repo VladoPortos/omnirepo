@@ -111,8 +111,16 @@ export function EmptyState({
         <Tooltip>
           <TooltipTrigger
             render={
-              <span className="mt-6 inline-block">
-                <Button disabled>{primaryCTA.label}</Button>
+              <span
+                className="mt-6 inline-block rounded-md focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                tabIndex={0}
+                role="button"
+                aria-disabled="true"
+                aria-label={primaryCTA.label}
+              >
+                <Button disabled tabIndex={-1}>
+                  {primaryCTA.label}
+                </Button>
               </span>
             }
           />

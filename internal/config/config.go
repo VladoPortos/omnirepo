@@ -127,9 +127,17 @@ type GC struct {
 //   - JWTTTLSeconds: /v2/token Bearer lifetime (D-06). Default 3600.
 //   - UploadSessionTTLSeconds: chunked-blob-upload session lifetime used by
 //     Phase 02-06. Default 3600.
+//   - ChunkMaxBytes: maximum bytes accepted in a single PATCH or final PUT
+//     chunk body. 0 = unbounded. Default 536870912 (512 MiB). F-T7: docker
+//     clients that fall back to single-PUT push would hit the old 64 MiB
+//     hard-cap for common base images (mariadb, postgres, golang).
+//   - SessionMaxBytes: maximum total bytes accepted across all chunks of a
+//     single blob upload session. 0 = unbounded. Default 10737418240 (10 GiB).
 type Docker struct {
-	JWTTTLSeconds           int `koanf:"jwt_ttl_seconds"`
-	UploadSessionTTLSeconds int `koanf:"upload_session_ttl_seconds"`
+	JWTTTLSeconds           int   `koanf:"jwt_ttl_seconds"`
+	UploadSessionTTLSeconds int   `koanf:"upload_session_ttl_seconds"`
+	ChunkMaxBytes           int64 `koanf:"chunk_max_bytes"`
+	SessionMaxBytes         int64 `koanf:"session_max_bytes"`
 }
 
 type ServerConfig struct {
@@ -241,6 +249,8 @@ func Defaults() Config {
 		Docker: Docker{
 			JWTTTLSeconds:           3600,
 			UploadSessionTTLSeconds: 3600,
+			ChunkMaxBytes:           512 << 20, // 512 MiB per-chunk cap (F-T7)
+			SessionMaxBytes:         10 << 30,  // 10 GiB per-session cap
 		},
 		GC: GC{
 			TrashRetentionDays:    7,

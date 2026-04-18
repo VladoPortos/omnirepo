@@ -145,9 +145,13 @@ func New(d Deps) *Handler {
 	if ttl <= 0 {
 		ttl = time.Hour
 	}
+	// F-T3: default lifted from 64 MiB to 512 MiB so docker clients that
+	// fall back to single-PUT push don't hard-fail on common base images
+	// (mariadb, postgres, golang) whose largest layer is 80–200 MiB. Admins
+	// can tune via docker.chunk_max_bytes in config.yaml.
 	chunk := d.ChunkMaxBytes
 	if chunk <= 0 {
-		chunk = 64 << 20 // 64 MiB
+		chunk = 512 << 20 // 512 MiB
 	}
 	sess := d.SessionMaxBytes
 	if sess <= 0 {

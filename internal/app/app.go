@@ -415,6 +415,11 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 		HMACSecret:  dockerJWTSecret,
 		JWTTTL:      jwtTTL,
 
+		// F-T7: admin-tunable caps. 0 → handler falls back to built-in
+		// defaults (512 MiB chunk / 10 GiB session).
+		ChunkMaxBytes:   cfg.Docker.ChunkMaxBytes,
+		SessionMaxBytes: cfg.Docker.SessionMaxBytes,
+
 		// Plan 02-07 wiring: manifests + tags + auto-scan enqueue.
 		Manifests: metadata.NewDockerManifestsRepo(db),
 		Tags:      metadata.NewDockerTagsRepo(db),

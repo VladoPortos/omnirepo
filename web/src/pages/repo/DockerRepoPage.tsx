@@ -44,8 +44,9 @@ import { api, envelopeFromError, type ApiErrorEnvelope } from '@/api/client';
 import { ErrorEnvelopeRenderer } from '@/components/common/ErrorEnvelope';
 import type { Repo } from '@/api/types';
 
-/** Represents a Docker image tag -- populated from API in a real app. */
+/** Represents a Docker image tag -- populated from /content API. */
 interface DockerTag {
+  image: string;
   tag: string;
   digest: string;
   size: number;
@@ -54,9 +55,6 @@ interface DockerTag {
   cosign_signed: boolean;
   pushed_at: string;
 }
-
-// Mock data for demonstration; will be replaced by API calls
-const MOCK_TAGS: DockerTag[] = [];
 
 interface DockerRepoPageProps {
   repo: Repo;
@@ -83,15 +81,44 @@ export function DockerRepoPage({ repo }: DockerRepoPageProps) {
   const canScan = !!currentUser?.is_super_admin || canUpload;
 
   const hostname = window.location.host;
-  const tags = MOCK_TAGS;
 
-  // Fetch real artifacts + scans for EMPTY-04 detection. Docker tags are
-  // still rendered from MOCK_TAGS above; artifacts here refer to the
-  // /content endpoint which returns per-manifest rows regardless of the
-  // mock-tag source, so EMPTY-04 surfaces when the repo has artifacts
-  // uploaded but no scans run yet.
+  // F-T10: /content now returns one row per (image, tag). Map into the
+  // DockerTag shape the table renders. Scan status derives from the
+  // unified scan_severity: '' = never scanned, 'scanning'/'failed' carry
+  // their own status, everything else is a done scan.
   const { data: artifactRows } = useRepoContent(projectName ?? '', 'docker', repo.name);
-  const artifactsCount = artifactRows?.length ?? 0;
+  const tags = useMemo<DockerTag[]>(() => {
+    if (!artifactRows) return [];
+    return artifactRows.map((row) => {
+      const extra = (row.extra ?? {}) as Record<string, unknown>;
+      const sev = row.scan_severity ?? '';
+      let scanStatus: string;
+      switch (sev) {
+        case '':
+          scanStatus = '';
+          break;
+        case 'scanning':
+          scanStatus = 'running';
+          break;
+        case 'failed':
+          scanStatus = 'failed';
+          break;
+        default:
+          scanStatus = 'done';
+      }
+      return {
+        image: String(extra.image ?? ''),
+        tag: String(extra.tag ?? row.version ?? row.name),
+        digest: String(extra.digest ?? ''),
+        size: row.size_bytes,
+        scan_status: scanStatus,
+        scan_severity: sev === 'scanning' || sev === 'failed' ? '' : sev,
+        cosign_signed: false, // surfaced separately once cosign rows are joined
+        pushed_at: row.uploaded_at,
+      };
+    });
+  }, [artifactRows]);
+  const artifactsCount = tags.length;
   const { data: scansData } = useRepoScans(projectName ?? '', 'docker', repo.name);
   const scansCount = scansData?.length ?? 0;
   const [rescanError, setRescanError] = useState<ApiErrorEnvelope | null>(null);
@@ -123,6 +150,7 @@ export function DockerRepoPage({ repo }: DockerRepoPageProps) {
     return tags.filter(
       (t) =>
         t.tag.toLowerCase().includes(q) ||
+        t.image.toLowerCase().includes(q) ||
         t.digest.toLowerCase().includes(q),
     );
   }, [tags, filter]);
@@ -130,17 +158,21 @@ export function DockerRepoPage({ repo }: DockerRepoPageProps) {
   const columns: ColumnDef<DockerTag>[] = [
     {
       id: 'tag',
-      name: 'Tag',
+      name: 'Image:Tag',
       sortable: true,
-      render: (row) => (
-        <button
-          className="inline-flex items-center gap-1.5 font-mono text-sm text-primary hover:underline"
-          onClick={() => setExpandedTag(expandedTag === row.tag ? null : row.tag)}
-        >
-          <Tag className="size-3.5" />
-          {row.tag}
-        </button>
-      ),
+      render: (row) => {
+        const label = row.image ? `${row.image}:${row.tag}` : row.tag;
+        const key = `${row.image}:${row.tag}`;
+        return (
+          <button
+            className="inline-flex items-center gap-1.5 font-mono text-sm text-primary hover:underline"
+            onClick={() => setExpandedTag(expandedTag === key ? null : key)}
+          >
+            <Tag className="size-3.5" />
+            {label}
+          </button>
+        );
+      },
     },
     {
       id: 'size',
@@ -198,7 +230,7 @@ export function DockerRepoPage({ repo }: DockerRepoPageProps) {
       render: (row) => (
         <div className="flex gap-1">
           <CopyButton
-            text={`docker pull ${hostname}/${projectName}/${repo.name}:${row.tag}`}
+            text={`docker pull ${hostname}/${projectName}/${repo.type}/${repo.name}/${row.image || row.tag}:${row.tag}`}
             className="size-7"
           />
           <button

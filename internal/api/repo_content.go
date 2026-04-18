@@ -137,11 +137,13 @@ func (d Deps) handleListRepoContent(w http.ResponseWriter, r *http.Request) {
 		entries, qerr = d.listHelmContent(r, repo.ID, limit, offset)
 	case "raw":
 		entries, qerr = d.listRawContent(r, repo.ID, limit, offset)
-	case "git", "docker":
-		// Git and Docker have their own dedicated listing surfaces (git
-		// tree/refs under /projects/.../git/..., docker tags under /v2).
-		// Return an empty list so the UI doesn't error, but the tabs there
-		// should link to the protocol-specific views instead.
+	case "docker":
+		entries, qerr = d.listDockerContent(r, repo.ID, limit, offset)
+	case "git":
+		// Git has its own dedicated listing surface (tree/refs under
+		// /projects/.../git/...). Return an empty list here so the UI's
+		// generic content tab doesn't error; repo page routes direct the
+		// user to the protocol-specific view.
 		entries = []RepoContentEntry{}
 	default:
 		entries = []RepoContentEntry{}
@@ -373,6 +375,69 @@ func (d Deps) listHelmContent(r *http.Request, repoID, limit, offset int64) ([]R
 				"app_version": appVersion,
 				"description": description,
 				"filename":    filename,
+			},
+		})
+	}
+	return out, rows.Err()
+}
+
+// listDockerContent produces one row per (image, tag) pair in a docker repo.
+// F-T10: previously returned [] because the listing was delegated to /v2,
+// but the generic Content tab had no link to that view so repos looked empty
+// even when populated with 16+ manifests.
+//
+// Row shape:
+//
+//	Name       = "<image>:<tag>"  (or just ":<tag>" for the legacy
+//	                               image-less rows pre-migration 021)
+//	Version    = tag               (so sort/filter by version chips work)
+//	SizeBytes  = manifest size_bytes (cheap; full layer sum would require
+//	                                 walking docker_blobs via JSON1 — we
+//	                                 surface that through the dashboard)
+//	Extra.image, Extra.tag, Extra.digest, Extra.media_type
+//
+// The scan hook uses artifact_id=digest since that's what the oci push path
+// enqueues (see internal/protocol/oci/manifests.go).
+func (d Deps) listDockerContent(r *http.Request, repoID, limit, offset int64) ([]RepoContentEntry, error) {
+	query := `
+		SELECT dt.image, dt.tag, dt.digest, dm.media_type, dm.size_bytes, dt.updated_at,
+		       COALESCE(ls.status, ''), COALESCE(ls.severity_summary_json, '')
+		FROM docker_tags dt
+		LEFT JOIN docker_manifests dm ON dm.repo_id = dt.repo_id AND dm.digest = dt.digest
+		` + fmtLatestScanJoin("dt.digest") + `
+		WHERE dt.repo_id=?
+		ORDER BY dt.image ASC, dt.tag ASC
+		LIMIT ? OFFSET ?`
+	rows, err := d.DB.Reader.QueryContext(r.Context(), query,
+		repoID, "docker", repoID, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var out []RepoContentEntry
+	for rows.Next() {
+		var image, tag, digest, mediaType, updatedAt string
+		var size sql.NullInt64
+		var scanStatus, scanSummary string
+		if err := rows.Scan(&image, &tag, &digest, &mediaType, &size, &updatedAt,
+			&scanStatus, &scanSummary); err != nil {
+			return nil, err
+		}
+		name := tag
+		if image != "" {
+			name = image + ":" + tag
+		}
+		out = append(out, RepoContentEntry{
+			Name:         name,
+			Version:      tag,
+			SizeBytes:    size.Int64,
+			UploadedAt:   updatedAt,
+			ScanSeverity: deriveScanSeverity(scanStatus, scanSummary),
+			Extra: map[string]any{
+				"image":      image,
+				"tag":        tag,
+				"digest":     digest,
+				"media_type": mediaType,
 			},
 		})
 	}

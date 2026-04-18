@@ -35,7 +35,6 @@ prefixes (AUTH, REPO, etc.).
 - [ ] **EMPTY-04**: When scanning has never run on a repo that supports scanning, the scan surface shows an "Enable / run first scan" empty state with explanation
 - [ ] **EMPTY-05**: When no admin-uploaded TLS certificate exists (default self-signed), the TLS admin page shows a "Configure TLS" empty state with an upload CTA
 - [ ] **EMPTY-06**: When no trash items exist, the trash page shows an explanatory empty state instead of a blank table
-- [ ] **EMPTY-07**: When no saved filters, favorites, or recents exist on a given surface, the UI shows guidance text rather than a silent empty section
 - [ ] **EMPTY-08**: When search returns no results, the UI shows "try a different term" guidance with example queries
 
 ### ERR — Better failure messaging
@@ -92,6 +91,10 @@ v1.2" column, not as v1.1 coverage.
 - [ ] **FAV-05**: Saved filters and favorites persist per-user across sessions — stored server-side, survive browser-data reset
 - [ ] **FAV-06**: User can rename and delete their saved filters
 - [ ] **FAV-07**: User can reorder their favorites (drag-and-drop or explicit up/down controls)
+
+### EMPTY — Context-aware empty states (deferred to v1.2)
+
+- [ ] **EMPTY-07**: When no saved filters, favorites, or recents exist on a given surface, the UI shows guidance text rather than a silent empty section *(deferred — depends on FAV surfaces)*
 
 ### OVERVIEW — Better repository overview pages (deferred to v1.2)
 
@@ -164,7 +167,7 @@ Deferred REQs carry a "v1.2" target and will re-map to concrete phases when
 the v1.2 ROADMAP is created. Phases numbered 6–7 continue from v1.0's
 phases 1–5.
 
-### Active v1.1 (33 REQs)
+### Active v1.1 (32 REQs)
 
 | REQ-ID | Phase | Status |
 |--------|-------|--------|
@@ -199,10 +202,9 @@ phases 1–5.
 | EMPTY-04 | Phase 7 | Pending |
 | EMPTY-05 | Phase 7 | Pending |
 | EMPTY-06 | Phase 7 | Pending |
-| EMPTY-07 | Phase 7 | Pending |
 | EMPTY-08 | Phase 7 | Pending |
 
-### Deferred to v1.2 (24 REQs — re-map at v1.2 planning)
+### Deferred to v1.2 (25 REQs — re-map at v1.2 planning)
 
 | REQ-ID | Target | Status |
 |--------|--------|--------|
@@ -222,6 +224,7 @@ phases 1–5.
 | FAV-05 | v1.2 | Deferred |
 | FAV-06 | v1.2 | Deferred |
 | FAV-07 | v1.2 | Deferred |
+| EMPTY-07 | v1.2 | Deferred |
 | OVERVIEW-01 | v1.2 | Deferred |
 | OVERVIEW-02 | v1.2 | Deferred |
 | OVERVIEW-03 | v1.2 | Deferred |
@@ -231,8 +234,8 @@ phases 1–5.
 | OVERVIEW-07 | v1.2 | Deferred |
 | OVERVIEW-08 | v1.2 | Deferred |
 
-**Coverage:** 33/33 active v1.1 REQ-IDs mapped to exactly one v1.1 phase;
-24 REQ-IDs deferred to v1.2 with phase mapping TBD.
+**Coverage:** 32/32 active v1.1 REQ-IDs mapped to exactly one v1.1 phase;
+25 REQ-IDs deferred to v1.2 with phase mapping TBD.
 
 ---
 

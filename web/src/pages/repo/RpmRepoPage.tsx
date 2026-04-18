@@ -28,7 +28,7 @@ import { SnippetList } from '@/components/common/SnippetList';
 import { RepoPageLayout } from './RepoPageLayout';
 import { formatBytes, formatDate } from '@/lib/format';
 import { api, envelopeFromError, type ApiErrorEnvelope, ApiError } from '@/api/client';
-import { useRepoContent, useMe, useRepoScans, useRescanArtifact } from '@/api/queries';
+import { useRepoContentLoadMore, useMe, useRepoScans, useRescanArtifact } from '@/api/queries';
 import { ErrorEnvelopeRenderer } from '@/components/common/ErrorEnvelope';
 import type { Repo } from '@/api/types';
 
@@ -64,7 +64,13 @@ export function RpmRepoPage({ repo }: RpmRepoPageProps) {
   const canScan = !!currentUser?.is_super_admin || canUpload;
   const hostname = window.location.host;
 
-  const { data: contentRows } = useRepoContent(projectName ?? '', 'rpm', repo.name);
+  const {
+    items: contentRows,
+    total: contentTotal,
+    hasMore: contentHasMore,
+    loadMore: loadMoreContent,
+    isFetching: contentFetching,
+  } = useRepoContentLoadMore(projectName ?? '', 'rpm', repo.name, 100);
   const { data: scansData } = useRepoScans(projectName ?? '', 'rpm', repo.name);
   const scansCount = scansData?.length ?? 0;
   const [rescanError, setRescanError] = useState<ApiErrorEnvelope | null>(null);
@@ -94,7 +100,7 @@ export function RpmRepoPage({ repo }: RpmRepoPageProps) {
   };
   const rescanMutation = useMutation({
     mutationFn: async () => {
-      if (!contentRows || contentRows.length === 0) {
+      if (contentRows.length === 0) {
         throw new Error('no artifacts to scan');
       }
       const first = contentRows[0];
@@ -114,7 +120,7 @@ export function RpmRepoPage({ repo }: RpmRepoPageProps) {
   });
   const packages: RpmPackage[] = useMemo(
     () =>
-      (contentRows ?? []).map((row) => ({
+      contentRows.map((row) => ({
         id: row.id ?? 0,
         name: row.name,
         version: row.version ?? '',
@@ -258,13 +264,37 @@ export function RpmRepoPage({ repo }: RpmRepoPageProps) {
             />
           )
         ) : (
-          <DataTable
-            columns={columns}
-            data={filtered}
-            sort={sort}
-            onSort={(col, dir) => setSort({ column: col, direction: dir })}
-            stickyFirstColumn
-          />
+          <>
+            <DataTable
+              columns={columns}
+              data={filtered}
+              sort={sort}
+              onSort={(col, dir) => setSort({ column: col, direction: dir })}
+              stickyFirstColumn
+            />
+            {/* F-T18: pagination footer. "Showing N of M" + Load more. Filter
+                applies client-side to whatever has been loaded, so total
+                counts loaded-window rather than total-filtered rows. */}
+            <div className="flex items-center justify-between px-1 pt-2 text-xs text-muted-foreground">
+              <span>
+                Showing {packages.length.toLocaleString()} of{' '}
+                {contentTotal.toLocaleString()}
+              </span>
+              {contentHasMore && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={loadMoreContent}
+                  disabled={contentFetching}
+                >
+                  {contentFetching ? (
+                    <Loader2 className="mr-1.5 size-3.5 animate-spin" />
+                  ) : null}
+                  Load more
+                </Button>
+              )}
+            </div>
+          </>
         )}
 
         {/* Selected package detail */}

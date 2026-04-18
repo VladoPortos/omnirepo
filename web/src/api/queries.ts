@@ -4,6 +4,7 @@
  */
 
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMemo, useState, useCallback } from 'react';
 import { api, ApiError } from './client';
 
 // enc encodes a path segment from a route-param (e.g. projectName, bucketName,
@@ -23,6 +24,7 @@ import type {
   SetupSuperAdminRequest,
   SetupSuperAdminResponse,
   RepoContentEntry,
+  RepoContentPage,
   ProjectListItem,
   ProjectDetail,
   ProjectCreate,
@@ -170,6 +172,9 @@ export function useRescanArtifact(
 
 // -- Repo content (listing artifacts uploaded to a repo) --
 
+// useRepoContent returns the entries array for the page. Existing consumers
+// treat the data as a plain array — preserved via `select`. For pagination
+// metadata (total, next_offset) use useRepoContentPage below.
 export function useRepoContent(
   projectName: string,
   repoType: string,
@@ -178,25 +183,117 @@ export function useRepoContent(
 ) {
   return useQuery({
     queryKey: ['repo-content', projectName, repoType, repoName, opts?.limit ?? 100, opts?.offset ?? 0],
-    queryFn: () => {
-      const params: Record<string, string> = {};
-      if (opts?.limit != null) params.limit = String(opts.limit);
-      if (opts?.offset != null) params.offset = String(opts.offset);
-      return api.get<RepoContentEntry[]>(
-        `/projects/${enc(projectName)}/repos/${enc(repoType)}/${enc(repoName)}/content`,
-        params,
-      );
-    },
+    queryFn: () => fetchRepoContentPage(projectName, repoType, repoName, opts),
     staleTime: 15_000,
+    select: (page: RepoContentPage) => page.items,
     // While any row is mid-scan (status="scanning"), poll so the severity
     // badge lights up as scans finish — otherwise the user sees "Not
     // scanned" frozen until they refresh.
     refetchInterval: (query) => {
-      const data = query.state.data as RepoContentEntry[] | undefined;
-      if (!data) return false;
-      return data.some((r) => r.scan_severity === 'scanning') ? 3_000 : false;
+      const page = query.state.data as RepoContentPage | undefined;
+      if (!page) return false;
+      return page.items.some((r) => r.scan_severity === 'scanning') ? 3_000 : false;
     },
   });
+}
+
+// useRepoContentPage returns the full paginated envelope so load-more
+// tables can read total / next_offset. F-T18.
+export function useRepoContentPage(
+  projectName: string,
+  repoType: string,
+  repoName: string,
+  opts?: { limit?: number; offset?: number },
+) {
+  return useQuery({
+    queryKey: ['repo-content', projectName, repoType, repoName, opts?.limit ?? 100, opts?.offset ?? 0],
+    queryFn: () => fetchRepoContentPage(projectName, repoType, repoName, opts),
+    staleTime: 15_000,
+    refetchInterval: (query) => {
+      const page = query.state.data as RepoContentPage | undefined;
+      if (!page) return false;
+      return page.items.some((r) => r.scan_severity === 'scanning') ? 3_000 : false;
+    },
+  });
+}
+
+function fetchRepoContentPage(
+  projectName: string,
+  repoType: string,
+  repoName: string,
+  opts?: { limit?: number; offset?: number },
+): Promise<RepoContentPage> {
+  const params: Record<string, string> = {};
+  if (opts?.limit != null) params.limit = String(opts.limit);
+  if (opts?.offset != null) params.offset = String(opts.offset);
+  return api.get<RepoContentPage>(
+    `/projects/${enc(projectName)}/repos/${enc(repoType)}/${enc(repoName)}/content`,
+    params,
+  );
+}
+
+// useRepoContentLoadMore wraps useRepoContentPage with append-forward
+// offset state — fits the existing /loop-more pattern used by the
+// per-row-scan feature (commit 8ffe66c). Call .loadMore() to fetch and
+// concatenate the next window; .hasMore tracks whether the backend is
+// still returning a next_offset. F-T18.
+export function useRepoContentLoadMore(
+  projectName: string,
+  repoType: string,
+  repoName: string,
+  pageSize = 100,
+) {
+  const [offset, setOffset] = useState(0);
+  const [accumulated, setAccumulated] = useState<RepoContentEntry[]>([]);
+  const [total, setTotal] = useState(0);
+  const [hasMore, setHasMore] = useState(true);
+
+  // Each page is cached under the shared ['repo-content', ...] key so the
+  // scan-polling refetch from useRepoContent also refreshes partials.
+  const q = useQuery({
+    queryKey: ['repo-content', projectName, repoType, repoName, pageSize, offset],
+    queryFn: async () => {
+      const page = await fetchRepoContentPage(projectName, repoType, repoName, {
+        limit: pageSize,
+        offset,
+      });
+      setAccumulated((prev) =>
+        offset === 0 ? page.items : [...prev, ...page.items],
+      );
+      setTotal(page.total);
+      setHasMore(page.next_offset != null);
+      return page;
+    },
+    staleTime: 15_000,
+  });
+
+  const loadMore = useCallback(() => {
+    if (!q.data?.next_offset || q.data.next_offset === offset) return;
+    setOffset(q.data.next_offset);
+  }, [q.data, offset]);
+
+  const reset = useCallback(() => {
+    setOffset(0);
+    setAccumulated([]);
+    setHasMore(true);
+  }, []);
+
+  // Reset accumulator when the target repo changes. Avoids leaking rows
+  // from repo A into repo B when a user navigates between them.
+  useMemo(() => {
+    reset();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectName, repoType, repoName]);
+
+  return {
+    items: accumulated,
+    total,
+    hasMore,
+    loadMore,
+    isLoading: q.isLoading,
+    isFetching: q.isFetching,
+    error: q.error,
+  };
 }
 
 // -- First-run setup --

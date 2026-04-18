@@ -78,13 +78,26 @@ func deriveScanSeverity(status, summaryJSON string) string {
 // every other per-type field lives under Extra so the frontend can destructure
 // what it needs without a new DTO per protocol.
 type RepoContentEntry struct {
-	ID            int64          `json:"id"`
-	Name          string         `json:"name"`
-	Version       string         `json:"version,omitempty"`
-	SizeBytes     int64          `json:"size_bytes"`
-	UploadedAt    string         `json:"uploaded_at"`
-	ScanSeverity  string         `json:"scan_severity,omitempty"`
-	Extra         map[string]any `json:"extra,omitempty"`
+	ID           int64          `json:"id"`
+	Name         string         `json:"name"`
+	Version      string         `json:"version,omitempty"`
+	SizeBytes    int64          `json:"size_bytes"`
+	UploadedAt   string         `json:"uploaded_at"`
+	ScanSeverity string         `json:"scan_severity,omitempty"`
+	Extra        map[string]any `json:"extra,omitempty"`
+}
+
+// RepoContentPage wraps a paginated slice of RepoContentEntry (F-T18).
+//
+//   - Items   — the slice for this page.
+//   - Total   — total row count for the repo/type (NOT filtered by
+//     limit/offset). UI uses this for "Showing N of M".
+//   - NextOffset — offset to pass next; nil when the caller has reached
+//     the end. Avoids a "+1 probe" round-trip on the frontend.
+type RepoContentPage struct {
+	Items      []RepoContentEntry `json:"items"`
+	Total      int64              `json:"total"`
+	NextOffset *int64             `json:"next_offset,omitempty"`
 }
 
 func (d Deps) mountRepoContent(r chi.Router) {
@@ -155,7 +168,59 @@ func (d Deps) handleListRepoContent(w http.ResponseWriter, r *http.Request) {
 	if entries == nil {
 		entries = []RepoContentEntry{}
 	}
-	writeJSON(w, http.StatusOK, entries)
+
+	// F-T18: total row-count so the UI can render "Showing N of M" and
+	// know when load-more has reached the end. Best-effort — a failing
+	// count query falls back to len(entries) + offset so the response
+	// still serialises.
+	total, terr := d.countRepoContent(r, repoType, repo.ID)
+	if terr != nil {
+		total = int64(len(entries)) + offset
+	}
+
+	var nextOffset *int64
+	consumed := offset + int64(len(entries))
+	if int64(len(entries)) >= limit && consumed < total {
+		next := consumed
+		nextOffset = &next
+	}
+
+	writeJSON(w, http.StatusOK, RepoContentPage{
+		Items:      entries,
+		Total:      total,
+		NextOffset: nextOffset,
+	})
+}
+
+// countRepoContent returns the total row count for a repo's content tab.
+// Dispatches per type on the same tables the listX helpers query; the
+// expressions below mirror repoItemCountExpr's per-type semantics so the
+// header count (F-T15) and the content-tab total stay consistent.
+func (d Deps) countRepoContent(r *http.Request, repoType string, repoID int64) (int64, error) {
+	var (
+		query string
+		n     int64
+	)
+	switch repoType {
+	case "rpm":
+		query = `SELECT COUNT(*) FROM rpm_packages WHERE repo_id=?`
+	case "deb":
+		query = `SELECT COUNT(*) FROM deb_packages WHERE repo_id=?`
+	case "pypi":
+		query = `SELECT COUNT(*) FROM pypi_files WHERE repo_id=?`
+	case "helm":
+		query = `SELECT COUNT(*) FROM helm_charts WHERE repo_id=?`
+	case "raw":
+		query = `SELECT COUNT(*) FROM raw_files WHERE repo_id=?`
+	case "docker":
+		query = `SELECT COUNT(*) FROM docker_tags WHERE repo_id=?`
+	default:
+		return 0, nil
+	}
+	if err := d.DB.Reader.QueryRowContext(r.Context(), query, repoID).Scan(&n); err != nil {
+		return 0, err
+	}
+	return n, nil
 }
 
 func parseLimitOffset(r *http.Request) (int64, int64) {

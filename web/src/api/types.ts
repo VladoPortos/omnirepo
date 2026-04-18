@@ -50,6 +50,15 @@ export interface RepoContentEntry {
   extra?: Record<string, unknown>;
 }
 
+// F-T18: paginated content response. Total is the row count without
+// limit/offset applied. next_offset is null/undefined when the caller has
+// reached the end — use it verbatim as the next request's offset.
+export interface RepoContentPage {
+  items: RepoContentEntry[];
+  total: number;
+  next_offset?: number | null;
+}
+
 export interface LoginResponse {
   login: string;
   is_super_admin: boolean;

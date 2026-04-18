@@ -131,10 +131,15 @@ rabbitmq:3.13-alpine
 memcached:1.6-alpine
 registry:2.8
 caddy:2-alpine
-haproxy:3-alpine
+haproxy:3.1-alpine
 traefik:v3.1
-prometheus:v2.54.1
+prom/prometheus:v2.54.1
 ```
+
+> Docker Hub tag notes (F-T4):
+> - `haproxy:3-alpine` does not exist — use `haproxy:3.1-alpine`.
+> - Prometheus lives under `prom/`, not `library/` — use
+>   `prom/prometheus:v2.54.1`.
 
 Most are <100 MB; a few (mariadb, mysql, golang) are several hundred MB.
 Total on-disk after dedup: expect ~3-5 GB.
@@ -147,20 +152,28 @@ Docker Hub rate limits apply):
 # teaching docker about the self-signed cert on 8443. We still push
 # with an API key; the client config lives in ~/.docker/config.json.
 REG=localhost:8080
-KEY=$(curl -sk -u admin:<PW> https://localhost:8443/api/v1/profile/api-keys \
+# F-T2: the real route is /api/v1/me/api-keys (not /profile/api-keys).
+KEY=$(curl -sk -u admin:<PW> https://localhost:8443/api/v1/me/api-keys \
     -X POST -d '{"name":"e2e-docker-push"}' | jq -r .token)
 
 docker login $REG -u admin -p "$KEY"
 
+# F-T2: the OCI router matches /v2/{project}/{type}/{repo}/{image} so the
+# tag target must be 4-segment (project/docker/repo/image). Pushing to the
+# 3-segment `${REG}/e2e/docker/${IMG}` returns NAME_UNKNOWN.
 for IMG in alpine:3.20 busybox:1.36 nginx:1.27-alpine httpd:2.4-alpine \
            redis:7.4-alpine postgres:16-alpine mariadb:11 mysql:8.4 \
            python:3.12-slim node:22-alpine golang:1.23-alpine ruby:3.3-alpine \
            php:8.3-fpm-alpine rabbitmq:3.13-alpine memcached:1.6-alpine \
-           registry:2.8 caddy:2-alpine haproxy:3-alpine traefik:v3.1 \
-           prometheus:v2.54.1 ; do
+           registry:2.8 caddy:2-alpine haproxy:3.1-alpine traefik:v3.1 \
+           prom/prometheus:v2.54.1 ; do
   docker pull $IMG
-  docker tag  $IMG $REG/e2e/docker/$IMG
-  docker push $REG/e2e/docker/$IMG
+  # Strip any `prom/` (or other) prefix from the image name so it lands
+  # under .../docker/docker/<image>:<tag>; the router expects a single
+  # image segment. IMG_LOCAL = basename of the reference.
+  IMG_LOCAL="${IMG##*/}"
+  docker tag  $IMG $REG/e2e/docker/docker/$IMG_LOCAL
+  docker push $REG/e2e/docker/docker/$IMG_LOCAL
 done
 ```
 
@@ -190,7 +203,9 @@ container to mirror the BaseOS x86_64 repo to
 files to OmniRepo via the REST upload endpoint.
 
 ```bash
-# Export ~3000 RPMs of Oracle Linux 9 BaseOS (x86_64). Expect ~5-8 GB.
+# Export ~815 RPMs of Oracle Linux 9 BaseOS (x86_64) with --newest-only.
+# Expect ~750–800 MB on disk (F-T5: prior "~3,000 RPMs / 5–8 GB" forecast
+# was stale — newest-only yields under 1k packages).
 docker run --rm -v /tmp/omnirepo-e2e/mirrors:/mirrors \
   oraclelinux:9 bash -c '
     dnf install -y dnf-plugins-core createrepo_c
@@ -206,14 +221,14 @@ Then upload the RPMs to the `oracle` repo in our `e2e` project:
 
 ```bash
 KEY=<as above>
-REPO=https://localhost:8443/api/v1/projects/e2e/repos/rpm/oracle/artifacts
+# F-T2: RPM PUTs live on the protocol surface, NOT under /api/v1.
+#   PUT /<project>/rpm/<repo>/packages/<filename>
+# See internal/protocol/rpm/handler.go:133.
+REPO=https://localhost:8443/e2e/rpm/oracle/packages
 find /tmp/omnirepo-e2e/mirrors/ol9_baseos_latest/Packages -name '*.rpm' |
   xargs -n1 -P4 -I{} curl -sk -u admin:$KEY -X PUT --data-binary @{} \
       "$REPO/$(basename {})"
 ```
-
-(Adjust the exact URL shape to whatever `internal/protocol/rpm/put.go`
-expects — confirm via one curl to `/api/v1/projects/e2e/repos` first.)
 
 **Observations:**
 - Total upload wall-clock (hundreds of PUTs — good stress test for
@@ -271,10 +286,36 @@ suite/component metadata — confirm the upload endpoint accepts the suite
 + component params it needs.
 
 ```bash
-# Confirm the PUT shape the handler expects, then:
+# F-T2: DEB PUTs go to the protocol surface with a full pool path. Real
+# route is
+#   PUT /<project>/deb/<repo>/pool/<c>/<pkg>/<file>.deb?suite=X&component=Y
+# and suites must be declared FIRST via
+#   PATCH /<project>/deb/<repo>/suites    (admin/api-key auth)
+# See internal/protocol/deb/handler.go:137.
+
+# 1) Declare the suites we're about to ingest (idempotent).
+curl -sk -u admin:$KEY -X PATCH \
+  -H 'Content-Type: application/json' \
+  -d '{"suites":[
+        {"suite":"jammy","component":"main","architecture":"amd64"},
+        {"suite":"jammy","component":"main","architecture":"all"},
+        {"suite":"jammy-updates","component":"main","architecture":"amd64"},
+        {"suite":"jammy-updates","component":"main","architecture":"all"},
+        {"suite":"jammy-security","component":"main","architecture":"amd64"},
+        {"suite":"jammy-security","component":"main","architecture":"all"}
+      ]}' \
+  https://localhost:8443/e2e/deb/ubuntu/suites
+
+# 2) Upload with the real pool path (F-T6 depends on this: the client-sent
+#    path is what Packages.gz emits as the Filename field).
 find /tmp/omnirepo-e2e/mirrors/ubuntu/mirror -name '*.deb' |
-  xargs -n1 -P4 -I{} curl -sk -u admin:$KEY -X PUT --data-binary @{} \
-    "https://localhost:8443/api/v1/projects/e2e/repos/deb/ubuntu/artifacts/$(basename {})?suite=jammy&component=main"
+  while read DEB; do
+    # Derive pool path relative to mirror root so apt's canonical layout
+    # (pool/main/<prefix>/<src>/<file>.deb) survives upload.
+    REL="${DEB#*/pool/}"
+    curl -sk -u admin:$KEY -X PUT --data-binary @"$DEB" \
+      "https://localhost:8443/e2e/deb/ubuntu/pool/$REL?suite=jammy&component=main"
+  done
 ```
 
 **Observations:**
@@ -373,8 +414,8 @@ sudo jq '.["insecure-registries"] = ["localhost:8080"]' \
     echo '{"insecure-registries":["localhost:8080"]}' | sudo tee /etc/docker/daemon.json
 sudo systemctl restart docker     # WSL2: sudo service docker restart
 
-docker pull localhost:8080/e2e/docker/alpine:3.20
-docker run --rm localhost:8080/e2e/docker/alpine:3.20 cat /etc/os-release
+docker pull localhost:8080/e2e/docker/docker/alpine:3.20
+docker run --rm localhost:8080/e2e/docker/docker/alpine:3.20 cat /etc/os-release
 ```
 
 Confirm the pull works and the digest matches what we pushed in Phase 2.
@@ -454,7 +495,8 @@ Ship only if **all** pass:
 1. ✅ OmniRepo image builds cleanly, starts in < 10 s, has no errors in
    logs at idle.
 2. ✅ 20 Docker images push + pull correctly, digests match.
-3. ✅ ~3,000 RPMs ingested; `dnf makecache` works from the repo.
+3. ✅ ~800 RPMs ingested (newest-only OL9 BaseOS); `dnf makecache` works
+   from the repo.
 4. ✅ ~10,000 `.deb`s ingested; `apt-get update` works and `InRelease`
    verifies with the server-generated key.
 5. ✅ Host bootstrap: `apt install jq` from OmniRepo as **only**

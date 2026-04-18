@@ -382,6 +382,21 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 	if jwtTTL <= 0 {
 		jwtTTL = time.Hour
 	}
+
+	// Plan 07-04 S-03b: wire the Helm protocol stack (handler + regen
+	// coalescer + mirror) BEFORE the OCI handler so we can hand the mirror
+	// adapter in through oci.Deps.HelmMirror. Mounting order is independent
+	// (chi routes are leaf-scoped), so mounting helm first does not affect
+	// /v2 dispatch. sharedLocks is constructed inline here because the
+	// other protocol wirings below still want to share the same Locks
+	// instance.
+	sharedLocks := storage.NewLocks()
+	helmRegistry, helmMirror := helmDeps{
+		cfg: cfg, db: db, auditLogger: auditLogger, locks: sharedLocks,
+	}.wireHelm(router)
+	defer shutdownHelmRegistry(context.Background(), helmRegistry)
+	ociHelmMirrorHook := wireHelmMirror(ociCAS, helmMirror)
+
 	// blobRoot + ociCAS already constructed in step 5e (scan handler wiring).
 	ociHandler := oci.New(oci.Deps{
 		DB:          db,
@@ -414,6 +429,11 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 		),
 		// WR-01: trust-pinned host for WWW-Authenticate realm.
 		ExternalHostnames: cfg.Server.ExternalHostnames,
+
+		// Plan 07-04 S-03b: forward-only Helm OCI→traditional mirror hook.
+		// nil when helmMirror or ociCAS were not wired (unit tests); the
+		// /v2 manifestPut detection branch is a no-op in that case.
+		HelmMirror: ociHelmMirrorHook,
 	})
 	ociHandler.Mount(router)
 	ociHandler.MountCosign(router)
@@ -515,12 +535,10 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 	// Phase 03 Plan 06: SYNC-05 sync handlers + REST. Construct registries
 	// for each protocol BEFORE api.Mount so wireSync can attach a
 	// coalescer.Get(repoID).Kick() factory at the end of every batch.
-	sharedLocks := storage.NewLocks()
-	helmRegistry := helmDeps{
-		cfg: cfg, db: db, auditLogger: auditLogger, locks: sharedLocks,
-	}.wireHelm(router)
-	defer shutdownHelmRegistry(context.Background(), helmRegistry)
-
+	//
+	// NOTE: helmRegistry + helmMirror are wired earlier (above the OCI
+	// handler) so the mirror adapter can feed oci.Deps.HelmMirror. The
+	// other protocol registries do not need that coupling.
 	pypiRegistry := pypiDeps{
 		cfg: cfg, db: db, auditLogger: auditLogger, locks: sharedLocks,
 	}.wirePyPI(router)

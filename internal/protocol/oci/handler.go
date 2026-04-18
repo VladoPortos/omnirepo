@@ -67,6 +67,27 @@ type Deps struct {
 	// entry rather than r.Host, closing WR-01 (host-header injection in the
 	// Docker bearer realm).
 	ExternalHostnames []string
+
+	// HelmMirror (optional) is the hook the /v2 manifestPut handler calls
+	// after successfully committing a manifest whose config.mediaType is
+	// MediaTypeHelmChartConfigV1 on a helm-type repo. Plan 07-04 S-03b:
+	// implementations fetch the chart-content layer blob from the CAS and
+	// mirror it into the traditional helm charts tree via
+	// helm.Mirror.MirrorToTraditional. A nil HelmMirror is a no-op (the
+	// mirror simply does not run — OCI push semantics are unaffected).
+	// Failure is logged by the caller; the OCI push continues regardless.
+	HelmMirror HelmMirrorHook
+}
+
+// HelmMirrorHook is the post-commit callback the /v2 manifestPut handler
+// invokes when it detects a Helm OCI chart push. The adapter (wired from
+// internal/app) resolves the chart-content layer blob from the CAS and
+// delegates to helm.Mirror.MirrorToTraditional. Plan 07-04 keeps this an
+// interface instead of a concrete type so the oci package stays free of a
+// direct helm package import (which would introduce a cycle at the wiring
+// site).
+type HelmMirrorHook interface {
+	Mirror(ctx context.Context, projectName, repoName, chartBlobDigest string) error
 }
 
 // SeverityGateFn is the block_on_severity hook signature. 02-09 will plug in
@@ -112,6 +133,10 @@ type Handler struct {
 	// externalHostnames: first entry used for WWW-Authenticate realm in
 	// preference to r.Host when non-empty (WR-01 fix).
 	externalHostnames []string
+
+	// helmMirror: plan 07-04 S-03b post-commit hook. nil-safe — when unset,
+	// manifestPut's helm-detection branch is a silent no-op.
+	helmMirror HelmMirrorHook
 }
 
 // New constructs a Handler from deps.
@@ -152,6 +177,7 @@ func New(d Deps) *Handler {
 		scanKick:          d.ScanKick,
 		severityGate:      d.SeverityGate,
 		externalHostnames: d.ExternalHostnames,
+		helmMirror:        d.HelmMirror,
 	}
 }
 

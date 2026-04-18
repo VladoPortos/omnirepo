@@ -28,11 +28,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	chimw "github.com/go-chi/chi/v5/middleware"
 
 	"github.com/dxc-internal/omnirepo/internal/audit"
 	"github.com/dxc-internal/omnirepo/internal/auth"
@@ -221,6 +223,70 @@ func (h *Handler) manifestPut(w http.ResponseWriter, r *http.Request) {
 	// After tx commits, kick the scan pool so auto-scan starts ASAP.
 	if scanEnqueued && h.scanKick != nil {
 		h.scanKick()
+	}
+
+	// Plan 07-04 S-03b: mirror Helm OCI chart pushes into the traditional
+	// /<project>/helm/<repo>/charts/ tree so `helm repo add` +
+	// `helm pull` can see them.
+	//
+	// Detection shape (LOCKED):
+	//   (a) manifest config.mediaType == MediaTypeHelmChartConfigV1
+	//   (b) AT LEAST ONE layer has mediaType == MediaTypeHelmChartContentV1
+	//       (pick the FIRST matching layer; ignore all others)
+	//
+	// Why not `len(layers) == 1`: Helm v3 allows a provenance .prov layer
+	// (mediaType application/vnd.cncf.helm.chart.provenance.v1.prov) to
+	// accompany the chart layer. A layer-count gate would silently skip
+	// mirroring for signed charts — breaking S-03b "forward-only mirror"
+	// for exactly the charts an enterprise is most likely to publish.
+	//
+	// Pitfall 1: log-and-continue on failure. OCI push semantics are
+	// preserved — the client has already received its 201 conceptually;
+	// the mirror is a pure side-effect on a different storage tree.
+	if !isIndex && rr.repo.Type == "helm" && h.helmMirror != nil {
+		var probe struct {
+			Config struct {
+				MediaType string `json:"mediaType"`
+			} `json:"config"`
+			Layers []struct {
+				MediaType string `json:"mediaType"`
+				Digest    string `json:"digest"`
+			} `json:"layers"`
+		}
+		if jerr := json.Unmarshal(body, &probe); jerr == nil &&
+			probe.Config.MediaType == MediaTypeHelmChartConfigV1 {
+			// Pick the first layer whose mediaType is the chart-content
+			// marker. Other layers (provenance, future Helm extensions)
+			// are ignored.
+			chartDigest := ""
+			for _, l := range probe.Layers {
+				if l.MediaType == MediaTypeHelmChartContentV1 {
+					chartDigest = l.Digest
+					break
+				}
+			}
+			if chartDigest == "" {
+				// Helm config manifest with no chart-content layer —
+				// malformed or a forward-compat Helm variant. Log at
+				// debug so operators can see it without warn-spamming,
+				// and SKIP the mirror. The push itself is already
+				// committed; no client-visible effect.
+				slog.DebugContext(ctx, "oci.manifests.helm_mirror_skipped_no_chart_layer",
+					slog.String("incident_id", chimw.GetReqID(ctx)),
+					slog.String("repo", repoPath),
+					slog.String("reference", reference),
+				)
+			} else {
+				if mirr := h.helmMirror.Mirror(ctx, rr.project.Name, rr.repo.Name, chartDigest); mirr != nil {
+					slog.WarnContext(ctx, "oci.manifests.helm_mirror_failed",
+						slog.String("incident_id", chimw.GetReqID(ctx)),
+						slog.String("repo", repoPath),
+						slog.String("reference", reference),
+						slog.Any("err", mirr),
+					)
+				}
+			}
+		}
 	}
 
 	h.emitManifestAudit(r, audit.EvtOCIManifestUploaded, mfDigest, "ok", map[string]any{

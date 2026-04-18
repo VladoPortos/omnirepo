@@ -15,4 +15,22 @@ const (
 	MediaTypeDockerManifestV2   = "application/vnd.docker.distribution.manifest.v2+json"
 	MediaTypeOCIIndex           = "application/vnd.oci.image.index.v1+json"
 	MediaTypeDockerManifestList = "application/vnd.docker.distribution.manifest.list.v2+json"
+
+	// Helm OCI chart config — the canonical marker for a manifest that
+	// wraps a chart pushed via `helm push oci://…`. Identifies WHICH
+	// manifests are Helm; the chart bytes themselves live in a layer (see
+	// MediaTypeHelmChartContentV1 below). Plan 07-04 S-03b: the OCI
+	// manifestPut post-commit hook sniffs for this exact string on
+	// helm-type repos to trigger the forward mirror into the traditional
+	// /<project>/helm/<repo>/charts/ tree.
+	MediaTypeHelmChartConfigV1 = "application/vnd.cncf.helm.config.v1+json"
+
+	// Helm OCI chart content — the canonical mediaType for the layer that
+	// carries the chart .tgz bytes. Helm v3 charts put the chart here and
+	// may ALSO ship a separate provenance-file layer (mediaType
+	// "application/vnd.cncf.helm.chart.provenance.v1.prov") alongside it.
+	// The mirror hook MUST pick the CHART layer by mediaType, never by
+	// layer index or by assuming exactly one layer (breaking charts with
+	// provenance is an S-03b regression waiting to happen).
+	MediaTypeHelmChartContentV1 = "application/vnd.cncf.helm.chart.content.v1.tar+gzip"
 )

@@ -72,8 +72,11 @@ type resolvedRepo struct {
 // triple, and returns the repo row. Writes the OCI error envelope and
 // returns nil on any failure.
 //
-// requireDocker — when true, rejects non-docker repo types with
-// NAME_INVALID. Every /v2 blob route should pass true.
+// requireDocker — when true, accepts only OCI-native repo types: "docker"
+// (standard image registry) and "helm" (charts pushed via `helm push
+// oci://…`; plan 07-04 S-03b wires a post-commit mirror into the
+// traditional /<project>/helm/<repo>/ tree so `helm repo add` can see
+// OCI-pushed charts). Other repo types are rejected with NAME_INVALID.
 func (h *Handler) resolveRepo(w http.ResponseWriter, r *http.Request, requireDocker bool) *resolvedRepo {
 	projectName := chi.URLParam(r, "project")
 	repoType := chi.URLParam(r, "type")
@@ -86,9 +89,12 @@ func (h *Handler) resolveRepo(w http.ResponseWriter, r *http.Request, requireDoc
 		writeOCIErr(w, http.StatusBadRequest, ErrCodeNameInvalid, err)
 		return nil
 	}
-	if requireDocker && repoType != "docker" {
+	// OCI v2 multiplexes Docker registry traffic and Helm OCI traffic on the
+	// same /v2 surface. Both speak the distribution protocol; the difference
+	// lives in the manifest config mediaType and the post-commit hooks.
+	if requireDocker && repoType != "docker" && repoType != "helm" {
 		writeOCIErr(w, http.StatusBadRequest, ErrCodeNameInvalid,
-			fmt.Errorf("expected type=docker, got %s", repoType))
+			fmt.Errorf("expected type=docker or helm, got %s", repoType))
 		return nil
 	}
 	if h.projects == nil || h.repos == nil {

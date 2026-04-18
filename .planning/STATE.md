@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: on 2026-04-17)
-status: planning
-stopped_at: Phase 7 context gathered
-last_updated: "2026-04-17T19:53:18.883Z"
-last_activity: 2026-04-17
+status: executing
+stopped_at: Completed 07-01-PLAN.md
+last_updated: "2026-04-18T00:11:24.292Z"
+last_activity: 2026-04-18 — Plan 07-01 (doc edits E-04 + D-07) shipped
 progress:
   total_phases: 3
   completed_phases: 1
-  total_plans: 8
-  completed_plans: 8
-  percent: 100
+  total_plans: 17
+  completed_plans: 9
+  percent: 53
 ---
 
 # STATE: OmniRepo
@@ -26,11 +26,11 @@ progress:
 
 ## Current Position
 
-Phase: 7
-Plan: Not started
-Status: Phase 6 shipped; rescope applied to ROADMAP.md + REQUIREMENTS.md — ready to plan Phase 7 (Snippet Polish, Dashboard Cards & Empty States)
-Last activity: 2026-04-17
-Stopped at: Phase 7 context gathered
+Phase: 07 (snippet-polish-dashboard-cards-empty-states) — EXECUTING
+Plan: 2 of 9
+Status: Plan 07-01 shipped; ready to execute plan 07-02
+Last activity: 2026-04-18 — Plan 07-01 (doc edits E-04 + D-07) shipped
+Stopped at: Completed 07-01-PLAN.md
 
 ## Phase Map
 
@@ -98,6 +98,8 @@ scoped tokens, LDAP/OIDC.
 - **VISUAL is not a trailing-polish phase** — the design-system primitives (status tokens, skeletons, badges, copy-to-clipboard, button hierarchy) ship alongside ERR in Phase 6 so every later UI phase consumes shared components instead of re-implementing them.
 - **FAV lives in its own phase (8)** — schema migration + server-side persistence + nav surfacing is independent enough to parallelize after Phase 6 lands, rather than bolting it onto an already-large foundation phase.
 - **OVERVIEW (Phase 10) depends on SNIPPET (Phase 7) and HEALTH (Phase 9)** — OVERVIEW-02 reuses snippet components, and OVERVIEW's scan/sync summary cards share patterns with HEALTH cards. Scheduling it last avoids duplicate component drift.
+- **[07-01] EMPTY-07 grouped under 'EMPTY — Context-aware empty states (deferred to v1.2)' sub-heading between FAV and OVERVIEW blocks in REQUIREMENTS.md** — v1.2 planner sees EMPTY-07 alongside the FAV cluster it depends on per E-04. Active v1.1 coverage recalculated to 32/32 REQs; Deferred to v1.2 now 25 REQs.
+- **[07-01] ROADMAP Phase 7 SC #2 invariant preserved** — no routes under `/api/v1/admin/health/*` ship in Phase 7; those belong to the deferred v1.2 Health page. The one new read-only admin endpoint permitted by the rewrite (`GET /api/v1/admin/jobs/summary`) lives under `/api/v1/admin/` directly, super-admin gate `ActionTriggerGC`, shape locked at D-06 in `07-CONTEXT.md`. Cards count raised to 6 (3 user-visible + 3 admin-only) matching D-04 inventory.
 
 ### Decisions carried forward from v1.0
 
@@ -165,6 +167,7 @@ with the tight scope below.
 | 06    | 06   | ~40 min  | 3     | 12    |
 | 06    | 07   | ~45 min  | 3     | 12    |
 | Phase 06 P08 | ~35 min | 3 tasks | 11 files |
+| Phase 07 P01 | ~3 min | 2 tasks | 2 files |
 
 ### Research Flags
 
@@ -180,7 +183,7 @@ with the tight scope below.
 ## Session Continuity
 
 - **Next action**: Run `/gsd-plan-phase 7` to generate plans for the rescoped Phase 7 (Snippet Polish, Dashboard Cards & Empty States). ROADMAP.md + REQUIREMENTS.md already reflect the tight scope.
-- **Last session:** 2026-04-17T19:53:18.880Z
+- **Last session:** 2026-04-18T00:11:24.290Z
 - **Artifacts on disk**:
   - `.planning/PROJECT.md` (Current Milestone: v1.1, Phase 6 progress paragraph added)
   - `.planning/REQUIREMENTS.md` (33 active v1.1 REQs + 24 deferred v1.2 REQs; traceability split by target milestone)

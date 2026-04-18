@@ -70,7 +70,7 @@ their own phase.
   5. Full `make test` + `go test ./...` + `npm run build` green; all Phase 6 lint gates (protocol-redaction / contrast / typography / spacing-carveout / axe-devdep) still pass; Phase 6 Playwright specs still pass alongside new snippet-audit and empty-state specs.
 **Plans:** 9 plans
 Plans:
-- [ ] 07-01-PLAN.md — Doc edits: move EMPTY-07 to v1.2 deferred + rewrite ROADMAP SC #2 (D-07)
+- [x] 07-01-PLAN.md — Doc edits: move EMPTY-07 to v1.2 deferred + rewrite ROADMAP SC #2 (D-07)
 - [ ] 07-02-PLAN.md — EmptyState + SnippetList primitives (extract from SnippetPanel)
 - [ ] 07-03-PLAN.md — snippets.ts rewrite (S-01..09) + unit tests + CopyButton aria-live e2e
 - [ ] 07-04-PLAN.md — Helm OCI→traditional chart mirror (MirrorToTraditional + OCI post-commit hook)
@@ -109,7 +109,7 @@ re-planned against a fresh v1.2 ROADMAP.md when that milestone opens.
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 6. Error Envelope & Visual Foundation | 8/8 | ✅ Shipped | 2026-04-17 |
-| 7. Snippet Polish, Dashboard Cards & Empty States | 0/9 | Not started | — |
+| 7. Snippet Polish, Dashboard Cards & Empty States | 1/9 | In Progress | — |
 
 ## Backlog
 

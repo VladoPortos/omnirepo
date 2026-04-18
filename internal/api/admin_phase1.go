@@ -144,6 +144,13 @@ func Mount(r chi.Router, d Deps) {
 		Users:          d.Users,
 		Sessions:       d.Sessions,
 		APIKeys:        d.APIKeys,
+		// F-T8: wire Projects so SessionOrAPIKey accepts the
+		// project:<name>:<key> Basic variant as well as the generic
+		// user:<api-key> shape. Without this, /api/v1 silently falls back
+		// to 401 for project-scoped keys sent via Basic — mismatched
+		// behaviour vs. the protocol endpoints (BasicOrAPIKey already
+		// honored both shapes).
+		Projects:       d.Projects,
 		Clock:          d.Clock,
 		SessionTTL:     d.sessionTTL(),
 		SessionHardTTL: d.sessionHardTTL(),

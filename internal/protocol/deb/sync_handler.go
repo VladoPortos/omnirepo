@@ -277,19 +277,23 @@ func (h *SyncHandler) fetchAndCommit(ctx context.Context, projectName string, re
 			return err
 		}
 		if _, err := h.deps.DEBPackages.Insert(ctx, tx, &metadata.DEBPackage{
-			RepoID:       repo.ID,
-			SuiteID:      suiteID,
-			Package:      ent.Control.Package,
-			Version:      ent.Control.Version,
-			Architecture: ent.Control.Architecture,
-			Maintainer:   ent.Control.Maintainer,
-			Section:      ent.Control.Section,
-			Priority:     ent.Control.Priority,
-			Depends:      ent.Control.Depends,
-			Description:  ent.Control.Description,
-			SizeBytes:    size,
-			Digest:       digest,
-			Filename:     ent.Filename,
+			RepoID:          repo.ID,
+			SuiteID:         suiteID,
+			Package:         ent.Control.Package,
+			Version:         ent.Control.Version,
+			Architecture:    ent.Control.Architecture,
+			Maintainer:      ent.Control.Maintainer,
+			Section:         ent.Control.Section,
+			Priority:        ent.Control.Priority,
+			Depends:         ent.Control.Depends,
+			Description:     ent.Control.Description,
+			SizeBytes:       size,
+			Digest:          digest,
+			Filename:        ent.Filename,
+			// F-T6: persist the real pool path so regen.go emits it
+			// verbatim as the Filename field. `rest` already matches the
+			// on-disk layout relPoolPath() just computed.
+			StoragePoolPath: rest,
 		}); err != nil {
 			return err
 		}

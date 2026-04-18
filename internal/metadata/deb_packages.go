@@ -9,22 +9,29 @@ import (
 )
 
 // DEBPackage mirrors one deb_packages row (Phase 03 Plan 01, D-26).
+//
+// F-T6: StoragePoolPath holds the real pool-relative path the client PUT to
+// (e.g. "pool/main/n/nano/nano_6.2-1ubuntu0.1_amd64.deb"). Packages.gz
+// emits this verbatim as the Filename field so apt can fetch the file from
+// its actual on-disk location. Rows backfilled by migration 023 carry the
+// legacy synthesised path until their next PUT.
 type DEBPackage struct {
-	ID           int64
-	RepoID       int64
-	SuiteID      int64
-	Package      string
-	Version      string
-	Architecture string
-	Maintainer   string
-	Section      string
-	Priority     string
-	Depends      string
-	Description  string
-	SizeBytes    int64
-	Digest       string
-	Filename     string
-	UploadedAt   time.Time
+	ID              int64
+	RepoID          int64
+	SuiteID         int64
+	Package         string
+	Version         string
+	Architecture    string
+	Maintainer      string
+	Section         string
+	Priority        string
+	Depends         string
+	Description     string
+	SizeBytes       int64
+	Digest          string
+	Filename        string
+	StoragePoolPath string
+	UploadedAt      time.Time
 }
 
 // DEBPackagesRepo owns CRUD on deb_packages. suite_id comes from
@@ -47,21 +54,22 @@ func (r *DEBPackagesRepo) Insert(ctx context.Context, tx *sql.Tx, p *DEBPackage)
 		INSERT INTO deb_packages(
 			repo_id, suite_id, package, version, architecture,
 			maintainer, section, priority, depends, description,
-			size_bytes, digest, filename
-		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+			size_bytes, digest, filename, storage_pool_path
+		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(repo_id, suite_id, package, version, architecture) DO UPDATE SET
-			maintainer  = excluded.maintainer,
-			section     = excluded.section,
-			priority    = excluded.priority,
-			depends     = excluded.depends,
-			description = excluded.description,
-			size_bytes  = excluded.size_bytes,
-			digest      = excluded.digest,
-			filename    = excluded.filename,
-			uploaded_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+			maintainer        = excluded.maintainer,
+			section           = excluded.section,
+			priority          = excluded.priority,
+			depends           = excluded.depends,
+			description       = excluded.description,
+			size_bytes        = excluded.size_bytes,
+			digest            = excluded.digest,
+			filename          = excluded.filename,
+			storage_pool_path = excluded.storage_pool_path,
+			uploaded_at       = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
 	`, p.RepoID, p.SuiteID, p.Package, p.Version, p.Architecture,
 		p.Maintainer, p.Section, p.Priority, p.Depends, p.Description,
-		p.SizeBytes, p.Digest, p.Filename); err != nil {
+		p.SizeBytes, p.Digest, p.Filename, p.StoragePoolPath); err != nil {
 		return 0, fmt.Errorf("deb_packages: upsert: %w", err)
 	}
 	var id int64
@@ -103,7 +111,7 @@ func (r *DEBPackagesRepo) ListBySuite(ctx context.Context, suiteID int64) ([]DEB
 	rows, err := r.db.Reader.QueryContext(ctx, `
 		SELECT id, repo_id, suite_id, package, version, architecture,
 		       maintainer, section, priority, depends, description,
-		       size_bytes, digest, filename, uploaded_at
+		       size_bytes, digest, filename, storage_pool_path, uploaded_at
 		FROM deb_packages WHERE suite_id=?
 		ORDER BY package, version DESC
 	`, suiteID)
@@ -127,7 +135,7 @@ func (r *DEBPackagesRepo) ListByRepo(ctx context.Context, repoID int64) ([]DEBPa
 	rows, err := r.db.Reader.QueryContext(ctx, `
 		SELECT id, repo_id, suite_id, package, version, architecture,
 		       maintainer, section, priority, depends, description,
-		       size_bytes, digest, filename, uploaded_at
+		       size_bytes, digest, filename, storage_pool_path, uploaded_at
 		FROM deb_packages WHERE repo_id=?
 		ORDER BY suite_id, package, version DESC
 	`, repoID)
@@ -150,7 +158,7 @@ func (r *DEBPackagesRepo) scanOne(ctx context.Context, where string, args ...any
 	row := r.db.Reader.QueryRowContext(ctx, `
 		SELECT id, repo_id, suite_id, package, version, architecture,
 		       maintainer, section, priority, depends, description,
-		       size_bytes, digest, filename, uploaded_at
+		       size_bytes, digest, filename, storage_pool_path, uploaded_at
 		FROM deb_packages WHERE `+where, args...)
 	p, err := scanDEBPackage(row)
 	if err != nil {
@@ -168,7 +176,7 @@ func scanDEBPackage(rs scanner) (*DEBPackage, error) {
 	if err := rs.Scan(
 		&p.ID, &p.RepoID, &p.SuiteID, &p.Package, &p.Version, &p.Architecture,
 		&p.Maintainer, &p.Section, &p.Priority, &p.Depends, &p.Description,
-		&p.SizeBytes, &p.Digest, &p.Filename, &uploaded,
+		&p.SizeBytes, &p.Digest, &p.Filename, &p.StoragePoolPath, &uploaded,
 	); err != nil {
 		return nil, err
 	}

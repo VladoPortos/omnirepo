@@ -216,7 +216,14 @@ func (d RegenDeps) regenSuite(ctx context.Context, distsDir, suite string, entri
 
 		out := make([]PackagesEntry, 0, len(pkgs))
 		for _, p := range pkgs {
-			poolPath := fmt.Sprintf("pool/%s/%s/%s", componentPrefix(p.Package), p.Package, p.Filename)
+			// F-T6: prefer the stored pool path (real on-disk location).
+			// Fallback to the legacy synthesis covers edge cases where a row
+			// somehow slipped in without the column populated (migration
+			// backfills every row, but belt-and-braces).
+			poolPath := p.StoragePoolPath
+			if poolPath == "" {
+				poolPath = fmt.Sprintf("pool/%s/%s/%s", componentPrefix(p.Package), p.Package, p.Filename)
+			}
 			ctrl := reconstructControlParagraph(storedPkg{
 				Package: p.Package, Version: p.Version, Architecture: p.Architecture,
 				Maintainer: p.Maintainer,

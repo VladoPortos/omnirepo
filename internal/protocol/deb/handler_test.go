@@ -474,6 +474,55 @@ func TestDEBGetServePackage(t *testing.T) {
 	}
 }
 
+// TestDEBPackagesFilenamePreservesPoolPath covers F-T6: Packages.gz must
+// emit the real on-disk pool path (pool/main/n/nano/…) not a synthesised
+// one that drops the component (pool/n/nano/…). apt fetches whatever
+// Filename: says and 404s when it points nowhere.
+func TestDEBPackagesFilenamePreservesPoolPath(t *testing.T) {
+	f := newDEBFixture(t)
+	_, _ = f.seedDEBRepo("proj", "myrepo", true)
+
+	body := buildTestDeb(t, "nano", "6.2-1ubuntu0.1", "amd64")
+	// Client PUT uses Debian's canonical layout with a `main/` component
+	// segment and an `n/nano/` source-package subtree — exactly what the
+	// deb PUT_FROM an existing mirror produces.
+	poolPath := "pool/main/n/nano/nano_6.2-1ubuntu0.1_amd64.deb"
+	putURL := "/proj/deb/myrepo/" + poolPath + "?suite=stable&component=main"
+	resp := f.do(t, http.MethodPut, putURL, body, true)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("upload: %d", resp.StatusCode)
+	}
+
+	pkgs, err := f.debPackages.ListByRepo(context.Background(), func() int64 {
+		var id int64
+		_ = f.db.Reader.QueryRow(`SELECT id FROM repos WHERE name='myrepo'`).Scan(&id)
+		return id
+	}())
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(pkgs) != 1 {
+		t.Fatalf("rows=%d", len(pkgs))
+	}
+	if pkgs[0].StoragePoolPath != poolPath {
+		t.Errorf("StoragePoolPath=%q, want %q", pkgs[0].StoragePoolPath, poolPath)
+	}
+
+	// Verify the file sits at exactly the requested pool path on disk.
+	absPath := filepath.Join(f.repoRoot, "proj", "deb", "myrepo", filepath.FromSlash(poolPath))
+	if _, err := os.Stat(absPath); err != nil {
+		t.Fatalf("expected file at %s: %v", absPath, err)
+	}
+
+	// And apt can fetch it from the same URL (no rewriting needed).
+	getResp := f.do(t, http.MethodGet, "/proj/deb/myrepo/"+poolPath, nil, false)
+	defer func() { _ = getResp.Body.Close() }()
+	if getResp.StatusCode != http.StatusOK {
+		t.Fatalf("GET %s: %d", poolPath, getResp.StatusCode)
+	}
+}
+
 // TestDEBGetServePackagePercentEncoded covers F-T7: apt percent-encodes `+`
 // (and other reserved chars) when deriving download URLs from Filename.
 // The handler must URL-decode the wildcard so the on-disk path matches.

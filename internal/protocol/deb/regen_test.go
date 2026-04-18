@@ -81,6 +81,15 @@ func newDEBRegenFixture(t *testing.T, suites []metadata.AptSuite) *debRegenFixtu
 
 func (f *debRegenFixture) seedPackage(suiteKey, pkg, version, arch string) {
 	f.t.Helper()
+	f.seedPackageWithPool(suiteKey, pkg, version, arch, "")
+}
+
+// seedPackageWithPool lets tests exercise StoragePoolPath behavior. An
+// empty poolPath triggers the regen.go fallback (legacy componentPrefix
+// synthesis), matching how migration-backfilled rows look when the client
+// hasn't re-PUT them yet.
+func (f *debRegenFixture) seedPackageWithPool(suiteKey, pkg, version, arch, poolPath string) {
+	f.t.Helper()
 	sid, ok := f.suiteRows[suiteKey]
 	if !ok {
 		f.t.Fatalf("unknown suiteKey %q", suiteKey)
@@ -90,10 +99,12 @@ func (f *debRegenFixture) seedPackage(suiteKey, pkg, version, arch string) {
 			RepoID: f.repoID, SuiteID: sid,
 			Package: pkg, Version: version, Architecture: arch,
 			Maintainer: "Test <t@e.com>", Section: "misc", Priority: "optional",
-			Depends:     "libc6",
-			Description: pkg + " summary\n multi-line\n",
-			SizeBytes:   1024, Digest: "sha256:" + strings.Repeat("a", 64),
-			Filename: pkg + "_" + version + "_" + arch + ".deb",
+			Depends:         "libc6",
+			Description:     pkg + " summary\n multi-line\n",
+			SizeBytes:       1024,
+			Digest:          "sha256:" + strings.Repeat("a", 64),
+			Filename:        pkg + "_" + version + "_" + arch + ".deb",
+			StoragePoolPath: poolPath,
 		})
 		return err
 	}); err != nil {
@@ -142,6 +153,60 @@ func TestDEBRegenSingleSuite(t *testing.T) {
 	}
 	if state != metadata.MetadataStateClean {
 		t.Errorf("state=%q want clean", state)
+	}
+}
+
+// TestDEBRegenUsesStoragePoolPath covers F-T6: when a row has
+// storage_pool_path set, Packages.gz must emit it verbatim (with the
+// component/source-package segments apt expects), not the legacy 2-level
+// synthesis that dropped `main/` and broke apt mirrors.
+func TestDEBRegenUsesStoragePoolPath(t *testing.T) {
+	f := newDEBRegenFixture(t, []metadata.AptSuite{
+		{Suite: "jammy", Component: "main", Architecture: "amd64"},
+	})
+	// Real Ubuntu-style pool layout: pool/main/n/nano/...
+	realPath := "pool/main/n/nano/nano_6.2-1ubuntu0.1_amd64.deb"
+	f.seedPackageWithPool("jammy|main|amd64", "nano", "6.2-1ubuntu0.1", "amd64", realPath)
+
+	if err := f.regenFn()(context.Background()); err != nil {
+		t.Fatalf("regen: %v", err)
+	}
+	pkgBody, err := os.ReadFile(filepath.Join(f.repoDir, "dists", "jammy", "main", "binary-amd64", "Packages"))
+	if err != nil {
+		t.Fatalf("read Packages: %v", err)
+	}
+	if !bytes.Contains(pkgBody, []byte("Filename: "+realPath+"\n")) {
+		t.Errorf("Packages missing real pool path; body:\n%s", pkgBody)
+	}
+	// Defensive: the legacy synthesis must NOT appear.
+	if bytes.Contains(pkgBody, []byte("Filename: pool/n/nano/")) {
+		t.Errorf("Packages leaks the broken legacy synthesis path:\n%s", pkgBody)
+	}
+}
+
+// TestDEBRegenFallsBackToLegacySynthesis covers rows backfilled by the
+// migration (storage_pool_path is non-empty for backfilled rows — the
+// migration populates it with the legacy synthesis). Here we simulate a
+// pre-migration edge where storage_pool_path is still empty, proving the
+// regen fallback keeps producing the old shape rather than emitting a
+// blank Filename.
+func TestDEBRegenFallsBackToLegacySynthesis(t *testing.T) {
+	f := newDEBRegenFixture(t, []metadata.AptSuite{
+		{Suite: "stable", Component: "main", Architecture: "amd64"},
+	})
+	f.seedPackageWithPool("stable|main|amd64", "libfoo", "1.0-1", "amd64", "") // empty pool path
+
+	if err := f.regenFn()(context.Background()); err != nil {
+		t.Fatalf("regen: %v", err)
+	}
+	pkgBody, err := os.ReadFile(filepath.Join(f.repoDir, "dists", "stable", "main", "binary-amd64", "Packages"))
+	if err != nil {
+		t.Fatalf("read Packages: %v", err)
+	}
+	// componentPrefix("libfoo") = "libf" per the lib* special-case.
+	want := "Filename: pool/libf/libfoo/libfoo_1.0-1_amd64.deb\n"
+	if !bytes.Contains(pkgBody, []byte(want)) {
+		t.Errorf("fallback path missing; body:\n%s", pkgBody)
 	}
 }
 

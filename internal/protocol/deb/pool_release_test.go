@@ -124,3 +124,39 @@ func TestResolvePoolPath_NilControl(t *testing.T) {
 		t.Errorf("nil ctrl: got %q want %q", got, want)
 	}
 }
+
+// TestResolvePoolPath_InReleaseFallback verifies that when only InRelease
+// (PGP clearsigned variant) is published — no plain Release — ResolvePoolPath
+// parses the header block after stripping the PGP wrapper and honours the
+// first Components: entry. Modern Debian publishers commonly emit InRelease
+// only (apt-ftparchive → gpg --clearsign).
+func TestResolvePoolPath_InReleaseFallback(t *testing.T) {
+	tmp := t.TempDir()
+	distsDir := filepath.Join(tmp, "proj", "deb", "r", "dists", "stable")
+	if err := os.MkdirAll(distsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	inRelease := []byte(`-----BEGIN PGP SIGNED MESSAGE-----
+Hash: SHA256
+
+Suite: stable
+Components: contrib main
+Architectures: amd64
+
+-----BEGIN PGP SIGNATURE-----
+
+iQGzBAEBCgAdFiEE...fake-sig...AACgkQ...
+=abcd
+-----END PGP SIGNATURE-----
+`)
+	if err := os.WriteFile(filepath.Join(distsDir, "InRelease"), inRelease, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := ResolvePoolPath(tmp, "proj", "r", "stable", "x_1.deb", &Control{Package: "x"})
+	want := "pool/contrib/x/x/x_1.deb"
+	if got != want {
+		t.Errorf("InRelease fallback: got %q want %q", got, want)
+	}
+}

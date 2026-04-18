@@ -23,7 +23,10 @@ import (
 //
 //  1. Attempt to read <repoRoot>/<project>/deb/<repo>/dists/<suite>/Release
 //     and honour its first-listed Components: entry.
-//  2. If the Release file is absent, empty, unparseable, missing the
+//  2. If Release is absent, try the clearsigned <suite>/InRelease variant
+//     (modern Debian publishers emit InRelease only). The PGP clearsign
+//     wrapper is stripped before RFC822 parsing.
+//  3. If neither file is available, empty, unparseable, missing the
 //     Components: header, or declares a component containing "/" or ".."
 //     (T-07-06-01 traversal mitigation), fall back to the legacy
 //     filename-inference path `pool/main/<initial>/<pkg>/<filename>`.
@@ -42,14 +45,50 @@ func ResolvePoolPath(repoRoot, projectName, repoName, suite, filename string, ct
 	initial := pkg[:1]
 
 	component := "main"
-	releasePath := filepath.Join(repoRoot, projectName, "deb", repoName, "dists", suite, "Release")
-	if data, err := os.ReadFile(releasePath); err == nil {
+	distsDir := filepath.Join(repoRoot, projectName, "deb", repoName, "dists", suite)
+	for _, name := range []string{"Release", "InRelease"} {
+		data, err := os.ReadFile(filepath.Join(distsDir, name))
+		if err != nil {
+			continue
+		}
+		if name == "InRelease" {
+			data = stripClearsign(data)
+		}
 		if first := extractFirstComponent(data); first != "" && isSafeComponent(first) {
 			component = first
+			break
 		}
 	}
 
 	return "pool/" + component + "/" + initial + "/" + pkg + "/" + filename
+}
+
+// stripClearsign extracts the RFC822 header block from a PGP clearsigned
+// message (as emitted by `apt-ftparchive release | gpg --clearsign`). It
+// removes the "-----BEGIN PGP SIGNED MESSAGE-----" preamble + optional
+// Hash: headers, and the trailing "-----BEGIN PGP SIGNATURE-----" block.
+// If the input is not clearsigned, it is returned unchanged.
+func stripClearsign(data []byte) []byte {
+	const preamble = "-----BEGIN PGP SIGNED MESSAGE-----"
+	const sigStart = "\n-----BEGIN PGP SIGNATURE-----"
+	idx := bytes.Index(data, []byte(preamble))
+	if idx < 0 {
+		return data
+	}
+	// Skip preamble line.
+	rest := data[idx+len(preamble):]
+	if nl := bytes.IndexByte(rest, '\n'); nl >= 0 {
+		rest = rest[nl+1:]
+	}
+	// Skip Hash: / Comment: header lines until a blank line.
+	if blank := bytes.Index(rest, []byte("\n\n")); blank >= 0 {
+		rest = rest[blank+2:]
+	}
+	// Trim at the signature block.
+	if end := bytes.Index(rest, []byte(sigStart)); end >= 0 {
+		rest = rest[:end]
+	}
+	return rest
 }
 
 // extractFirstComponent parses a Debian Release file (RFC 822 headers) and

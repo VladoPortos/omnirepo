@@ -98,6 +98,54 @@ func TestBearerAPIKeyUpdatesLastUsedAt(t *testing.T) {
 	}
 }
 
+// TestBasicAPIKeySuccess covers F-T8: /api/v1 must accept HTTP Basic with an
+// API key in the password field (the same shape accepted by protocol
+// endpoints via BasicOrAPIKey).
+func TestBasicAPIKeySuccess(t *testing.T) {
+	e := newEnv(t)
+	h := middleware.SessionOrAPIKey(e.Deps)(okHandler())
+	req := httptest.NewRequest("GET", "/", nil)
+	req.SetBasicAuth("admin", e.AliceAPIKey.Plaintext)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: %d, body=%q", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "login=alice") {
+		t.Fatalf("body: %q", w.Body.String())
+	}
+}
+
+// TestBasicAPIKeyInvalidKeyShapedPasswordRejected ensures a password that
+// matches the API-key regex but doesn't correspond to a live row fails
+// closed (no fall-through to password auth).
+func TestBasicAPIKeyInvalidKeyShapedPasswordRejected(t *testing.T) {
+	e := newEnv(t)
+	h := middleware.SessionOrAPIKey(e.Deps)(okHandler())
+	req := httptest.NewRequest("GET", "/", nil)
+	req.SetBasicAuth("alice", "omr_u_"+strings.Repeat("x", 28))
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("status: %d; want 401", w.Code)
+	}
+}
+
+// TestBasicPasswordFallsThroughTo401 — Basic with a non-key password is not
+// handled by SessionOrAPIKey (interactive logins go through the /auth/login
+// endpoint), so the middleware must 401 rather than attempting password auth.
+func TestBasicPasswordRejected(t *testing.T) {
+	e := newEnv(t)
+	h := middleware.SessionOrAPIKey(e.Deps)(okHandler())
+	req := httptest.NewRequest("GET", "/", nil)
+	req.SetBasicAuth("alice", e.AlicePwPlain)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("status: %d; want 401", w.Code)
+	}
+}
+
 func TestInvalidBearerFormatRejected(t *testing.T) {
 	e := newEnv(t)
 	h := middleware.SessionOrAPIKey(e.Deps)(okHandler())

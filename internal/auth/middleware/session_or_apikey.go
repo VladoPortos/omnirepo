@@ -28,6 +28,14 @@ import (
 func SessionOrAPIKey(d Deps) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if actor, handled, ok := tryBasicAPIKey(r, d); handled {
+				if !ok {
+					writeJSON401(w, r)
+					return
+				}
+				next.ServeHTTP(w, r.WithContext(auth.WithActor(r.Context(), actor)))
+				return
+			}
 			if bearer := stripBearer(r.Header.Get("Authorization")); bearer != "" {
 				actor, ok := authenticateAPIKey(r.Context(), d, bearer)
 				if !ok {
@@ -49,6 +57,36 @@ func SessionOrAPIKey(d Deps) func(http.Handler) http.Handler {
 			writeJSON401(w, r)
 		})
 	}
+}
+
+// tryBasicAPIKey returns (actor, handled, ok):
+//   - handled=false → no Basic header (caller should fall through to Bearer/cookie).
+//   - handled=true, ok=true → Basic header carried a valid API key.
+//   - handled=true, ok=false → Basic header looked like an API-key request but
+//     auth failed; caller should 401 rather than fall through.
+//
+// Accepts either `login:<omr_u|p_...>` or the project:<name>:<omr_p_...>
+// variant already supported by BasicOrAPIKey (KEY-06 / D-31). Password-only
+// basic auth is intentionally NOT accepted here — /api/v1 stays on
+// session-cookie or Bearer for interactive logins.
+func tryBasicAPIKey(r *http.Request, d Deps) (auth.Actor, bool, bool) {
+	login, pw, ok := r.BasicAuth()
+	if !ok {
+		return auth.Actor{}, false, false
+	}
+	if login == "project" && d.Projects != nil {
+		pwParts := strings.SplitN(pw, ":", 2)
+		if len(pwParts) == 2 && pwParts[0] != "" && auth.APIKeyRegex.MatchString(pwParts[1]) {
+			actor, authed := authenticateProjectKey(r.Context(), d, pwParts[0], pwParts[1])
+			return actor, true, authed
+		}
+		return auth.Actor{}, true, false
+	}
+	if auth.APIKeyRegex.MatchString(pw) {
+		actor, authed := authenticateAPIKey(r.Context(), d, pw)
+		return actor, true, authed
+	}
+	return auth.Actor{}, false, false
 }
 
 // stripBearer returns the token portion of `Authorization: Bearer <token>` or
@@ -175,6 +213,13 @@ func authenticateSession(ctx context.Context, d Deps, token string) (auth.Actor,
 func OptionalSessionOrAPIKey(d Deps) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if actor, handled, ok := tryBasicAPIKey(r, d); handled {
+				if ok {
+					r = r.WithContext(auth.WithActor(r.Context(), actor))
+				}
+				next.ServeHTTP(w, r)
+				return
+			}
 			if bearer := stripBearer(r.Header.Get("Authorization")); bearer != "" {
 				if actor, ok := authenticateAPIKey(r.Context(), d, bearer); ok {
 					r = r.WithContext(auth.WithActor(r.Context(), actor))

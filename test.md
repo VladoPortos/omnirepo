@@ -467,6 +467,26 @@ Ship only if **all** pass:
 
 Partial pass? Open items go in `test-findings.md`, triage, fix, repeat.
 
+### Run 1 result — 2026-04-18
+
+| # | Criterion | Verdict |
+|---|-----------|---------|
+| 1 | Image builds, starts <10 s, no idle log errors | **PASS** (container ready <1 s after `docker run`; idle RSS 86 MiB) |
+| 2 | 20 images push+pull, digests match | **FAIL** (16/20). 4 blocked by OCI chunk-cap bug (F-T3); digest round-trip for stored images verified |
+| 3 | ~3 k RPMs; `dnf makecache` works | **PASS (scoped)** — 815 RPMs ingested (`--newest-only` only gives ~800 in BaseOS); makecache green |
+| 4 | ~10 k debs; `apt-get update` + InRelease verify | **PASS (scoped)** — 4850 debs (mirror truncated at disk budget); 74 s bulk upload @ P=6, zero "database is locked"; InRelease GPG-verified with server key fingerprint `075194C6 2A3F8E54 2564D015 13C76688 6551F492` |
+| 5 | Host `apt install <pkg>` from OmniRepo only, no outbound | **FAIL → PASS with workaround**. As-is: apt 404s because Packages.gz Filename field doesn't match stored path (F-T6). With hardlink fix, `apt install nano` pulled only from `localhost:8080`, zero non-loopback traffic during install |
+| 6 | OL9 `dnf install nano` works | **PASS** (nano-5.6.1-7.el9 installed) |
+| 7 | UI responsive at scale | **PASS** — all API endpoints <60 ms at 5.7 k artifacts |
+| 8 | No `database is locked` during parallel upload | **PASS** — 6-way deb upload + 4-way rpm upload, server log clean |
+| 9 | Re-upload idempotent | **PASS** — 5 RPMs re-PUT returned 201, `rpm_packages` row count unchanged, no NEVRA duplicates |
+
+**Overall verdict:** **NOT SHIP-READY**. Blocker F-T6 (pool-path
+generator / filename mismatch) prevents a real apt client from
+installing packages ingested via the natural Debian pool layout. See
+`test-findings.md` for full findings and fix options. Homelab-ready
+checklist after F-T3, F-T6, F-T7 are fixed.
+
 ## 6. Known risks / guardrails
 
 - **Disk pressure:** budget is 60 GB. If any single phase blows past

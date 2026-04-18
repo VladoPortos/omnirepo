@@ -21,11 +21,15 @@ iana-after.png
 # Vite dev cache (not used at runtime)
 .vite/
 
-# Dev screenshots from walkthroughs — regenerated per session
-/[0-9][0-9]-*.png
-/walkthrough-*.png
-/fix-*.png
-/Screenshot.png
+# Dev screenshots from walkthroughs — regenerated per session. Tracked
+# visual references live under ui-test/; anything dropped at the repo
+# root is a scratch artifact from a Playwright session and shouldn't be
+# committed.
+/*.png
+
+# Codex plugin runtime droppings (zero-byte state files that occasionally
+# appear at the repo root).
+/.codex
 
 # Stray TS→JS compilation output (Vite builds into dist/, these are accidental)
 web/src/**/*.js

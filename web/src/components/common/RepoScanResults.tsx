@@ -13,11 +13,14 @@
  */
 
 import { useMemo } from 'react';
-import { RefreshCw, ShieldCheck, ShieldAlert, ShieldX, Clock } from 'lucide-react';
+import { RefreshCw, ShieldCheck, ShieldAlert, ShieldX, Clock, Loader2 } from 'lucide-react';
+import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
-import { useRepoScans } from '@/api/queries';
+import { useRepoScans, useRescanRepo, useMe } from '@/api/queries';
 import { formatDate } from '@/lib/format';
+import { ApiError } from '@/api/client';
 import type { Scan } from '@/api/types';
 
 interface RepoScanResultsProps {
@@ -130,12 +133,72 @@ function CountCell({ label, value, className }: { label: string; value: number; 
 
 export function RepoScanResults({ projectName, repoType, repoName }: RepoScanResultsProps) {
   const { data: scans, isLoading, isError } = useRepoScans(projectName, repoType, repoName);
+  const { data: me } = useMe();
+  const rescan = useRescanRepo(projectName, repoType, repoName);
 
   const rows = useMemo(() => scans ?? [], [scans]);
+  // Git repos don't have scannable artifacts. Rendering the button there
+  // would 400 on click — hide it instead. Everyone else gets the button
+  // (server enforces the real permission check).
+  const canRescan = repoType !== 'git' && !!me;
+
+  const handleRescanAll = async () => {
+    try {
+      const res = await rescan.mutateAsync();
+      if (res.enqueued === 0) {
+        toast.info('No artifacts to scan in this repo.');
+        return;
+      }
+      toast.success(
+        `Queued ${res.enqueued} scan${res.enqueued === 1 ? '' : 's'}. Results will appear shortly.`,
+      );
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 412) {
+        // Trivy DB not installed. Deep-link to the admin page so super-
+        // admins can fix it in one click; non-admins at least see where
+        // the problem lives.
+        toast.error(
+          'Trivy database is not installed. An administrator must install it at /admin/trivy.',
+        );
+        return;
+      }
+      if (err instanceof ApiError) {
+        toast.error(err.detail || err.message || 'Rescan failed.');
+        return;
+      }
+      toast.error('Rescan failed.');
+    }
+  };
+
+  const header = canRescan ? (
+    <div className="flex items-center justify-between gap-3 pb-3">
+      <div>
+        <h3 className="text-sm font-semibold">Scan Results</h3>
+        <p className="text-xs text-muted-foreground">
+          Run a fresh scan against every artifact in this repository — useful after
+          updating the Trivy database or clearing past failures.
+        </p>
+      </div>
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={handleRescanAll}
+        disabled={rescan.isPending}
+      >
+        {rescan.isPending ? (
+          <Loader2 className="mr-1.5 size-4 animate-spin" />
+        ) : (
+          <RefreshCw className="mr-1.5 size-4" />
+        )}
+        {rescan.isPending ? 'Queuing...' : 'Rescan all'}
+      </Button>
+    </div>
+  ) : null;
 
   if (isLoading) {
     return (
       <div className="space-y-3 py-4">
+        {header}
         <Skeleton className="h-8 w-full" />
         <Skeleton className="h-8 w-full" />
         <Skeleton className="h-8 w-full" />
@@ -145,22 +208,29 @@ export function RepoScanResults({ projectName, repoType, repoName }: RepoScanRes
 
   if (isError) {
     return (
-      <div className="flex items-center justify-center gap-2 py-12 text-sm text-destructive">
-        <ShieldX className="size-4" />
-        Failed to load scans.
+      <div className="py-4">
+        {header}
+        <div className="flex items-center justify-center gap-2 py-12 text-sm text-destructive">
+          <ShieldX className="size-4" />
+          Failed to load scans.
+        </div>
       </div>
     );
   }
 
   if (rows.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center gap-3 py-12 text-center">
-        <Clock className="size-10 text-muted-foreground" />
-        <div>
-          <h3 className="text-sm font-semibold">No scans yet</h3>
-          <p className="text-xs text-muted-foreground">
-            Scans are enqueued automatically when an artifact is uploaded to this repository.
-          </p>
+      <div className="py-4">
+        {header}
+        <div className="flex flex-col items-center justify-center gap-3 py-12 text-center">
+          <Clock className="size-10 text-muted-foreground" />
+          <div>
+            <h3 className="text-sm font-semibold">No scans yet</h3>
+            <p className="text-xs text-muted-foreground">
+              Scans are enqueued automatically when an artifact is uploaded. Use
+              the button above to scan existing artifacts now.
+            </p>
+          </div>
         </div>
       </div>
     );
@@ -168,6 +238,7 @@ export function RepoScanResults({ projectName, repoType, repoName }: RepoScanRes
 
   return (
     <div className="py-2">
+      {header}
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead className="border-b">

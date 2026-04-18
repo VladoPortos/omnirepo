@@ -89,6 +89,11 @@ func (d Deps) mountScans(r chi.Router) {
 	// from the router so requests fell through to the SPA (WALKTHROUGH-
 	// FINDINGS F-2b). Populates the "Scan Results" tab on the repo page.
 	r.Get("/projects/{name}/repos/{type}/{repo}/scans", d.handleListRepoScans)
+	// Repo-level "rescan all artifacts" — the per-artifact endpoint above
+	// handles retries one-by-one, but operators also want a single button
+	// after a Trivy DB refresh or after past scans failed en masse (e.g.
+	// DB not yet installed when uploads landed).
+	r.Post("/projects/{name}/repos/{type}/{repo}/rescan", d.handleRescanRepo)
 	r.Get("/scans/{id}", d.handleGetScan)
 	r.Get("/scans/{id}/vulnerabilities", d.handleListScanVulns)
 	r.Get("/scans/{id}/sbom", d.handleGetSBOM)
@@ -353,6 +358,153 @@ func (d Deps) lookupPackageFilename(ctx context.Context, kind string, repoID int
 		return "", fmt.Errorf("%s lookup: %w", table, err)
 	}
 	return filename, nil
+}
+
+// handleRescanRepo enqueues a fresh scan for every artifact currently in
+// the repo and kicks the pool. Idempotent in the sense that each call
+// adds a new scans row per artifact — the pool dedupes via its leasing
+// model, so stacking "Rescan all" presses is cheap, not a landslide.
+//
+// POST /projects/{name}/repos/{type}/{repo}/rescan → 202 {enqueued,
+// repo_type, pool_kicked}. Git repos return 400 (nothing to scan).
+func (d Deps) handleRescanRepo(w http.ResponseWriter, r *http.Request) {
+	actor, ok := auth.ActorFromContext(r.Context())
+	if !ok {
+		writeJSONError(w, r, http.StatusUnauthorized, ErrUnauthenticated, "")
+		return
+	}
+	projectName := chi.URLParam(r, "name")
+	repoType := chi.URLParam(r, "type")
+	repoName := chi.URLParam(r, "repo")
+	if _, ok := validRepoTypes[repoType]; !ok {
+		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "repo not found")
+		return
+	}
+	p, err := d.Projects.FindByName(r.Context(), projectName)
+	if err != nil || p == nil {
+		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "project not found")
+		return
+	}
+	repo, err := d.Repos.FindByTriple(r.Context(), p.ID, repoType, repoName)
+	if err != nil || repo == nil {
+		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "repo not found")
+		return
+	}
+	if !d.actorIsProjectMember(r.Context(), actor, p.ID) {
+		writeJSONError(w, r, http.StatusForbidden, ErrForbidden, "not a project member")
+		return
+	}
+	kind := artifactKindForRepoType(repo.Type)
+	if kind == "" {
+		writeJSONError(w, r, http.StatusBadRequest, ErrValidationFailed,
+			"rescan not supported for "+repo.Type+" repos")
+		return
+	}
+	if !d.trivyDBInstalled() {
+		writeJSONError(w, r, http.StatusPreconditionFailed, "trivy_db_missing",
+			"Vulnerability scanning is not available: the Trivy database has not been installed. An administrator must upload a DB tarball or pull the latest DB at /admin/trivy before the first scan.")
+		return
+	}
+
+	ids, err := d.listRepoArtifactIDs(r.Context(), kind, repo.ID)
+	if err != nil {
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
+		return
+	}
+	if len(ids) == 0 {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"enqueued":    0,
+			"repo_type":   repo.Type,
+			"pool_kicked": false,
+		})
+		return
+	}
+
+	// Batch the inserts in one writer tx so SQLite takes one lock cycle,
+	// not N. On error we roll back the whole batch — partial rescans would
+	// surprise operators more than a clear failure.
+	enqueued := 0
+	if err := d.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
+		for _, id := range ids {
+			if _, err := d.ScanDeps.Scans.Enqueue(r.Context(), tx, repo.ID, kind, id); err != nil {
+				return err
+			}
+			enqueued++
+		}
+		return nil
+	}); err != nil {
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
+		return
+	}
+	if d.ScanDeps.ScanKick != nil {
+		d.ScanDeps.ScanKick()
+	}
+
+	if userID := actor.ID; userID != 0 {
+		uid := userID
+		d.recordAudit(r, audit.Event{
+			Kind:        audit.EvtScanStarted,
+			ActorUserID: &uid,
+			TargetKind:  "repo",
+			TargetID:    strconv.FormatInt(repo.ID, 10),
+			Outcome:     "rescan_all_enqueued",
+			Details: map[string]any{
+				"repo_id":       repo.ID,
+				"artifact_kind": kind,
+				"enqueued":      enqueued,
+				"reason":        "manual_rescan_all",
+			},
+		})
+	}
+
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"enqueued":    enqueued,
+		"repo_type":   repo.Type,
+		"pool_kicked": d.ScanDeps.ScanKick != nil,
+	})
+}
+
+// listRepoArtifactIDs returns the artifact-ids the scan pipeline expects
+// for a given repo — the same string each upload path passes to
+// ScansRepo.Enqueue. Docker uses digests; raw uses paths; package repos
+// use filenames.
+func (d Deps) listRepoArtifactIDs(ctx context.Context, kind string, repoID int64) ([]string, error) {
+	var query string
+	switch kind {
+	case "docker":
+		// Dedup by digest — a single manifest can be tagged many times,
+		// and we only need to scan each content-addressed manifest once.
+		query = `SELECT DISTINCT digest FROM docker_manifests WHERE repo_id=?`
+	case "raw":
+		query = `SELECT path FROM raw_files WHERE repo_id=?`
+	case "rpm":
+		query = `SELECT filename FROM rpm_packages WHERE repo_id=?`
+	case "deb":
+		query = `SELECT filename FROM deb_packages WHERE repo_id=?`
+	case "pypi":
+		query = `SELECT filename FROM pypi_files WHERE repo_id=?`
+	case "helm":
+		query = `SELECT filename FROM helm_charts WHERE repo_id=?`
+	default:
+		return nil, fmt.Errorf("unsupported kind %q", kind)
+	}
+	rows, err := d.DB.Reader.QueryContext(ctx, query, repoID)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	out := make([]string, 0, 32)
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		if id == "" {
+			continue
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
 }
 
 // artifactKindForRepoType maps a repo.type onto the scans.artifact_kind

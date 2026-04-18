@@ -85,6 +85,32 @@ export function useRepoScans(
   });
 }
 
+/**
+ * useRescanRepo — POST /projects/{name}/repos/{type}/{repo}/rescan,
+ * which enqueues a fresh Trivy scan for every artifact currently in the
+ * repo. Invalidates the repo-scans query on success so the progress
+ * appears immediately in the Scan Results tab.
+ */
+export function useRescanRepo(
+  projectName: string,
+  repoType: string,
+  repoName: string,
+) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      api.post<{ enqueued: number; repo_type: string; pool_kicked: boolean }>(
+        `/projects/${enc(projectName)}/repos/${enc(repoType)}/${enc(repoName)}/rescan`,
+        {},
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({
+        queryKey: ['repo-scans', projectName, repoType, repoName],
+      });
+    },
+  });
+}
+
 // -- Repo content (listing artifacts uploaded to a repo) --
 
 export function useRepoContent(

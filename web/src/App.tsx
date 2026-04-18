@@ -28,12 +28,35 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { SearchPage } from '@/pages/SearchPage';
 import { ProfilePage } from '@/pages/ProfilePage';
 
-// Placeholder for lazy-load error fallbacks
-function PlaceholderPage({ name }: { name: string }) {
+// Fallback shown when a code-split chunk fails to load. The usual cause
+// is that the OmniRepo server is unreachable (backend stopped, network
+// dropped, TLS cert rejected by the browser), so the browser can't fetch
+// the lazy JS bundle for this route. The page itself is built and
+// deployed — it just couldn't download.
+function ChunkLoadFailurePage({ name }: { name: string }) {
   return (
-    <div>
+    <div className="max-w-xl">
       <h1 className="text-2xl font-semibold">{name}</h1>
-      <p className="text-muted-foreground mt-2">Coming in a future plan.</p>
+      <p className="text-muted-foreground mt-2">
+        Couldn't load this page. The OmniRepo server is likely unreachable
+        — the browser failed to fetch the JavaScript bundle for this route.
+      </p>
+      <ul className="text-muted-foreground mt-3 list-disc pl-5 text-sm space-y-1">
+        <li>Check that the OmniRepo server is running.</li>
+        <li>
+          If you're using a self-signed TLS cert, confirm your browser has
+          accepted it (visit the server URL directly and approve the
+          warning).
+        </li>
+        <li>Check the browser devtools Network tab for the failing request.</li>
+      </ul>
+      <button
+        type="button"
+        onClick={() => window.location.reload()}
+        className="mt-4 inline-flex items-center rounded-md border border-input bg-background px-3 py-1.5 text-sm font-medium hover:bg-accent hover:text-accent-foreground"
+      >
+        Retry
+      </button>
     </div>
   );
 }
@@ -41,37 +64,37 @@ function PlaceholderPage({ name }: { name: string }) {
 // Lazy-loaded admin pages per D-37 code splitting
 const AdminUsersPage = lazy(() =>
   import('@/pages/admin/UsersPage').catch(() => ({
-    default: () => <PlaceholderPage name="Users" />,
+    default: () => <ChunkLoadFailurePage name="Users" />,
   })),
 );
 const AdminAuditPage = lazy(() =>
   import('@/pages/admin/AuditPage').catch(() => ({
-    default: () => <PlaceholderPage name="Audit Log" />,
+    default: () => <ChunkLoadFailurePage name="Audit Log" />,
   })),
 );
 const AdminTLSPage = lazy(() =>
   import('@/pages/admin/TLSPage').catch(() => ({
-    default: () => <PlaceholderPage name="TLS Certificates" />,
+    default: () => <ChunkLoadFailurePage name="TLS Certificates" />,
   })),
 );
 const AdminTrivyPage = lazy(() =>
   import('@/pages/admin/TrivyPage').catch(() => ({
-    default: () => <PlaceholderPage name="Trivy Database" />,
+    default: () => <ChunkLoadFailurePage name="Trivy Database" />,
   })),
 );
 const AdminGCPage = lazy(() =>
   import('@/pages/admin/GCPage').catch(() => ({
-    default: () => <PlaceholderPage name="Garbage Collection" />,
+    default: () => <ChunkLoadFailurePage name="Garbage Collection" />,
   })),
 );
 const AdminTrashPage = lazy(() =>
   import('@/pages/admin/TrashPage').catch(() => ({
-    default: () => <PlaceholderPage name="Trash" />,
+    default: () => <ChunkLoadFailurePage name="Trash" />,
   })),
 );
 const AdminMaintenancePage = lazy(() =>
   import('@/pages/admin/MaintenancePage').catch(() => ({
-    default: () => <PlaceholderPage name="Maintenance" />,
+    default: () => <ChunkLoadFailurePage name="Maintenance" />,
   })),
 );
 

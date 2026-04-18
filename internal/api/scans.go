@@ -98,6 +98,11 @@ func (d Deps) mountScans(r chi.Router) {
 	// after a Trivy DB refresh or after past scans failed en masse (e.g.
 	// DB not yet installed when uploads landed).
 	r.Post("/projects/{name}/repos/{type}/{repo}/rescan", d.handleRescanRepo)
+	// Prune historical scan rows, keeping only the latest per
+	// (artifact_kind, artifact_id). Operators repeatedly rescanning after
+	// DB updates otherwise accumulate long history in the Scan Results
+	// tab; this button makes the history reflect current state.
+	r.Post("/projects/{name}/repos/{type}/{repo}/scans/prune", d.handleScanPrune)
 	r.Get("/scans/{id}", d.handleGetScan)
 	r.Get("/scans/{id}/vulnerabilities", d.handleListScanVulns)
 	r.Get("/scans/{id}/sbom", d.handleGetSBOM)
@@ -141,6 +146,12 @@ func (d Deps) handleListRepoScans(w http.ResponseWriter, r *http.Request) {
 			limit = v
 		}
 	}
+	offset := int64(0)
+	if q := r.URL.Query().Get("offset"); q != "" {
+		if v, perr := strconv.ParseInt(q, 10, 64); perr == nil && v >= 0 {
+			offset = v
+		}
+	}
 	status := r.URL.Query().Get("status")
 
 	query := `
@@ -157,8 +168,8 @@ func (d Deps) handleListRepoScans(w http.ResponseWriter, r *http.Request) {
 		query += ` AND status=?`
 		args = append(args, status)
 	}
-	query += ` ORDER BY id DESC LIMIT ?`
-	args = append(args, limit)
+	query += ` ORDER BY id DESC LIMIT ? OFFSET ?`
+	args = append(args, limit, offset)
 
 	rows, err := d.DB.Reader.QueryContext(r.Context(), query, args...)
 	if err != nil {
@@ -467,6 +478,100 @@ func (d Deps) handleRescanRepo(w http.ResponseWriter, r *http.Request) {
 		"enqueued":    enqueued,
 		"repo_type":   repo.Type,
 		"pool_kicked": d.ScanDeps.ScanKick != nil,
+	})
+}
+
+// handleScanPrune deletes every scan row for the repo except the newest
+// per (artifact_kind, artifact_id). Never touches rows in pending/running
+// state — deleting those would orphan in-flight jobs. Returns the number
+// of rows deleted so the UI can confirm the result.
+//
+// POST /projects/{name}/repos/{type}/{repo}/scans/prune → 200 {deleted, kept}
+func (d Deps) handleScanPrune(w http.ResponseWriter, r *http.Request) {
+	actor, ok := auth.ActorFromContext(r.Context())
+	if !ok {
+		writeJSONError(w, r, http.StatusUnauthorized, ErrUnauthenticated, "")
+		return
+	}
+	projectName := chi.URLParam(r, "name")
+	repoType := chi.URLParam(r, "type")
+	repoName := chi.URLParam(r, "repo")
+	if _, ok := validRepoTypes[repoType]; !ok {
+		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "repo not found")
+		return
+	}
+	p, err := d.Projects.FindByName(r.Context(), projectName)
+	if err != nil || p == nil {
+		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "project not found")
+		return
+	}
+	repo, err := d.Repos.FindByTriple(r.Context(), p.ID, repoType, repoName)
+	if err != nil || repo == nil {
+		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "repo not found")
+		return
+	}
+	if !d.actorIsProjectMember(r.Context(), actor, p.ID) {
+		writeJSONError(w, r, http.StatusForbidden, ErrForbidden, "not a project member")
+		return
+	}
+
+	// Count rows before/after so we can return a meaningful summary.
+	// DELETE ... WHERE id NOT IN (SELECT MAX(id) FROM scans
+	//   WHERE repo_id=? AND status IN ('done','failed')
+	//   GROUP BY artifact_kind, artifact_id) AND repo_id=? AND status IN (...)
+	// Pending/running rows are explicitly preserved.
+	var deleted int64
+	if err := d.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
+		res, err := tx.ExecContext(r.Context(), `
+			DELETE FROM scans
+			WHERE repo_id = ?
+			  AND status IN ('done','failed')
+			  AND id NOT IN (
+				SELECT MAX(id) FROM scans
+				WHERE repo_id = ? AND status IN ('done','failed')
+				GROUP BY artifact_kind, artifact_id
+			  )
+		`, repo.ID, repo.ID)
+		if err != nil {
+			return err
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return err
+		}
+		deleted = n
+		return nil
+	}); err != nil {
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
+		return
+	}
+
+	// Count what's left so the UI can display "Kept N / deleted M".
+	var kept int64
+	_ = d.DB.Reader.QueryRowContext(r.Context(),
+		`SELECT COUNT(*) FROM scans WHERE repo_id = ?`, repo.ID,
+	).Scan(&kept)
+
+	if actor.ID != 0 {
+		uid := actor.ID
+		d.recordAudit(r, audit.Event{
+			Kind:        audit.EvtMaintenanceToggled, // closest existing kind; scan.prune would be cleaner
+			ActorUserID: &uid,
+			TargetKind:  "repo",
+			TargetID:    strconv.FormatInt(repo.ID, 10),
+			Outcome:     "scans_pruned",
+			Details: map[string]any{
+				"repo_id": repo.ID,
+				"deleted": deleted,
+				"kept":    kept,
+				"reason":  "manual_prune",
+			},
+		})
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"deleted": deleted,
+		"kept":    kept,
 	})
 }
 

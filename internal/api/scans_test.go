@@ -205,6 +205,93 @@ func TestScansREST_RescanRepo_EmptyRepo(t *testing.T) {
 	}
 }
 
+// TestScansREST_PruneScans_KeepsLatest — prune must delete every
+// finished (done/failed) scan row except the newest per artifact, and
+// must never touch rows still in pending/running state.
+func TestScansREST_PruneScans_KeepsLatest(t *testing.T) {
+	s := newScanRESTServer(t)
+	uid, pw := seedTestUser(t, s.db, "alice", "a@x", false, false)
+	cookie, _, _ := s.login(t, "alice", pw)
+	proj, repo, _, repoID := seedScanProject(t, s, uid, "docker")
+
+	ctx := context.Background()
+	scans := metadata.NewScansRepo(s.db)
+
+	// Three finished scans for artifact A (should keep only the newest) +
+	// two finished for artifact B (keep newest) + one running row (must
+	// survive regardless).
+	insertDoneScan := func(kind, artifactID string) int64 {
+		t.Helper()
+		var id int64
+		if err := s.db.WriteTx(ctx, func(tx *sql.Tx) error {
+			newID, err := scans.Enqueue(ctx, tx, repoID, kind, artifactID)
+			if err != nil {
+				return err
+			}
+			id = newID
+			_, err = tx.ExecContext(ctx,
+				`UPDATE scans SET status='done', finished_at=CURRENT_TIMESTAMP WHERE id=?`, id)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	insertDoneScan("docker", "sha256:a")
+	insertDoneScan("docker", "sha256:a")
+	keepA := insertDoneScan("docker", "sha256:a")
+	insertDoneScan("docker", "sha256:b")
+	keepB := insertDoneScan("docker", "sha256:b")
+	// Running row for a third artifact — must survive the prune.
+	var running int64
+	if err := s.db.WriteTx(ctx, func(tx *sql.Tx) error {
+		id, err := scans.Enqueue(ctx, tx, repoID, "docker", "sha256:c")
+		running = id
+		if err != nil {
+			return err
+		}
+		_, err = tx.ExecContext(ctx, `UPDATE scans SET status='running' WHERE id=?`, id)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	resp, body := s.do(t, "POST",
+		"/api/v1/projects/"+proj+"/repos/docker/"+repo+"/scans/prune",
+		cookie, nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("prune code=%d body=%v", resp.StatusCode, body)
+	}
+	if got, _ := body["deleted"].(float64); got != 3 {
+		t.Fatalf("deleted=%v want 3 (body=%v)", got, body)
+	}
+
+	// What remains: keepA, keepB, running — three rows total.
+	var ids []int64
+	rows, err := s.db.Reader.QueryContext(ctx,
+		`SELECT id FROM scans WHERE repo_id=? ORDER BY id`, repoID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, id)
+	}
+	want := map[int64]bool{keepA: true, keepB: true, running: true}
+	if len(ids) != len(want) {
+		t.Fatalf("surviving ids=%v want %v", ids, want)
+	}
+	for _, id := range ids {
+		if !want[id] {
+			t.Fatalf("unexpected surviving id=%d (want %v)", id, want)
+		}
+	}
+}
+
 // TestScansREST_RescanRepo_GitRejected — git repos have no scannable
 // artifacts; the endpoint must surface a clear 400 instead of silently
 // enqueuing nothing.

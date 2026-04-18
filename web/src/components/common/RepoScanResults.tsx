@@ -12,13 +12,31 @@
  * can just render <RepoScanResults .../>.
  */
 
-import { useMemo } from 'react';
-import { RefreshCw, ShieldCheck, ShieldAlert, ShieldX, Clock, Loader2 } from 'lucide-react';
+import { useMemo, useState } from 'react';
+import {
+  RefreshCw,
+  ShieldCheck,
+  ShieldAlert,
+  ShieldX,
+  Clock,
+  Loader2,
+  ChevronDown,
+  ChevronRight,
+  Trash2,
+} from 'lucide-react';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
-import { useRepoScans, useRescanRepo, useMe } from '@/api/queries';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from '@/components/ui/dialog';
+import { useRepoScans, useRescanRepo, usePruneScans, useMe } from '@/api/queries';
 import { formatDate } from '@/lib/format';
 import { ApiError } from '@/api/client';
 import type { Scan } from '@/api/types';
@@ -131,16 +149,73 @@ function CountCell({ label, value, className }: { label: string; value: number; 
   );
 }
 
+// groupKeyFor returns the YYYY-MM-DD day a scan should live under — we
+// prefer finished_at (terminal rows) but fall back to started_at →
+// created_at so running rows still land in a sensible bucket.
+function groupKeyFor(scan: Scan): string {
+  const ts = scan.finished_at || scan.started_at || scan.created_at || '';
+  if (!ts) return 'unknown';
+  // The scan API emits RFC3339; pick the date portion (UTC).
+  return ts.slice(0, 10);
+}
+
+// humanDayLabel turns YYYY-MM-DD into "Today", "Yesterday", or the long
+// date — scannable at a glance while still showing the exact day for
+// older entries.
+function humanDayLabel(key: string): string {
+  if (key === 'unknown') return 'No timestamp';
+  const today = new Date();
+  const todayKey = today.toISOString().slice(0, 10);
+  if (key === todayKey) return `Today (${key})`;
+  const yesterday = new Date(today);
+  yesterday.setDate(today.getDate() - 1);
+  const yKey = yesterday.toISOString().slice(0, 10);
+  if (key === yKey) return `Yesterday (${key})`;
+  return key;
+}
+
+const PAGE_SIZE = 100;
+
 export function RepoScanResults({ projectName, repoType, repoName }: RepoScanResultsProps) {
-  const { data: scans, isLoading, isError } = useRepoScans(projectName, repoType, repoName);
+  // Paginated list: bump `limit` as the user clicks "Load more".
+  const [limit, setLimit] = useState(PAGE_SIZE);
+  const { data: scans, isLoading, isError } = useRepoScans(projectName, repoType, repoName, {
+    limit,
+  });
   const { data: me } = useMe();
   const rescan = useRescanRepo(projectName, repoType, repoName);
+  const prune = usePruneScans(projectName, repoType, repoName);
+  const [pruneOpen, setPruneOpen] = useState(false);
+  // Track which date groups the user has opened. Closed by default so a
+  // repo with years of scan history doesn't render as a wall of rows.
+  const [openGroups, setOpenGroups] = useState<Set<string>>(new Set());
 
   const rows = useMemo(() => scans ?? [], [scans]);
+  const hasMore = rows.length >= limit;
   // Git repos don't have scannable artifacts. Rendering the button there
   // would 400 on click — hide it instead. Everyone else gets the button
   // (server enforces the real permission check).
   const canRescan = repoType !== 'git' && !!me;
+
+  // Group scans by day key; preserves per-group ordering (newest first
+  // because the API already sorts by id DESC, which correlates with
+  // timestamp).
+  const groups = useMemo(() => {
+    const map = new Map<string, Scan[]>();
+    for (const scan of rows) {
+      const key = groupKeyFor(scan);
+      const bucket = map.get(key) ?? [];
+      bucket.push(scan);
+      map.set(key, bucket);
+    }
+    // Order groups by key DESC so "today" is first. Guard the "unknown"
+    // bucket to the bottom so it doesn't claim pole position.
+    return Array.from(map.entries()).sort(([a], [b]) => {
+      if (a === 'unknown') return 1;
+      if (b === 'unknown') return -1;
+      return b.localeCompare(a);
+    });
+  }, [rows]);
 
   const handleRescanAll = async () => {
     try {
@@ -154,9 +229,6 @@ export function RepoScanResults({ projectName, repoType, repoName }: RepoScanRes
       );
     } catch (err) {
       if (err instanceof ApiError && err.status === 412) {
-        // Trivy DB not installed. Deep-link to the admin page so super-
-        // admins can fix it in one click; non-admins at least see where
-        // the problem lives.
         toast.error(
           'Trivy database is not installed. An administrator must install it at /admin/trivy.',
         );
@@ -170,30 +242,107 @@ export function RepoScanResults({ projectName, repoType, repoName }: RepoScanRes
     }
   };
 
+  const handlePrune = async () => {
+    try {
+      const res = await prune.mutateAsync();
+      if (res.deleted === 0) {
+        toast.info('Nothing to prune — history is already one-per-artifact.');
+      } else {
+        toast.success(
+          `Removed ${res.deleted} older scan${res.deleted === 1 ? '' : 's'} (kept ${res.kept}).`,
+        );
+      }
+    } catch (err) {
+      if (err instanceof ApiError) {
+        toast.error(err.detail || err.message || 'Prune failed.');
+      } else {
+        toast.error('Prune failed.');
+      }
+    } finally {
+      setPruneOpen(false);
+    }
+  };
+
+  const toggleGroup = (key: string) => {
+    setOpenGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      return next;
+    });
+  };
+
   const header = canRescan ? (
-    <div className="flex items-center justify-between gap-3 pb-3">
+    <div className="flex flex-wrap items-center justify-between gap-3 pb-3">
       <div>
         <h3 className="text-sm font-semibold">Scan Results</h3>
         <p className="text-xs text-muted-foreground">
-          Run a fresh scan against every artifact in this repository — useful after
-          updating the Trivy database or clearing past failures.
+          Run a fresh scan against every artifact, or prune the history to one
+          row per artifact.
         </p>
       </div>
-      <Button
-        variant="outline"
-        size="sm"
-        onClick={handleRescanAll}
-        disabled={rescan.isPending}
-      >
-        {rescan.isPending ? (
-          <Loader2 className="mr-1.5 size-4 animate-spin" />
-        ) : (
-          <RefreshCw className="mr-1.5 size-4" />
-        )}
-        {rescan.isPending ? 'Queuing...' : 'Rescan all'}
-      </Button>
+      <div className="flex items-center gap-2">
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => setPruneOpen(true)}
+          disabled={prune.isPending || rows.length === 0}
+          title="Keep only the newest scan per artifact, delete older ones"
+        >
+          {prune.isPending ? (
+            <Loader2 className="mr-1.5 size-4 animate-spin" />
+          ) : (
+            <Trash2 className="mr-1.5 size-4" />
+          )}
+          {prune.isPending ? 'Pruning…' : 'Prune old scans'}
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={handleRescanAll}
+          disabled={rescan.isPending}
+        >
+          {rescan.isPending ? (
+            <Loader2 className="mr-1.5 size-4 animate-spin" />
+          ) : (
+            <RefreshCw className="mr-1.5 size-4" />
+          )}
+          {rescan.isPending ? 'Queuing…' : 'Rescan all'}
+        </Button>
+      </div>
     </div>
   ) : null;
+
+  const pruneDialog = (
+    <Dialog open={pruneOpen} onOpenChange={setPruneOpen}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Prune old scan history</DialogTitle>
+          <DialogDescription>
+            Delete every finished scan except the newest one per artifact in
+            this repository. In-flight (pending or running) scans are left
+            alone. This cannot be undone.
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => setPruneOpen(false)}>
+            Cancel
+          </Button>
+          <Button variant="destructive" onClick={handlePrune} disabled={prune.isPending}>
+            {prune.isPending ? (
+              <Loader2 className="mr-1.5 size-4 animate-spin" />
+            ) : (
+              <Trash2 className="mr-1.5 size-4" />
+            )}
+            Delete older scans
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
 
   if (isLoading) {
     return (
@@ -202,6 +351,7 @@ export function RepoScanResults({ projectName, repoType, repoName }: RepoScanRes
         <Skeleton className="h-8 w-full" />
         <Skeleton className="h-8 w-full" />
         <Skeleton className="h-8 w-full" />
+        {pruneDialog}
       </div>
     );
   }
@@ -214,6 +364,7 @@ export function RepoScanResults({ projectName, repoType, repoName }: RepoScanRes
           <ShieldX className="size-4" />
           Failed to load scans.
         </div>
+        {pruneDialog}
       </div>
     );
   }
@@ -232,6 +383,7 @@ export function RepoScanResults({ projectName, repoType, repoName }: RepoScanRes
             </p>
           </div>
         </div>
+        {pruneDialog}
       </div>
     );
   }
@@ -239,8 +391,57 @@ export function RepoScanResults({ projectName, repoType, repoName }: RepoScanRes
   return (
     <div className="py-2">
       {header}
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm">
+      <div className="space-y-2">
+        {groups.map(([key, groupRows]) => {
+          const isOpen = openGroups.has(key);
+          return (
+            <div key={key} className="rounded-md border">
+              <button
+                type="button"
+                onClick={() => toggleGroup(key)}
+                className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left hover:bg-muted/30"
+                aria-expanded={isOpen}
+              >
+                <div className="flex items-center gap-2">
+                  {isOpen ? (
+                    <ChevronDown className="size-4 text-muted-foreground" />
+                  ) : (
+                    <ChevronRight className="size-4 text-muted-foreground" />
+                  )}
+                  <span className="text-sm font-medium">{humanDayLabel(key)}</span>
+                </div>
+                <span className="text-xs text-muted-foreground">
+                  {groupRows.length} scan{groupRows.length === 1 ? '' : 's'}
+                </span>
+              </button>
+              {isOpen && <ScanRowsTable rows={groupRows} />}
+            </div>
+          );
+        })}
+        {hasMore && (
+          <div className="flex justify-center pt-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setLimit((n) => n + PAGE_SIZE)}
+            >
+              Load more
+            </Button>
+          </div>
+        )}
+      </div>
+      {pruneDialog}
+    </div>
+  );
+}
+
+// ScanRowsTable renders the per-row details for one date group. Pulled
+// out of the main component so the date collapsibles can lazy-render
+// (table only mounts when the group is expanded).
+function ScanRowsTable({ rows }: { rows: Scan[] }) {
+  return (
+    <div className="overflow-x-auto border-t">
+      <table className="w-full text-sm">
           <thead className="border-b">
             <tr className="text-left text-xs font-medium text-muted-foreground">
               <th className="px-3 py-2">Artifact</th>
@@ -306,6 +507,5 @@ export function RepoScanResults({ projectName, repoType, repoName }: RepoScanRes
           </tbody>
         </table>
       </div>
-    </div>
   );
 }

@@ -62,14 +62,23 @@ export function useRepoScans(
   projectName: string,
   repoType: string,
   repoName: string,
-  opts?: { status?: ScanStatus; limit?: number },
+  opts?: { status?: ScanStatus; limit?: number; offset?: number },
 ) {
   return useQuery({
-    queryKey: ['repo-scans', projectName, repoType, repoName, opts?.status ?? '', opts?.limit ?? 100],
+    queryKey: [
+      'repo-scans',
+      projectName,
+      repoType,
+      repoName,
+      opts?.status ?? '',
+      opts?.limit ?? 100,
+      opts?.offset ?? 0,
+    ],
     queryFn: () => {
       const params: Record<string, string> = {};
       if (opts?.status) params.status = opts.status;
       if (opts?.limit != null) params.limit = String(opts.limit);
+      if (opts?.offset != null) params.offset = String(opts.offset);
       return api.get<Scan[]>(
         `/projects/${enc(projectName)}/repos/${enc(repoType)}/${enc(repoName)}/scans`,
         params,
@@ -81,6 +90,29 @@ export function useRepoScans(
       const data = query.state.data as Scan[] | undefined;
       if (!data) return false;
       return data.some((s) => s.status === 'pending' || s.status === 'running') ? 3_000 : false;
+    },
+  });
+}
+
+/**
+ * usePruneScans — POST /projects/.../scans/prune which deletes every
+ * finished scan row except the newest per (artifact_kind, artifact_id).
+ * Running/pending rows are preserved. Returns {deleted, kept}.
+ */
+export function usePruneScans(
+  projectName: string,
+  repoType: string,
+  repoName: string,
+) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      api.post<{ deleted: number; kept: number }>(
+        `/projects/${enc(projectName)}/repos/${enc(repoType)}/${enc(repoName)}/scans/prune`,
+        {},
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['repo-scans', projectName, repoType, repoName] });
     },
   });
 }

@@ -6,6 +6,7 @@ import (
 	stdtls "crypto/tls"
 	"database/sql"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -197,6 +198,14 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 				return err // preserve *ErrBootstrap
 			}
 		}
+	}
+
+	// 3a. Record baked-in Trivy DB metadata (F-T13). When the DB dir was
+	// just seeded from /opt/trivy-db we have a metadata.json on disk but
+	// no trivy_db_meta row — the dashboard widget then renders "Age
+	// unknown (baked-in)". Populate the row now so real ages surface.
+	if err := RecordBakedTrivyDBMeta(ctx, db.Writer, cfg.DataRoot); err != nil {
+		slog.WarnContext(ctx, "trivy.db.meta.record_failed", "err", err)
 	}
 
 	// 3b. One-shot FTS backfill for pre-existing DBs. The bootstrap path now
@@ -857,4 +866,93 @@ func SeedTrivyDB(ctx context.Context, dataRoot, bakedDir string) error {
 	}
 	slog.InfoContext(ctx, "trivy.db.seeded", "from", bakedDir, "to", dbDir, "files", len(srcEntries))
 	return nil
+}
+
+// trivyDBMetadata mirrors the subset of Trivy's metadata.json we care about.
+// Trivy writes UpdatedAt (when the upstream DB snapshot was built),
+// DownloadedAt (when we fetched/baked it), and Version.
+type trivyDBMetadata struct {
+	Version      int       `json:"Version"`
+	UpdatedAt    time.Time `json:"UpdatedAt"`
+	DownloadedAt time.Time `json:"DownloadedAt"`
+}
+
+// RecordBakedTrivyDBMeta inserts a trivy_db_meta row for a baked-in DB that
+// was seeded to disk without a corresponding DB row. F-T13: the dashboard
+// widget falls back to "Age unknown (baked-in)" whenever no row exists, even
+// though Trivy's metadata.json carries the upstream UpdatedAt we can surface
+// as a real age.
+//
+// Idempotent: skipped when any trivy_db_meta row already exists, OR when
+// there's no metadata.json to read from.
+func RecordBakedTrivyDBMeta(ctx context.Context, db *sql.DB, dataRoot string) error {
+	var existing int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM trivy_db_meta`).Scan(&existing); err != nil {
+		return fmt.Errorf("count trivy_db_meta: %w", err)
+	}
+	if existing > 0 {
+		return nil
+	}
+
+	dbDir := filepath.Join(dataRoot, "trivy", "db")
+	metaPath := filepath.Join(dbDir, "metadata.json")
+	raw, err := os.ReadFile(metaPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("read %s: %w", metaPath, err)
+	}
+	var m trivyDBMetadata
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return fmt.Errorf("parse %s: %w", metaPath, err)
+	}
+
+	// applied_at = when this instance picked up the DB. Prefer Trivy's
+	// DownloadedAt (set when the DB tarball was baked into the image).
+	// Fall back to now if Trivy zero-valued it.
+	appliedAt := m.DownloadedAt
+	if appliedAt.IsZero() {
+		appliedAt = time.Now().UTC()
+	}
+	version := ""
+	if !m.UpdatedAt.IsZero() {
+		version = "baked-" + m.UpdatedAt.UTC().Format("20060102")
+	}
+	size := dirSizeBytes(dbDir)
+
+	_, err = db.ExecContext(ctx, `
+		INSERT INTO trivy_db_meta(version, source, size_bytes, applied_at)
+		VALUES (?, 'baked-in', ?, ?)
+	`, version, size, appliedAt.UTC().Format(time.RFC3339))
+	if err != nil {
+		return fmt.Errorf("insert trivy_db_meta: %w", err)
+	}
+	slog.InfoContext(ctx, "trivy.db.meta.seeded",
+		"version", version,
+		"applied_at", appliedAt,
+		"size_bytes", size,
+	)
+	return nil
+}
+
+// dirSizeBytes walks dir and sums regular-file sizes. Errors and non-regular
+// entries are skipped silently — this is a best-effort metric.
+func dirSizeBytes(dir string) int64 {
+	var total int64
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return 0
+	}
+	for _, e := range entries {
+		if !e.Type().IsRegular() {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		total += info.Size()
+	}
+	return total
 }

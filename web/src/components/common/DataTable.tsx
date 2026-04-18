@@ -58,6 +58,15 @@ interface DataTableProps<T> {
    */
   stickyFirstColumn?: boolean;
   onRowClick?: (row: T) => void;
+  /**
+   * F-T17 accordion detail row. When both isRowExpanded(row) returns true
+   * AND renderExpanded is provided, the table inserts a full-width <tr>
+   * immediately after the expanded row containing renderExpanded(row).
+   * Scroll-margin-top on the expanded row keeps it visible when the
+   * content pushes its container downward.
+   */
+  isRowExpanded?: (row: T) => boolean;
+  renderExpanded?: (row: T) => ReactNode;
 }
 
 export function DataTable<T>({
@@ -71,6 +80,8 @@ export function DataTable<T>({
   emptyMessage = 'No data found.',
   stickyFirstColumn = false,
   onRowClick,
+  isRowExpanded,
+  renderExpanded,
 }: DataTableProps<T>) {
   const handleSort = (columnId: string) => {
     if (!onSort) return;
@@ -156,30 +167,54 @@ export function DataTable<T>({
                   </TableCell>
                 </TableRow>
               )
-            : data.map((row, i) => (
-                <TableRow
-                  key={i}
-                  onClick={onRowClick ? () => onRowClick(row) : undefined}
-                  className={onRowClick ? 'cursor-pointer' : undefined}
-                >
-                  {columns.map((col, ci) => (
-                    <TableCell
-                      key={col.id}
-                      className={
-                        ci === 0
-                          ? firstColClassName(col.className)
-                          : col.className
-                      }
+            : data.flatMap((row, i) => {
+                const expanded =
+                  !!(renderExpanded && isRowExpanded?.(row));
+                const rows = [
+                  <TableRow
+                    key={`r-${i}`}
+                    onClick={onRowClick ? () => onRowClick(row) : undefined}
+                    className={[
+                      onRowClick ? 'cursor-pointer' : '',
+                      // scroll-margin keeps the clicked row below the app
+                      // bar when the expanded panel pushes the viewport.
+                      expanded ? 'scroll-mt-16' : '',
+                    ]
+                      .filter(Boolean)
+                      .join(' ')}
+                  >
+                    {columns.map((col, ci) => (
+                      <TableCell
+                        key={col.id}
+                        className={
+                          ci === 0
+                            ? firstColClassName(col.className)
+                            : col.className
+                        }
+                      >
+                        {col.render
+                          ? col.render(row)
+                          : col.accessor
+                            ? String(col.accessor(row) ?? '')
+                            : null}
+                      </TableCell>
+                    ))}
+                  </TableRow>,
+                ];
+                if (expanded && renderExpanded) {
+                  rows.push(
+                    <TableRow
+                      key={`r-${i}-exp`}
+                      className="bg-muted/30 hover:bg-muted/30"
                     >
-                      {col.render
-                        ? col.render(row)
-                        : col.accessor
-                          ? String(col.accessor(row) ?? '')
-                          : null}
-                    </TableCell>
-                  ))}
-                </TableRow>
-              ))}
+                      <TableCell colSpan={columns.length} className="p-4">
+                        {renderExpanded(row)}
+                      </TableCell>
+                    </TableRow>,
+                  );
+                }
+                return rows;
+              })}
       </TableBody>
     </Table>
   );

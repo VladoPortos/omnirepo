@@ -271,6 +271,25 @@ export function RpmRepoPage({ repo }: RpmRepoPageProps) {
               sort={sort}
               onSort={(col, dir) => setSort({ column: col, direction: dir })}
               stickyFirstColumn
+              // F-T17: inline accordion — clicking the Name column toggles
+              // selectedPkg, and the detail panel now renders as a
+              // full-width row directly below the click target rather than
+              // floating at the bottom of the list.
+              isRowExpanded={(row) => selectedPkg?.id === row.id}
+              renderExpanded={(row) => (
+                <div className="space-y-2">
+                  <h4 className="font-semibold">
+                    {row.name}-{row.version}-{row.release}.{row.arch}
+                  </h4>
+                  <p className="text-sm text-muted-foreground">
+                    Package metadata and scan results will be displayed here.
+                  </p>
+                  <Button variant="outline" size="sm">
+                    <Upload className="mr-1.5 size-4" />
+                    Download RPM
+                  </Button>
+                </div>
+              )}
             />
             {/* F-T18: pagination footer. "Showing N of M" + Load more. Filter
                 applies client-side to whatever has been loaded, so total
@@ -297,19 +316,6 @@ export function RpmRepoPage({ repo }: RpmRepoPageProps) {
           </>
         )}
 
-        {/* Selected package detail */}
-        {selectedPkg && (
-          <div className="rounded-md border bg-muted/30 p-4 space-y-2">
-            <h4 className="font-semibold">{selectedPkg.name}-{selectedPkg.version}-{selectedPkg.release}.{selectedPkg.arch}</h4>
-            <p className="text-sm text-muted-foreground">
-              Package metadata and scan results will be displayed here.
-            </p>
-            <Button variant="outline" size="sm">
-              <Upload className="mr-1.5 size-4" />
-              Download RPM
-            </Button>
-          </div>
-        )}
       </div>
 
       {/* Sync dialog */}

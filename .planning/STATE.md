@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: on 2026-04-17)
 status: executing
-stopped_at: Completed 07-07-PLAN.md
-last_updated: "2026-04-18T01:19:15.115Z"
+stopped_at: Completed 07-08-PLAN.md
+last_updated: "2026-04-18T01:36:45.078Z"
 last_activity: 2026-04-18
 progress:
   total_phases: 3
   completed_phases: 1
   total_plans: 17
-  completed_plans: 15
-  percent: 88
+  completed_plans: 16
+  percent: 94
 ---
 
 # STATE: OmniRepo
@@ -27,10 +27,10 @@ progress:
 ## Current Position
 
 Phase: 07 (snippet-polish-dashboard-cards-empty-states) — EXECUTING
-Plan: 8 of 9
+Plan: 9 of 9
 Status: Ready to execute
 Last activity: 2026-04-18
-Stopped at: Completed 07-07-PLAN.md
+Stopped at: Completed 07-08-PLAN.md
 
 ## Phase Map
 
@@ -132,6 +132,15 @@ scoped tokens, LDAP/OIDC.
 - **[07-07] `jobsStatusLabel` overlays 'Running' copy when `running + queued > 0`** even though `jobsVariant` returns `healthy` for jobs-moving state. D-02 locks `jobsVariant` to 3 variants (healthy/warning/failure) with no maintenance/idle split — the UI distinguishes idle vs running purely via per-card label mapping, keeping the variant enum from expanding without a CONTEXT decision.
 - **[07-07] C-6 Trivy `everInitialised = source !== 'none'`.** Baked-in DB (source='baked-in', age_hours=-1, version='unknown') counts as initialised because scans CAN run — age is just unknown. Surface 'Age unknown (baked-in)' body copy; `trivyDBVariant(0, true)` maps to healthy which matches the spirit of "DB is present". Only `source === 'none'` flips to the disabled variant with the 'Not initialised' label.
 - **[07-07] C-2 Recent Failures derived client-side from `dashboard.recent_activity[]`.** Server already scopes to `visibleProjectIDs` so no new data-scoping work needed. Detection regex: `action.toLowerCase().endsWith('.failed') OR .includes('error')`. 24h cutoff. The "View full audit log →" link is only rendered for super-admins (non-admins have no `/admin/audit` route).
+- **[07-08] EMPTY-04 scope locked: option (b) — rescan FIRST artifact.** `POST /api/v1/projects/{p}/repos/{type}/{r}/artifacts/{firstArtifactId}/rescan` is the canonical CTA action. No new repo-level scan endpoint ships; repo-level "scan all" is deferred to v1.2 alongside HEALTH. EMPTY-04 fires only when `artifacts.length > 0 && scans.length === 0` — when zero artifacts, EMPTY-03 covers that state with a snippet. Inline comment at each of the 4 scannable repo pages (Docker/RPM/APT/PyPI) documents the scope for future maintainers.
+- **[07-08] canUpload resolver: `useMe() != null`.** v1.0 ships flat project membership (any project member = full access), so any authenticated viewer of the repo page is by definition a project member who can push. More granular role-based resolvers (maintainer vs viewer per project) are deferred to v1.2 when the role schema lands. EMPTY-03 and EMPTY-04 both reuse this same canUpload/canScan gate.
+- **[07-08] EMPTY-03 conditional pattern established:** `{items.length === 0 ? (canUpload ? <EmptyState><SnippetList/></EmptyState> : <EmptyState/>) : <DataTable/>}`. Non-uploaders (rare edge case) see the simpler "Ask a maintainer to upload an artifact." variant. GitRepoPage uses an early-return variant (zero refs → full-page EmptyState); RawRepoPage/S3BucketPage gate on root-level emptiness (not subdirectory) because snippets are bucket-level setup.
+- **[07-08] TrashPage DataTable short-circuit.** `DataTable`'s `emptyMessage` prop retained for other callers (ProfilePage API-key/S3-key tables use it). TrashPage migrates by conditionally rendering `<EmptyState />` BEFORE the DataTable sees empty data, so `emptyMessage` prop is dropped from that one call site.
+- **[07-08] TLSPage Upload Form Card grew `id="tls-upload"`.** EMPTY-05 CTA uses `document.getElementById('tls-upload')?.scrollIntoView({ behavior: 'smooth', block: 'start' })`. The anchor is on the `<Card>` rather than a child element so the scroll lands at the card's top edge.
+- **[07-08] Rule-2 mitigation T-07-08-04 (rapid-click DoS) shipped via TanStack's `rescanMutation.isPending`.** Button disabled state is `disabled: !canScan || rescanMutation.isPending` — prevents multiple in-flight rescans on rapid clicks. Automatic un-disable on mutation settle (success OR error).
+- **[07-08] EMPTY-04 mutation failure surfaces via ErrorEnvelopeRenderer mode="inline".** `onError` sets local `ApiErrorEnvelope` state; renderer appears directly below the EmptyState when non-null. Preserves the Phase 6 ERR-04 transient-retry surface contract.
+- **[07-08] Playwright `assertEmptyState` helper exported from `empty-states.spec.ts`.** Signature `(page, title, ctaLabel?) => Promise<void>` matches UI-SPEC §E-08. Per-surface tests import it locally; plan 07-09 can import it across the broader Phase 7 verification spec.
+- **[07-08] EMPTY-04 Playwright fixture uses route mocking, NOT a real OCI manifest push.** `page.route('**/content**' / '**/scans**' / '**/rescan')` simulates the artifacts-without-scans state. Full OCI push + Trivy scan round-trip belongs in `internal/protocol/oci/*_test.go` + `internal/api/scans_test.go`, not the UI e2e spec. Non-maintainer variant uses `test.skip` when seed user already exists from a prior run (OTP cannot be recovered).
 
 ### Decisions carried forward from v1.0
 
@@ -160,6 +169,7 @@ scoped tokens, LDAP/OIDC.
 - Execute plan 07-05 (dashboard data sources — /admin/jobs/summary endpoint + threshold utilities). ✅ Shipped; new `internal/api/admin_jobs.go` (D-06 locked shape: running/queued/failed_last_24h/last_completed_at/last_failed_at) super-admin-gated via existing `ActionTriggerGC` + mounted next to `mountAdminGC` in `admin_phase1.go`; three handler tests green (200 super-admin/403 non-super/401 unauth); `web/src/lib/dashboard-thresholds.ts` ships six pure threshold functions (storage/failures/scanFindings/jobs/tls/trivyDB) mapping D-02 defaults to `StatusVariant` with per-function typed overrides; `jobsVariant` returns ONLY healthy/warning/failure (no new StatusBadge variants invented); 54 vitest boundary cases green; `useAdminJobsSummary(enabled)` TanStack hook + `AdminJobsSummary` interface appended to `queries.ts`. Four commits `2c16eb2` (RED Task 1), `f26f3e9` (GREEN Task 1), `84ddf51` (RED Task 2), `6fb0134` (GREEN Task 2). Full `go test ./internal/api/` + `npm run test` (63/63) + `npm run build` + `make lint-protocol-redaction` + `make lint-typography` + `make lint-spacing-carveout` clean. Plan 07-07 now has everything pre-built for the Composition row.
 - Execute plan 07-06 (walkthrough micro-fixes: W-02 docker blob ref-counting + W-03 DEB Release-aware pool-path). ✅ Shipped; `internal/api/dashboard.go:repoSizeExpr` rewritten with `CAST(SUM(b.size_bytes * 1.0 / b.distinct_repos) AS INTEGER)` ref-count sub-expression + new `TestDashboardStorage_RefCountsSharedBlobs` verifying a 2 GiB blob shared between two repos contributes ~1 GiB to each (existing `TestDashboardStorage_ReturnsRepoBreakdown` stays green unchanged — Pitfall 5 verified); new `internal/protocol/deb/pool_release.go` with `ResolvePoolPath` helper reading `dists/<suite>/Release` via `net/mail.ReadMessage` and honouring its first-listed `Components:` entry, with `isSafeComponent` traversal mitigation (T-07-06-01); `relPoolPath` signature extended in-place in `sync_handler.go` (single caller had every param in scope); 6 sub-tests for ResolvePoolPath (default/custom/missing/malformed/traversal/nil). Four commits `a094cff` (RED W-02), `04a1f19` (GREEN W-02), `03eb808` (RED W-03), `9c60eb2` (GREEN W-03). Discovered during TDD: modernc.org/sqlite returns an error on REAL→int64 Scan rather than silently truncating — the CAST in repoSizeExpr is mandatory, not cosmetic. Full `go test ./...` + `make test` + all 5 Phase 6 lint gates clean.
 - Execute plan 07-07 (DashboardPage Composition row + D-05 string migrations). ✅ Shipped; `web/src/pages/DashboardPage.tsx` grew Row 2 Composition row with 6 cards (3 user-visible: Storage/Recent Failures/Scan Findings Trend + 3 admin-gated: Background Jobs/TLS Certificate/Trivy Database) using `<CardAction>` slot for right-aligned StatusBadge, StatusBadge variants derived from `dashboard-thresholds.ts` pure functions, cold-load extended to 6 SkeletonCard slots, errors surface via `ErrorEnvelopeRenderer mode="inline"`. Three D-05 migrations: `"No recent activity." → <EmptyState icon={Activity}>`, `"No repositories with stored data." → <EmptyState icon={HardDrive}>`, `"... Looking good!" → inline <StatusBadge status="healthy" label="All clear" />` (E-06 positive goal state). Two new TanStack hooks added to queries.ts: `useAdminTLSCurrent` + `useAdminTrivyDBStatus` with `AdminTLSCurrent` / `AdminTrivyDBStatus` interfaces verified 1:1 against Go handler JSON shapes. Per-card label pure functions (`storageStatusLabel` / `failuresStatusLabel` / `scanFindingsStatusLabel` / `jobsStatusLabel` / `tlsStatusLabel` / `trivyDBStatusLabel`) keep the variant→copy mapping next to the consumer. `jobsStatusLabel` overlays "Running" when running/queued>0 even though `jobsVariant` returns healthy — D-02's 3-variant lock preserved. New `web/e2e/dashboard-composition.spec.ts` asserts 6 cards for super-admin, 3 cards for non-admin (seeds user via POST /api/v1/admin/users, drives must_change_password wall via UI), no horizontal page scroll at 1366×768 on both flows. Three commits `b3f2eb0` (Task 1 hooks), `f7b41d0` (Task 2 Composition row + migrations), `f8f7848` (Task 3 Playwright spec). Full `npm run build` + 63/63 vitest + all 5 Phase 6 lint gates green. Plan 07-07 is the Phase 7 tentpole user-visible delivery.
+- Execute plan 07-08 (EmptyState call-site migrations — EMPTY-01..06 + EMPTY-08). ✅ Shipped; 17 EmptyState call sites across 13 pages. Task 1 ships `web/e2e/empty-states.spec.ts` with `assertEmptyState` helper + 8 tests; Task 2 migrates ProjectsPage/ProjectDetailPage (×2 variants)/SearchPage/TLSPage/TrashPage to UI-SPEC-verbatim copy; Task 3 adds EMPTY-03 with inline `<SnippetList>` on all 8 repo pages (Docker/RPM/APT/PyPI/Helm/Git/RAW/S3); Task 4 adds EMPTY-04 on the 4 scannable repo pages (Docker/RPM/APT/PyPI) with CTA triggering artifact-level rescan on the first artifact per RESEARCH §1 option (b). SearchPage chips (openssl/CVE-2024-/myorg/docker/alpine) + Clear filters reset helper land as part of EMPTY-08. TLSPage upload card gains `id="tls-upload"` scroll anchor. GitRepoPage uses early-return EmptyState when refs.length===0; RawRepoPage/S3BucketPage gate on root-level emptiness only. Four commits `c73ecdc` (Task 1 Playwright spec), `491180f` (Task 2 page migrations), `a325d0b` (Task 3 EMPTY-03), `11cdc3d` (Task 4 EMPTY-04). Full `npm run build` + all 5 Phase 6 lint gates green. EMPTY-01..06 + EMPTY-08 complete; EMPTY-07 deferred to v1.2 per E-04.
 
 ### Phase 7 rescope (2026-04-17 — APPLIED)
 
@@ -212,6 +222,7 @@ with the tight scope below.
 | Phase 07 P05 | 5m13s | 2 tasks | 6 files |
 | Phase 07 P06 | 6m16s | 2 tasks | 5 files |
 | Phase 07 P07 | ~7 min | 3 tasks | 3 files |
+| Phase 07 P08 | 11 min | 4 tasks | 13 files |
 
 ### Research Flags
 
@@ -227,7 +238,7 @@ with the tight scope below.
 ## Session Continuity
 
 - **Next action**: Run `/gsd-plan-phase 7` to generate plans for the rescoped Phase 7 (Snippet Polish, Dashboard Cards & Empty States). ROADMAP.md + REQUIREMENTS.md already reflect the tight scope.
-- **Last session:** 2026-04-18T01:19:15.113Z
+- **Last session:** 2026-04-18T01:36:45.076Z
 - **Artifacts on disk**:
   - `.planning/PROJECT.md` (Current Milestone: v1.1, Phase 6 progress paragraph added)
   - `.planning/REQUIREMENTS.md` (33 active v1.1 REQs + 24 deferred v1.2 REQs; traceability split by target milestone)

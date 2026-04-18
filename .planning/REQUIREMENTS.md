@@ -29,13 +29,13 @@ prefixes (AUTH, REPO, etc.).
 
 ### EMPTY — Context-aware empty states
 
-- [ ] **EMPTY-01**: When a project has zero repos, the project page shows a guided "Create first repo" empty state with a CTA
-- [ ] **EMPTY-02**: When a project has zero members beyond the creator, the members page shows an "Add your first teammate" empty state with a CTA
-- [ ] **EMPTY-03**: When a repo has zero artifacts, the repo page shows an "Upload your first artifact" empty state that surfaces the relevant client snippet inline
-- [ ] **EMPTY-04**: When scanning has never run on a repo that supports scanning, the scan surface shows an "Enable / run first scan" empty state with explanation
-- [ ] **EMPTY-05**: When no admin-uploaded TLS certificate exists (default self-signed), the TLS admin page shows a "Configure TLS" empty state with an upload CTA
-- [ ] **EMPTY-06**: When no trash items exist, the trash page shows an explanatory empty state instead of a blank table
-- [ ] **EMPTY-08**: When search returns no results, the UI shows "try a different term" guidance with example queries
+- [x] **EMPTY-01**: When a project has zero repos, the project page shows a guided "Create first repo" empty state with a CTA
+- [x] **EMPTY-02**: When a project has zero members beyond the creator, the members page shows an "Add your first teammate" empty state with a CTA
+- [x] **EMPTY-03**: When a repo has zero artifacts, the repo page shows an "Upload your first artifact" empty state that surfaces the relevant client snippet inline
+- [x] **EMPTY-04**: When scanning has never run on a repo that supports scanning, the scan surface shows an "Enable / run first scan" empty state with explanation
+- [x] **EMPTY-05**: When no admin-uploaded TLS certificate exists (default self-signed), the TLS admin page shows a "Configure TLS" empty state with an upload CTA
+- [x] **EMPTY-06**: When no trash items exist, the trash page shows an explanatory empty state instead of a blank table
+- [x] **EMPTY-08**: When search returns no results, the UI shows "try a different term" guidance with example queries
 
 ### ERR — Better failure messaging
 
@@ -196,13 +196,13 @@ phases 1–5.
 | SNIPPET-07 | Phase 7 | Complete |
 | SNIPPET-08 | Phase 7 | Complete |
 | SNIPPET-09 | Phase 7 | Complete |
-| EMPTY-01 | Phase 7 | Pending |
-| EMPTY-02 | Phase 7 | Pending |
-| EMPTY-03 | Phase 7 | Pending |
-| EMPTY-04 | Phase 7 | Pending |
-| EMPTY-05 | Phase 7 | Pending |
-| EMPTY-06 | Phase 7 | Pending |
-| EMPTY-08 | Phase 7 | Pending |
+| EMPTY-01 | Phase 7 | Complete |
+| EMPTY-02 | Phase 7 | Complete |
+| EMPTY-03 | Phase 7 | Complete |
+| EMPTY-04 | Phase 7 | Complete |
+| EMPTY-05 | Phase 7 | Complete |
+| EMPTY-06 | Phase 7 | Complete |
+| EMPTY-08 | Phase 7 | Complete |
 
 ### Deferred to v1.2 (25 REQs — re-map at v1.2 planning)
 

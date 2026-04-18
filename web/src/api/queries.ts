@@ -232,6 +232,87 @@ export function useAdminJobsSummary(enabled: boolean) {
   });
 }
 
+// -- Admin TLS current (Phase 7 / C-5) -------------------------------------
+
+/**
+ * AdminTLSCurrent mirrors the GET /api/v1/admin/tls/current response shape
+ * emitted by internal/api/admin_tls_history.go:handleTLSCurrent. The
+ * handler returns RFC3339 strings for not_before / not_after; `source` is
+ * derived from on-disk state and is either "self-signed" (bootstrap cert
+ * in use) or "uploaded" (operator-uploaded cert present on disk).
+ */
+export interface AdminTLSCurrent {
+  subject: string;
+  issuer: string;
+  not_before: string;
+  not_after: string;
+  dns_names: string[];
+  serial: string;
+  fingerprint_sha256: string;
+  source: 'self-signed' | 'uploaded';
+}
+
+/**
+ * useAdminTLSCurrent — TanStack hook for the C-5 TLS Cert Expiry card.
+ *
+ * Pass `enabled = !!currentUser?.is_super_admin` so non-admins never
+ * issue a request (server gate = RequireCan(ActionUploadTLSCert)).
+ * staleTime 60s matches the other admin card hooks — expiry days don't
+ * tick fast enough to warrant sub-minute polling.
+ */
+export function useAdminTLSCurrent(enabled: boolean) {
+  return useQuery({
+    queryKey: ['admin', 'tls', 'current'],
+    queryFn: () => api.get<AdminTLSCurrent>('/admin/tls/current'),
+    staleTime: 60_000,
+    enabled,
+  });
+}
+
+// -- Admin Trivy DB status (Phase 7 / C-6) ---------------------------------
+
+/**
+ * AdminTrivyDBStatus mirrors the GET /api/v1/admin/trivy/db/status
+ * response shape emitted by internal/api/admin_trivy.go:handleTrivyDBStatus.
+ *
+ * Shape notes:
+ *   - `age_hours` is -1 when no Trivy DB has been initialised (no meta
+ *     row and no baked-in files on disk), or when a baked-in DB is
+ *     detected but has no version metadata. The C-6 card maps
+ *     `source === 'none'` (or `version === ''`) to the disabled /
+ *     "Not initialised" state.
+ *   - `source` is one of 'uploaded' (admin-uploaded tarball),
+ *     'online-pulled' (internet fetch), 'baked-in' (shipped with the
+ *     Docker image, no meta row), or 'none' (no DB at all).
+ *   - `size_bytes` and `applied_at` are only populated when a meta row
+ *     exists (source ∈ {'uploaded', 'online-pulled'}).
+ *   - `stale` is the server's threshold verdict (age > scan.db_warn_age_days
+ *     setting, default 7 days). The client uses `age_hours` directly
+ *     via `trivyDBVariant` so the UI remains threshold-sovereign.
+ */
+export interface AdminTrivyDBStatus {
+  version: string;
+  source: 'uploaded' | 'online-pulled' | 'baked-in' | 'none';
+  age_hours: number;
+  stale: boolean;
+  size_bytes?: number;
+  applied_at?: string;
+}
+
+/**
+ * useAdminTrivyDBStatus — TanStack hook for the C-6 Trivy DB Freshness
+ * card. Pass `enabled = !!currentUser?.is_super_admin` so non-admins
+ * never issue a request (server gate = RequireCan(ActionTriggerGC)).
+ */
+export function useAdminTrivyDBStatus(enabled: boolean) {
+  return useQuery({
+    queryKey: ['admin', 'trivy', 'db', 'status'],
+    queryFn: () => api.get<AdminTrivyDBStatus>('/admin/trivy/db/status'),
+    staleTime: 60_000,
+    enabled,
+  });
+}
+
 // -- Projects --
 
 export function useProjects() {

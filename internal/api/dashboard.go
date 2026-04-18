@@ -32,18 +32,32 @@ func (d Deps) mountDashboard(r chi.Router) {
 // `repos` alias; every caller MUST alias the repos table as `r` for this
 // fragment to bind.
 //
-// Docker is an underestimate: we count manifest body bytes only, not the
-// ref-counted blob tree (blobs are global and attributing them per-repo
-// requires a manifest→blob join that costs too much per dashboard load).
-// Good enough for "is storage growing?" — not for billing.
 // The docker sub-expression sums the manifest bodies themselves plus the
 // de-duplicated config+layer blobs they reference. Blobs are ref-counted
 // globally in `docker_blobs`, but the (repo_id → blob digest) graph is
 // only carried in each manifest's JSON body — no join table exists — so
 // we walk the `layers` array and `config.digest` with SQLite's JSON1
-// functions. Per-repo shared blobs are NOT split across repos: a blob
-// referenced by two repos is fully counted in both (overestimate), which
-// matches how operators think about stored bytes per logical repo.
+// functions.
+//
+// W-02 — ref-counted shared-blob bytes: each blob's bytes are split across
+// referencing repos by COUNT(DISTINCT repo_id) of manifests referencing it.
+// A blob of size S referenced by N distinct repos contributes ~S/N to each,
+// matching how operators think about stored bytes per logical repo. This
+// replaces the prior over-count (each repo was fully charged for every
+// shared blob it touched). Billing-grade per-repo attribution is NOT in
+// scope (deferred to v2.0); this trades precision for explanation — the
+// aggregate `dashboard.storage_used_bytes` now reflects actual disk usage
+// rather than an N× inflation when N repos share a blob.
+//
+// Arithmetic: `* 1.0` forces floating-point division so small blobs
+// referenced by many repos don't truncate to zero per-repo. The inner SUM
+// produces a REAL; we CAST back to INTEGER at the ref-counted blob
+// sub-expression boundary so the outer addition and the Go-side Scan into
+// int64 both stay integer-typed. modernc.org/sqlite's driver refuses to
+// implicitly convert REAL→int64 on Scan (returns an error rather than
+// silently truncating), so the explicit CAST here is required for
+// correctness — not just formatting. Sub-byte fractional remainders are
+// discarded at the CAST; fine at storage scale.
 const repoSizeExpr = `(
 	COALESCE((SELECT SUM(size_bytes) FROM rpm_packages  WHERE repo_id = r.id), 0) +
 	COALESCE((SELECT SUM(size_bytes) FROM deb_packages  WHERE repo_id = r.id), 0) +
@@ -52,15 +66,31 @@ const repoSizeExpr = `(
 	COALESCE((SELECT SUM(size_bytes) FROM raw_files     WHERE repo_id = r.id), 0) +
 	COALESCE((SELECT SUM(size_bytes) FROM docker_manifests WHERE repo_id = r.id), 0) +
 	COALESCE((
-		SELECT SUM(size_bytes) FROM docker_blobs WHERE digest IN (
-			SELECT DISTINCT json_extract(jl.value, '$.digest')
-			FROM docker_manifests m, json_each(m.body, '$.layers') jl
-			WHERE m.repo_id = r.id
-			UNION
-			SELECT DISTINCT json_extract(m.body, '$.config.digest')
-			FROM docker_manifests m
-			WHERE m.repo_id = r.id AND json_extract(m.body, '$.config.digest') IS NOT NULL
-		)
+		SELECT CAST(SUM(b.size_bytes * 1.0 / b.distinct_repos) AS INTEGER)
+		FROM (
+			SELECT
+				db.digest,
+				db.size_bytes,
+				COUNT(DISTINCT m2.repo_id) AS distinct_repos
+			FROM docker_blobs db
+			JOIN docker_manifests m2 ON db.digest IN (
+				SELECT json_extract(jl.value, '$.digest')
+				FROM json_each(m2.body, '$.layers') jl
+				UNION
+				SELECT json_extract(m2.body, '$.config.digest')
+				WHERE json_extract(m2.body, '$.config.digest') IS NOT NULL
+			)
+			WHERE db.digest IN (
+				SELECT json_extract(jl.value, '$.digest')
+				FROM docker_manifests m, json_each(m.body, '$.layers') jl
+				WHERE m.repo_id = r.id
+				UNION
+				SELECT json_extract(m.body, '$.config.digest')
+				FROM docker_manifests m
+				WHERE m.repo_id = r.id AND json_extract(m.body, '$.config.digest') IS NOT NULL
+			)
+			GROUP BY db.digest
+		) b
 	), 0)
 )`
 

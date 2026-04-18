@@ -6,7 +6,7 @@
 
 import { useState, useMemo } from 'react';
 import { useParams } from 'react-router-dom';
-import { ExternalLink } from 'lucide-react';
+import { ExternalLink, Terminal } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -25,10 +25,12 @@ import { SeverityBadge } from '@/components/common/SeverityBadge';
 import { InlineSearch } from '@/components/common/InlineSearch';
 import { Dropzone } from '@/components/common/Dropzone';
 import { FilterChips } from '@/components/common/FilterChips';
+import { EmptyState } from '@/components/common/EmptyState';
+import { SnippetList } from '@/components/common/SnippetList';
 import { RepoPageLayout } from './RepoPageLayout';
 import { formatBytes, formatDate } from '@/lib/format';
 import { api } from '@/api/client';
-import { useRepoContent } from '@/api/queries';
+import { useRepoContent, useMe } from '@/api/queries';
 import type { Repo } from '@/api/types';
 
 interface DebPackage {
@@ -54,6 +56,11 @@ export function AptRepoPage({ repo }: AptRepoPageProps) {
   const [suiteFilter, setSuiteFilter] = useState<string[]>([]);
   const [componentFilter, setComponentFilter] = useState<string[]>([]);
   const [syncOpen, setSyncOpen] = useState(false);
+
+  // EMPTY-03 upload-permission gate — see DockerRepoPage for rationale.
+  const { data: currentUser } = useMe();
+  const canUpload = !!currentUser;
+  const hostname = window.location.host;
 
   const { data: contentRows } = useRepoContent(projectName ?? '', 'deb', repo.name);
   const packages: DebPackage[] = useMemo(
@@ -173,15 +180,38 @@ export function AptRepoPage({ repo }: AptRepoPageProps) {
           className="max-w-sm"
         />
 
-        {/* Package table */}
-        <DataTable
-          columns={columns}
-          data={filtered}
-          sort={sort}
-          onSort={(col, dir) => setSort({ column: col, direction: dir })}
-          emptyMessage="No .deb packages found. Upload a package to get started."
-          stickyFirstColumn
-        />
+        {/* Package table — EMPTY-03 when no artifacts yet */}
+        {packages.length === 0 ? (
+          canUpload ? (
+            <EmptyState
+              icon={Terminal}
+              title="No artifacts yet"
+              description="Upload your first artifact using the snippet below."
+            >
+              <SnippetList
+                repoType="deb"
+                projectName={projectName ?? ''}
+                repoName={repo.name}
+                hostname={hostname}
+                className="w-full max-w-2xl"
+              />
+            </EmptyState>
+          ) : (
+            <EmptyState
+              icon={Terminal}
+              title="No artifacts yet"
+              description="Ask a maintainer to upload an artifact."
+            />
+          )
+        ) : (
+          <DataTable
+            columns={columns}
+            data={filtered}
+            sort={sort}
+            onSort={(col, dir) => setSort({ column: col, direction: dir })}
+            stickyFirstColumn
+          />
+        )}
       </div>
 
       {/* Sync dialog */}

@@ -6,15 +6,17 @@
 
 import { useState, useMemo } from 'react';
 import { useParams } from 'react-router-dom';
-import { ChevronDown, ChevronRight, Package } from 'lucide-react';
+import { ChevronDown, ChevronRight, Package, Terminal } from 'lucide-react';
 import { DataTable, type ColumnDef, type SortState } from '@/components/common/DataTable';
 import { SeverityBadge } from '@/components/common/SeverityBadge';
 import { InlineSearch } from '@/components/common/InlineSearch';
 import { Dropzone } from '@/components/common/Dropzone';
+import { EmptyState } from '@/components/common/EmptyState';
+import { SnippetList } from '@/components/common/SnippetList';
 import { RepoPageLayout } from './RepoPageLayout';
 import { formatBytes, formatDate } from '@/lib/format';
 import { api } from '@/api/client';
-import { useRepoContent } from '@/api/queries';
+import { useRepoContent, useMe } from '@/api/queries';
 import type { Repo } from '@/api/types';
 
 interface PypiFile {
@@ -51,6 +53,11 @@ export function PypiRepoPage({ repo }: PypiRepoPageProps) {
   const [filter, setFilter] = useState('');
   const [sort, setSort] = useState<SortState>({ column: 'normalized_name', direction: 'asc' });
   const [expandedProject, setExpandedProject] = useState<string | null>(null);
+
+  // EMPTY-03 upload-permission gate — see DockerRepoPage for rationale.
+  const { data: currentUser } = useMe();
+  const canUpload = !!currentUser;
+  const hostname = window.location.host;
 
   const { data: contentRows } = useRepoContent(projectName ?? '', 'pypi', repo.name);
   const files: PypiFile[] = useMemo(
@@ -176,15 +183,38 @@ export function PypiRepoPage({ repo }: PypiRepoPageProps) {
           className="max-w-sm"
         />
 
-        {/* Grouped table */}
-        <DataTable
-          columns={columns}
-          data={filtered}
-          sort={sort}
-          onSort={(col, dir) => setSort({ column: col, direction: dir })}
-          emptyMessage="No Python packages found. Upload a wheel or sdist to get started."
-          stickyFirstColumn
-        />
+        {/* Grouped table — EMPTY-03 when no artifacts yet */}
+        {files.length === 0 ? (
+          canUpload ? (
+            <EmptyState
+              icon={Terminal}
+              title="No artifacts yet"
+              description="Upload your first artifact using the snippet below."
+            >
+              <SnippetList
+                repoType="pypi"
+                projectName={projectName ?? ''}
+                repoName={repo.name}
+                hostname={hostname}
+                className="w-full max-w-2xl"
+              />
+            </EmptyState>
+          ) : (
+            <EmptyState
+              icon={Terminal}
+              title="No artifacts yet"
+              description="Ask a maintainer to upload an artifact."
+            />
+          )
+        ) : (
+          <DataTable
+            columns={columns}
+            data={filtered}
+            sort={sort}
+            onSort={(col, dir) => setSort({ column: col, direction: dir })}
+            stickyFirstColumn
+          />
+        )}
 
         {/* Expanded project files */}
         {expandedProject && (() => {

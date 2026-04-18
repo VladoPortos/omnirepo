@@ -6,10 +6,12 @@
 
 import { useState, useCallback, useEffect, useMemo } from 'react';
 import { useParams } from 'react-router-dom';
-import { GitBranch } from 'lucide-react';
+import { GitBranch, Terminal } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { CopyButton } from '@/components/common/CopyButton';
+import { EmptyState } from '@/components/common/EmptyState';
+import { SnippetList } from '@/components/common/SnippetList';
 import { RepoPageLayout } from './RepoPageLayout';
 import { RefSelector } from '@/components/git/RefSelector';
 import { FileTree } from '@/components/git/FileTree';
@@ -18,7 +20,7 @@ import { BlameViewer } from '@/components/git/BlameViewer';
 import { CommitLog } from '@/components/git/CommitLog';
 import { CommitDetail } from '@/components/git/CommitDetail';
 import { BranchCompare } from '@/components/git/BranchCompare';
-import { useGitRefs, useGitTree, useGitBlob } from '@/api/queries';
+import { useGitRefs, useGitTree, useGitBlob, useMe } from '@/api/queries';
 import type { Repo, GitTreeEntry } from '@/api/types';
 
 interface GitRepoPageProps {
@@ -37,6 +39,10 @@ export function GitRepoPage({ repo }: GitRepoPageProps) {
   const [viewingCommit, setViewingCommit] = useState<string | null>(null);
 
   // Fetch refs
+  // EMPTY-03 upload-permission gate — see DockerRepoPage for rationale.
+  const { data: currentUser } = useMe();
+  const canUpload = !!currentUser;
+
   const { data: refsData, isLoading: refsLoading } = useGitRefs(
     projectName!,
     repo.name,
@@ -105,6 +111,44 @@ export function GitRepoPage({ repo }: GitRepoPageProps) {
   }, []);
 
   const cloneUrl = `${window.location.protocol}//${hostname}/${projectName}/${repo.name}.git`;
+
+  // EMPTY-03 for empty git repos: no refs = no commits pushed yet.
+  // When zero refs, show an EmptyState with the git push snippet inline
+  // instead of the empty Files/Commits/Refs tabs dance.
+  if (!refsLoading && refs.length === 0) {
+    return (
+      <RepoPageLayout repo={repo}>
+        <div className="space-y-4">
+          <div className="flex items-center gap-2 rounded-md border bg-muted/30 px-3 py-1.5">
+            <GitBranch className="size-4 text-muted-foreground" />
+            <code className="text-xs">{cloneUrl}</code>
+            <CopyButton text={cloneUrl} />
+          </div>
+          {canUpload ? (
+            <EmptyState
+              icon={Terminal}
+              title="No artifacts yet"
+              description="Upload your first artifact using the snippet below."
+            >
+              <SnippetList
+                repoType="git"
+                projectName={projectName ?? ''}
+                repoName={repo.name}
+                hostname={hostname}
+                className="w-full max-w-2xl"
+              />
+            </EmptyState>
+          ) : (
+            <EmptyState
+              icon={Terminal}
+              title="No artifacts yet"
+              description="Ask a maintainer to upload an artifact."
+            />
+          )}
+        </div>
+      </RepoPageLayout>
+    );
+  }
 
   return (
     <RepoPageLayout repo={repo}>

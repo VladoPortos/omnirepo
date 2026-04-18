@@ -22,6 +22,7 @@ import {
   HardDrive,
   Hash,
   Trash2,
+  Terminal,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
@@ -42,11 +43,14 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog';
 import { InlineSearch } from '@/components/common/InlineSearch';
+import { EmptyState } from '@/components/common/EmptyState';
+import { SnippetList } from '@/components/common/SnippetList';
 import { NotFoundPage } from '@/pages/NotFoundPage';
 import {
   useBucket,
   useBucketObjects,
   useDeleteBucket,
+  useMe,
 } from '@/api/queries';
 import { formatBytes, formatDate } from '@/lib/format';
 import { envelopeFromError, type ApiErrorEnvelope } from '@/api/client';
@@ -118,6 +122,11 @@ export function S3BucketPage() {
   const [filter, setFilter] = useState('');
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteError, setDeleteError] = useState<ApiErrorEnvelope | null>(null);
+
+  // EMPTY-03 upload-permission gate — see DockerRepoPage for rationale.
+  const { data: currentUser } = useMe();
+  const canUpload = !!currentUser;
+  const hostname = window.location.host;
 
   const bucketQ = useBucket(name, bucket);
   // Fetch ALL objects under `prefix` — the folding logic needs every row to
@@ -291,7 +300,35 @@ export function S3BucketPage() {
         className="max-w-sm"
       />
 
-      {/* Object listing */}
+      {/* EMPTY-03 when bucket is genuinely empty (no prefix, no objects).
+          Subdirectory emptiness stays as the inline table row since
+          snippets are about bucket-level setup. */}
+      {!objectsQ.isLoading &&
+      !prefix &&
+      (objectsQ.data?.items?.length ?? 0) === 0 ? (
+        canUpload ? (
+          <EmptyState
+            icon={Terminal}
+            title="No artifacts yet"
+            description="Upload your first artifact using the snippet below."
+          >
+            <SnippetList
+              repoType="s3"
+              projectName={name}
+              repoName={bucket}
+              hostname={hostname}
+              className="w-full max-w-2xl"
+            />
+          </EmptyState>
+        ) : (
+          <EmptyState
+            icon={Terminal}
+            title="No artifacts yet"
+            description="Ask a maintainer to upload an artifact."
+          />
+        )
+      ) : (
+      /* Object listing */
       <div className="overflow-hidden rounded-lg border">
         <table className="w-full text-sm">
           <thead className="bg-muted/50 text-xs uppercase text-muted-foreground">
@@ -315,9 +352,7 @@ export function S3BucketPage() {
                   colSpan={4}
                   className="px-4 py-6 text-center text-sm text-muted-foreground"
                 >
-                  {prefix
-                    ? 'No objects under this prefix.'
-                    : 'Bucket is empty. Upload via S3 SDK with SigV4.'}
+                  No objects under this prefix.
                 </td>
               </tr>
             ) : (
@@ -359,6 +394,7 @@ export function S3BucketPage() {
           </tbody>
         </table>
       </div>
+      )}
 
       {objectsQ.data?.truncated && (
         <p className="text-xs text-muted-foreground">

@@ -4,6 +4,7 @@
  */
 
 import { useState, useMemo } from 'react';
+import { useParams } from 'react-router-dom';
 import {
   Download,
   RefreshCw,
@@ -13,6 +14,7 @@ import {
   Tag,
   Layers,
   ArrowRightLeft,
+  Terminal,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
@@ -31,8 +33,11 @@ import { DataTable, type ColumnDef, type SortState } from '@/components/common/D
 import { SeverityBadge } from '@/components/common/SeverityBadge';
 import { InlineSearch } from '@/components/common/InlineSearch';
 import { CopyButton } from '@/components/common/CopyButton';
+import { EmptyState } from '@/components/common/EmptyState';
+import { SnippetList } from '@/components/common/SnippetList';
 import { RepoPageLayout } from './RepoPageLayout';
 import { formatBytes, formatDate } from '@/lib/format';
+import { useMe } from '@/api/queries';
 import type { Repo } from '@/api/types';
 
 /** Represents a Docker image tag -- populated from API in a real app. */
@@ -54,11 +59,20 @@ interface DockerRepoPageProps {
 }
 
 export function DockerRepoPage({ repo }: DockerRepoPageProps) {
+  const { name: projectName } = useParams<{ name: string }>();
   const [filter, setFilter] = useState('');
   const [sort, setSort] = useState<SortState>({ column: 'pushed_at', direction: 'desc' });
   const [pullOpen, setPullOpen] = useState(false);
   const [promoteOpen, setPromoteOpen] = useState(false);
   const [expandedTag, setExpandedTag] = useState<string | null>(null);
+
+  // EMPTY-03 upload-permission gate. v1.0 ships flat project membership
+  // (any member = full access) — if the user can see this authenticated
+  // page, they are a project member (or super-admin) and can push to it.
+  // Conservatively fall back to super-admin for unauthenticated edge
+  // cases; a future role-aware permission resolver can replace this.
+  const { data: currentUser } = useMe();
+  const canUpload = !!currentUser;
 
   const hostname = window.location.host;
   const tags = MOCK_TAGS;
@@ -181,15 +195,38 @@ export function DockerRepoPage({ repo }: DockerRepoPageProps) {
           className="max-w-sm"
         />
 
-        {/* Tag table */}
-        <DataTable
-          columns={columns}
-          data={filteredTags}
-          sort={sort}
-          onSort={(col, dir) => setSort({ column: col, direction: dir })}
-          emptyMessage="No tags found. Push an image to get started."
-          stickyFirstColumn
-        />
+        {/* Tag table — EMPTY-03 when no artifacts yet */}
+        {tags.length === 0 ? (
+          canUpload ? (
+            <EmptyState
+              icon={Terminal}
+              title="No artifacts yet"
+              description="Upload your first artifact using the snippet below."
+            >
+              <SnippetList
+                repoType="docker"
+                projectName={projectName ?? ''}
+                repoName={repo.name}
+                hostname={hostname}
+                className="w-full max-w-2xl"
+              />
+            </EmptyState>
+          ) : (
+            <EmptyState
+              icon={Terminal}
+              title="No artifacts yet"
+              description="Ask a maintainer to upload an artifact."
+            />
+          )
+        ) : (
+          <DataTable
+            columns={columns}
+            data={filteredTags}
+            sort={sort}
+            onSort={(col, dir) => setSort({ column: col, direction: dir })}
+            stickyFirstColumn
+          />
+        )}
 
         {/* Expanded tag detail */}
         {expandedTag && (

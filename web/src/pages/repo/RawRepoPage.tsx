@@ -11,6 +11,7 @@ import {
   ChevronRight,
   Download,
   ArrowLeft,
+  Terminal,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
@@ -24,10 +25,12 @@ import {
 import { DataTable, type ColumnDef, type SortState } from '@/components/common/DataTable';
 import { InlineSearch } from '@/components/common/InlineSearch';
 import { Dropzone } from '@/components/common/Dropzone';
+import { EmptyState } from '@/components/common/EmptyState';
+import { SnippetList } from '@/components/common/SnippetList';
 import { RepoPageLayout } from './RepoPageLayout';
 import { formatBytes, formatDate } from '@/lib/format';
 import { api } from '@/api/client';
-import { useRepoContent } from '@/api/queries';
+import { useRepoContent, useMe } from '@/api/queries';
 import type { Repo } from '@/api/types';
 
 interface RawFileEntry {
@@ -48,6 +51,11 @@ export function RawRepoPage({ repo }: RawRepoPageProps) {
   const [currentPath, setCurrentPath] = useState('');
   const [filter, setFilter] = useState('');
   const [sort, setSort] = useState<SortState>({ column: 'name', direction: 'asc' });
+
+  // EMPTY-03 upload-permission gate — see DockerRepoPage for rationale.
+  const { data: currentUser } = useMe();
+  const canUpload = !!currentUser;
+  const hostname = window.location.host;
 
   const { data: contentRows } = useRepoContent(projectName ?? '', 'raw', repo.name);
   // RAW content endpoint returns a flat list of paths; the directory-tree
@@ -239,18 +247,44 @@ export function RawRepoPage({ repo }: RawRepoPageProps) {
           className="max-w-sm"
         />
 
-        {/* File listing */}
-        <DataTable
-          columns={columns}
-          data={filtered}
-          sort={sort}
-          onSort={(col, dir) => setSort({ column: col, direction: dir })}
-          emptyMessage={
-            currentPath
-              ? 'This directory is empty.'
-              : 'No files found. Upload a file to get started.'
-          }
-        />
+        {/* File listing — EMPTY-03 when repo has no artifacts at all.
+            Per-subdirectory emptiness keeps the informational inline
+            message since snippets don't help within a specific subpath. */}
+        {!currentPath && (contentRows?.length ?? 0) === 0 ? (
+          canUpload ? (
+            <EmptyState
+              icon={Terminal}
+              title="No artifacts yet"
+              description="Upload your first artifact using the snippet below."
+            >
+              <SnippetList
+                repoType="raw"
+                projectName={projectName ?? ''}
+                repoName={repo.name}
+                hostname={hostname}
+                className="w-full max-w-2xl"
+              />
+            </EmptyState>
+          ) : (
+            <EmptyState
+              icon={Terminal}
+              title="No artifacts yet"
+              description="Ask a maintainer to upload an artifact."
+            />
+          )
+        ) : (
+          <DataTable
+            columns={columns}
+            data={filtered}
+            sort={sort}
+            onSort={(col, dir) => setSort({ column: col, direction: dir })}
+            emptyMessage={
+              currentPath
+                ? 'This directory is empty.'
+                : 'No files found. Upload a file to get started.'
+            }
+          />
+        )}
       </div>
     </RepoPageLayout>
   );

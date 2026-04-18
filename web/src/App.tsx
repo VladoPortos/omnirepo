@@ -349,6 +349,12 @@ export const router = createBrowserRouter([
           },
         ],
       },
+      // F-T12: nested catch-all keeps NotFoundPage inside AppShell (sidebar,
+      // breadcrumbs) for /projects/:name/:type and similar wrong-but-still-
+      // authenticated paths. The top-level `path: '*'` below still renders
+      // NotFoundPage chrome-less for pre-auth routes (e.g. /bogus on a fresh
+      // install) — no AppShell is available before AuthGuard anyway.
+      { path: '*', element: <NotFoundPage /> },
     ],
   },
   { path: '*', element: <NotFoundPage /> },

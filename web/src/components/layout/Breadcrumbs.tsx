@@ -73,11 +73,21 @@ export function Breadcrumbs() {
             path = `/projects/${segments[1]}`;
           }
 
+          // F-T12: `/projects/:name/:type` is not a real route (repo types
+          // don't have standalone pages — buckets are the exception above).
+          // Render the type crumb as non-link text when it sits between
+          // :name and :repo. Keeps the URL visible without the 404.
+          const isRepoTypeCrumb =
+            segments[0] === 'projects' &&
+            index === 2 &&
+            segments.length >= 4 &&
+            segment in LABEL_MAP;
+
           return (
             <span key={segmentPath} className="contents">
               <BreadcrumbSeparator />
               <BreadcrumbItem>
-                {isLast ? (
+                {isLast || isRepoTypeCrumb ? (
                   <BreadcrumbPage>{segmentLabel(segment)}</BreadcrumbPage>
                 ) : (
                   <BreadcrumbLink render={<Link to={path} />}>

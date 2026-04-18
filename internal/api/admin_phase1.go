@@ -263,6 +263,11 @@ func Mount(r chi.Router, d Deps) {
 			// (D-37, OPS-06). RequireCan(ActionTriggerGC) gate inside.
 			d.mountAdminGC(r)
 
+			// Phase 07 / D-06: super-admin background-jobs read-only
+			// summary for the Dashboard C-4 card. Reuses ActionTriggerGC
+			// as the policy gate (no new action introduced).
+			d.mountAdminJobs(r)
+
 			// Phase 05-03: admin audit, maintenance, trash, settings,
 			// Trivy DB, TLS history, full user CRUD.
 			d.mountAdminAudit(r)

@@ -10,9 +10,10 @@
  */
 
 import { useState, type FormEvent } from 'react';
-import { Navigate, useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { useQueryClient } from '@tanstack/react-query';
+import { CheckCircle2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -62,12 +63,41 @@ export function SetupPage() {
     );
   }
 
-  // If setup is already done, bounce to /login rather than showing a form
-  // that would just 409. Handles the case where an admin navigates to /setup
-  // manually after the install is live. `submitted` opts the winning tab
-  // out so the post-mutation navigate() with state takes effect.
+  // F-T9: when setup is already done, render an explicit "Setup complete"
+  // screen instead of silently bouncing to /login. The old <Navigate>
+  // short-circuit made it look like /setup was broken — the form would flash
+  // briefly under some cache-warming sequences, or confused admins who
+  // navigated here manually. `submitted` opts the winning tab out so the
+  // post-mutation navigate() with {state:setupDone} reaches /login cleanly.
   if (!submitted && status && !status.needs_setup) {
-    return <Navigate to="/login" replace />;
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-background p-4">
+        <motion.div
+          initial={{ opacity: 0, scale: 0.95 }}
+          animate={{ opacity: 1, scale: 1 }}
+          transition={{ duration: 0.15, ease: 'easeOut' }}
+        >
+          <Card className="w-full max-w-md">
+            <CardHeader className="text-center">
+              <div className="mx-auto flex size-12 items-center justify-center rounded-lg bg-emerald-500/15 text-emerald-600 mb-4">
+                <CheckCircle2 className="size-6" />
+              </div>
+              <CardTitle className="text-2xl">Setup complete</CardTitle>
+              <p className="text-muted-foreground text-sm mt-2">
+                A super-admin account already exists. Sign in to continue.
+              </p>
+            </CardHeader>
+            <CardContent>
+              <Button
+                className="w-full"
+                nativeButton={false}
+                render={<Link to="/login">Go to sign in</Link>}
+              />
+            </CardContent>
+          </Card>
+        </motion.div>
+      </div>
+    );
   }
 
   const handleSubmit = async (e: FormEvent) => {

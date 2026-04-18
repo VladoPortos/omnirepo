@@ -64,11 +64,21 @@ their own phase.
 **Requirements**: SNIPPET-01, SNIPPET-02, SNIPPET-03, SNIPPET-04, SNIPPET-05, SNIPPET-06, SNIPPET-07, SNIPPET-08, SNIPPET-09, EMPTY-01, EMPTY-02, EMPTY-03, EMPTY-04, EMPTY-05, EMPTY-06, EMPTY-07, EMPTY-08
 **Success Criteria** (what must be TRUE):
   1. Every snippet in `web/src/lib/snippets.ts` passes a correctness audit: APT snippet no longer uses deprecated `apt-key add` (switches to `signed-by=` or `/etc/apt/trusted.gpg.d/*.asc`) and exposes suite + component placeholders instead of hard-coded `stable main`; Helm snippet includes `helm repo add`, `helm push` (documented plugin path), and `helm pull`; S3 snippet surfaces endpoint URL + region + bucket + access-key reminder (currently region is missing); Git snippet includes an auth hint (HTTPS basic auth or API-key form); RAW snippet includes `-u user:key` auth form per REQ-08 wording. Each edit lands with one unit test that asserts the emitted string shape.
-  2. The existing `DashboardPage` grows at least 4 additive composition cards rendered via Phase 6 primitives (StatusBadge + SkeletonCard) using signal already exposed by the v1.0 API: (a) health summary / recent failures card driven by the audit log endpoint, (b) storage-growth indicator computed from the storage endpoint's current-vs-previous snapshot, (c) background-jobs summary using the existing jobs endpoint, (d) expiring-certs / stale-scan-DB card driven by the TLS and Trivy admin endpoints. Zero new `/api/v1/admin/health/*` routes; all endpoints must already be shipped in v1.0.
+  2. The existing `DashboardPage` grows at least 6 additive composition cards rendered via Phase 6 primitives (StatusBadge + SkeletonCard): 3 user-visible (Storage / Recent Failures / Scan Findings Trend) + 3 admin-only (Background Jobs / TLS Cert Expiry / Trivy DB Freshness). No new routes under `/api/v1/admin/health/*` (those belong to the deferred v1.2 Health page). New read-only admin endpoints are permitted when they deliver first-glance dashboard value and can be shipped without schema changes. The phase ships exactly one such endpoint: `GET /api/v1/admin/jobs/summary` (super-admin gate `ActionTriggerGC`, shape locked at D-06).
   3. A shared `EmptyState` component replaces every ad-hoc inline empty-state text (currently 4 call sites: ProjectsPage, SearchPage, ProjectDetailPage, DashboardPage) plus the previously-blank surfaces for EMPTY-01..08: zero-repos project, zero-members project, zero-artifacts repo (inlines SNIPPET for that protocol), never-scanned repo, no-TLS-cert admin, empty trash, empty saved-filters/favorites/recents, no-results search. Every empty state has an explanatory headline + single primary CTA selector that Playwright asserts.
   4. Walkthrough micro-fixes (items the user names at plan time) ship as atomic commits within the phase; each one is test-covered (unit, integration, or Playwright as appropriate).
   5. Full `make test` + `go test ./...` + `npm run build` green; all Phase 6 lint gates (protocol-redaction / contrast / typography / spacing-carveout / axe-devdep) still pass; Phase 6 Playwright specs still pass alongside new snippet-audit and empty-state specs.
-**Plans**: TBD
+**Plans:** 9 plans
+Plans:
+- [ ] 07-01-PLAN.md — Doc edits: move EMPTY-07 to v1.2 deferred + rewrite ROADMAP SC #2 (D-07)
+- [ ] 07-02-PLAN.md — EmptyState + SnippetList primitives (extract from SnippetPanel)
+- [ ] 07-03-PLAN.md — snippets.ts rewrite (S-01..09) + unit tests + CopyButton aria-live e2e
+- [ ] 07-04-PLAN.md — Helm OCI→traditional chart mirror (MirrorToTraditional + OCI post-commit hook)
+- [ ] 07-05-PLAN.md — /admin/jobs/summary endpoint + dashboard-thresholds utility + TanStack hook
+- [ ] 07-06-PLAN.md — W-02 ref-counted repoSizeExpr + W-03 DEB Release-file pool-path reader
+- [ ] 07-07-PLAN.md — DashboardPage Composition row (6 cards) + D-05 string migrations
+- [ ] 07-08-PLAN.md — EmptyState wiring across 13 call sites (EMPTY-01..06, 08) + Playwright spec
+- [ ] 07-09-PLAN.md — Codex rescue sweep (W-01) + findings triage + phase closure
 **UI hint**: yes
 
 ### Deferred to v1.2 (dropped from v1.1 on 2026-04-17)
@@ -99,7 +109,7 @@ re-planned against a fresh v1.2 ROADMAP.md when that milestone opens.
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 6. Error Envelope & Visual Foundation | 8/8 | ✅ Shipped | 2026-04-17 |
-| 7. Snippet Polish, Dashboard Cards & Empty States | 0/0 | Not started | — |
+| 7. Snippet Polish, Dashboard Cards & Empty States | 0/9 | Not started | — |
 
 ## Backlog
 

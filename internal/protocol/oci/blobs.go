@@ -61,16 +61,27 @@ func isUploadUUID(s string) bool {
 }
 
 // resolvedRepo bundles what every blob handler needs after resolving the
-// URL-encoded (project, type, repo) triple.
+// URL-encoded (project, type, repo) triple, plus the optional {image}
+// 4th segment that Helm OCI (and nested Docker paths) use. For 3-segment
+// URLs image is "".
 type resolvedRepo struct {
 	project  *metadata.Project
 	repo     *metadata.Repo
-	fullPath string // "<project>/<type>/<repo>" for Location headers
+	image    string // "" for 3-segment paths; chart-name for Helm, image-name for nested Docker
+	fullPath string // "<project>/<type>/<repo>" or "<project>/<type>/<repo>/<image>" for Location headers
 }
 
-// resolveRepo parses {project}, {type}, {repo} chi URL params, validates the
-// triple, and returns the repo row. Writes the OCI error envelope and
-// returns nil on any failure.
+// resolveRepo parses {project}, {type}, {repo} chi URL params plus the
+// optional {image} 4th-segment param, validates the triple, and returns the
+// repo row. Writes the OCI error envelope and returns nil on any failure.
+//
+// Routes are registered in two shapes: the classic 3-segment form
+// (/v2/{project}/{type}/{repo}/...) and the 4-segment form
+// (/v2/{project}/{type}/{repo}/{image}/...). The latter is required for
+// Helm OCI — the Helm CLI always appends the chart name as a 4th URL
+// segment so each chart is a distinct OCI "image" inside an OmniRepo helm
+// repo. Docker clients can also use the 4-segment form to host multiple
+// images under a single OmniRepo docker repo.
 //
 // requireDocker — when true, accepts only OCI-native repo types: "docker"
 // (standard image registry) and "helm" (charts pushed via `helm push
@@ -81,6 +92,7 @@ func (h *Handler) resolveRepo(w http.ResponseWriter, r *http.Request, requireDoc
 	projectName := chi.URLParam(r, "project")
 	repoType := chi.URLParam(r, "type")
 	repoName := chi.URLParam(r, "repo")
+	image := chi.URLParam(r, "image") // "" when the 3-segment route matched
 	if projectName == "" || repoType == "" || repoName == "" {
 		writeOCIErr(w, http.StatusBadRequest, ErrCodeNameInvalid, errors.New("missing name components"))
 		return nil
@@ -88,6 +100,13 @@ func (h *Handler) resolveRepo(w http.ResponseWriter, r *http.Request, requireDoc
 	if err := auth.ProjectNameValid(projectName); err != nil {
 		writeOCIErr(w, http.StatusBadRequest, ErrCodeNameInvalid, err)
 		return nil
+	}
+	if image != "" {
+		if err := auth.RepoNameValid(image); err != nil {
+			writeOCIErr(w, http.StatusBadRequest, ErrCodeNameInvalid,
+				fmt.Errorf("invalid image/chart segment: %w", err))
+			return nil
+		}
 	}
 	// OCI v2 multiplexes Docker registry traffic and Helm OCI traffic on the
 	// same /v2 surface. Both speak the distribution protocol; the difference
@@ -111,10 +130,15 @@ func (h *Handler) resolveRepo(w http.ResponseWriter, r *http.Request, requireDoc
 		writeOCIErr(w, http.StatusNotFound, ErrCodeNameUnknown, err)
 		return nil
 	}
+	fullPath := projectName + "/" + repoType + "/" + repoName
+	if image != "" {
+		fullPath += "/" + image
+	}
 	return &resolvedRepo{
 		project:  p,
 		repo:     rr,
-		fullPath: projectName + "/" + repoType + "/" + repoName,
+		image:    image,
+		fullPath: fullPath,
 	}
 }
 

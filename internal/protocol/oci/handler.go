@@ -233,6 +233,14 @@ func (h *Handler) Mount(parent chi.Router) {
 			//     /v2/<project>/<type>/<repo>/blobs/uploads/<uuid>
 			// we use three typed params project/type/repo and let the
 			// handlers re-assemble them.
+			//
+			// Every route is also mounted in a 4-segment {image} form
+			// (/v2/{project}/{type}/{repo}/{image}/...) so Helm OCI
+			// works: `helm push chart.tgz oci://host/proj/helm/repo`
+			// always appends the chart name as a 4th path segment.
+			// Docker clients may also use the 4-segment form to host
+			// multiple images under one OmniRepo repo. When the
+			// 3-segment route matches, resolveRepo reads image = "".
 			r.Post("/{project}/{type}/{repo}/blobs/uploads/", h.blobPostDispatch)
 			r.Patch("/{project}/{type}/{repo}/blobs/uploads/{uuid}", h.blobUploadPatch)
 			r.Put("/{project}/{type}/{repo}/blobs/uploads/{uuid}", h.blobUploadPut)
@@ -241,6 +249,14 @@ func (h *Handler) Mount(parent chi.Router) {
 			r.Head("/{project}/{type}/{repo}/blobs/{digest}", h.blobHead)
 			r.Delete("/{project}/{type}/{repo}/blobs/{digest}", h.blobDelete)
 
+			r.Post("/{project}/{type}/{repo}/{image}/blobs/uploads/", h.blobPostDispatch)
+			r.Patch("/{project}/{type}/{repo}/{image}/blobs/uploads/{uuid}", h.blobUploadPatch)
+			r.Put("/{project}/{type}/{repo}/{image}/blobs/uploads/{uuid}", h.blobUploadPut)
+			r.Get("/{project}/{type}/{repo}/{image}/blobs/uploads/{uuid}", h.blobUploadStatus)
+			r.Get("/{project}/{type}/{repo}/{image}/blobs/{digest}", h.blobGet)
+			r.Head("/{project}/{type}/{repo}/{image}/blobs/{digest}", h.blobHead)
+			r.Delete("/{project}/{type}/{repo}/{image}/blobs/{digest}", h.blobDelete)
+
 			// Manifest routes (02-07). reference is either a tag or a
 			// digest; handler disambiguates.
 			r.Get("/{project}/{type}/{repo}/manifests/{reference}", h.manifestGet)
@@ -248,9 +264,17 @@ func (h *Handler) Mount(parent chi.Router) {
 			r.Put("/{project}/{type}/{repo}/manifests/{reference}", h.manifestPut)
 			r.Delete("/{project}/{type}/{repo}/manifests/{reference}", h.manifestDelete)
 
+			r.Get("/{project}/{type}/{repo}/{image}/manifests/{reference}", h.manifestGet)
+			r.Head("/{project}/{type}/{repo}/{image}/manifests/{reference}", h.manifestHead)
+			r.Put("/{project}/{type}/{repo}/{image}/manifests/{reference}", h.manifestPut)
+			r.Delete("/{project}/{type}/{repo}/{image}/manifests/{reference}", h.manifestDelete)
+
 			// Tag routes (02-07).
 			r.Get("/{project}/{type}/{repo}/tags/list", h.tagsList)
 			r.Delete("/{project}/{type}/{repo}/tags/{tag}", h.tagDelete)
+
+			r.Get("/{project}/{type}/{repo}/{image}/tags/list", h.tagsList)
+			r.Delete("/{project}/{type}/{repo}/{image}/tags/{tag}", h.tagDelete)
 		})
 	})
 }

@@ -206,7 +206,7 @@ func (h *Handler) manifestPut(w http.ResponseWriter, r *http.Request) {
 
 	err = h.db.WriteTx(ctx, func(tx *sql.Tx) error {
 		enq, err := h.writeManifestWithRefcounts(
-			ctx, tx, rr.repo.ID, repoPath, reference, mfDigest, mediaType, body,
+			ctx, tx, rr.repo.ID, repoPath, rr.image, reference, mfDigest, mediaType, body,
 			refs, isIndex, rr.repo.AutoScan,
 		)
 		if err != nil {
@@ -351,8 +351,10 @@ func (h *Handler) decRefs(ctx context.Context, tx *sql.Tx, repoID int64, refs []
 }
 
 // resolveManifestRef returns the manifest digest for a /v2/.../manifests/<ref>
-// reference. `ref` is either a digest or a tag name.
-func (h *Handler) resolveManifestRef(ctx context.Context, repoID int64, ref string) (digest string, found bool, err error) {
+// reference. `ref` is either a digest or a tag name. `image` scopes tag
+// resolution to a single OCI image inside the repo (empty for classic
+// single-image Docker paths; chart-name for Helm OCI).
+func (h *Handler) resolveManifestRef(ctx context.Context, repoID int64, image, ref string) (digest string, found bool, err error) {
 	if isDigestRef(ref) {
 		m, err := h.manifests.GetByDigest(ctx, repoID, ref)
 		if err != nil {
@@ -363,7 +365,7 @@ func (h *Handler) resolveManifestRef(ctx context.Context, repoID int64, ref stri
 		}
 		return ref, true, nil
 	}
-	d, err := h.tags.Resolve(ctx, repoID, ref)
+	d, err := h.tags.Resolve(ctx, repoID, image, ref)
 	if err != nil {
 		return "", false, err
 	}
@@ -405,7 +407,7 @@ func (h *Handler) manifestGetOrHead(w http.ResponseWriter, r *http.Request, writ
 		return
 	}
 	ctx := r.Context()
-	digest, found, err := h.resolveManifestRef(ctx, rr.repo.ID, reference)
+	digest, found, err := h.resolveManifestRef(ctx, rr.repo.ID, rr.image, reference)
 	if err != nil {
 		writeOCIErr(w, http.StatusInternalServerError, ErrCodeUnknown, err)
 		return
@@ -486,7 +488,7 @@ func (h *Handler) manifestDelete(w http.ResponseWriter, r *http.Request) {
 		targetDigest = reference
 	} else {
 		tagForm = true
-		d, err := h.tags.Resolve(ctx, rr.repo.ID, reference)
+		d, err := h.tags.Resolve(ctx, rr.repo.ID, rr.image, reference)
 		if err != nil {
 			writeOCIErr(w, http.StatusInternalServerError, ErrCodeUnknown, err)
 			return
@@ -523,7 +525,7 @@ func (h *Handler) manifestDelete(w http.ResponseWriter, r *http.Request) {
 	err = h.db.WriteTx(ctx, func(tx *sql.Tx) error {
 		if tagForm {
 			// Unlink the tag only.
-			if _, err := h.tags.Delete(ctx, tx, rr.repo.ID, reference); err != nil {
+			if _, err := h.tags.Delete(ctx, tx, rr.repo.ID, rr.image, reference); err != nil {
 				return err
 			}
 			// If another tag still points at digest, or the manifest itself
@@ -607,6 +609,7 @@ func (h *Handler) writeManifestWithRefcounts(
 	tx *sql.Tx,
 	repoID int64,
 	repoPath string,
+	image string,
 	reference string,
 	mfDigest string,
 	mediaType string,
@@ -622,7 +625,7 @@ func (h *Handler) writeManifestWithRefcounts(
 		return false, err
 	}
 	if reference != "" && !isDigestRef(reference) {
-		priorDigest, err := h.tags.Upsert(ctx, tx, repoID, reference, mfDigest)
+		priorDigest, err := h.tags.Upsert(ctx, tx, repoID, image, reference, mfDigest)
 		if err != nil {
 			return false, err
 		}

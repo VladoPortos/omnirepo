@@ -30,7 +30,7 @@ func TestTagsListPagination(t *testing.T) {
 	err := f.db.WriteTx(ctx, func(tx *sql.Tx) error {
 		for i := 1; i < 250; i++ {
 			tag := fmt.Sprintf("v%03d", i)
-			if _, err := f.tags.Upsert(ctx, tx, f.repoID, tag, digest); err != nil {
+			if _, err := f.tags.Upsert(ctx, tx, f.repoID, "", tag, digest); err != nil {
 				return err
 			}
 		}
@@ -135,7 +135,7 @@ func TestCosignBadge(t *testing.T) {
 	// Insert sig tag via direct repo call.
 	ctx := context.Background()
 	err := f.db.WriteTx(ctx, func(tx *sql.Tx) error {
-		_, err := f.tags.Upsert(ctx, tx, f.repoID, sigTag, digest)
+		_, err := f.tags.Upsert(ctx, tx, f.repoID, "", sigTag, digest)
 		return err
 	})
 	if err != nil {
@@ -324,7 +324,7 @@ func TestTagDeleteUnlinks(t *testing.T) {
 	}
 
 	// Tag should be gone; blobs should be ref_count=0 (last reference removed).
-	d, err := f.tags.Resolve(context.Background(), f.repoID, "v1")
+	d, err := f.tags.Resolve(context.Background(), f.repoID, "", "v1")
 	if err != nil {
 		t.Fatal(err)
 	}

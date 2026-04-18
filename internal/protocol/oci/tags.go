@@ -56,7 +56,7 @@ func (h *Handler) tagsList(w http.ResponseWriter, r *http.Request) {
 	}
 	after := q.Get("last")
 
-	tags, err := h.tags.ListPaginated(r.Context(), rr.repo.ID, limit, after)
+	tags, err := h.tags.ListPaginated(r.Context(), rr.repo.ID, rr.image, limit, after)
 	if err != nil {
 		writeOCIErr(w, http.StatusInternalServerError, ErrCodeUnknown, err)
 		return
@@ -105,7 +105,7 @@ func (h *Handler) tagDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := r.Context()
 
-	digest, err := h.tags.Resolve(ctx, rr.repo.ID, tag)
+	digest, err := h.tags.Resolve(ctx, rr.repo.ID, rr.image, tag)
 	if err != nil {
 		writeOCIErr(w, http.StatusInternalServerError, ErrCodeUnknown, err)
 		return
@@ -136,7 +136,7 @@ func (h *Handler) tagDelete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	err = h.db.WriteTx(ctx, func(tx *sql.Tx) error {
-		if _, err := h.tags.Delete(ctx, tx, rr.repo.ID, tag); err != nil {
+		if _, err := h.tags.Delete(ctx, tx, rr.repo.ID, rr.image, tag); err != nil {
 			return err
 		}
 		if m == nil {

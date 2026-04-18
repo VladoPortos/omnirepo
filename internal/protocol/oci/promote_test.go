@@ -206,7 +206,7 @@ func TestPromote_ZeroBlobCopy(t *testing.T) {
 	}
 
 	// dst tag resolves.
-	got, _ := p.tags.Resolve(context.Background(), p.dstRepoID, "prod-clone")
+	got, _ := p.tags.Resolve(context.Background(), p.dstRepoID, "", "prod-clone")
 	if got != digest {
 		t.Fatalf("dst tag digest=%s want %s", got, digest)
 	}

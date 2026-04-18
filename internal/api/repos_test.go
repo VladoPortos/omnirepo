@@ -310,7 +310,7 @@ func writeDockerSeed(s *testServer, blobs *metadata.DockerBlobsRepo, mans *metad
 		if err := blobs.IncRef(ctx, tx, shared); err != nil {
 			return err
 		}
-		if _, err := tags.Upsert(ctx, tx, r1id, "latest", "sha256:m1"); err != nil {
+		if _, err := tags.Upsert(ctx, tx, r1id, "", "latest", "sha256:m1"); err != nil {
 			return err
 		}
 		body2 := []byte(`{"schemaVersion":2,"config":{"digest":"` + shared + `"},"layers":[]}`)
@@ -320,7 +320,7 @@ func writeDockerSeed(s *testServer, blobs *metadata.DockerBlobsRepo, mans *metad
 		if err := blobs.IncRef(ctx, tx, shared); err != nil {
 			return err
 		}
-		if _, err := tags.Upsert(ctx, tx, r2id, "latest", "sha256:m2"); err != nil {
+		if _, err := tags.Upsert(ctx, tx, r2id, "", "latest", "sha256:m2"); err != nil {
 			return err
 		}
 		return nil

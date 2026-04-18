@@ -404,7 +404,7 @@ func (p *PullExternalHandler) commitManifest(
 			}
 		}
 		enq, err := p.deps.OCI.writeManifestWithRefcounts(
-			ctx, tx, dstRepo.ID, repoPath, reference, mfDigest, mediaType, body,
+			ctx, tx, dstRepo.ID, repoPath, "", reference, mfDigest, mediaType, body,
 			refs, isIndex, dstRepo.AutoScan && !isChild,
 		)
 		if err != nil {

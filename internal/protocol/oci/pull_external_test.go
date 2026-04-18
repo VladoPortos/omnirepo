@@ -290,7 +290,7 @@ func TestPullExternal_Anonymous_ImportsManifestByteIdentical(t *testing.T) {
 		t.Fatalf("body not byte-identical:\n  got : %q\n  want: %q", m.Body, f.up.manifestBody)
 	}
 	// Tag should point at mfDigest.
-	d, err := f.tags.Resolve(context.Background(), f.repoID, "pulled")
+	d, err := f.tags.Resolve(context.Background(), f.repoID, "", "pulled")
 	if err != nil {
 		t.Fatalf("resolve tag: %v", err)
 	}

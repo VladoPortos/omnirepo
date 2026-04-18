@@ -240,7 +240,7 @@ func TestReposRepo_WipeDocker_SharedBlobsSurvive(t *testing.T) {
 			return err
 		}
 		// Tag in r1.
-		if _, err := tags.Upsert(ctx, tx, r1id, "latest", "sha256:m1"); err != nil {
+		if _, err := tags.Upsert(ctx, tx, r1id, "", "latest", "sha256:m1"); err != nil {
 			return err
 		}
 		// Manifest M2 in r2 references shared only.
@@ -251,7 +251,7 @@ func TestReposRepo_WipeDocker_SharedBlobsSurvive(t *testing.T) {
 		if err := blobs.IncRef(ctx, tx, shared); err != nil {
 			return err
 		}
-		if _, err := tags.Upsert(ctx, tx, r2id, "latest", "sha256:m2"); err != nil {
+		if _, err := tags.Upsert(ctx, tx, r2id, "", "latest", "sha256:m2"); err != nil {
 			return err
 		}
 		return nil
@@ -298,13 +298,13 @@ func TestReposRepo_WipeDocker_SharedBlobsSurvive(t *testing.T) {
 	if got, _ := manis.GetByDigest(ctx, r1id, "sha256:m1"); got != nil {
 		t.Fatalf("manifest m1 should be gone")
 	}
-	if d, _ := tags.Resolve(ctx, r1id, "latest"); d != "" {
+	if d, _ := tags.Resolve(ctx, r1id, "", "latest"); d != "" {
 		t.Fatalf("tag in r1 should be gone, got %q", d)
 	}
 	if got, _ := manis.GetByDigest(ctx, r2id, "sha256:m2"); got == nil {
 		t.Fatalf("manifest m2 in r2 must survive")
 	}
-	if d, _ := tags.Resolve(ctx, r2id, "latest"); d != "sha256:m2" {
+	if d, _ := tags.Resolve(ctx, r2id, "", "latest"); d != "sha256:m2" {
 		t.Fatalf("tag in r2 must survive, got %q", d)
 	}
 }

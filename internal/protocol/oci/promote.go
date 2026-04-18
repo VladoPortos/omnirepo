@@ -128,7 +128,7 @@ func (p *PromoteREST) Handle(w http.ResponseWriter, r *http.Request) {
 	// Resolve src tag → digest. WR-03: never echo raw Go error strings on
 	// 5xx — they can carry file paths, SQL snippets, and internal state.
 	// Log server-side with slog and respond with an empty detail.
-	digest, err := p.h.tags.Resolve(r.Context(), srcRepo.ID, req.SrcTag)
+	digest, err := p.h.tags.Resolve(r.Context(), srcRepo.ID, "", req.SrcTag)
 	if err != nil {
 		slog.ErrorContext(r.Context(), "oci.promote.tags.resolve",
 			"src_repo", srcRepo.ID, "tag", req.SrcTag, "err", err)
@@ -184,7 +184,7 @@ func (p *PromoteREST) Handle(w http.ResponseWriter, r *http.Request) {
 
 	err = p.h.db.WriteTx(r.Context(), func(tx *sql.Tx) error {
 		_, err := p.h.writeManifestWithRefcounts(
-			r.Context(), tx, dstRepo.ID, repoPath, req.DstTag,
+			r.Context(), tx, dstRepo.ID, repoPath, "", req.DstTag,
 			digest, srcManifest.MediaType, srcManifest.Body,
 			refs, isIndex, false, // autoScan deliberately false for promote (already scanned at src)
 		)

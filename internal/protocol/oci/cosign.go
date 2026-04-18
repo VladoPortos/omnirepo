@@ -87,7 +87,7 @@ func (h *Handler) cosignBadge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	digest, err := h.tags.Resolve(ctx, rr.ID, tag)
+	digest, err := h.tags.Resolve(ctx, rr.ID, "", tag)
 	if err != nil {
 		writeJSONErr(w, http.StatusInternalServerError, err.Error())
 		return
@@ -98,7 +98,7 @@ func (h *Handler) cosignBadge(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sigTag := CosignTag(digest)
-	signed, err := h.tags.ExistsTag(ctx, rr.ID, sigTag)
+	signed, err := h.tags.ExistsTag(ctx, rr.ID, "", sigTag)
 	if err != nil {
 		writeJSONErr(w, http.StatusInternalServerError, err.Error())
 		return

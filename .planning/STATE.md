@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: on 2026-04-17)
 status: executing
-stopped_at: Completed 07-01-PLAN.md
-last_updated: "2026-04-18T00:11:24.292Z"
-last_activity: 2026-04-18 — Plan 07-01 (doc edits E-04 + D-07) shipped
+stopped_at: Completed 07-02-PLAN.md
+last_updated: "2026-04-18T00:18:19.773Z"
+last_activity: 2026-04-18
 progress:
   total_phases: 3
   completed_phases: 1
   total_plans: 17
-  completed_plans: 9
-  percent: 53
+  completed_plans: 10
+  percent: 59
 ---
 
 # STATE: OmniRepo
@@ -27,10 +27,10 @@ progress:
 ## Current Position
 
 Phase: 07 (snippet-polish-dashboard-cards-empty-states) — EXECUTING
-Plan: 2 of 9
-Status: Plan 07-01 shipped; ready to execute plan 07-02
-Last activity: 2026-04-18 — Plan 07-01 (doc edits E-04 + D-07) shipped
-Stopped at: Completed 07-01-PLAN.md
+Plan: 3 of 9
+Status: Ready to execute
+Last activity: 2026-04-18
+Stopped at: Completed 07-02-PLAN.md
 
 ## Phase Map
 
@@ -100,6 +100,12 @@ scoped tokens, LDAP/OIDC.
 - **OVERVIEW (Phase 10) depends on SNIPPET (Phase 7) and HEALTH (Phase 9)** — OVERVIEW-02 reuses snippet components, and OVERVIEW's scan/sync summary cards share patterns with HEALTH cards. Scheduling it last avoids duplicate component drift.
 - **[07-01] EMPTY-07 grouped under 'EMPTY — Context-aware empty states (deferred to v1.2)' sub-heading between FAV and OVERVIEW blocks in REQUIREMENTS.md** — v1.2 planner sees EMPTY-07 alongside the FAV cluster it depends on per E-04. Active v1.1 coverage recalculated to 32/32 REQs; Deferred to v1.2 now 25 REQs.
 - **[07-01] ROADMAP Phase 7 SC #2 invariant preserved** — no routes under `/api/v1/admin/health/*` ship in Phase 7; those belong to the deferred v1.2 Health page. The one new read-only admin endpoint permitted by the rewrite (`GET /api/v1/admin/jobs/summary`) lives under `/api/v1/admin/` directly, super-admin gate `ActionTriggerGC`, shape locked at D-06 in `07-CONTEXT.md`. Cards count raised to 6 (3 user-visible + 3 admin-only) matching D-04 inventory.
+- **[07-02] EmptyState + SnippetList shipped as wave-0 shared primitives.** `web/src/components/common/EmptyState.tsx` (E-01 props API — icon/title/description ReactNode/primaryCTA/children/className) and `web/src/components/common/SnippetList.tsx` (lifted SnippetPanel body, font-semibold header, 8px inset) now exist and are importable. SnippetPanel's Sheet shell delegates its body to `<SnippetList />`. No call sites migrated yet (plan 07-08's job); no snippets.ts rewrite (plan 07-03's job).
+- **[07-02] base-ui render= prop — NOT shadcn asChild — for Button-as-Link.** Repo wraps `@base-ui/react/button`, not shadcn/Radix. EmptyState's `primaryCTA.to` path uses `<Button nativeButton={false} render={<Link to={...}>{label}</Link>} />` matching every existing Link-composed button in the codebase (DashboardPage/ProjectDetailPage/NotFoundPage/Breadcrumbs/Sidebar/ProfilePage). Plan's `<Button asChild>` action text was a Rule-1 bug fixed inline; plan's acceptance criteria guards against `TooltipTrigger[^>]*asChild` only, so the correction does not break any contract.
+- **[07-02] CopyButton grew optional `aria-label` prop.** Typed as `'aria-label'?: string` so SnippetList can announce contextual labels per snippet (`Copy Pull`, `Copy .pypirc`, `Copy helm repo add (traditional)`). Backwards-compatible — falls back to the hardcoded `"Copy to clipboard"` when unset. Preferred over HTML-attribute passthrough because Button's underlying aria-label is hardcoded literal.
+- **[07-02] SnippetPanel removed from `lint-spacing-carveout --exclude` list.** Body lift normalized inset to 8px (`right-2 top-2`) in SnippetList; SnippetPanel itself no longer contains the 6px classes. OneTimeReveal.tsx + shadcn-generated ui/sidebar.tsx remain the only grandfathered files. New SnippetList.tsx + EmptyState.tsx files use 8px inset and are NOT on the allowlist (per UI-SPEC line 532).
+- **[07-02] EmptyState description typed as ReactNode, not string.** E-08 + UI-SPEC §EmptyState callsite wiring rule 2 requires embedding example chip buttons in the description region for EMPTY-08; locking the type signature here now avoids a 07-08 follow-up widening.
+- **[07-02] EmptyState disabled CTA wraps Button in `<span className="inline-block">`.** Bare disabled Button has `pointer-events-none` which would swallow hover; span forwards pointer events so the TooltipTrigger fires on hover. Tooltip API is base-ui `render=` prop, NOT shadcn/Radix `asChild`.
 
 ### Decisions carried forward from v1.0
 
@@ -122,6 +128,7 @@ scoped tokens, LDAP/OIDC.
 - Execute plan 06-08 (Phase 6 test gates). ✅ Shipped; 5 hard lint gates wired into `make test` (lint-protocol-redaction + check-contrast + lint-typography + lint-spacing-carveout + lint-axe-devdep, all clean); 3 new Playwright specs (visual-foundation snapshot of 24-variant StatusBadge matrix + responsive 1366×768 across 6 admin routes + a11y-audit via axe-core across 5 pages), 13/13 pass in 7.6s; @axe-core/playwright in devDeps only; tsconfig noEmit:true deferred-fix landed; --status-disabled-foreground Rule-1 auto-fix so every status passes WCAG AA. Full `make test` green in ~30s. Phase 6 complete — every ERR-01..07 + VISUAL-01..09 requirement now has at least one automated test gate.
 - Phase 6 verification (post-execution). Run `codex:rescue` / Codex review flow per global CLAUDE.md. Transition to Phase 7 (Client Snippets & Empty States). ✅ Shipped; Playwright walkthrough surfaced 5 findings (hydration warning, duplicate breadcrumb key, repo-validator wording, spurious project-bucket refetch, ERR-06 field highlight). All 5 resolved as atomic commits `2fd7ba5..0c79ef1`, Codex-reviewed and real-issue items absorbed (encodeURIComponent on route params + Playwright spec for aria-invalid + defensive setup-email/login bindings). Full `go test ./...` + `make test` + `npm run build` green. Phase 6 fully shipped.
 - Transition to Phase 7 (Client Snippets & Empty States). Run `/gsd-plan-phase 7` to generate plans. ⚠️ SCOPE CHANGED 2026-04-17 session — rescope applied, see below.
+- Execute plan 07-02 (wave-0 shared primitives: EmptyState + SnippetList). ✅ Shipped; `web/src/components/common/EmptyState.tsx` (new, 136 lines, E-01 props API + E-02 layout + E-08 a11y), `web/src/components/common/SnippetList.tsx` (new, 58 lines, lifted from SnippetPanel with font-medium→font-semibold + 6px→8px inset fixes), SnippetPanel refactored to delegate body to SnippetList, CopyButton grew optional `aria-label` prop for contextual per-snippet labels, Makefile `lint-spacing-carveout` dropped SnippetPanel.tsx from the exclude list. Two atomic commits `1c3674a` (Task 1) + `7ff48e6` (Task 2). All 5 Phase 6 lint gates + `npm run build` green.
 
 ### Phase 7 rescope (2026-04-17 — APPLIED)
 
@@ -168,6 +175,7 @@ with the tight scope below.
 | 06    | 07   | ~45 min  | 3     | 12    |
 | Phase 06 P08 | ~35 min | 3 tasks | 11 files |
 | Phase 07 P01 | ~3 min | 2 tasks | 2 files |
+| Phase 07 P02 | ~4min | 2 tasks | 5 files |
 
 ### Research Flags
 
@@ -183,7 +191,7 @@ with the tight scope below.
 ## Session Continuity
 
 - **Next action**: Run `/gsd-plan-phase 7` to generate plans for the rescoped Phase 7 (Snippet Polish, Dashboard Cards & Empty States). ROADMAP.md + REQUIREMENTS.md already reflect the tight scope.
-- **Last session:** 2026-04-18T00:11:24.290Z
+- **Last session:** 2026-04-18T00:18:19.770Z
 - **Artifacts on disk**:
   - `.planning/PROJECT.md` (Current Milestone: v1.1, Phase 6 progress paragraph added)
   - `.planning/REQUIREMENTS.md` (33 active v1.1 REQs + 24 deferred v1.2 REQs; traceability split by target milestone)

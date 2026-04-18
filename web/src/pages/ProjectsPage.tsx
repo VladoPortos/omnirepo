@@ -10,7 +10,7 @@
 
 import { useEffect, useState, type FormEvent } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Plus, FolderGit2 } from 'lucide-react';
+import { Plus, FolderKanban } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -33,6 +33,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { SkeletonTable } from '@/components/common/SkeletonTable';
+import { EmptyState } from '@/components/common/EmptyState';
 import { useProjects, useCreateProject } from '@/api/queries';
 import { formatBytes, formatDate } from '@/lib/format';
 import {
@@ -153,20 +154,15 @@ export function ProjectsPage() {
           widths={['w-40', 'w-full', 'w-20', 'w-20', 'w-24', 'w-32']}
         />
       ) : projects.length === 0 ? (
-        <div className="flex flex-col items-center justify-center rounded-lg border border-dashed p-12 text-center">
-          <FolderGit2 className="size-12 text-muted-foreground/50" />
-          <h2 className="mt-4 text-lg font-semibold">No projects yet</h2>
-          <p className="mt-2 max-w-md text-sm text-muted-foreground">
-            Create your first project to start hosting artifacts.
-          </p>
-          <Button
-            className="mt-6"
-            onClick={() => setDialogOpen(true)}
-          >
-            <Plus className="mr-1.5 size-4" />
-            Create Project
-          </Button>
-        </div>
+        <EmptyState
+          icon={FolderKanban}
+          title="No projects yet"
+          description="Create your first project to start hosting artifacts."
+          primaryCTA={{
+            label: 'Create project',
+            onClick: () => setDialogOpen(true),
+          }}
+        />
       ) : (
         /*
          * Admin-table pattern (VISUAL-06): outer overflow-x-auto wrapper

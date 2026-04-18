@@ -22,6 +22,7 @@ import {
 import { toast } from 'sonner';
 import { formatDate } from '@/lib/format';
 import { Trash2, RotateCcw, AlertTriangle } from 'lucide-react';
+import { EmptyState } from '@/components/common/EmptyState';
 
 // ---------- Hooks ----------
 
@@ -251,22 +252,29 @@ export default function TrashPage() {
         </div>
       )}
 
-      <DataTable
-        columns={columns}
-        data={items}
-        loading={isLoading}
-        emptyMessage="Trash is empty. Deleted items will appear here for the configured retention period."
-        stickyFirstColumn
-        pagination={
-          data?.next_cursor
-            ? {
-                cursor: data.next_cursor,
-                hasMore: !!data.next_cursor,
-                onLoadMore: () => setCursor(data.next_cursor ?? undefined),
-              }
-            : undefined
-        }
-      />
+      {!isLoading && items.length === 0 ? (
+        <EmptyState
+          icon={Trash2}
+          title="Trash is empty"
+          description="Deleted items will appear here for the configured retention period."
+        />
+      ) : (
+        <DataTable
+          columns={columns}
+          data={items}
+          loading={isLoading}
+          stickyFirstColumn
+          pagination={
+            data?.next_cursor
+              ? {
+                  cursor: data.next_cursor,
+                  hasMore: !!data.next_cursor,
+                  onLoadMore: () => setCursor(data.next_cursor ?? undefined),
+                }
+              : undefined
+          }
+        />
+      )}
 
       {/* Purge Confirmation Dialog */}
       <Dialog open={!!purgeTarget} onOpenChange={(open) => { if (!open) setPurgeTarget(null); }}>

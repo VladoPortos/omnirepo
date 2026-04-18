@@ -7,6 +7,7 @@ import { useState, useMemo, type FormEvent } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { Plus, Users, Activity, FolderGit2, Trash2 } from 'lucide-react';
+import { EmptyState } from '@/components/common/EmptyState';
 import { toast } from 'sonner';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -281,7 +282,12 @@ export function ProjectDetailPage() {
               </CardHeader>
               <CardContent>
                 {project.members.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">No members.</p>
+                  <EmptyState
+                    icon={Users}
+                    title="No teammates yet"
+                    description="Add a teammate so someone else can publish to this project."
+                    primaryCTA={{ label: 'Add member', to: '/admin/users' }}
+                  />
                 ) : (
                   <div className="space-y-2">
                     {project.members.map((m) => (
@@ -391,22 +397,15 @@ export function ProjectDetailPage() {
               </div>
 
               {reposByType[rt.value].length === 0 ? (
-                <div className="flex flex-col items-center justify-center rounded-lg border border-dashed p-12 text-center">
-                  <FolderGit2 className="size-12 text-muted-foreground/50" />
-                  <h3 className="mt-4 text-lg font-semibold">
-                    No repositories
-                  </h3>
-                  <p className="mt-2 max-w-md text-sm text-muted-foreground">
-                    Create your first {rt.label.toLowerCase()} repository
-                  </p>
-                  <Button
-                    className="mt-6"
-                    onClick={() => openCreateDialog(rt.value)}
-                  >
-                    <Plus className="mr-1.5 size-4" />
-                    Create Repository
-                  </Button>
-                </div>
+                <EmptyState
+                  icon={FolderGit2}
+                  title="No repositories yet"
+                  description="Add a repository to start publishing artifacts to this project."
+                  primaryCTA={{
+                    label: 'Create repository',
+                    onClick: () => openCreateDialog(rt.value),
+                  }}
+                />
               ) : (
                 <div className="space-y-2">
                   {reposByType[rt.value].map((repo) => (

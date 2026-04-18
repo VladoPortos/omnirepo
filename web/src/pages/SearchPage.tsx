@@ -7,7 +7,8 @@
 import { useState, useMemo, useCallback, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Search as SearchIcon } from 'lucide-react';
+import { Search as SearchIcon, SearchX } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
 import {
@@ -17,6 +18,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { EmptyState } from '@/components/common/EmptyState';
 import { FilterChips } from '@/components/common/FilterChips';
 import { TypeBadge } from '@/components/common/TypeBadge';
 import { SeverityBadge } from '@/components/common/SeverityBadge';
@@ -150,6 +152,17 @@ export function SearchPage() {
   const hasQuery = debouncedQuery.length > 0;
   const hasResults = filteredResults.length > 0;
 
+  // EMPTY-08: resetFilters zeroes the text input AND every filter chip.
+  // The EmptyState CTA "Clear filters" calls this so a no-results surface
+  // can return the user to the starting state without manually clearing
+  // each chip.
+  const resetFilters = useCallback(() => {
+    setQuery('');
+    setKindFilters([]);
+    setSeverityFilters([]);
+    setProjectFilter('');
+  }, []);
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -222,12 +235,39 @@ export function SearchPage() {
         )}
 
         {!showLoading && hasQuery && !hasResults && (
-          <div className="rounded-lg border p-8 text-center">
-            <h2 className="text-lg font-semibold">No results found</h2>
-            <p className="text-muted-foreground mt-1">
-              Try a different search term or adjust your filters.
-            </p>
-          </div>
+          <EmptyState
+            icon={SearchX}
+            title="No results found"
+            description={
+              <div className="space-y-3">
+                <p>Try a different search term or adjust your filters.</p>
+                <div className="flex flex-wrap justify-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setQuery('openssl')}
+                  >
+                    openssl
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setQuery('CVE-2024-')}
+                  >
+                    CVE-2024-
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setQuery('myorg/docker/alpine')}
+                  >
+                    myorg/docker/alpine
+                  </Button>
+                </div>
+              </div>
+            }
+            primaryCTA={{ label: 'Clear filters', onClick: resetFilters }}
+          />
         )}
 
         {!hasQuery && (

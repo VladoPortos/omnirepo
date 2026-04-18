@@ -16,6 +16,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { toast } from 'sonner';
 import { formatDate } from '@/lib/format';
 import { ShieldCheck, Upload, Clock, Fingerprint } from 'lucide-react';
+import { EmptyState } from '@/components/common/EmptyState';
 
 // ---------- Hooks ----------
 
@@ -183,13 +184,24 @@ export default function TLSPage() {
               </div>
             </div>
           ) : (
-            <p className="text-muted-foreground">No certificate information available.</p>
+            <EmptyState
+              icon={ShieldCheck}
+              title="Using the default self-signed certificate"
+              description="Upload a certificate and private key (PEM) to replace the self-signed default."
+              primaryCTA={{
+                label: 'Upload certificate',
+                onClick: () =>
+                  document
+                    .getElementById('tls-upload')
+                    ?.scrollIntoView({ behavior: 'smooth', block: 'start' }),
+              }}
+            />
           )}
         </CardContent>
       </Card>
 
       {/* Upload Form */}
-      <Card>
+      <Card id="tls-upload">
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Upload className="size-5" />

@@ -46,6 +46,32 @@ const TYPE_LABELS: Record<RepoType, string> = {
   s3: 'S3',
 };
 
+// F-T15: per-type unit label for the header item-count badge. Accepts n
+// so we can pluralize naturally ("1 package" vs "2 packages") without
+// Intl.PluralRules — English-only UI at v1.
+function itemUnit(type: RepoType, n: number): string {
+  const plural = n === 1 ? '' : 's';
+  switch (type) {
+    case 'docker':
+      return `tag${plural}`;
+    case 'rpm':
+    case 'deb':
+      return `package${plural}`;
+    case 'pypi':
+      return `release${plural}`;
+    case 'helm':
+      return `chart${plural}`;
+    case 'raw':
+      return `file${plural}`;
+    case 'git':
+      return `ref${plural}`;
+    case 's3':
+      return `object${plural}`;
+    default:
+      return `item${plural}`;
+  }
+}
+
 export function RepoPageLayout({ repo, children, scanContent }: RepoPageLayoutProps) {
   const { name: projectName } = useParams<{ name: string }>();
   const [tab, setTab] = useState('content');
@@ -90,7 +116,14 @@ export function RepoPageLayout({ repo, children, scanContent }: RepoPageLayoutPr
         <div>
           <h1 className="text-2xl font-semibold">{repo.name}</h1>
           <p className="text-sm text-muted-foreground">
-            {typeLabel} repository &middot; {formatBytes(repo.size_bytes)}
+            {typeLabel} repository &middot;{' '}
+            {repo.item_count > 0 && (
+              <>
+                {repo.item_count.toLocaleString()} {itemUnit(repo.type, repo.item_count)}
+                {' '}&middot;{' '}
+              </>
+            )}
+            {formatBytes(repo.size_bytes)}
           </p>
         </div>
         <SnippetPanel

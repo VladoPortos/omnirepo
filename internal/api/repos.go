@@ -61,7 +61,11 @@ type repoResponse struct {
 	BlockOnSeverity string    `json:"block_on_severity"`
 	PublicRead      bool      `json:"public_read"`
 	SizeBytes       int64     `json:"size_bytes"`
-	CreatedAt       time.Time `json:"created_at"`
+	// F-T15: ItemCount renders "42 packages · 180 MB" in the repo header.
+	// Meaning depends on type — see repoItemCountExpr. 0 is a valid empty
+	// repo; callers can suppress the badge if desired.
+	ItemCount int64     `json:"item_count"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 func repoToResponse(r metadata.Repo) repoResponse {
@@ -122,6 +126,10 @@ func (d Deps) handleGetRepo(w http.ResponseWriter, r *http.Request) {
 	// actually contain artifacts.
 	if sizes := d.liveRepoSizes(r.Context(), []int64{rr.ID}); len(sizes) > 0 {
 		resp.SizeBytes = sizes[rr.ID]
+	}
+	// F-T15: overlay live item count so header renders "42 packages · 180 MB".
+	if counts := d.liveRepoItemCounts(r.Context(), []int64{rr.ID}); len(counts) > 0 {
+		resp.ItemCount = counts[rr.ID]
 	}
 	writeJSON(w, http.StatusOK, resp)
 }

@@ -222,6 +222,10 @@ export interface Repo {
   block_on_severity: BlockSeverity;
   public_read: boolean;
   size_bytes: number;
+  // F-T15: per-type artifact count. Meaning depends on type:
+  //   docker=tagged images, rpm/pypi/helm/raw=stored files, deb=distinct
+  //   (package,arch), git=ref count. 0 is a valid empty repo.
+  item_count: number;
   created_at: string;
 }
 

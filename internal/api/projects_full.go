@@ -48,6 +48,61 @@ func (d Deps) liveRepoSizes(ctx context.Context, ids []int64) map[int64]int64 {
 	return out
 }
 
+// repoItemCountExpr returns item counts per repo, dispatching on r.type.
+// F-T15: the repo header previously rendered "<type> · <bytes>"; an item
+// count ("42 packages · 180 MB") communicates ingest progress at a glance.
+// Per-type meaning:
+//   - docker : number of (image, tag) rows — one per push
+//   - rpm    : one row per ingested .rpm
+//   - deb    : distinct (package, architecture) — dedups the same package
+//     appearing in multiple suites (a common apt-mirror layout)
+//   - pypi   : one row per uploaded sdist/wheel
+//   - helm   : one row per chart version
+//   - raw    : one row per stored object
+//   - git    : refs count (branches + tags + HEAD)
+//   - s3     : repo-level count is 0 here (buckets carry their own counts)
+const repoItemCountExpr = `(
+    CASE r.type
+        WHEN 'docker' THEN (SELECT COUNT(*) FROM docker_tags WHERE repo_id = r.id)
+        WHEN 'rpm'    THEN (SELECT COUNT(*) FROM rpm_packages WHERE repo_id = r.id)
+        WHEN 'deb'    THEN (SELECT COUNT(*) FROM (SELECT DISTINCT package, architecture FROM deb_packages WHERE repo_id = r.id))
+        WHEN 'pypi'   THEN (SELECT COUNT(*) FROM pypi_files WHERE repo_id = r.id)
+        WHEN 'helm'   THEN (SELECT COUNT(*) FROM helm_charts WHERE repo_id = r.id)
+        WHEN 'raw'    THEN (SELECT COUNT(*) FROM raw_files WHERE repo_id = r.id)
+        WHEN 'git'    THEN (SELECT COUNT(*) FROM git_refs WHERE repo_id = r.id)
+        ELSE 0
+    END
+)`
+
+// liveRepoItemCounts mirrors liveRepoSizes but counts items. Returns an empty
+// map (never nil) on an empty input or a DB error — callers treat missing
+// entries as "unknown" and suppress the badge.
+func (d Deps) liveRepoItemCounts(ctx context.Context, ids []int64) map[int64]int64 {
+	out := make(map[int64]int64, len(ids))
+	if len(ids) == 0 {
+		return out
+	}
+	ph := make([]string, len(ids))
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		ph[i] = "?"
+		args[i] = id
+	}
+	query := `SELECT r.id, ` + repoItemCountExpr + ` FROM repos r WHERE r.id IN (` + strings.Join(ph, ",") + `)`
+	rows, err := d.DB.Reader.QueryContext(ctx, query, args...)
+	if err != nil {
+		return out
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var id, n int64
+		if err := rows.Scan(&id, &n); err == nil {
+			out[id] = n
+		}
+	}
+	return out
+}
+
 // mountProjectsFull installs the full projects endpoints.
 func (d Deps) mountProjectsFull(r chi.Router) {
 	r.Get("/projects", d.handleListProjects)

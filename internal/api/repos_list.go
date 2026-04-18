@@ -31,6 +31,8 @@ type repoListItem struct {
 	Name            string    `json:"name"`
 	DescriptionMD   string    `json:"description_md"`
 	SizeBytes       int64     `json:"size_bytes"`
+	// F-T15: ItemCount is the per-type artifact count (see repoItemCountExpr).
+	ItemCount       int64     `json:"item_count"`
 	AutoScan        bool      `json:"auto_scan"`
 	PublicRead      bool      `json:"public_read"`
 	BlockOnSeverity string    `json:"block_on_severity"`
@@ -72,6 +74,7 @@ func (d Deps) handleListRepos(w http.ResponseWriter, r *http.Request) {
 		ids = append(ids, rr.ID)
 	}
 	sizes := d.liveRepoSizes(r.Context(), ids)
+	itemCounts := d.liveRepoItemCounts(r.Context(), ids)
 	for _, rr := range repos {
 		if skipping {
 			if rr.ID == pp.Cursor.ID {
@@ -85,6 +88,7 @@ func (d Deps) handleListRepos(w http.ResponseWriter, r *http.Request) {
 		items = append(items, repoListItem{
 			ID: rr.ID, Type: rr.Type, Name: rr.Name,
 			DescriptionMD: rr.DescriptionMD, SizeBytes: sizes[rr.ID],
+			ItemCount: itemCounts[rr.ID],
 			AutoScan: rr.AutoScan, PublicRead: rr.PublicRead,
 			BlockOnSeverity: rr.BlockOnSeverity, CreatedAt: rr.CreatedAt,
 		})

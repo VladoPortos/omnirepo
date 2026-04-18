@@ -16,6 +16,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/url"
 	"path"
 	"strings"
 	"time"
@@ -215,6 +216,9 @@ func (h *Handler) resolveRepo(w http.ResponseWriter, r *http.Request) (resolved,
 		return resolved{}, false
 	}
 	rest := chi.URLParam(r, "*")
+	if dec, err := url.PathUnescape(rest); err == nil {
+		rest = dec
+	}
 	return resolved{project: proj, repo: rr, rest: rest}, true
 }
 

@@ -474,6 +474,37 @@ func TestDEBGetServePackage(t *testing.T) {
 	}
 }
 
+// TestDEBGetServePackagePercentEncoded covers F-T7: apt percent-encodes `+`
+// (and other reserved chars) when deriving download URLs from Filename.
+// The handler must URL-decode the wildcard so the on-disk path matches.
+func TestDEBGetServePackagePercentEncoded(t *testing.T) {
+	f := newDEBFixture(t)
+	_, _ = f.seedDEBRepo("proj", "myrepo", true)
+
+	// Upload a package whose filename contains `+` and `~`. The client puts
+	// the literal characters in the URL path.
+	body := buildTestDeb(t, "zstd", "1.4.8+dfsg~rc1-3build1", "amd64")
+	filename := "zstd_1.4.8+dfsg~rc1-3build1_amd64.deb"
+	putPath := "/proj/deb/myrepo/pool/z/zstd/" + filename + "?suite=stable&component=main"
+	resp := f.do(t, http.MethodPut, putPath, body, true)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("upload: %d", resp.StatusCode)
+	}
+
+	// apt percent-encodes `+` as %2B and `~` as %7E in the GET.
+	encodedPath := "/proj/deb/myrepo/pool/z/zstd/zstd_1.4.8%2Bdfsg%7Erc1-3build1_amd64.deb"
+	resp = f.do(t, http.MethodGet, encodedPath, nil, false)
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("encoded GET status=%d", resp.StatusCode)
+	}
+	got, _ := io.ReadAll(resp.Body)
+	if !bytes.Equal(got, body) {
+		t.Errorf("roundtrip mismatch %d vs %d", len(got), len(body))
+	}
+}
+
 func TestDEBUploadForbiddenForOutsider(t *testing.T) {
 	f := newDEBFixture(t)
 	_, _ = f.seedDEBRepo("proj", "myrepo", false)

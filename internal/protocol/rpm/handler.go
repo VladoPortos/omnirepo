@@ -14,6 +14,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/url"
 	"path"
 	"strings"
 	"time"
@@ -196,6 +197,9 @@ func (h *Handler) resolveRepo(w http.ResponseWriter, r *http.Request, requireFil
 	projectName := chi.URLParam(r, "project")
 	repoName := chi.URLParam(r, "repo")
 	filename := chi.URLParam(r, "filename")
+	if dec, err := url.PathUnescape(filename); err == nil {
+		filename = dec
+	}
 
 	if projectName == "" || repoName == "" {
 		http.Error(w, "missing project or repo", http.StatusNotFound)

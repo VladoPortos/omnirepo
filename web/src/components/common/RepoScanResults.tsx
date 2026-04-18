@@ -50,6 +50,32 @@ function shortDigest(s: string): string {
   return s.slice(0, 'sha256:'.length + 12);
 }
 
+// summarizeScanError condenses a raw scan.last_error (which may be several
+// lines of Trivy stderr plus Go wrapping) into a single short phrase
+// suitable for an inline badge. Known failure modes get bespoke copy so
+// the user knows what to do next; everything else falls back to the first
+// non-empty line of the underlying error.
+function summarizeScanError(raw: string): string {
+  if (!raw) return 'Scan failed.';
+  if (raw.includes('--skip-db-update cannot be specified on the first run')) {
+    return 'Trivy database not installed — ask an administrator to upload it at /admin/trivy.';
+  }
+  if (raw.includes('artifact file missing on disk')) {
+    return 'The uploaded file is missing from disk (data volume corruption or manual removal).';
+  }
+  if (raw.includes('trivy: trivy exec failed')) {
+    return 'Trivy scan crashed. See scan row details for the full log.';
+  }
+  // Generic: take the first non-empty line and trim.
+  for (const line of raw.split('\n')) {
+    const trimmed = line.trim();
+    if (trimmed) {
+      return trimmed.length > 200 ? trimmed.slice(0, 200) + '…' : trimmed;
+    }
+  }
+  return 'Scan failed.';
+}
+
 function StatusBadge({ scan }: { scan: Scan }) {
   if (scan.status === 'done') {
     const counts = parseSummary(scan.severity_summary_json);
@@ -77,8 +103,14 @@ function StatusBadge({ scan }: { scan: Scan }) {
       </Badge>
     );
   }
+  // Failed — expose the reason on hover so operators don't have to go
+  // digging in the scan detail panel.
   return (
-    <Badge variant="outline" className="bg-destructive/10 text-destructive border-destructive/20">
+    <Badge
+      variant="outline"
+      className="bg-destructive/10 text-destructive border-destructive/20"
+      title={scan.last_error || 'Scan failed.'}
+    >
       <ShieldX className="mr-1 size-3" />
       Failed
     </Badge>
@@ -152,6 +184,8 @@ export function RepoScanResults({ projectName, repoType, repoName }: RepoScanRes
           <tbody>
             {rows.map((scan) => {
               const counts = parseSummary(scan.severity_summary_json);
+              const failureSummary =
+                scan.status === 'failed' ? summarizeScanError(scan.last_error) : null;
               return (
                 <tr key={scan.id} className="border-b last:border-0 hover:bg-muted/30">
                   <td className="px-3 py-2">
@@ -164,6 +198,9 @@ export function RepoScanResults({ projectName, repoType, repoName }: RepoScanRes
                   </td>
                   <td className="px-3 py-2">
                     <StatusBadge scan={scan} />
+                    {failureSummary && (
+                      <p className="mt-1 max-w-xl text-xs text-destructive">{failureSummary}</p>
+                    )}
                   </td>
                   <td className="px-3 py-2 text-right">
                     <CountCell label="Critical" value={counts.critical} className="font-medium text-destructive" />

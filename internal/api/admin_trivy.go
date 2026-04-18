@@ -8,9 +8,11 @@ package api
 import (
 	"archive/tar"
 	"compress/gzip"
+	"context"
 	"database/sql"
 	"fmt"
 	"io"
+	"log/slog"
 	"math"
 	"net/http"
 	"os"
@@ -244,20 +246,42 @@ func (d Deps) handleTrivyDBUpload(w http.ResponseWriter, r *http.Request) {
 }
 
 func (d Deps) handleTrivyDBPull(w http.ResponseWriter, r *http.Request) {
-	// Create temp cache dir for Trivy download.
+	// Create temp cache dir for Trivy download on the same filesystem as the
+	// live DB dir so the atomic swap at the end uses same-FS rename rather
+	// than a cross-FS copy (EXDEV).
 	tmpDir, err := os.MkdirTemp(filepath.Join(d.DataRoot, "tmp"), "trivypull-*")
 	if err != nil {
-		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
+		slog.ErrorContext(r.Context(), "trivy.pull.mktempdir", "err", err)
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "could not create temp dir")
 		return
 	}
 	defer func() { _ = os.RemoveAll(tmpDir) }()
 
+	// Detach from the inbound HTTP request context so a client disconnect or
+	// short proxy timeout doesn't kill the download mid-flight. Cap the pull
+	// at 10 minutes — generous for the ~90 MiB DB over a slow link.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+
 	// Run trivy to download DB.
-	cmd := exec.CommandContext(r.Context(), "trivy", "image", "--download-db-only", "--cache-dir", tmpDir)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
+	cmd := exec.CommandContext(ctx, "trivy", "image", "--download-db-only", "--cache-dir", tmpDir)
+	output, cmdErr := cmd.CombinedOutput()
+	if cmdErr != nil {
+		// Surface the real reason to operators (log) and return an actionable
+		// envelope to the UI. Deadline exceeded → timeout; everything else is
+		// either network failure, auth/rate-limit, or on-disk issues.
+		slog.ErrorContext(r.Context(), "trivy.pull.exec_failed",
+			"err", cmdErr,
+			"output", strings.TrimSpace(string(output)),
+			"context_err", ctx.Err(),
+		)
+		if ctx.Err() == context.DeadlineExceeded {
+			writeJSONError(w, r, http.StatusGatewayTimeout, "network_unavailable",
+				"Trivy DB download timed out after 10 minutes. Upload a DB tarball instead.")
+			return
+		}
 		writeJSONError(w, r, http.StatusBadGateway, "network_unavailable",
-			"Unable to reach the Trivy database server. Upload a DB tarball instead.")
+			"Unable to reach the Trivy database server ("+oneLineErr(output, cmdErr)+"). Upload a DB tarball instead.")
 		return
 	}
 
@@ -273,7 +297,10 @@ func (d Deps) handleTrivyDBPull(w http.ResponseWriter, r *http.Request) {
 	// rationale: never leave the live DB dir missing on a failed swap.
 	dbDir := d.trivyDBDir()
 	if err := storage.SwapDir(srcDB, dbDir); err != nil {
-		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "swap failed")
+		slog.ErrorContext(r.Context(), "trivy.pull.swap_failed",
+			"err", err, "src", srcDB, "dst", dbDir)
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal,
+			"failed to install downloaded DB: "+err.Error())
 		return
 	}
 
@@ -302,9 +329,36 @@ func (d Deps) handleTrivyDBPull(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	_ = output // suppress unused warning
+	slog.InfoContext(r.Context(), "trivy.pull.success",
+		"bytes", len(output), "dst", dbDir)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status": "ok",
 		"source": "online-pulled",
 	})
+}
+
+// oneLineErr collapses cmd output + error into a single short line suitable
+// for inclusion in a client-facing error message. Multi-line Trivy output
+// would otherwise leak into the envelope and garble it.
+func oneLineErr(output []byte, err error) string {
+	trimmed := strings.TrimSpace(string(output))
+	// Prefer the last non-empty line of output — Trivy logs put the concrete
+	// cause last (e.g. "FATAL Fatal error: ...").
+	for _, line := range strings.Split(trimmed, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		// Keep the trailing FATAL/ERROR line when present.
+		if strings.Contains(line, "FATAL") || strings.Contains(line, "ERROR") {
+			trimmed = line
+		}
+	}
+	if trimmed == "" {
+		return err.Error()
+	}
+	if len(trimmed) > 240 {
+		trimmed = trimmed[:240] + "…"
+	}
+	return trimmed
 }

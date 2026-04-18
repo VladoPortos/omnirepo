@@ -251,6 +251,16 @@ func (d Deps) handleRescan(w http.ResponseWriter, r *http.Request) {
 			"rescan not supported for "+repo.Type+" repos")
 		return
 	}
+	// Pre-flight: if the Trivy DB has never been installed, fail fast with an
+	// actionable message instead of enqueueing a scan that will crash with
+	// "--skip-db-update cannot be specified on the first run". This mirrors
+	// the check the scan pool would hit, but surfaces it to the user *now*
+	// instead of after a job failure.
+	if !d.trivyDBInstalled() {
+		writeJSONError(w, r, http.StatusPreconditionFailed, "trivy_db_missing",
+			"Vulnerability scanning is not available: the Trivy database has not been installed. An administrator must upload a DB tarball or pull the latest DB at /admin/trivy before the first scan.")
+		return
+	}
 	// Package-style repos (rpm/deb/pypi/helm) store scans.artifact_id as the
 	// on-disk filename (auto-scan at upload time uses `res.filename`), but the
 	// REST URL pins the {id} param to the DB row's PK for stable linkability.
@@ -295,6 +305,17 @@ func (d Deps) handleRescan(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	writeJSON(w, http.StatusAccepted, map[string]any{"scan_id": sid})
+}
+
+// trivyDBInstalled returns true when the Trivy DB directory contains the
+// core `trivy.db` file. Used by handleRescan to fail fast with a friendly
+// 412 instead of enqueueing a job that will crash in the scan pool.
+func (d Deps) trivyDBInstalled() bool {
+	dir := d.trivyDBDir()
+	if _, err := os.Stat(filepath.Join(dir, "trivy.db")); err == nil {
+		return true
+	}
+	return false
 }
 
 // lookupPackageFilename resolves the on-disk filename for a package-style

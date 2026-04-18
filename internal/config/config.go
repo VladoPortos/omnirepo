@@ -352,6 +352,22 @@ func (cfg *Config) Validate() error {
 	if cfg.Repos.Git.MaxPushBytes == 0 {
 		cfg.Repos.Git.MaxPushBytes = 524288000 // 500 MiB default (D-35)
 	}
+	// Re-bind Trivy paths to follow a relocated DataRoot. The defaults are
+	// pinned to /var/lib/omnirepo/... which is correct in production but
+	// silently wrong in dev when DataRoot is overridden (e.g.
+	// OMNIREPO_DATA_ROOT=/tmp/...). In that case the admin UI would write
+	// the DB into <DataRoot>/trivy/db but the scan runner would still read
+	// /var/lib/omnirepo/trivy/db. Only rebind when the caller did NOT
+	// override Trivy.DBPath / CachePath explicitly — a non-default value
+	// means the operator deliberately split storage.
+	if cfg.DataRoot != "" && cfg.DataRoot != "/var/lib/omnirepo" {
+		if cfg.Trivy.DBPath == "/var/lib/omnirepo/trivy/db" {
+			cfg.Trivy.DBPath = cfg.DataRoot + "/trivy/db"
+		}
+		if cfg.Trivy.CachePath == "/var/lib/omnirepo/trivy" {
+			cfg.Trivy.CachePath = cfg.DataRoot + "/trivy"
+		}
+	}
 	return nil
 }
 

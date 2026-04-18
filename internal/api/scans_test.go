@@ -27,10 +27,16 @@ func newScanRESTServer(t *testing.T) *testServer {
 	t.Helper()
 	db := sqlitetest.New(t)
 	dataRoot := t.TempDir()
-	for _, d := range []string{"certs", "repos", "trash", "tmp", "logs", "sboms"} {
+	for _, d := range []string{"certs", "repos", "trash", "tmp", "logs", "sboms", "trivy/db"} {
 		if err := os.MkdirAll(filepath.Join(dataRoot, d), 0o750); err != nil {
 			t.Fatal(err)
 		}
+	}
+	// Pre-flight Trivy DB check in handleRescan requires trivy/db/trivy.db to
+	// exist; create a placeholder so scan enqueue tests reach the real code
+	// path instead of being 412'd by the missing-DB guard.
+	if err := os.WriteFile(filepath.Join(dataRoot, "trivy", "db", "trivy.db"), []byte("placeholder"), 0o640); err != nil {
+		t.Fatal(err)
 	}
 	auditLogger, err := audit.New(db, filepath.Join(dataRoot, "logs", "audit.log"), 10, 1)
 	if err != nil {

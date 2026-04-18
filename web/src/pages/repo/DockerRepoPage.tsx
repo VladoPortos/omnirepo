@@ -5,6 +5,7 @@
 
 import { useState, useMemo } from 'react';
 import { useParams } from 'react-router-dom';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Download,
   RefreshCw,
@@ -15,6 +16,7 @@ import {
   Layers,
   ArrowRightLeft,
   Terminal,
+  ShieldAlert,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
@@ -37,7 +39,9 @@ import { EmptyState } from '@/components/common/EmptyState';
 import { SnippetList } from '@/components/common/SnippetList';
 import { RepoPageLayout } from './RepoPageLayout';
 import { formatBytes, formatDate } from '@/lib/format';
-import { useMe } from '@/api/queries';
+import { useMe, useRepoContent, useRepoScans } from '@/api/queries';
+import { api, envelopeFromError, type ApiErrorEnvelope } from '@/api/client';
+import { ErrorEnvelopeRenderer } from '@/components/common/ErrorEnvelope';
 import type { Repo } from '@/api/types';
 
 /** Represents a Docker image tag -- populated from API in a real app. */
@@ -73,9 +77,45 @@ export function DockerRepoPage({ repo }: DockerRepoPageProps) {
   // cases; a future role-aware permission resolver can replace this.
   const { data: currentUser } = useMe();
   const canUpload = !!currentUser;
+  // EMPTY-04 (Phase 7): triggers rescan on the FIRST artifact when the repo
+  // has artifacts but no scans yet (RESEARCH Open Question §1 option (b)).
+  // A repo-level "scan all" endpoint is deferred to v1.2 alongside HEALTH.
+  const canScan = !!currentUser?.is_super_admin || canUpload;
 
   const hostname = window.location.host;
   const tags = MOCK_TAGS;
+
+  // Fetch real artifacts + scans for EMPTY-04 detection. Docker tags are
+  // still rendered from MOCK_TAGS above; artifacts here refer to the
+  // /content endpoint which returns per-manifest rows regardless of the
+  // mock-tag source, so EMPTY-04 surfaces when the repo has artifacts
+  // uploaded but no scans run yet.
+  const { data: artifactRows } = useRepoContent(projectName ?? '', 'docker', repo.name);
+  const artifactsCount = artifactRows?.length ?? 0;
+  const { data: scansData } = useRepoScans(projectName ?? '', 'docker', repo.name);
+  const scansCount = scansData?.length ?? 0;
+  const [rescanError, setRescanError] = useState<ApiErrorEnvelope | null>(null);
+  const qc = useQueryClient();
+  const rescanMutation = useMutation({
+    mutationFn: async () => {
+      if (!artifactRows || artifactRows.length === 0) {
+        throw new Error('no artifacts to scan');
+      }
+      const first = artifactRows[0];
+      return api.post<void>(
+        `/projects/${encodeURIComponent(projectName ?? '')}/repos/docker/${encodeURIComponent(repo.name)}/artifacts/${first.id}/rescan`,
+        {},
+      );
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['repo-scans', projectName ?? '', 'docker', repo.name] });
+      toast.success('Scan queued. Results will appear shortly.');
+      setRescanError(null);
+    },
+    onError: (err) => {
+      setRescanError(envelopeFromError(err, 'Failed to start scan.'));
+    },
+  });
 
   const filteredTags = useMemo(() => {
     if (!filter) return tags;
@@ -194,6 +234,26 @@ export function DockerRepoPage({ repo }: DockerRepoPageProps) {
           placeholder="Filter by tag or digest..."
           className="max-w-sm"
         />
+
+        {/* EMPTY-04: repo has artifacts but no scan results yet */}
+        {artifactsCount > 0 && scansCount === 0 && (
+          <>
+            <EmptyState
+              icon={ShieldAlert}
+              title="No scan results yet"
+              description="Run a scan to see vulnerability findings for this repository."
+              primaryCTA={{
+                label: 'Run first scan',
+                onClick: () => rescanMutation.mutate(),
+                disabled: !canScan || rescanMutation.isPending,
+                disabledHint: 'Requires maintainer role on this repo',
+              }}
+            />
+            {rescanError && (
+              <ErrorEnvelopeRenderer envelope={rescanError} mode="inline" />
+            )}
+          </>
+        )}
 
         {/* Tag table — EMPTY-03 when no artifacts yet */}
         {tags.length === 0 ? (

@@ -6,7 +6,8 @@
 
 import { useState, useMemo } from 'react';
 import { useParams } from 'react-router-dom';
-import { ExternalLink, Terminal } from 'lucide-react';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { ExternalLink, Terminal, ShieldAlert } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -29,8 +30,9 @@ import { EmptyState } from '@/components/common/EmptyState';
 import { SnippetList } from '@/components/common/SnippetList';
 import { RepoPageLayout } from './RepoPageLayout';
 import { formatBytes, formatDate } from '@/lib/format';
-import { api } from '@/api/client';
-import { useRepoContent, useMe } from '@/api/queries';
+import { api, envelopeFromError, type ApiErrorEnvelope } from '@/api/client';
+import { useRepoContent, useMe, useRepoScans } from '@/api/queries';
+import { ErrorEnvelopeRenderer } from '@/components/common/ErrorEnvelope';
 import type { Repo } from '@/api/types';
 
 interface DebPackage {
@@ -60,9 +62,37 @@ export function AptRepoPage({ repo }: AptRepoPageProps) {
   // EMPTY-03 upload-permission gate — see DockerRepoPage for rationale.
   const { data: currentUser } = useMe();
   const canUpload = !!currentUser;
+  // EMPTY-04 (Phase 7): triggers rescan on the FIRST artifact when the repo
+  // has artifacts but no scans yet (RESEARCH Open Question §1 option (b)).
+  // A repo-level "scan all" endpoint is deferred to v1.2 alongside HEALTH.
+  const canScan = !!currentUser?.is_super_admin || canUpload;
   const hostname = window.location.host;
 
   const { data: contentRows } = useRepoContent(projectName ?? '', 'deb', repo.name);
+  const { data: scansData } = useRepoScans(projectName ?? '', 'deb', repo.name);
+  const scansCount = scansData?.length ?? 0;
+  const [rescanError, setRescanError] = useState<ApiErrorEnvelope | null>(null);
+  const qc = useQueryClient();
+  const rescanMutation = useMutation({
+    mutationFn: async () => {
+      if (!contentRows || contentRows.length === 0) {
+        throw new Error('no artifacts to scan');
+      }
+      const first = contentRows[0];
+      return api.post<void>(
+        `/projects/${encodeURIComponent(projectName ?? '')}/repos/deb/${encodeURIComponent(repo.name)}/artifacts/${first.id}/rescan`,
+        {},
+      );
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['repo-scans', projectName ?? '', 'deb', repo.name] });
+      toast.success('Scan queued. Results will appear shortly.');
+      setRescanError(null);
+    },
+    onError: (err) => {
+      setRescanError(envelopeFromError(err, 'Failed to start scan.'));
+    },
+  });
   const packages: DebPackage[] = useMemo(
     () =>
       (contentRows ?? []).map((row) => ({
@@ -179,6 +209,26 @@ export function AptRepoPage({ repo }: AptRepoPageProps) {
           placeholder="Filter by package name..."
           className="max-w-sm"
         />
+
+        {/* EMPTY-04: repo has artifacts but no scan results yet */}
+        {packages.length > 0 && scansCount === 0 && (
+          <>
+            <EmptyState
+              icon={ShieldAlert}
+              title="No scan results yet"
+              description="Run a scan to see vulnerability findings for this repository."
+              primaryCTA={{
+                label: 'Run first scan',
+                onClick: () => rescanMutation.mutate(),
+                disabled: !canScan || rescanMutation.isPending,
+                disabledHint: 'Requires maintainer role on this repo',
+              }}
+            />
+            {rescanError && (
+              <ErrorEnvelopeRenderer envelope={rescanError} mode="inline" />
+            )}
+          </>
+        )}
 
         {/* Package table — EMPTY-03 when no artifacts yet */}
         {packages.length === 0 ? (

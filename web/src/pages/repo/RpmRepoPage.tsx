@@ -142,8 +142,12 @@ export function RpmRepoPage({ repo }: RpmRepoPageProps) {
   ];
 
   const handleUpload = async (file: File, onProgress: (pct: number) => void) => {
-    // Upload endpoint: PUT /projects/{project}/repos/{repo}/artifacts
-    await api.upload(`/projects/${repo.name}/repos/${repo.name}/artifacts`, file, onProgress);
+    // Upload endpoint: PUT /projects/{project}/repos/{type}/{repo}/artifacts
+    await api.upload(
+      `/projects/${encodeURIComponent(projectName ?? '')}/repos/rpm/${encodeURIComponent(repo.name)}/artifacts`,
+      file,
+      onProgress,
+    );
   };
 
   return (

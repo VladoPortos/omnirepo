@@ -160,7 +160,11 @@ export function HelmRepoPage({ repo }: HelmRepoPageProps) {
   ];
 
   const handleUpload = async (file: File, onProgress: (pct: number) => void) => {
-    await api.upload(`/projects/${repo.name}/repos/${repo.name}/artifacts`, file, onProgress);
+    await api.upload(
+      `/projects/${encodeURIComponent(projectName ?? '')}/repos/helm/${encodeURIComponent(repo.name)}/artifacts`,
+      file,
+      onProgress,
+    );
   };
 
   return (

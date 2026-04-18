@@ -180,7 +180,11 @@ export function RawRepoPage({ repo }: RawRepoPageProps) {
 
   const handleUpload = async (file: File, onProgress: (pct: number) => void) => {
     const uploadPath = currentPath ? `${currentPath}/${file.name}` : file.name;
-    await api.upload(`/projects/${repo.name}/repos/${repo.name}/artifacts/${uploadPath}`, file, onProgress);
+    await api.upload(
+      `/projects/${encodeURIComponent(projectName ?? '')}/repos/raw/${encodeURIComponent(repo.name)}/artifacts/${uploadPath}`,
+      file,
+      onProgress,
+    );
   };
 
   return (

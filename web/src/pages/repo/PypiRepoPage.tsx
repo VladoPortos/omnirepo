@@ -197,7 +197,11 @@ export function PypiRepoPage({ repo }: PypiRepoPageProps) {
   ];
 
   const handleUpload = async (file: File, onProgress: (pct: number) => void) => {
-    await api.upload(`/projects/${repo.name}/repos/${repo.name}/artifacts`, file, onProgress);
+    await api.upload(
+      `/projects/${encodeURIComponent(projectName ?? '')}/repos/pypi/${encodeURIComponent(repo.name)}/artifacts`,
+      file,
+      onProgress,
+    );
   };
 
   return (

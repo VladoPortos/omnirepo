@@ -161,7 +161,11 @@ export function AptRepoPage({ repo }: AptRepoPageProps) {
   ];
 
   const handleUpload = async (file: File, onProgress: (pct: number) => void) => {
-    await api.upload(`/projects/${repo.name}/repos/${repo.name}/artifacts`, file, onProgress);
+    await api.upload(
+      `/projects/${encodeURIComponent(projectName ?? '')}/repos/deb/${encodeURIComponent(repo.name)}/artifacts`,
+      file,
+      onProgress,
+    );
   };
 
   return (

@@ -317,20 +317,25 @@ export function DockerRepoPage({ repo }: DockerRepoPageProps) {
             sort={sort}
             onSort={(col, dir) => setSort({ column: col, direction: dir })}
             stickyFirstColumn
+            // F-T17 follow-up: render the tag detail panel inline as an
+            // accordion row immediately under the clicked row rather than
+            // letting it float at the bottom of a 3-viewport-long list.
+            isRowExpanded={(row) =>
+              expandedTag === `${row.image}:${row.tag}`
+            }
+            renderExpanded={(row) => (
+              <div>
+                <div className="flex items-center gap-2 text-sm font-semibold">
+                  <Layers className="size-4" />
+                  Layer breakdown for{' '}
+                  {row.image ? `${row.image}:${row.tag}` : row.tag}
+                </div>
+                <p className="mt-2 text-xs text-muted-foreground">
+                  Layer details will be populated from the OCI manifest API.
+                </p>
+              </div>
+            )}
           />
-        )}
-
-        {/* Expanded tag detail */}
-        {expandedTag && (
-          <div className="rounded-md border bg-muted/30 p-4">
-            <div className="flex items-center gap-2 text-sm font-semibold">
-              <Layers className="size-4" />
-              Layer breakdown for {expandedTag}
-            </div>
-            <p className="mt-2 text-xs text-muted-foreground">
-              Layer details will be populated from the OCI manifest API.
-            </p>
-          </div>
         )}
       </div>
 

@@ -456,16 +456,37 @@ func (d Deps) listHelmContent(r *http.Request, repoID, limit, offset int64) ([]R
 //	Name       = "<image>:<tag>"  (or just ":<tag>" for the legacy
 //	                               image-less rows pre-migration 021)
 //	Version    = tag               (so sort/filter by version chips work)
-//	SizeBytes  = manifest size_bytes (cheap; full layer sum would require
-//	                                 walking docker_blobs via JSON1 — we
-//	                                 surface that through the dashboard)
+//	SizeBytes  = manifest body + config blob + all layer blobs. Walks the
+//	            manifest JSON via JSON1 to resolve each referenced digest
+//	            against docker_blobs. Matches what `docker pull` actually
+//	            transfers — the manifest-body-only number (few KB) would
+//	            mislead operators inspecting repo contents.
 //	Extra.image, Extra.tag, Extra.digest, Extra.media_type
 //
 // The scan hook uses artifact_id=digest since that's what the oci push path
 // enqueues (see internal/protocol/oci/manifests.go).
 func (d Deps) listDockerContent(r *http.Request, repoID, limit, offset int64) ([]RepoContentEntry, error) {
+	// dockerImageSize = manifest body + config blob + sum(layer blobs).
+	// Correlated subqueries with json_each walk the manifest body against
+	// docker_blobs. COALESCE each subquery to 0 so manifests with zero
+	// layers (empty config-only images) still produce a size = manifest
+	// bytes only.
+	const dockerImageSizeExpr = `(
+		COALESCE(dm.size_bytes, 0)
+		+ COALESCE((
+			SELECT db.size_bytes FROM docker_blobs db
+			WHERE db.digest = json_extract(dm.body, '$.config.digest')
+		), 0)
+		+ COALESCE((
+			SELECT SUM(db.size_bytes)
+			FROM json_each(dm.body, '$.layers') jl
+			JOIN docker_blobs db ON db.digest = json_extract(jl.value, '$.digest')
+		), 0)
+	)`
 	query := `
-		SELECT dt.image, dt.tag, dt.digest, dm.media_type, dm.size_bytes, dt.updated_at,
+		SELECT dt.image, dt.tag, dt.digest, dm.media_type,
+		       ` + dockerImageSizeExpr + ` AS total_size,
+		       dt.updated_at,
 		       COALESCE(ls.status, ''), COALESCE(ls.severity_summary_json, '')
 		FROM docker_tags dt
 		LEFT JOIN docker_manifests dm ON dm.repo_id = dt.repo_id AND dm.digest = dt.digest

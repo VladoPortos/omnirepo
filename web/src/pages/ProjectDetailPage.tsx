@@ -31,7 +31,6 @@ import {
 } from '@/components/ui/select';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { TypeBadge } from '@/components/common/TypeBadge';
-import { StorageGauge } from '@/components/common/StorageGauge';
 import {
   useProject,
   useProjectActivity,
@@ -313,22 +312,25 @@ export function ProjectDetailPage() {
               </CardContent>
             </Card>
 
-            {/* Storage */}
+            {/* Storage — plain total, no gauge. OmniRepo v1 has no
+                per-project quota, so the old `used of max(2×used, 1 GB)`
+                ratio was a placeholder denominator that confused operators
+                (e.g. "Where does the 1 GB limit come from?"). The admin
+                Dashboard carries the global used/disk gauge; this card
+                stays informational. */}
             <Card>
               <CardHeader>
                 <CardTitle>Storage</CardTitle>
               </CardHeader>
               <CardContent>
-                <StorageGauge
-                  used={totalSize}
-                  total={Math.max(totalSize * 2, 1073741824)}
-                />
-                <p className="mt-3 text-xs text-muted-foreground">
+                <p className="text-3xl font-semibold tabular-nums">
+                  {formatBytes(totalSize)}
+                </p>
+                <p className="mt-2 text-xs text-muted-foreground">
                   {project.repos?.length ?? 0} repositories
                   {bucketCount > 0
                     ? `, ${bucketCount} S3 bucket${bucketCount === 1 ? '' : 's'}`
                     : ''}
-                  , {formatBytes(totalSize)} total
                 </p>
               </CardContent>
             </Card>

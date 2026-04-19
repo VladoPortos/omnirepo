@@ -123,6 +123,82 @@ func TestRepoContent_DockerEmptyRepoReturnsEmptyArray(t *testing.T) {
 	}
 }
 
+// TestRepoContent_DockerSizeSumsLayers verifies that the size_bytes
+// returned for a docker tag row sums the manifest body + the referenced
+// config blob + all referenced layer blobs, rather than reporting just
+// the manifest body size (typically a few KB). Operators inspecting a
+// populated repo need to see "this image is 75 MB" not "this manifest is
+// 3 KB".
+func TestRepoContent_DockerSizeSumsLayers(t *testing.T) {
+	s := newTestServer(t)
+	_, pw := seedTestUser(t, s.db, "root", "r@x", true, false)
+	cookie, _, code := s.login(t, "root", pw)
+	if code != 200 {
+		t.Fatalf("login code=%d", code)
+	}
+
+	ctx := context.Background()
+	pid, _ := s.deps.Projects.Create(ctx, "proj", "")
+	repoID, _ := s.deps.Repos.Create(ctx, pid, "docker", "hub", "", nil, nil, nil)
+
+	// Manifest body references cfg-blob (1_000_000 B) + 2 layers
+	// (5_000_000 B + 7_500_000 B). Manifest blob itself weighs 500 B.
+	// Expected total = 500 + 1_000_000 + 5_000_000 + 7_500_000 = 13_500_500.
+	manifestBody := []byte(`{
+		"schemaVersion": 2,
+		"config": {"digest": "sha256:cfg", "size": 1000000},
+		"layers": [
+			{"digest": "sha256:l1", "size": 5000000},
+			{"digest": "sha256:l2", "size": 7500000}
+		]
+	}`)
+	_, err := s.db.Writer.ExecContext(ctx,
+		`INSERT INTO docker_manifests(digest, repo_id, media_type, body, size_bytes, ref_count)
+		 VALUES (?, ?, 'application/vnd.oci.image.manifest.v1+json', ?, 500, 1)`,
+		"sha256:m1", repoID, manifestBody)
+	if err != nil {
+		t.Fatalf("seed manifest: %v", err)
+	}
+	for _, row := range []struct {
+		digest string
+		size   int64
+	}{
+		{"sha256:cfg", 1_000_000},
+		{"sha256:l1", 5_000_000},
+		{"sha256:l2", 7_500_000},
+	} {
+		if _, err := s.db.Writer.ExecContext(ctx,
+			`INSERT INTO docker_blobs(digest, size_bytes, ref_count) VALUES (?, ?, 1)`,
+			row.digest, row.size); err != nil {
+			t.Fatalf("seed blob %s: %v", row.digest, err)
+		}
+	}
+	if _, err := s.db.Writer.ExecContext(ctx,
+		`INSERT INTO docker_tags(repo_id, image, tag, digest) VALUES (?, 'nginx', '1.27', ?)`,
+		repoID, "sha256:m1"); err != nil {
+		t.Fatalf("seed tag: %v", err)
+	}
+
+	resp, raw := s.doRaw(t, "GET", "/api/v1/projects/proj/repos/docker/hub/content", cookie, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d body=%s", resp.StatusCode, raw)
+	}
+	var page struct {
+		Items []map[string]any `json:"items"`
+	}
+	if err := json.Unmarshal(raw, &page); err != nil {
+		t.Fatalf("decode: %v body=%s", err, raw)
+	}
+	if len(page.Items) != 1 {
+		t.Fatalf("got %d items, want 1; body=%s", len(page.Items), raw)
+	}
+	got := int64(page.Items[0]["size_bytes"].(float64))
+	want := int64(500 + 1_000_000 + 5_000_000 + 7_500_000)
+	if got != want {
+		t.Errorf("size_bytes=%d, want %d (manifest+config+layers)", got, want)
+	}
+}
+
 // TestRepoContent_PaginationNextOffset verifies limit/offset chains. Seeds
 // 3 RPM rows, asks for limit=2 — first call should return items[0..1] with
 // next_offset=2 and total=3; using that offset returns items[2..2] and

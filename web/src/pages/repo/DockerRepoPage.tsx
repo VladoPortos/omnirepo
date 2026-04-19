@@ -138,9 +138,20 @@ export function DockerRepoPage({ repo }: DockerRepoPageProps) {
       if (!artifactRows || artifactRows.length === 0) {
         throw new Error('no artifacts to scan');
       }
+      // Docker scans key on the manifest digest, not a surrogate DB id
+      // (docker_tags has no integer PK — the content endpoint returns
+      // id=0 for every row). Use first.extra.digest so the rescan
+      // endpoint enqueues `artifact_id=<digest>` instead of the literal
+      // string "0" which then fails "manifest 0 not found in repo".
       const first = artifactRows[0];
+      const digest = String(
+        (first.extra as Record<string, unknown> | undefined)?.digest ?? '',
+      );
+      if (!digest) {
+        throw new Error('no digest on first artifact');
+      }
       return api.post<void>(
-        `/projects/${encodeURIComponent(projectName ?? '')}/repos/docker/${encodeURIComponent(repo.name)}/artifacts/${first.id}/rescan`,
+        `/projects/${encodeURIComponent(projectName ?? '')}/repos/docker/${encodeURIComponent(repo.name)}/artifacts/${encodeURIComponent(digest)}/rescan`,
         {},
       );
     },

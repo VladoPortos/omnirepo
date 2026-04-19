@@ -5,7 +5,7 @@
  */
 
 import { useState, useMemo } from 'react';
-import { useParams } from 'react-router-dom';
+import { Link, useParams } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { ChevronDown, ChevronRight, Package, Terminal, ShieldAlert, RefreshCw, Loader2 } from 'lucide-react';
@@ -36,6 +36,7 @@ interface PypiFile {
   scan_status: string;
   severity_counts: Record<string, number>;
   uploaded_at: string;
+  latest_scan_id?: number;
 }
 
 /** Grouped view: one row per normalized project name. */
@@ -51,6 +52,7 @@ interface PypiProjectGroup {
   severity_counts: Record<string, number>;
   uploaded_at: string;
   files: PypiFile[];
+  latest_scan_id?: number;
 }
 
 interface PypiRepoPageProps {
@@ -134,6 +136,7 @@ export function PypiRepoPage({ repo }: PypiRepoPageProps) {
           severity_counts:
             (e.severity_counts as Record<string, number>) ?? {},
           uploaded_at: row.uploaded_at,
+          latest_scan_id: row.latest_scan_id,
         };
       }),
     [contentRows],
@@ -162,6 +165,7 @@ export function PypiRepoPage({ repo }: PypiRepoPageProps) {
         severity_counts: latest.severity_counts,
         uploaded_at: latest.uploaded_at,
         files: sorted,
+        latest_scan_id: latest.latest_scan_id,
       };
     });
   }, [files]);
@@ -357,14 +361,40 @@ export function PypiRepoPage({ repo }: PypiRepoPageProps) {
                         <span className="text-muted-foreground">
                           {formatDate(f.uploaded_at)}
                         </span>
+                        {f.latest_scan_id && f.scan_status === 'done' && (
+                          <Link
+                            to={`/projects/${encodeURIComponent(projectName ?? '')}/${encodeURIComponent(repo.type)}/${encodeURIComponent(repo.name)}/scans/${f.latest_scan_id}`}
+                            className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+                          >
+                            <ShieldAlert className="size-3" />
+                            Scan report
+                          </Link>
+                        )}
                       </div>
                     </div>
                   ))}
                 </div>
-                <SeverityStrip
-                  status={row.scan_status}
-                  counts={row.severity_counts}
-                />
+                <div className="flex flex-wrap items-center gap-2">
+                  <SeverityStrip
+                    status={row.scan_status}
+                    counts={row.severity_counts}
+                  />
+                  {row.latest_scan_id && row.scan_status === 'done' && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      nativeButton={false}
+                      render={
+                        <Link
+                          to={`/projects/${encodeURIComponent(projectName ?? '')}/${encodeURIComponent(repo.type)}/${encodeURIComponent(repo.name)}/scans/${row.latest_scan_id}`}
+                        />
+                      }
+                    >
+                      <ShieldAlert className="mr-1.5 size-3.5" />
+                      View full scan report
+                    </Button>
+                  )}
+                </div>
               </div>
             )}
           />

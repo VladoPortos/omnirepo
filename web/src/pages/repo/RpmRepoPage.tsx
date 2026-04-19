@@ -51,6 +51,7 @@ interface RpmPackage {
   license: string;
   scan_status: string;
   severity_counts: Record<string, number>;
+  latest_scan_id?: number;
 }
 
 interface RpmRepoPageProps {
@@ -148,6 +149,7 @@ export function RpmRepoPage({ repo }: RpmRepoPageProps) {
           license: String(e.license ?? ''),
           scan_status: String(e.scan_status ?? ''),
           severity_counts: counts,
+          latest_scan_id: row.latest_scan_id,
         };
       }),
     [contentRows],
@@ -317,6 +319,11 @@ export function RpmRepoPage({ repo }: RpmRepoPageProps) {
                     status: row.scan_status,
                     counts: row.severity_counts,
                   }}
+                  scanReportURL={
+                    row.latest_scan_id
+                      ? `/projects/${encodeURIComponent(projectName ?? '')}/${encodeURIComponent(repo.type)}/${encodeURIComponent(repo.name)}/scans/${row.latest_scan_id}`
+                      : undefined
+                  }
                   downloadURL={
                     row.filename
                       ? `/${encodeURIComponent(projectName ?? '')}/rpm/${encodeURIComponent(repo.name)}/packages/${encodeURIComponent(row.filename)}`

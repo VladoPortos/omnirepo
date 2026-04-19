@@ -56,6 +56,7 @@ import type {
   BucketCreate,
   Scan,
   ScanStatus,
+  Vulnerability,
 } from './types';
 
 // -- Repo-level scans list (populates the Scan Results tab on every repo page) --
@@ -143,6 +144,39 @@ export function useRescanRepo(
       });
     },
   });
+}
+
+/**
+ * useScan — GET /scans/{id} for a single scan row. Used by the
+ * per-artifact scan report page.
+ */
+export function useScan(scanID: number | null | undefined) {
+  return useQuery({
+    queryKey: ['scan', scanID ?? 0],
+    enabled: scanID != null && scanID > 0,
+    queryFn: () => api.get<Scan>(`/scans/${scanID}`),
+  });
+}
+
+/**
+ * useScanVulnerabilities — GET /scans/{id}/vulnerabilities. Backend
+ * caps the response at 1000 rows; that's the v1 contract.
+ */
+export function useScanVulnerabilities(scanID: number | null | undefined) {
+  return useQuery({
+    queryKey: ['scan-vulns', scanID ?? 0],
+    enabled: scanID != null && scanID > 0,
+    queryFn: () => api.get<Vulnerability[]>(`/scans/${scanID}/vulnerabilities`),
+  });
+}
+
+/**
+ * sbomDownloadURL — the API path the browser hits to download the
+ * CycloneDX SBOM for a scan. Exposed as a helper so the report page
+ * can render a plain `<a href>` (no fetch → no CORS surprises).
+ */
+export function sbomDownloadURL(scanID: number): string {
+  return `/api/v1/scans/${scanID}/sbom`;
 }
 
 /**

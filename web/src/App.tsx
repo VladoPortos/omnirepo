@@ -21,6 +21,7 @@ import { ProjectsPage } from '@/pages/ProjectsPage';
 import { ProjectDetailPage } from '@/pages/ProjectDetailPage';
 import { RepoDetailRouter } from '@/pages/repo/RepoDetailRouter';
 import { S3BucketPage } from '@/pages/repo/S3BucketPage';
+import { ScanReportPage } from '@/pages/repo/ScanReportPage';
 import { useAuth } from '@/hooks/useAuth';
 import { useSetupStatus } from '@/api/queries';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -285,6 +286,10 @@ export const router = createBrowserRouter([
       // /:type/:repo pattern — React Router 7 picks the more specific
       // match, but ordering keeps intent obvious.
       { path: 'projects/:name/s3/:bucket', element: <S3BucketPage /> },
+      {
+        path: 'projects/:name/:type/:repo/scans/:id',
+        element: <ScanReportPage />,
+      },
       { path: 'projects/:name/:type/:repo', element: <RepoDetailRouter /> },
       { path: 'search', element: <SearchPage /> },
       { path: 'profile', element: <ProfilePage /> },

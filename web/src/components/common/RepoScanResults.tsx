@@ -13,6 +13,7 @@
  */
 
 import { useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import {
   RefreshCw,
   ShieldCheck,
@@ -414,7 +415,14 @@ export function RepoScanResults({ projectName, repoType, repoName }: RepoScanRes
                   {groupRows.length} scan{groupRows.length === 1 ? '' : 's'}
                 </span>
               </button>
-              {isOpen && <ScanRowsTable rows={groupRows} />}
+              {isOpen && (
+                <ScanRowsTable
+                  rows={groupRows}
+                  projectName={projectName}
+                  repoType={repoType}
+                  repoName={repoName}
+                />
+              )}
             </div>
           );
         })}
@@ -438,7 +446,17 @@ export function RepoScanResults({ projectName, repoType, repoName }: RepoScanRes
 // ScanRowsTable renders the per-row details for one date group. Pulled
 // out of the main component so the date collapsibles can lazy-render
 // (table only mounts when the group is expanded).
-function ScanRowsTable({ rows }: { rows: Scan[] }) {
+function ScanRowsTable({
+  rows,
+  projectName,
+  repoType,
+  repoName,
+}: {
+  rows: Scan[];
+  projectName: string;
+  repoType: string;
+  repoName: string;
+}) {
   return (
     <div className="overflow-x-auto border-t">
       <table className="w-full text-sm">
@@ -451,6 +469,7 @@ function ScanRowsTable({ rows }: { rows: Scan[] }) {
               <th className="px-3 py-2 text-right">Med</th>
               <th className="px-3 py-2 text-right">Low</th>
               <th className="px-3 py-2">Finished</th>
+              <th className="px-3 py-2 text-right">Report</th>
             </tr>
           </thead>
           <tbody>
@@ -500,6 +519,19 @@ function ScanRowsTable({ rows }: { rows: Scan[] }) {
                   </td>
                   <td className="px-3 py-2 text-xs text-muted-foreground">
                     {scan.finished_at ? formatDate(scan.finished_at) : '—'}
+                  </td>
+                  <td className="px-3 py-2 text-right">
+                    {scan.status === 'done' ? (
+                      <Link
+                        to={`/projects/${encodeURIComponent(projectName)}/${encodeURIComponent(repoType)}/${encodeURIComponent(repoName)}/scans/${scan.id}`}
+                        className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+                      >
+                        <ShieldAlert className="size-3.5" />
+                        Open
+                      </Link>
+                    ) : (
+                      <span className="text-xs text-muted-foreground">—</span>
+                    )}
                   </td>
                 </tr>
               );

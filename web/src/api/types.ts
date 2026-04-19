@@ -47,6 +47,7 @@ export interface RepoContentEntry {
   size_bytes: number;
   uploaded_at: string;
   scan_severity?: string;
+  latest_scan_id?: number;
   extra?: Record<string, unknown>;
 }
 

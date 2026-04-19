@@ -7,7 +7,8 @@
  */
 
 import type { ReactNode } from 'react';
-import { Download } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { Download, ShieldAlert } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { formatBytes, formatDate } from '@/lib/format';
@@ -31,6 +32,14 @@ export interface ArtifactDetailProps {
     status: string;
     counts: Record<string, number>;
   };
+  /**
+   * In-app route to the standalone scan report page. When set, the
+   * severity strip renders a "View full scan report" link-button that
+   * takes the user to the per-artifact CVE table. Only meaningful when
+   * the latest scan exists and has vulnerabilities; callers are
+   * expected to guard on scan-status themselves.
+   */
+  scanReportURL?: string;
   /** Absolute URL the Download button points at; omit to hide. */
   downloadURL?: string;
   downloadLabel?: string;
@@ -126,6 +135,7 @@ export function ArtifactDetail({
   sizeBytes,
   uploadedAt,
   severity,
+  scanReportURL,
   downloadURL,
   downloadLabel,
 }: ArtifactDetailProps) {
@@ -160,7 +170,20 @@ export function ArtifactDetail({
           <p className="mb-1 text-xs font-medium text-muted-foreground">
             Scan findings
           </p>
-          <SeverityStrip status={severity.status} counts={severity.counts} />
+          <div className="flex flex-wrap items-center gap-2">
+            <SeverityStrip status={severity.status} counts={severity.counts} />
+            {scanReportURL && severity.status === 'done' && (
+              <Button
+                variant="outline"
+                size="sm"
+                nativeButton={false}
+                render={<Link to={scanReportURL} />}
+              >
+                <ShieldAlert className="mr-1.5 size-3.5" />
+                View full scan report
+              </Button>
+            )}
+          </div>
         </div>
       )}
       {downloadURL && (

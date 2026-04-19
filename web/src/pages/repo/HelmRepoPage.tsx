@@ -5,8 +5,8 @@
  */
 
 import { useState, useMemo } from 'react';
-import { useParams } from 'react-router-dom';
-import { ChevronDown, ChevronRight, Layers, Terminal } from 'lucide-react';
+import { Link, useParams } from 'react-router-dom';
+import { ChevronDown, ChevronRight, Layers, ShieldAlert, Terminal } from 'lucide-react';
 import { DataTable, type ColumnDef, type SortState } from '@/components/common/DataTable';
 import { ContentScanBadge } from '@/components/common/ContentScanBadge';
 import { Button } from '@/components/ui/button';
@@ -37,6 +37,7 @@ interface HelmChartVersion {
   scan_status: string;
   severity_counts: Record<string, number>;
   uploaded_at: string;
+  latest_scan_id?: number;
 }
 
 /** Grouped view: one row per chart name. */
@@ -52,6 +53,7 @@ interface HelmChartGroup {
   severity_counts: Record<string, number>;
   uploaded_at: string;
   versions: HelmChartVersion[];
+  latest_scan_id?: number;
 }
 
 interface HelmRepoPageProps {
@@ -109,6 +111,7 @@ export function HelmRepoPage({ repo }: HelmRepoPageProps) {
           severity_counts:
             (e.severity_counts as Record<string, number>) ?? {},
           uploaded_at: row.uploaded_at,
+          latest_scan_id: row.latest_scan_id,
         };
       }),
     [contentRows],
@@ -137,6 +140,7 @@ export function HelmRepoPage({ repo }: HelmRepoPageProps) {
         severity_counts: latest.severity_counts,
         uploaded_at: latest.uploaded_at,
         versions: sorted,
+        latest_scan_id: latest.latest_scan_id,
       };
     });
   }, [chartVersions]);
@@ -321,6 +325,21 @@ export function HelmRepoPage({ repo }: HelmRepoPageProps) {
                           {formatDate(v.uploaded_at)}
                         </span>
                         <ContentScanBadge severity={v.scan_severity} />
+                        {v.latest_scan_id && v.scan_status === 'done' && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            nativeButton={false}
+                            render={
+                              <Link
+                                to={`/projects/${encodeURIComponent(projectName ?? '')}/${encodeURIComponent(repo.type)}/${encodeURIComponent(repo.name)}/scans/${v.latest_scan_id}`}
+                              />
+                            }
+                          >
+                            <ShieldAlert className="mr-1.5 size-3.5" />
+                            Scan report
+                          </Button>
+                        )}
                         <Button
                           variant="outline"
                           size="sm"
@@ -343,10 +362,27 @@ export function HelmRepoPage({ repo }: HelmRepoPageProps) {
                     </div>
                   ))}
                 </div>
-                <SeverityStrip
-                  status={row.scan_status}
-                  counts={row.severity_counts}
-                />
+                <div className="flex flex-wrap items-center gap-2">
+                  <SeverityStrip
+                    status={row.scan_status}
+                    counts={row.severity_counts}
+                  />
+                  {row.latest_scan_id && row.scan_status === 'done' && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      nativeButton={false}
+                      render={
+                        <Link
+                          to={`/projects/${encodeURIComponent(projectName ?? '')}/${encodeURIComponent(repo.type)}/${encodeURIComponent(repo.name)}/scans/${row.latest_scan_id}`}
+                        />
+                      }
+                    >
+                      <ShieldAlert className="mr-1.5 size-3.5" />
+                      View latest scan report
+                    </Button>
+                  )}
+                </div>
               </div>
             )}
           />

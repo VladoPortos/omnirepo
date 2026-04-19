@@ -2,6 +2,7 @@
  * Badge with severity color per 05-UI-SPEC semantic colors.
  */
 
+import type { ReactNode } from 'react';
 import { cn } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';
 
@@ -18,9 +19,11 @@ const severityStyles: Record<SeverityLevel, string> = {
 interface SeverityBadgeProps {
   severity: string;
   className?: string;
+  /** Override the rendered label. Useful for count chips like "3". */
+  children?: ReactNode;
 }
 
-export function SeverityBadge({ severity, className }: SeverityBadgeProps) {
+export function SeverityBadge({ severity, className, children }: SeverityBadgeProps) {
   const level = severity.toLowerCase() as SeverityLevel;
   const style = severityStyles[level] ?? severityStyles.unknown;
 
@@ -29,7 +32,7 @@ export function SeverityBadge({ severity, className }: SeverityBadgeProps) {
       variant="outline"
       className={cn(style, className)}
     >
-      {severity.charAt(0).toUpperCase() + severity.slice(1).toLowerCase()}
+      {children ?? severity.charAt(0).toUpperCase() + severity.slice(1).toLowerCase()}
     </Badge>
   );
 }

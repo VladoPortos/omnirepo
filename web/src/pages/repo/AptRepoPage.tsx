@@ -57,6 +57,7 @@ interface DebPackage {
   storage_pool_path: string;
   scan_status: string;
   severity_counts: Record<string, number>;
+  latest_scan_id?: number;
 }
 
 interface AptRepoPageProps {
@@ -149,6 +150,7 @@ export function AptRepoPage({ repo }: AptRepoPageProps) {
           storage_pool_path: String(e.storage_pool_path ?? ''),
           scan_status: String(e.scan_status ?? ''),
           severity_counts: counts,
+          latest_scan_id: row.latest_scan_id,
         };
       }),
     [contentRows],
@@ -380,6 +382,11 @@ export function AptRepoPage({ repo }: AptRepoPageProps) {
                   status: row.scan_status,
                   counts: row.severity_counts,
                 }}
+                scanReportURL={
+                  row.latest_scan_id
+                    ? `/projects/${encodeURIComponent(projectName ?? '')}/${encodeURIComponent(repo.type)}/${encodeURIComponent(repo.name)}/scans/${row.latest_scan_id}`
+                    : undefined
+                }
                 downloadURL={
                   row.storage_pool_path
                     ? `/${encodeURIComponent(projectName ?? '')}/deb/${encodeURIComponent(repo.name)}/${row.storage_pool_path}`

@@ -61,6 +61,7 @@ interface DockerTag {
   media_type: string;
   layer_count: number;
   severity_counts: Record<string, number>;
+  latest_scan_id?: number;
 }
 
 interface DockerRepoPageProps {
@@ -122,6 +123,7 @@ export function DockerRepoPage({ repo }: DockerRepoPageProps) {
         scan_severity: sev === 'scanning' || sev === 'failed' ? '' : sev,
         cosign_signed: false, // surfaced separately once cosign rows are joined
         pushed_at: row.uploaded_at,
+        latest_scan_id: row.latest_scan_id,
         media_type: String(extra.media_type ?? ''),
         layer_count: Number(extra.layer_count ?? 0),
         severity_counts:
@@ -416,6 +418,11 @@ export function DockerRepoPage({ repo }: DockerRepoPageProps) {
                     status: row.scan_status,
                     counts: row.severity_counts,
                   }}
+                  scanReportURL={
+                    row.latest_scan_id
+                      ? `/projects/${encodeURIComponent(projectName ?? '')}/${encodeURIComponent(repo.type)}/${encodeURIComponent(repo.name)}/scans/${row.latest_scan_id}`
+                      : undefined
+                  }
                 />
               );
             }}

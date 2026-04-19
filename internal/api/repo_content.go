@@ -106,6 +106,10 @@ type RepoContentEntry struct {
 	SizeBytes    int64          `json:"size_bytes"`
 	UploadedAt   string         `json:"uploaded_at"`
 	ScanSeverity string         `json:"scan_severity,omitempty"`
+	// LatestScanID is the id of the newest scan row for this artifact,
+	// omitted when the artifact has never been scanned. The UI uses it
+	// to deep-link to the standalone scan report page.
+	LatestScanID *int64         `json:"latest_scan_id,omitempty"`
 	Extra        map[string]any `json:"extra,omitempty"`
 }
 
@@ -282,7 +286,7 @@ func (d Deps) listRPMContent(r *http.Request, repoID, limit, offset int64) ([]Re
 		       rp.filename, rp.digest,
 		       COALESCE(rp.summary, ''), COALESCE(rp.license, ''),
 		       rp.uploaded_at,
-		       COALESCE(ls.status, ''), COALESCE(ls.severity_summary_json, '')
+		       ls.id, COALESCE(ls.status, ''), COALESCE(ls.severity_summary_json, '')
 		FROM rpm_packages rp` + fmtLatestScanJoin("rp.filename") + `
 		WHERE rp.repo_id=?
 		ORDER BY rp.name ASC, rp.version ASC, rp.release ASC
@@ -298,10 +302,11 @@ func (d Deps) listRPMContent(r *http.Request, repoID, limit, offset int64) ([]Re
 		var id int64
 		var name, version, release, arch, filename, digest, summary, license, uploadedAt string
 		var scanStatus, scanSummary string
+		var scanID sql.NullInt64
 		var size int64
 		if err := rows.Scan(&id, &name, &version, &release, &arch, &size,
 			&filename, &digest, &summary, &license, &uploadedAt,
-			&scanStatus, &scanSummary); err != nil {
+			&scanID, &scanStatus, &scanSummary); err != nil {
 			return nil, err
 		}
 		out = append(out, RepoContentEntry{
@@ -311,6 +316,7 @@ func (d Deps) listRPMContent(r *http.Request, repoID, limit, offset int64) ([]Re
 			SizeBytes:    size,
 			UploadedAt:   uploadedAt,
 			ScanSeverity: deriveScanSeverity(scanStatus, scanSummary),
+			LatestScanID: scanIDPtr(scanID),
 			Extra: map[string]any{
 				"release":         release,
 				"arch":            arch,
@@ -324,6 +330,17 @@ func (d Deps) listRPMContent(r *http.Request, repoID, limit, offset int64) ([]Re
 		})
 	}
 	return out, rows.Err()
+}
+
+// scanIDPtr converts a LEFT-JOINed NullInt64 latest-scan id into the
+// optional *int64 the API exposes. Returns nil when there is no
+// matching scan row.
+func scanIDPtr(n sql.NullInt64) *int64 {
+	if !n.Valid {
+		return nil
+	}
+	v := n.Int64
+	return &v
 }
 
 // fmtLatestScanJoin inserts the right artifact-id expression into the
@@ -354,7 +371,7 @@ func (d Deps) listDebContent(r *http.Request, repoID, limit, offset int64) ([]Re
 		       COALESCE(d.storage_pool_path, ''),
 		       COALESCE(d.maintainer, ''), COALESCE(d.depends, ''),
 		       d.uploaded_at,
-		       COALESCE(ls.status, ''), COALESCE(ls.severity_summary_json, '')
+		       ls.id, COALESCE(ls.status, ''), COALESCE(ls.severity_summary_json, '')
 		FROM deb_packages d
 		LEFT JOIN apt_suites s ON s.id = d.suite_id` + fmtLatestScanJoin("d.filename") + `
 		WHERE d.repo_id=?
@@ -371,10 +388,11 @@ func (d Deps) listDebContent(r *http.Request, repoID, limit, offset int64) ([]Re
 		var id int64
 		var pkg, version, arch, suite, component, section, filename, digest, poolPath, maintainer, depends, uploadedAt string
 		var scanStatus, scanSummary string
+		var scanID sql.NullInt64
 		var size int64
 		if err := rows.Scan(&id, &pkg, &version, &arch, &suite, &component, &section,
 			&size, &filename, &digest, &poolPath, &maintainer, &depends, &uploadedAt,
-			&scanStatus, &scanSummary); err != nil {
+			&scanID, &scanStatus, &scanSummary); err != nil {
 			return nil, err
 		}
 		out = append(out, RepoContentEntry{
@@ -384,6 +402,7 @@ func (d Deps) listDebContent(r *http.Request, repoID, limit, offset int64) ([]Re
 			SizeBytes:    size,
 			UploadedAt:   uploadedAt,
 			ScanSeverity: deriveScanSeverity(scanStatus, scanSummary),
+			LatestScanID: scanIDPtr(scanID),
 			Extra: map[string]any{
 				"architecture":      arch,
 				"suite":             suite,
@@ -406,7 +425,7 @@ func (d Deps) listPypiContent(r *http.Request, repoID, limit, offset int64) ([]R
 	query := `
 		SELECT pf.id, pf.project_normalized, pf.version, pf.filename, pf.kind,
 		       COALESCE(pf.requires_python, ''), pf.size_bytes, pf.uploaded_at,
-		       COALESCE(ls.status, ''), COALESCE(ls.severity_summary_json, '')
+		       ls.id, COALESCE(ls.status, ''), COALESCE(ls.severity_summary_json, '')
 		FROM pypi_files pf` + fmtLatestScanJoin("pf.filename") + `
 		WHERE pf.repo_id=?
 		ORDER BY pf.project_normalized ASC, pf.version ASC, pf.filename ASC
@@ -422,9 +441,10 @@ func (d Deps) listPypiContent(r *http.Request, repoID, limit, offset int64) ([]R
 		var id int64
 		var project, version, filename, kind, reqPy, uploadedAt string
 		var scanStatus, scanSummary string
+		var scanID sql.NullInt64
 		var size int64
 		if err := rows.Scan(&id, &project, &version, &filename, &kind, &reqPy, &size, &uploadedAt,
-			&scanStatus, &scanSummary); err != nil {
+			&scanID, &scanStatus, &scanSummary); err != nil {
 			return nil, err
 		}
 		out = append(out, RepoContentEntry{
@@ -434,6 +454,7 @@ func (d Deps) listPypiContent(r *http.Request, repoID, limit, offset int64) ([]R
 			SizeBytes:    size,
 			UploadedAt:   uploadedAt,
 			ScanSeverity: deriveScanSeverity(scanStatus, scanSummary),
+			LatestScanID: scanIDPtr(scanID),
 			Extra: map[string]any{
 				"filename":        filename,
 				"kind":            kind,
@@ -450,7 +471,7 @@ func (d Deps) listHelmContent(r *http.Request, repoID, limit, offset int64) ([]R
 	query := `
 		SELECT hc.id, hc.name, hc.version, hc.app_version, hc.description,
 		       hc.size_bytes, hc.filename, hc.uploaded_at,
-		       COALESCE(ls.status, ''), COALESCE(ls.severity_summary_json, '')
+		       ls.id, COALESCE(ls.status, ''), COALESCE(ls.severity_summary_json, '')
 		FROM helm_charts hc` + fmtLatestScanJoin("hc.filename") + `
 		WHERE hc.repo_id=?
 		ORDER BY hc.name ASC, hc.version ASC
@@ -466,9 +487,10 @@ func (d Deps) listHelmContent(r *http.Request, repoID, limit, offset int64) ([]R
 		var id int64
 		var name, version, appVersion, description, filename, uploadedAt string
 		var scanStatus, scanSummary string
+		var scanID sql.NullInt64
 		var size int64
 		if err := rows.Scan(&id, &name, &version, &appVersion, &description, &size, &filename, &uploadedAt,
-			&scanStatus, &scanSummary); err != nil {
+			&scanID, &scanStatus, &scanSummary); err != nil {
 			return nil, err
 		}
 		out = append(out, RepoContentEntry{
@@ -478,6 +500,7 @@ func (d Deps) listHelmContent(r *http.Request, repoID, limit, offset int64) ([]R
 			SizeBytes:    size,
 			UploadedAt:   uploadedAt,
 			ScanSeverity: deriveScanSeverity(scanStatus, scanSummary),
+			LatestScanID: scanIDPtr(scanID),
 			Extra: map[string]any{
 				"app_version":     appVersion,
 				"description":     description,
@@ -538,7 +561,7 @@ func (d Deps) listDockerContent(r *http.Request, repoID, limit, offset int64) ([
 		       ` + dockerImageSizeExpr + ` AS total_size,
 		       COALESCE(` + dockerLayerCountExpr + `, 0) AS layer_count,
 		       dt.updated_at,
-		       COALESCE(ls.status, ''), COALESCE(ls.severity_summary_json, '')
+		       ls.id, COALESCE(ls.status, ''), COALESCE(ls.severity_summary_json, '')
 		FROM docker_tags dt
 		LEFT JOIN docker_manifests dm ON dm.repo_id = dt.repo_id AND dm.digest = dt.digest
 		` + fmtLatestScanJoin("dt.digest") + `
@@ -557,8 +580,9 @@ func (d Deps) listDockerContent(r *http.Request, repoID, limit, offset int64) ([
 		var size sql.NullInt64
 		var layerCount sql.NullInt64
 		var scanStatus, scanSummary string
+		var scanID sql.NullInt64
 		if err := rows.Scan(&image, &tag, &digest, &mediaType, &size, &layerCount, &updatedAt,
-			&scanStatus, &scanSummary); err != nil {
+			&scanID, &scanStatus, &scanSummary); err != nil {
 			return nil, err
 		}
 		name := tag
@@ -571,6 +595,7 @@ func (d Deps) listDockerContent(r *http.Request, repoID, limit, offset int64) ([
 			SizeBytes:    size.Int64,
 			UploadedAt:   updatedAt,
 			ScanSeverity: deriveScanSeverity(scanStatus, scanSummary),
+			LatestScanID: scanIDPtr(scanID),
 			Extra: map[string]any{
 				"image":           image,
 				"tag":             tag,
@@ -588,7 +613,7 @@ func (d Deps) listDockerContent(r *http.Request, repoID, limit, offset int64) ([
 func (d Deps) listRawContent(r *http.Request, repoID, limit, offset int64) ([]RepoContentEntry, error) {
 	query := `
 		SELECT rf.path, rf.size_bytes, COALESCE(rf.mime, ''), COALESCE(rf.sha256, ''), rf.modified,
-		       COALESCE(ls.status, ''), COALESCE(ls.severity_summary_json, '')
+		       ls.id, COALESCE(ls.status, ''), COALESCE(ls.severity_summary_json, '')
 		FROM raw_files rf` + fmtLatestScanJoin("rf.path") + `
 		WHERE rf.repo_id=?
 		ORDER BY rf.path ASC
@@ -603,9 +628,10 @@ func (d Deps) listRawContent(r *http.Request, repoID, limit, offset int64) ([]Re
 	for rows.Next() {
 		var path, mime, sha string
 		var scanStatus, scanSummary string
+		var scanID sql.NullInt64
 		var size int64
 		var modified sql.NullTime
-		if err := rows.Scan(&path, &size, &mime, &sha, &modified, &scanStatus, &scanSummary); err != nil {
+		if err := rows.Scan(&path, &size, &mime, &sha, &modified, &scanID, &scanStatus, &scanSummary); err != nil {
 			return nil, err
 		}
 		uploaded := ""
@@ -619,6 +645,7 @@ func (d Deps) listRawContent(r *http.Request, repoID, limit, offset int64) ([]Re
 			SizeBytes:    size,
 			UploadedAt:   uploaded,
 			ScanSeverity: deriveScanSeverity(scanStatus, scanSummary),
+			LatestScanID: scanIDPtr(scanID),
 			Extra: map[string]any{
 				"mime":            mime,
 				"sha256":          sha,

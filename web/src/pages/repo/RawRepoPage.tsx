@@ -52,6 +52,7 @@ interface RawFileEntry {
   sha256: string;
   scan_status: string;
   severity_counts: Record<string, number>;
+  latest_scan_id?: number;
 }
 
 interface RawRepoPageProps {
@@ -121,6 +122,7 @@ export function RawRepoPage({ repo }: RawRepoPageProps) {
           scan_status: String(e.scan_status ?? ''),
           severity_counts:
             (e.severity_counts as Record<string, number>) ?? {},
+          latest_scan_id: row.latest_scan_id,
         });
       } else {
         const folder = rest.slice(0, slash);
@@ -400,6 +402,11 @@ export function RawRepoPage({ repo }: RawRepoPageProps) {
                   status: row.scan_status,
                   counts: row.severity_counts,
                 }}
+                scanReportURL={
+                  row.latest_scan_id
+                    ? `/projects/${encodeURIComponent(projectName ?? '')}/${encodeURIComponent(repo.type)}/${encodeURIComponent(repo.name)}/scans/${row.latest_scan_id}`
+                    : undefined
+                }
                 downloadURL={`/${encodeURIComponent(projectName ?? '')}/raw/${encodeURIComponent(repo.name)}/${row.path}`}
                 downloadLabel="Download"
               />

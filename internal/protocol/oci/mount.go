@@ -140,10 +140,18 @@ func (h *Handler) blobMount(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusCreated)
 }
 
-// parseFromRepo accepts either "<project>/<type>/<repo>" (canonical) or
-// "<project>/<repo>" (shorthand: type inferred as "docker", matching the
-// OCI client convention of always pushing docker repos). Returns ok=false
-// for any other shape.
+// parseFromRepo accepts the shapes emitted by `docker push` when it tries to
+// cross-mount a blob it knows is already present on this registry:
+//
+//   - "<project>/<repo>"                  — shorthand, type inferred docker
+//   - "<project>/<type>/<repo>"           — canonical 3-segment
+//   - "<project>/<type>/<repo>/<image>"   — 4-segment (docker push derives
+//     this from the PUSH target URL, which the OCI router matches at
+//     /v2/{project}/{type}/{repo}/{image}). The <image> segment is below
+//     repo-granularity for OmniRepo — the blob lives at repo level — so we
+//     drop it and resolve the repo from the first three segments.
+//
+// Anything else returns ok=false.
 func parseFromRepo(raw string) (project, repoType, repoName string, ok bool) {
 	if raw == "" {
 		return "", "", "", false
@@ -159,8 +167,11 @@ func parseFromRepo(raw string) (project, repoType, repoName string, ok bool) {
 			return "", "", "", false
 		}
 		return parts[0], "docker", parts[1], true
-	case 3:
+	case 3, 4:
 		if parts[0] == "" || parts[1] == "" || parts[2] == "" {
+			return "", "", "", false
+		}
+		if len(parts) == 4 && parts[3] == "" {
 			return "", "", "", false
 		}
 		return parts[0], parts[1], parts[2], true

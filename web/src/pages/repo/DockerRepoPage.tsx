@@ -8,6 +8,7 @@ import { useParams } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Download,
+  Loader2,
   RefreshCw,
   Trash2,
   ShieldCheck,
@@ -42,8 +43,8 @@ import {
 } from '@/components/common/ArtifactDetail';
 import { RepoPageLayout } from './RepoPageLayout';
 import { formatBytes, formatDate } from '@/lib/format';
-import { useMe, useRepoContent, useRepoScans } from '@/api/queries';
-import { api, envelopeFromError, type ApiErrorEnvelope } from '@/api/client';
+import { useMe, useRepoContent, useRepoScans, useRescanArtifact } from '@/api/queries';
+import { api, ApiError, envelopeFromError, type ApiErrorEnvelope } from '@/api/client';
 import { ErrorEnvelopeRenderer } from '@/components/common/ErrorEnvelope';
 import type { Repo } from '@/api/types';
 
@@ -133,6 +134,28 @@ export function DockerRepoPage({ repo }: DockerRepoPageProps) {
   const scansCount = scansData?.length ?? 0;
   const [rescanError, setRescanError] = useState<ApiErrorEnvelope | null>(null);
   const qc = useQueryClient();
+  // Per-row rescan. Docker keys on the manifest digest — docker_tags has no
+  // integer PK so listDockerContent returns id=0 for every row; the REST
+  // endpoint accepts a URL-encoded digest (see commits 6e998b2 + f2a1523).
+  const rescanRow = useRescanArtifact(projectName ?? '', 'docker', repo.name);
+  const [rescanningDigest, setRescanningDigest] = useState<string | null>(null);
+  const handleRescanRow = async (digest: string) => {
+    setRescanningDigest(digest);
+    try {
+      await rescanRow.mutateAsync(digest);
+      toast.success('Scan queued.');
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 412) {
+        toast.error('Trivy database is not installed. See /admin/trivy.');
+      } else if (err instanceof ApiError) {
+        toast.error(err.detail || 'Rescan failed.');
+      } else {
+        toast.error('Rescan failed.');
+      }
+    } finally {
+      setRescanningDigest(null);
+    }
+  };
   const rescanMutation = useMutation({
     mutationFn: async () => {
       if (!artifactRows || artifactRows.length === 0) {
@@ -243,6 +266,31 @@ export function DockerRepoPage({ repo }: DockerRepoPageProps) {
         ) : (
           <span title="Unsigned"><ShieldX className="size-4 text-muted-foreground" /></span>
         ),
+    },
+    {
+      id: 'scan_action',
+      name: '',
+      className: 'w-28 text-right',
+      render: (row) => {
+        const busy =
+          rescanningDigest === row.digest || row.scan_status === 'running';
+        return (
+          <Button
+            variant="outline"
+            size="sm"
+            title="Queue a fresh Trivy scan for this image"
+            onClick={() => handleRescanRow(row.digest)}
+            disabled={busy || !row.digest}
+          >
+            {busy ? (
+              <Loader2 className="mr-1.5 size-3.5 animate-spin" />
+            ) : (
+              <RefreshCw className="mr-1.5 size-3.5" />
+            )}
+            {busy ? 'Rescanning…' : 'Rescan'}
+          </Button>
+        );
+      },
     },
     {
       id: 'actions',

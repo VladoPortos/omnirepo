@@ -44,6 +44,7 @@ type SyncDeps struct {
 	Repos      *metadata.ReposRepo
 	Projects   *metadata.ProjectsRepo
 	Creds      *metadata.UpstreamCredsRepo
+	Scans      *metadata.ScansRepo
 	Audit      audit.Logger
 	Coalescer  *regen.Registry
 	HTTPClient *http.Client
@@ -279,6 +280,11 @@ func (h *SyncHandler) fetchAndCommit(ctx context.Context, projectName string, re
 		}
 		if err := metadata.IndexHelm(ctx, tx, repo.ID, chart.Name, chart.Version, chart.AppVersion, chart.Description); err != nil {
 			return err
+		}
+		if repo.AutoScan && h.deps.Scans != nil {
+			if _, err := h.deps.Scans.Enqueue(ctx, tx, repo.ID, "helm", ent.Filename); err != nil {
+				return err
+			}
 		}
 		return h.deps.Repos.SetMetadataState(ctx, tx, repo.ID, metadata.MetadataStateDirty)
 	}); err != nil {

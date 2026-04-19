@@ -186,7 +186,7 @@ func (p *PromoteREST) Handle(w http.ResponseWriter, r *http.Request) {
 		_, err := p.h.writeManifestWithRefcounts(
 			r.Context(), tx, dstRepo.ID, repoPath, "", req.DstTag,
 			digest, srcManifest.MediaType, srcManifest.Body,
-			refs, isIndex, false, // autoScan deliberately false for promote (already scanned at src)
+			refs, isIndex, dstRepo.AutoScan,
 		)
 		return err
 	})

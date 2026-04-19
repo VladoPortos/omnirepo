@@ -51,6 +51,7 @@ type SyncDeps struct {
 	Repos       *metadata.ReposRepo
 	Projects    *metadata.ProjectsRepo
 	Creds       *metadata.UpstreamCredsRepo
+	Scans       *metadata.ScansRepo
 	Audit       audit.Logger
 	Coalescer   *regen.Registry
 	HTTPClient  *http.Client
@@ -304,6 +305,11 @@ func (h *SyncHandler) fetchAndCommit(ctx context.Context, projectName string, re
 		}
 		if err := metadata.IndexRPM(ctx, tx, repo.ID, parsed.Name, parsed.Version, parsed.Arch, parsed.Summary); err != nil {
 			return err
+		}
+		if repo.AutoScan && h.deps.Scans != nil {
+			if _, err := h.deps.Scans.Enqueue(ctx, tx, repo.ID, "rpm", ent.Filename); err != nil {
+				return err
+			}
 		}
 		// NOTE: per-file Insert intentionally does NOT call coalescer.Kick.
 		// The single end-of-batch kick happens in Handle after parse+wait.

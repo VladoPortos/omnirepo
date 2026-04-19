@@ -49,6 +49,7 @@ type SyncDeps struct {
 	Repos      *metadata.ReposRepo
 	Projects   *metadata.ProjectsRepo
 	Creds      *metadata.UpstreamCredsRepo
+	Scans      *metadata.ScansRepo
 	Audit      audit.Logger
 	Coalescer  *regen.Registry
 	HTTPClient *http.Client
@@ -303,6 +304,11 @@ func (h *SyncHandler) fetchAndCommit(ctx context.Context, projectName string, re
 		}
 		if err := metadata.IndexPyPI(ctx, tx, repo.ID, normalizedProject, version, f.RequiresPython, ""); err != nil {
 			return err
+		}
+		if repo.AutoScan && h.deps.Scans != nil {
+			if _, err := h.deps.Scans.Enqueue(ctx, tx, repo.ID, "pypi", f.Filename); err != nil {
+				return err
+			}
 		}
 		return h.deps.Repos.SetMetadataState(ctx, tx, repo.ID, metadata.MetadataStateDirty)
 	}); err != nil {

@@ -50,6 +50,7 @@ type SyncDeps struct {
 	Repos       *metadata.ReposRepo
 	Projects    *metadata.ProjectsRepo
 	Creds       *metadata.UpstreamCredsRepo
+	Scans       *metadata.ScansRepo
 	Audit       audit.Logger
 	Coalescer   *regen.Registry
 	HTTPClient  *http.Client
@@ -302,6 +303,11 @@ func (h *SyncHandler) fetchAndCommit(ctx context.Context, projectName string, re
 		}
 		if err := metadata.IndexDEB(ctx, tx, repo.ID, ent.Control.Package, ent.Control.Version, ent.Control.Architecture, ent.Control.Description); err != nil {
 			return err
+		}
+		if repo.AutoScan && h.deps.Scans != nil {
+			if _, err := h.deps.Scans.Enqueue(ctx, tx, repo.ID, "deb", ent.Filename); err != nil {
+				return err
+			}
 		}
 		return h.deps.Repos.SetMetadataState(ctx, tx, repo.ID, metadata.MetadataStateDirty)
 	}); err != nil {

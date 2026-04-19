@@ -50,12 +50,13 @@ func (d syncDeps) wireSync() *api.SyncRESTAdapter {
 
 	reposRepo := metadata.NewReposRepo(d.db)
 	projectsRepo := metadata.NewProjectsRepo(d.db)
+	scansRepo := metadata.NewScansRepo(d.db)
 
 	rpmSync := rpm.NewSyncHandler(rpm.SyncDeps{
 		DB: d.db, Path: pathStore,
 		RPMPackages: metadata.NewRPMPackagesRepo(d.db),
 		Repos:       reposRepo, Projects: projectsRepo,
-		Creds: d.creds, Audit: d.auditLogger,
+		Creds: d.creds, Scans: scansRepo, Audit: d.auditLogger,
 		Coalescer: d.rpmRegistry, HTTPClient: httpClient,
 		RepoRoot: repoRoot, Cfg: d.cfg.Sync,
 	})
@@ -64,7 +65,7 @@ func (d syncDeps) wireSync() *api.SyncRESTAdapter {
 		DEBPackages: metadata.NewDEBPackagesRepo(d.db),
 		AptSuites:   metadata.NewAptSuitesRepo(d.db),
 		Repos:       reposRepo, Projects: projectsRepo,
-		Creds: d.creds, Audit: d.auditLogger,
+		Creds: d.creds, Scans: scansRepo, Audit: d.auditLogger,
 		Coalescer: d.debRegistry, HTTPClient: httpClient,
 		RepoRoot: repoRoot, Cfg: d.cfg.Sync,
 	})
@@ -72,7 +73,7 @@ func (d syncDeps) wireSync() *api.SyncRESTAdapter {
 		DB: d.db, Path: pathStore,
 		PyPIFiles: metadata.NewPyPIFilesRepo(d.db),
 		Repos:     reposRepo, Projects: projectsRepo,
-		Creds: d.creds, Audit: d.auditLogger,
+		Creds: d.creds, Scans: scansRepo, Audit: d.auditLogger,
 		Coalescer: d.pypiRegistry, HTTPClient: httpClient,
 		RepoRoot: repoRoot, Cfg: d.cfg.Sync,
 	})
@@ -80,7 +81,7 @@ func (d syncDeps) wireSync() *api.SyncRESTAdapter {
 		DB: d.db, Path: pathStore,
 		HelmCharts: metadata.NewHelmChartsRepo(d.db),
 		Repos:      reposRepo, Projects: projectsRepo,
-		Creds: d.creds, Audit: d.auditLogger,
+		Creds: d.creds, Scans: scansRepo, Audit: d.auditLogger,
 		Coalescer: d.helmRegistry, HTTPClient: httpClient,
 		RepoRoot: repoRoot, Cfg: d.cfg.Sync,
 	})

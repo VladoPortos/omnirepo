@@ -13,7 +13,6 @@ import {
   ShieldCheck,
   ShieldX,
   Tag,
-  Layers,
   ArrowRightLeft,
   Terminal,
   ShieldAlert,
@@ -37,6 +36,10 @@ import { InlineSearch } from '@/components/common/InlineSearch';
 import { CopyButton } from '@/components/common/CopyButton';
 import { EmptyState } from '@/components/common/EmptyState';
 import { SnippetList } from '@/components/common/SnippetList';
+import {
+  ArtifactDetail,
+  ArtifactDigest,
+} from '@/components/common/ArtifactDetail';
 import { RepoPageLayout } from './RepoPageLayout';
 import { formatBytes, formatDate } from '@/lib/format';
 import { useMe, useRepoContent, useRepoScans } from '@/api/queries';
@@ -54,6 +57,9 @@ interface DockerTag {
   scan_severity: string;
   cosign_signed: boolean;
   pushed_at: string;
+  media_type: string;
+  layer_count: number;
+  severity_counts: Record<string, number>;
 }
 
 interface DockerRepoPageProps {
@@ -115,6 +121,10 @@ export function DockerRepoPage({ repo }: DockerRepoPageProps) {
         scan_severity: sev === 'scanning' || sev === 'failed' ? '' : sev,
         cosign_signed: false, // surfaced separately once cosign rows are joined
         pushed_at: row.uploaded_at,
+        media_type: String(extra.media_type ?? ''),
+        layer_count: Number(extra.layer_count ?? 0),
+        severity_counts:
+          (extra.severity_counts as Record<string, number>) ?? {},
       };
     });
   }, [artifactRows]);
@@ -323,18 +333,33 @@ export function DockerRepoPage({ repo }: DockerRepoPageProps) {
             isRowExpanded={(row) =>
               expandedTag === `${row.image}:${row.tag}`
             }
-            renderExpanded={(row) => (
-              <div>
-                <div className="flex items-center gap-2 text-sm font-semibold">
-                  <Layers className="size-4" />
-                  Layer breakdown for{' '}
-                  {row.image ? `${row.image}:${row.tag}` : row.tag}
-                </div>
-                <p className="mt-2 text-xs text-muted-foreground">
-                  Layer details will be populated from the OCI manifest API.
-                </p>
-              </div>
-            )}
+            renderExpanded={(row) => {
+              const ref = row.image ? `${row.image}:${row.tag}` : row.tag;
+              return (
+                <ArtifactDetail
+                  title={`${hostname}/${projectName}/${repo.type}/${repo.name}/${ref}`}
+                  subtitle={row.media_type}
+                  sizeBytes={row.size}
+                  uploadedAt={row.pushed_at}
+                  fields={[
+                    { label: 'Image', value: row.image || <em>(unset)</em> },
+                    { label: 'Tag', value: row.tag },
+                    {
+                      label: 'Digest',
+                      value: <ArtifactDigest value={row.digest} />,
+                    },
+                    {
+                      label: 'Layers',
+                      value: row.layer_count.toLocaleString(),
+                    },
+                  ]}
+                  severity={{
+                    status: row.scan_status,
+                    counts: row.severity_counts,
+                  }}
+                />
+              );
+            }}
           />
         )}
       </div>

@@ -86,24 +86,35 @@ func (h *Handler) resolveArtifactFileOnDisk(ctx context.Context, kind string, re
 	return "", fmt.Errorf("unknown package kind %q", kind)
 }
 
-// resolveDebPoolPath reconstructs the pool-relative path for one .deb row.
-// Returns paths like `pool/main/h/hello/hello_2.10-3_amd64.deb`.
+// resolveDebPoolPath returns the pool-relative path for one .deb row.
+//
+// F-T6 follow-up: prefer the stored `storage_pool_path` column (the exact
+// path the client PUT to, e.g. pool/main/libz/libzstd/zstd_….deb). The
+// synthesised layout below collapses source-package information — a
+// `zstd` binary from the `libzstd` source package lives at
+// pool/main/libz/libzstd/, not pool/main/z/zstd/ — so the materializer
+// looked at the wrong path and the scan failed "file missing on disk"
+// forever. Falls back to the legacy synthesis when the column is empty
+// (pre-migration rows that were never re-PUT).
 func (h *Handler) resolveDebPoolPath(ctx context.Context, repoID int64, filename string) (string, error) {
 	if h.deps.DB == nil {
 		return "", errors.New("db not wired")
 	}
-	var pkg, component string
+	var pkg, component, storagePoolPath string
 	err := h.deps.DB.Reader.QueryRowContext(ctx, `
-		SELECT d.package, COALESCE(s.component, 'main')
+		SELECT d.package, COALESCE(s.component, 'main'), COALESCE(d.storage_pool_path, '')
 		FROM deb_packages d
 		LEFT JOIN apt_suites s ON s.id = d.suite_id
 		WHERE d.repo_id = ? AND d.filename = ?
-	`, repoID, filename).Scan(&pkg, &component)
+	`, repoID, filename).Scan(&pkg, &component, &storagePoolPath)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", fmt.Errorf("deb package %q not found in repo %d", filename, repoID)
 	}
 	if err != nil {
 		return "", fmt.Errorf("deb pool path lookup: %w", err)
+	}
+	if storagePoolPath != "" {
+		return storagePoolPath, nil
 	}
 	letter := debPoolLetter(pkg)
 	return filepath.Join("pool", component, letter, pkg, filename), nil

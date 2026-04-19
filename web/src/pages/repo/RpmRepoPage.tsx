@@ -6,7 +6,7 @@
 import { useState, useMemo } from 'react';
 import { useParams } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { Upload, ExternalLink, Terminal, ShieldAlert, RefreshCw, Loader2 } from 'lucide-react';
+import { ExternalLink, Terminal, ShieldAlert, RefreshCw, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -21,6 +21,10 @@ import {
 } from '@/components/ui/dialog';
 import { DataTable, type ColumnDef, type SortState } from '@/components/common/DataTable';
 import { ContentScanBadge } from '@/components/common/ContentScanBadge';
+import {
+  ArtifactDetail,
+  ArtifactDigest,
+} from '@/components/common/ArtifactDetail';
 import { InlineSearch } from '@/components/common/InlineSearch';
 import { Dropzone } from '@/components/common/Dropzone';
 import { EmptyState } from '@/components/common/EmptyState';
@@ -41,6 +45,12 @@ interface RpmPackage {
   size: number;
   scan_severity: string;
   uploaded_at: string;
+  filename: string;
+  digest: string;
+  summary: string;
+  license: string;
+  scan_status: string;
+  severity_counts: Record<string, number>;
 }
 
 interface RpmRepoPageProps {
@@ -120,16 +130,26 @@ export function RpmRepoPage({ repo }: RpmRepoPageProps) {
   });
   const packages: RpmPackage[] = useMemo(
     () =>
-      contentRows.map((row) => ({
-        id: row.id ?? 0,
-        name: row.name,
-        version: row.version ?? '',
-        release: String(row.extra?.release ?? ''),
-        arch: String(row.extra?.arch ?? ''),
-        size: row.size_bytes,
-        scan_severity: row.scan_severity ?? '',
-        uploaded_at: row.uploaded_at,
-      })),
+      contentRows.map((row) => {
+        const e = (row.extra ?? {}) as Record<string, unknown>;
+        const counts = (e.severity_counts ?? {}) as Record<string, number>;
+        return {
+          id: row.id ?? 0,
+          name: row.name,
+          version: row.version ?? '',
+          release: String(e.release ?? ''),
+          arch: String(e.arch ?? ''),
+          size: row.size_bytes,
+          scan_severity: row.scan_severity ?? '',
+          uploaded_at: row.uploaded_at,
+          filename: String(e.filename ?? ''),
+          digest: String(e.digest ?? ''),
+          summary: String(e.summary ?? ''),
+          license: String(e.license ?? ''),
+          scan_status: String(e.scan_status ?? ''),
+          severity_counts: counts,
+        };
+      }),
     [contentRows],
   );
 
@@ -277,18 +297,33 @@ export function RpmRepoPage({ repo }: RpmRepoPageProps) {
               // floating at the bottom of the list.
               isRowExpanded={(row) => selectedPkg?.id === row.id}
               renderExpanded={(row) => (
-                <div className="space-y-2">
-                  <h4 className="font-semibold">
-                    {row.name}-{row.version}-{row.release}.{row.arch}
-                  </h4>
-                  <p className="text-sm text-muted-foreground">
-                    Package metadata and scan results will be displayed here.
-                  </p>
-                  <Button variant="outline" size="sm">
-                    <Upload className="mr-1.5 size-4" />
-                    Download RPM
-                  </Button>
-                </div>
+                <ArtifactDetail
+                  title={`${row.name}-${row.version}-${row.release}.${row.arch}`}
+                  subtitle={row.summary || undefined}
+                  sizeBytes={row.size}
+                  uploadedAt={row.uploaded_at}
+                  fields={[
+                    { label: 'Filename', value: row.filename },
+                    { label: 'Arch', value: row.arch },
+                    {
+                      label: 'Digest',
+                      value: <ArtifactDigest value={row.digest} />,
+                    },
+                    ...(row.license
+                      ? [{ label: 'License', value: row.license }]
+                      : []),
+                  ]}
+                  severity={{
+                    status: row.scan_status,
+                    counts: row.severity_counts,
+                  }}
+                  downloadURL={
+                    row.filename
+                      ? `/${encodeURIComponent(projectName ?? '')}/rpm/${encodeURIComponent(repo.name)}/packages/${encodeURIComponent(row.filename)}`
+                      : undefined
+                  }
+                  downloadLabel="Download RPM"
+                />
               )}
             />
             {/* F-T18: pagination footer. "Showing N of M" + Load more. Filter

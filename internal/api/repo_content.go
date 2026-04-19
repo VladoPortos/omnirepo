@@ -25,6 +25,28 @@ import (
 	"github.com/dxc-internal/omnirepo/internal/auth"
 )
 
+// severityCounts parses the Trivy summary JSON into an explicit
+// {critical,high,medium,low} map. Returned as map[string]int64 so the JSON
+// serialisation the frontend consumes is predictable regardless of JSON
+// key ordering or missing fields.
+func severityCounts(summaryJSON string) map[string]int64 {
+	var s struct {
+		Critical int64 `json:"critical"`
+		High     int64 `json:"high"`
+		Medium   int64 `json:"medium"`
+		Low      int64 `json:"low"`
+	}
+	if summaryJSON != "" {
+		_ = json.Unmarshal([]byte(summaryJSON), &s)
+	}
+	return map[string]int64{
+		"critical": s.Critical,
+		"high":     s.High,
+		"medium":   s.Medium,
+		"low":      s.Low,
+	}
+}
+
 // deriveScanSeverity maps the latest scan row (status + severity summary
 // JSON) onto the single string the content table renders:
 //
@@ -257,7 +279,9 @@ func (d Deps) listRPMContent(r *http.Request, repoID, limit, offset int64) ([]Re
 	// where Enqueue gets called with res.filename.
 	query := `
 		SELECT rp.id, rp.name, rp.version, rp.release, rp.arch, rp.size_bytes,
-		       rp.filename, rp.uploaded_at,
+		       rp.filename, rp.digest,
+		       COALESCE(rp.summary, ''), COALESCE(rp.license, ''),
+		       rp.uploaded_at,
 		       COALESCE(ls.status, ''), COALESCE(ls.severity_summary_json, '')
 		FROM rpm_packages rp` + fmtLatestScanJoin("rp.filename") + `
 		WHERE rp.repo_id=?
@@ -272,10 +296,11 @@ func (d Deps) listRPMContent(r *http.Request, repoID, limit, offset int64) ([]Re
 	var out []RepoContentEntry
 	for rows.Next() {
 		var id int64
-		var name, version, release, arch, filename, uploadedAt string
+		var name, version, release, arch, filename, digest, summary, license, uploadedAt string
 		var scanStatus, scanSummary string
 		var size int64
-		if err := rows.Scan(&id, &name, &version, &release, &arch, &size, &filename, &uploadedAt,
+		if err := rows.Scan(&id, &name, &version, &release, &arch, &size,
+			&filename, &digest, &summary, &license, &uploadedAt,
 			&scanStatus, &scanSummary); err != nil {
 			return nil, err
 		}
@@ -287,9 +312,14 @@ func (d Deps) listRPMContent(r *http.Request, repoID, limit, offset int64) ([]Re
 			UploadedAt:   uploadedAt,
 			ScanSeverity: deriveScanSeverity(scanStatus, scanSummary),
 			Extra: map[string]any{
-				"release":  release,
-				"arch":     arch,
-				"filename": filename,
+				"release":         release,
+				"arch":            arch,
+				"filename":        filename,
+				"digest":          digest,
+				"summary":         summary,
+				"license":         license,
+				"scan_status":     scanStatus,
+				"severity_counts": severityCounts(scanSummary),
 			},
 		})
 	}
@@ -320,7 +350,10 @@ func (d Deps) listDebContent(r *http.Request, repoID, limit, offset int64) ([]Re
 	query := `
 		SELECT d.id, d.package, d.version, d.architecture,
 		       COALESCE(s.suite, ''), COALESCE(s.component, ''), COALESCE(d.section, ''),
-		       d.size_bytes, d.filename, d.uploaded_at,
+		       d.size_bytes, d.filename, d.digest,
+		       COALESCE(d.storage_pool_path, ''),
+		       COALESCE(d.maintainer, ''), COALESCE(d.depends, ''),
+		       d.uploaded_at,
 		       COALESCE(ls.status, ''), COALESCE(ls.severity_summary_json, '')
 		FROM deb_packages d
 		LEFT JOIN apt_suites s ON s.id = d.suite_id` + fmtLatestScanJoin("d.filename") + `
@@ -336,11 +369,12 @@ func (d Deps) listDebContent(r *http.Request, repoID, limit, offset int64) ([]Re
 	var out []RepoContentEntry
 	for rows.Next() {
 		var id int64
-		var pkg, version, arch, suite, component, section, filename, uploadedAt string
+		var pkg, version, arch, suite, component, section, filename, digest, poolPath, maintainer, depends, uploadedAt string
 		var scanStatus, scanSummary string
 		var size int64
 		if err := rows.Scan(&id, &pkg, &version, &arch, &suite, &component, &section,
-			&size, &filename, &uploadedAt, &scanStatus, &scanSummary); err != nil {
+			&size, &filename, &digest, &poolPath, &maintainer, &depends, &uploadedAt,
+			&scanStatus, &scanSummary); err != nil {
 			return nil, err
 		}
 		out = append(out, RepoContentEntry{
@@ -351,11 +385,17 @@ func (d Deps) listDebContent(r *http.Request, repoID, limit, offset int64) ([]Re
 			UploadedAt:   uploadedAt,
 			ScanSeverity: deriveScanSeverity(scanStatus, scanSummary),
 			Extra: map[string]any{
-				"architecture": arch,
-				"suite":        suite,
-				"component":    component,
-				"section":      section,
-				"filename":     filename,
+				"architecture":      arch,
+				"suite":             suite,
+				"component":         component,
+				"section":           section,
+				"filename":          filename,
+				"digest":            digest,
+				"storage_pool_path": poolPath,
+				"maintainer":        maintainer,
+				"depends":           depends,
+				"scan_status":       scanStatus,
+				"severity_counts":   severityCounts(scanSummary),
 			},
 		})
 	}
@@ -483,9 +523,16 @@ func (d Deps) listDockerContent(r *http.Request, repoID, limit, offset int64) ([
 			JOIN docker_blobs db ON db.digest = json_extract(jl.value, '$.digest')
 		), 0)
 	)`
+	// dockerLayerCountExpr returns the number of layers referenced by a
+	// manifest body. Returns 0 when the body is missing or has no layers
+	// array (e.g., an empty image or a malformed manifest).
+	const dockerLayerCountExpr = `(
+		SELECT COUNT(*) FROM json_each(dm.body, '$.layers')
+	)`
 	query := `
 		SELECT dt.image, dt.tag, dt.digest, dm.media_type,
 		       ` + dockerImageSizeExpr + ` AS total_size,
+		       COALESCE(` + dockerLayerCountExpr + `, 0) AS layer_count,
 		       dt.updated_at,
 		       COALESCE(ls.status, ''), COALESCE(ls.severity_summary_json, '')
 		FROM docker_tags dt
@@ -504,8 +551,9 @@ func (d Deps) listDockerContent(r *http.Request, repoID, limit, offset int64) ([
 	for rows.Next() {
 		var image, tag, digest, mediaType, updatedAt string
 		var size sql.NullInt64
+		var layerCount sql.NullInt64
 		var scanStatus, scanSummary string
-		if err := rows.Scan(&image, &tag, &digest, &mediaType, &size, &updatedAt,
+		if err := rows.Scan(&image, &tag, &digest, &mediaType, &size, &layerCount, &updatedAt,
 			&scanStatus, &scanSummary); err != nil {
 			return nil, err
 		}
@@ -520,10 +568,13 @@ func (d Deps) listDockerContent(r *http.Request, repoID, limit, offset int64) ([
 			UploadedAt:   updatedAt,
 			ScanSeverity: deriveScanSeverity(scanStatus, scanSummary),
 			Extra: map[string]any{
-				"image":      image,
-				"tag":        tag,
-				"digest":     digest,
-				"media_type": mediaType,
+				"image":           image,
+				"tag":             tag,
+				"digest":          digest,
+				"media_type":      mediaType,
+				"layer_count":     layerCount.Int64,
+				"scan_status":     scanStatus,
+				"severity_counts": severityCounts(scanSummary),
 			},
 		})
 	}

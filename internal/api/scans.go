@@ -27,6 +27,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -216,6 +217,14 @@ func (d Deps) resolveArtifactRepo(w http.ResponseWriter, r *http.Request) (*meta
 	repoType := chi.URLParam(r, "type")
 	repoName := chi.URLParam(r, "repo")
 	artifactID := chi.URLParam(r, "id")
+	// Percent-decode the {id} param so clients can safely encode reserved
+	// characters. Docker rescans pass the manifest digest (sha256:<hex>);
+	// encodeURIComponent() on the frontend turns the ":" into "%3A" and
+	// chi leaves that as-is, so without this decode the scan looked up
+	// "sha256%3A<hex>" and failed "manifest … not found in repo".
+	if dec, err := url.PathUnescape(artifactID); err == nil {
+		artifactID = dec
+	}
 	if _, ok := validRepoTypes[repoType]; !ok {
 		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "repo not found")
 		return nil, nil, "", false

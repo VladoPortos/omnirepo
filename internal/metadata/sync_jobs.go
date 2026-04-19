@@ -91,6 +91,11 @@ func (r *SyncJobsRepo) MarkDone(ctx context.Context, tx *sql.Tx, id int64) error
 // MarkFailed records err and schedules a retry at nextRunAt. The caller
 // owns the backoff policy (D-18); this method does not compute it.
 // Sets status back to 'pending' for future lease.
+//
+// Timestamp format: format explicitly as "YYYY-MM-DD HH:MM:SS" so the
+// string comparison against CURRENT_TIMESTAMP in the lease poll works
+// (see ScansRepo.MarkFailed for the full explanation — same class of
+// bug, same fix; both paths were wedging retries forever).
 func (r *SyncJobsRepo) MarkFailed(ctx context.Context, tx *sql.Tx, id int64, errMsg string, nextRunAt time.Time) error {
 	_, err := tx.ExecContext(ctx, `
 		UPDATE sync_jobs
@@ -102,7 +107,7 @@ func (r *SyncJobsRepo) MarkFailed(ctx context.Context, tx *sql.Tx, id int64, err
 		    leased_at=NULL,
 		    updated_at=CURRENT_TIMESTAMP
 		WHERE id=?
-	`, errMsg, nextRunAt.UTC(), id)
+	`, errMsg, nextRunAt.UTC().Format("2006-01-02 15:04:05"), id)
 	if err != nil {
 		return fmt.Errorf("sync_jobs: mark_failed %d: %w", id, err)
 	}

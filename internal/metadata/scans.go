@@ -92,6 +92,16 @@ func (r *ScansRepo) MarkDone(ctx context.Context, tx *sql.Tx, id int64, severity
 }
 
 // MarkFailed records err and schedules a retry at nextRunAt (D-18).
+//
+// SQLite timestamp format note: CURRENT_TIMESTAMP yields
+// "YYYY-MM-DD HH:MM:SS" but time.Time passed through the modernc.org/sqlite
+// driver serialises via time.Time.String() as
+// "YYYY-MM-DD HH:MM:SS.nnnnnnnnn +0000 UTC". String-compared, the trailing
+// " +0000 UTC" sorts AFTER any pure-numeric CURRENT_TIMESTAMP, so the
+// scheduler's `next_run_at <= CURRENT_TIMESTAMP` predicate never matched
+// and failed jobs went into a permanent wedge — exactly the zstd loop we
+// hit with F-T6. Format explicitly to the SQLite-native shape so retries
+// actually fire on time.
 func (r *ScansRepo) MarkFailed(ctx context.Context, tx *sql.Tx, id int64, errMsg string, nextRunAt time.Time) error {
 	_, err := tx.ExecContext(ctx, `
 		UPDATE scans
@@ -103,7 +113,7 @@ func (r *ScansRepo) MarkFailed(ctx context.Context, tx *sql.Tx, id int64, errMsg
 		    leased_at=NULL,
 		    updated_at=CURRENT_TIMESTAMP
 		WHERE id=?
-	`, errMsg, nextRunAt.UTC(), id)
+	`, errMsg, nextRunAt.UTC().Format("2006-01-02 15:04:05"), id)
 	if err != nil {
 		return fmt.Errorf("scans: mark_failed %d: %w", id, err)
 	}

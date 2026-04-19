@@ -1069,7 +1069,12 @@ function StorageBreakdown({
   repos: StorageRepoRow[];
 }) {
   const percentage = totalBytes > 0 ? Math.min(Math.round((usedBytes / totalBytes) * 100), 100) : 0;
+  // When total disk capacity is known, scale per-repo bars against it so
+  // each bar reads as "fraction of the whole volume" — matches the top
+  // gauge. Falls back to scaling against the largest repo when capacity
+  // is unknown so the chart still conveys relative size.
   const maxRepoBytes = repos.length > 0 ? repos[0].size_bytes : 1;
+  const scaleDenominator = totalBytes > 0 ? totalBytes : maxRepoBytes;
 
   return (
     <div id="storage" className="space-y-5">
@@ -1101,9 +1106,14 @@ function StorageBreakdown({
       ) : (
         <div className="space-y-2">
           {repos.map((repo) => {
-            const barPercent = maxRepoBytes > 0
-              ? Math.max((repo.size_bytes / maxRepoBytes) * 100, 8)
-              : 8;
+            // Proportional to total disk (or to the largest repo if total
+            // is unknown). No minimum floor — a repo that's 0.1% of disk
+            // should render as a hairline, not pretend to be 8%.
+            const rawPercent =
+              scaleDenominator > 0
+                ? (repo.size_bytes / scaleDenominator) * 100
+                : 0;
+            const barPercent = Math.min(rawPercent, 100);
             const colors = repoTypeColor[repo.type] ?? defaultColor;
             return (
               <Link
@@ -1113,20 +1123,32 @@ function StorageBreakdown({
               >
                 <div className="flex items-center gap-1.5 mb-0.5">
                   <span className={`inline-block size-2 shrink-0 rounded-full ${colors.dot}`} />
-                  <span className="text-xs text-muted-foreground truncate">
+                  <span className="text-xs text-muted-foreground truncate flex-1">
                     {repo.project} /{' '}
                     <span className="font-medium text-foreground">{repo.name}</span>
                     <span className="ml-1">({repo.type})</span>
                   </span>
-                </div>
-                <div className="relative h-6 w-full rounded bg-muted/40 overflow-hidden">
-                  <div
-                    className="absolute inset-y-0 left-0 rounded"
-                    style={{ width: `${barPercent}%`, backgroundColor: colors.bar, opacity: 0.8 }}
-                  />
-                  <span className="absolute inset-y-0 left-2 flex items-center text-xs font-medium tabular-nums text-foreground drop-shadow-sm">
+                  <span className="text-xs font-medium tabular-nums text-muted-foreground shrink-0">
                     {formatBytes(repo.size_bytes)}
                   </span>
+                </div>
+                <div
+                  className="relative h-2 w-full rounded bg-muted/40 overflow-hidden"
+                  title={`${formatBytes(repo.size_bytes)} — ${rawPercent.toFixed(2)}% of ${totalBytes > 0 ? formatBytes(totalBytes) : 'largest repo'}`}
+                >
+                  <div
+                    className="absolute inset-y-0 left-0 rounded"
+                    style={{
+                      // Bars under 0.3% collapse to sub-pixel; clamp to a
+                      // 2px hairline so users still see the segment.
+                      width:
+                        rawPercent > 0 && rawPercent < 0.3
+                          ? '2px'
+                          : `${barPercent}%`,
+                      backgroundColor: colors.bar,
+                      opacity: 0.85,
+                    }}
+                  />
                 </div>
               </Link>
             );

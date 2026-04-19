@@ -31,6 +31,10 @@ import { InlineSearch } from '@/components/common/InlineSearch';
 import { Dropzone } from '@/components/common/Dropzone';
 import { EmptyState } from '@/components/common/EmptyState';
 import { SnippetList } from '@/components/common/SnippetList';
+import {
+  ArtifactDetail,
+  ArtifactDigest,
+} from '@/components/common/ArtifactDetail';
 import { RepoPageLayout } from './RepoPageLayout';
 import { formatBytes, formatDate } from '@/lib/format';
 import { api, ApiError } from '@/api/client';
@@ -45,6 +49,9 @@ interface RawFileEntry {
   content_type: string;
   last_modified: string;
   scan_severity: string;
+  sha256: string;
+  scan_status: string;
+  severity_counts: Record<string, number>;
 }
 
 interface RawRepoPageProps {
@@ -56,6 +63,7 @@ export function RawRepoPage({ repo }: RawRepoPageProps) {
   const [currentPath, setCurrentPath] = useState('');
   const [filter, setFilter] = useState('');
   const [sort, setSort] = useState<SortState>({ column: 'name', direction: 'asc' });
+  const [expandedPath, setExpandedPath] = useState<string | null>(null);
 
   // EMPTY-03 upload-permission gate — see DockerRepoPage for rationale.
   const { data: currentUser } = useMe();
@@ -99,15 +107,20 @@ export function RawRepoPage({ repo }: RawRepoPageProps) {
       if (prefix && !row.name.startsWith(prefix)) continue;
       const rest = row.name.slice(prefix.length);
       const slash = rest.indexOf('/');
+      const e = (row.extra ?? {}) as Record<string, unknown>;
       if (slash === -1) {
         files.push({
           name: rest,
           path: row.name,
           is_dir: false,
           size: row.size_bytes,
-          content_type: String(row.extra?.mime ?? ''),
+          content_type: String(e.mime ?? ''),
           last_modified: row.uploaded_at,
           scan_severity: row.scan_severity ?? '',
+          sha256: String(e.sha256 ?? ''),
+          scan_status: String(e.scan_status ?? ''),
+          severity_counts:
+            (e.severity_counts as Record<string, number>) ?? {},
         });
       } else {
         const folder = rest.slice(0, slash);
@@ -127,6 +140,9 @@ export function RawRepoPage({ repo }: RawRepoPageProps) {
       // Folder rows don't carry scan state — aggregating worst-of across
       // children is noisy when a dir has hundreds of files. Leave blank.
       scan_severity: '',
+      sha256: '',
+      scan_status: '',
+      severity_counts: {},
     }));
     return [...folderRows, ...files];
   }, [contentRows, currentPath]);
@@ -171,10 +187,15 @@ export function RawRepoPage({ repo }: RawRepoPageProps) {
             <ChevronRight className="size-3 text-muted-foreground" />
           </button>
         ) : (
-          <div className="inline-flex items-center gap-1.5 text-sm">
+          <button
+            className="inline-flex items-center gap-1.5 text-sm font-medium text-primary hover:underline"
+            onClick={() =>
+              setExpandedPath(expandedPath === row.path ? null : row.path)
+            }
+          >
             <FileIcon className="size-4 text-muted-foreground" />
             {row.name}
-          </div>
+          </button>
         ),
     },
     {
@@ -230,7 +251,18 @@ export function RawRepoPage({ repo }: RawRepoPageProps) {
               )}
               {busy ? 'Rescanning…' : 'Rescan'}
             </Button>
-            <Button variant="ghost" size="icon-xs" title="Download">
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              title="Download"
+              nativeButton={false}
+              render={
+                <a
+                  href={`/${encodeURIComponent(projectName ?? '')}/raw/${encodeURIComponent(repo.name)}/${row.path}`}
+                  download
+                />
+              }
+            >
               <Download className="size-3.5" />
             </Button>
           </div>
@@ -348,6 +380,30 @@ export function RawRepoPage({ repo }: RawRepoPageProps) {
                 ? 'This directory is empty.'
                 : 'No files found. Upload a file to get started.'
             }
+            isRowExpanded={(row) => !row.is_dir && expandedPath === row.path}
+            renderExpanded={(row) => (
+              <ArtifactDetail
+                title={row.path}
+                sizeBytes={row.size}
+                uploadedAt={row.last_modified}
+                fields={[
+                  {
+                    label: 'Content-Type',
+                    value: row.content_type || 'application/octet-stream',
+                  },
+                  {
+                    label: 'SHA-256',
+                    value: <ArtifactDigest value={row.sha256} />,
+                  },
+                ]}
+                severity={{
+                  status: row.scan_status,
+                  counts: row.severity_counts,
+                }}
+                downloadURL={`/${encodeURIComponent(projectName ?? '')}/raw/${encodeURIComponent(repo.name)}/${row.path}`}
+                downloadLabel="Download"
+              />
+            )}
           />
         )}
       </div>

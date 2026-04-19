@@ -438,6 +438,8 @@ func (d Deps) listPypiContent(r *http.Request, repoID, limit, offset int64) ([]R
 				"filename":        filename,
 				"kind":            kind,
 				"requires_python": reqPy,
+				"scan_status":     scanStatus,
+				"severity_counts": severityCounts(scanSummary),
 			},
 		})
 	}
@@ -477,9 +479,11 @@ func (d Deps) listHelmContent(r *http.Request, repoID, limit, offset int64) ([]R
 			UploadedAt:   uploadedAt,
 			ScanSeverity: deriveScanSeverity(scanStatus, scanSummary),
 			Extra: map[string]any{
-				"app_version": appVersion,
-				"description": description,
-				"filename":    filename,
+				"app_version":     appVersion,
+				"description":     description,
+				"filename":        filename,
+				"scan_status":     scanStatus,
+				"severity_counts": severityCounts(scanSummary),
 			},
 		})
 	}
@@ -616,8 +620,10 @@ func (d Deps) listRawContent(r *http.Request, repoID, limit, offset int64) ([]Re
 			UploadedAt:   uploaded,
 			ScanSeverity: deriveScanSeverity(scanStatus, scanSummary),
 			Extra: map[string]any{
-				"mime":   mime,
-				"sha256": sha,
+				"mime":            mime,
+				"sha256":          sha,
+				"scan_status":     scanStatus,
+				"severity_counts": severityCounts(scanSummary),
 			},
 		})
 	}

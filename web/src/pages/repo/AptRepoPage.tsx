@@ -28,6 +28,10 @@ import { Dropzone } from '@/components/common/Dropzone';
 import { FilterChips } from '@/components/common/FilterChips';
 import { EmptyState } from '@/components/common/EmptyState';
 import { SnippetList } from '@/components/common/SnippetList';
+import {
+  ArtifactDetail,
+  ArtifactDigest,
+} from '@/components/common/ArtifactDetail';
 import { RepoPageLayout } from './RepoPageLayout';
 import { formatBytes, formatDate } from '@/lib/format';
 import { api, envelopeFromError, type ApiErrorEnvelope, ApiError } from '@/api/client';
@@ -45,6 +49,14 @@ interface DebPackage {
   size: number;
   scan_severity: string;
   uploaded_at: string;
+  filename: string;
+  digest: string;
+  section: string;
+  maintainer: string;
+  depends: string;
+  storage_pool_path: string;
+  scan_status: string;
+  severity_counts: Record<string, number>;
 }
 
 interface AptRepoPageProps {
@@ -58,6 +70,7 @@ export function AptRepoPage({ repo }: AptRepoPageProps) {
   const [suiteFilter, setSuiteFilter] = useState<string[]>([]);
   const [componentFilter, setComponentFilter] = useState<string[]>([]);
   const [syncOpen, setSyncOpen] = useState(false);
+  const [expandedID, setExpandedID] = useState<number | null>(null);
 
   // EMPTY-03 upload-permission gate — see DockerRepoPage for rationale.
   const { data: currentUser } = useMe();
@@ -115,17 +128,29 @@ export function AptRepoPage({ repo }: AptRepoPageProps) {
   });
   const packages: DebPackage[] = useMemo(
     () =>
-      (contentRows ?? []).map((row) => ({
-        id: row.id ?? 0,
-        name: row.name,
-        version: row.version ?? '',
-        arch: String(row.extra?.architecture ?? ''),
-        suite: String(row.extra?.suite ?? ''),
-        component: String(row.extra?.component ?? ''),
-        size: row.size_bytes,
-        scan_severity: row.scan_severity ?? '',
-        uploaded_at: row.uploaded_at,
-      })),
+      (contentRows ?? []).map((row) => {
+        const e = (row.extra ?? {}) as Record<string, unknown>;
+        const counts = (e.severity_counts ?? {}) as Record<string, number>;
+        return {
+          id: row.id ?? 0,
+          name: row.name,
+          version: row.version ?? '',
+          arch: String(e.architecture ?? ''),
+          suite: String(e.suite ?? ''),
+          component: String(e.component ?? ''),
+          size: row.size_bytes,
+          scan_severity: row.scan_severity ?? '',
+          uploaded_at: row.uploaded_at,
+          filename: String(e.filename ?? ''),
+          digest: String(e.digest ?? ''),
+          section: String(e.section ?? ''),
+          maintainer: String(e.maintainer ?? ''),
+          depends: String(e.depends ?? ''),
+          storage_pool_path: String(e.storage_pool_path ?? ''),
+          scan_status: String(e.scan_status ?? ''),
+          severity_counts: counts,
+        };
+      }),
     [contentRows],
   );
 
@@ -151,7 +176,21 @@ export function AptRepoPage({ repo }: AptRepoPageProps) {
   }, [packages, filter, suiteFilter, componentFilter]);
 
   const columns: ColumnDef<DebPackage>[] = [
-    { id: 'name', name: 'Name', sortable: true, accessor: (row) => row.name },
+    {
+      id: 'name',
+      name: 'Name',
+      sortable: true,
+      render: (row) => (
+        <button
+          className="text-sm font-medium text-primary hover:underline"
+          onClick={() =>
+            setExpandedID(expandedID === row.id ? null : row.id)
+          }
+        >
+          {row.name}
+        </button>
+      ),
+    },
     { id: 'version', name: 'Version', sortable: true, accessor: (row) => row.version },
     { id: 'arch', name: 'Arch', sortable: true, accessor: (row) => row.arch },
     {
@@ -303,6 +342,52 @@ export function AptRepoPage({ repo }: AptRepoPageProps) {
             sort={sort}
             onSort={(col, dir) => setSort({ column: col, direction: dir })}
             stickyFirstColumn
+            isRowExpanded={(row) => expandedID === row.id}
+            renderExpanded={(row) => (
+              <ArtifactDetail
+                title={`${row.name} ${row.version} (${row.arch})`}
+                subtitle={row.suite ? `${row.suite}/${row.component}` : undefined}
+                sizeBytes={row.size}
+                uploadedAt={row.uploaded_at}
+                fields={[
+                  { label: 'Filename', value: row.filename },
+                  { label: 'Pool path', value: row.storage_pool_path },
+                  { label: 'Arch', value: row.arch },
+                  ...(row.section
+                    ? [{ label: 'Section', value: row.section }]
+                    : []),
+                  ...(row.maintainer
+                    ? [{ label: 'Maintainer', value: row.maintainer }]
+                    : []),
+                  ...(row.depends
+                    ? [
+                        {
+                          label: 'Depends',
+                          value: (
+                            <span className="font-mono text-xs">
+                              {row.depends}
+                            </span>
+                          ),
+                        },
+                      ]
+                    : []),
+                  {
+                    label: 'Digest',
+                    value: <ArtifactDigest value={row.digest} />,
+                  },
+                ]}
+                severity={{
+                  status: row.scan_status,
+                  counts: row.severity_counts,
+                }}
+                downloadURL={
+                  row.storage_pool_path
+                    ? `/${encodeURIComponent(projectName ?? '')}/deb/${encodeURIComponent(repo.name)}/${row.storage_pool_path}`
+                    : undefined
+                }
+                downloadLabel="Download .deb"
+              />
+            )}
           />
         )}
       </div>

@@ -16,6 +16,7 @@ import { InlineSearch } from '@/components/common/InlineSearch';
 import { Dropzone } from '@/components/common/Dropzone';
 import { EmptyState } from '@/components/common/EmptyState';
 import { SnippetList } from '@/components/common/SnippetList';
+import { SeverityStrip } from '@/components/common/ArtifactDetail';
 import { RepoPageLayout } from './RepoPageLayout';
 import { formatBytes, formatDate } from '@/lib/format';
 import { api, envelopeFromError, type ApiErrorEnvelope, ApiError } from '@/api/client';
@@ -32,6 +33,8 @@ interface PypiFile {
   size: number;
   requires_python: string;
   scan_severity: string;
+  scan_status: string;
+  severity_counts: Record<string, number>;
   uploaded_at: string;
 }
 
@@ -44,6 +47,8 @@ interface PypiProjectGroup {
   total_size: number;
   requires_python: string;
   scan_severity: string;
+  scan_status: string;
+  severity_counts: Record<string, number>;
   uploaded_at: string;
   files: PypiFile[];
 }
@@ -114,17 +119,23 @@ export function PypiRepoPage({ repo }: PypiRepoPageProps) {
   });
   const files: PypiFile[] = useMemo(
     () =>
-      (contentRows ?? []).map((row) => ({
-        id: row.id ?? 0,
-        project_name: row.name,
-        normalized_name: row.name,
-        version: row.version ?? '',
-        filename: String(row.extra?.filename ?? ''),
-        size: row.size_bytes,
-        requires_python: String(row.extra?.requires_python ?? ''),
-        scan_severity: row.scan_severity ?? '',
-        uploaded_at: row.uploaded_at,
-      })),
+      (contentRows ?? []).map((row) => {
+        const e = (row.extra ?? {}) as Record<string, unknown>;
+        return {
+          id: row.id ?? 0,
+          project_name: row.name,
+          normalized_name: row.name,
+          version: row.version ?? '',
+          filename: String(e.filename ?? ''),
+          size: row.size_bytes,
+          requires_python: String(e.requires_python ?? ''),
+          scan_severity: row.scan_severity ?? '',
+          scan_status: String(e.scan_status ?? ''),
+          severity_counts:
+            (e.severity_counts as Record<string, number>) ?? {},
+          uploaded_at: row.uploaded_at,
+        };
+      }),
     [contentRows],
   );
 
@@ -147,6 +158,8 @@ export function PypiRepoPage({ repo }: PypiRepoPageProps) {
         total_size: projectFiles.reduce((sum, f) => sum + f.size, 0),
         requires_python: latest.requires_python,
         scan_severity: latest.scan_severity,
+        scan_status: latest.scan_status,
+        severity_counts: latest.severity_counts,
         uploaded_at: latest.uploaded_at,
         files: sorted,
       };
@@ -309,36 +322,53 @@ export function PypiRepoPage({ repo }: PypiRepoPageProps) {
             sort={sort}
             onSort={(col, dir) => setSort({ column: col, direction: dir })}
             stickyFirstColumn
+            // Inline accordion — file list renders directly under the
+            // clicked project row instead of floating at the bottom.
+            isRowExpanded={(row) => expandedProject === row.normalized_name}
+            renderExpanded={(row) => (
+              <div className="space-y-3">
+                <div>
+                  <h4 className="font-semibold leading-tight">
+                    {row.display_name}
+                  </h4>
+                  <p className="text-xs text-muted-foreground">
+                    {row.file_count} file{row.file_count === 1 ? '' : 's'} ·
+                    latest {row.latest_version} ·
+                    requires-python {row.requires_python || '—'}
+                  </p>
+                </div>
+                <div className="space-y-1">
+                  {row.files.map((f) => (
+                    <div
+                      key={f.id}
+                      className="flex items-center justify-between rounded-md border bg-background px-3 py-1.5 text-xs"
+                    >
+                      <a
+                        className="font-mono text-primary hover:underline"
+                        href={`/${encodeURIComponent(projectName ?? '')}/pypi/${encodeURIComponent(repo.name)}/simple/${encodeURIComponent(row.normalized_name)}/${encodeURIComponent(f.filename)}`}
+                      >
+                        {f.filename}
+                      </a>
+                      <div className="flex items-center gap-3">
+                        <span>{f.version}</span>
+                        <span className="text-muted-foreground">
+                          {formatBytes(f.size)}
+                        </span>
+                        <span className="text-muted-foreground">
+                          {formatDate(f.uploaded_at)}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <SeverityStrip
+                  status={row.scan_status}
+                  counts={row.severity_counts}
+                />
+              </div>
+            )}
           />
         )}
-
-        {/* Expanded project files */}
-        {expandedProject && (() => {
-          const group = groups.find((g) => g.normalized_name === expandedProject);
-          if (!group) return null;
-          return (
-            <div className="ml-6 rounded-md border bg-muted/30 p-4 space-y-2">
-              <h4 className="text-sm font-semibold">
-                {group.display_name} -- {group.file_count} file(s)
-              </h4>
-              <div className="space-y-1">
-                {group.files.map((f) => (
-                  <div
-                    key={f.id}
-                    className="flex items-center justify-between rounded-md border bg-background px-3 py-1.5 text-xs"
-                  >
-                    <span className="font-mono">{f.filename}</span>
-                    <div className="flex items-center gap-3">
-                      <span>{f.version}</span>
-                      <span className="text-muted-foreground">{formatBytes(f.size)}</span>
-                      <span className="text-muted-foreground">{formatDate(f.uploaded_at)}</span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          );
-        })()}
       </div>
     </RepoPageLayout>
   );

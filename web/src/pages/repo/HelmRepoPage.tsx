@@ -18,6 +18,7 @@ import { InlineSearch } from '@/components/common/InlineSearch';
 import { Dropzone } from '@/components/common/Dropzone';
 import { EmptyState } from '@/components/common/EmptyState';
 import { SnippetList } from '@/components/common/SnippetList';
+import { SeverityStrip } from '@/components/common/ArtifactDetail';
 import { RepoPageLayout } from './RepoPageLayout';
 import { formatBytes, formatDate } from '@/lib/format';
 import { api } from '@/api/client';
@@ -29,8 +30,12 @@ interface HelmChartVersion {
   chart_name: string;
   version: string;
   app_version: string;
+  description: string;
+  filename: string;
   size: number;
   scan_severity: string;
+  scan_status: string;
+  severity_counts: Record<string, number>;
   uploaded_at: string;
 }
 
@@ -39,9 +44,12 @@ interface HelmChartGroup {
   chart_name: string;
   latest_version: string;
   latest_app_version: string;
+  description: string;
   version_count: number;
   total_size: number;
   scan_severity: string;
+  scan_status: string;
+  severity_counts: Record<string, number>;
   uploaded_at: string;
   versions: HelmChartVersion[];
 }
@@ -86,15 +94,23 @@ export function HelmRepoPage({ repo }: HelmRepoPageProps) {
   };
   const chartVersions: HelmChartVersion[] = useMemo(
     () =>
-      (contentRows ?? []).map((row) => ({
-        id: row.id ?? 0,
-        chart_name: row.name,
-        version: row.version ?? '',
-        app_version: String(row.extra?.app_version ?? ''),
-        size: row.size_bytes,
-        scan_severity: row.scan_severity ?? '',
-        uploaded_at: row.uploaded_at,
-      })),
+      (contentRows ?? []).map((row) => {
+        const e = (row.extra ?? {}) as Record<string, unknown>;
+        return {
+          id: row.id ?? 0,
+          chart_name: row.name,
+          version: row.version ?? '',
+          app_version: String(e.app_version ?? ''),
+          description: String(e.description ?? ''),
+          filename: String(e.filename ?? ''),
+          size: row.size_bytes,
+          scan_severity: row.scan_severity ?? '',
+          scan_status: String(e.scan_status ?? ''),
+          severity_counts:
+            (e.severity_counts as Record<string, number>) ?? {},
+          uploaded_at: row.uploaded_at,
+        };
+      }),
     [contentRows],
   );
 
@@ -113,9 +129,12 @@ export function HelmRepoPage({ repo }: HelmRepoPageProps) {
         chart_name: name,
         latest_version: latest.version,
         latest_app_version: latest.app_version,
+        description: latest.description,
         version_count: versions.length,
         total_size: versions.reduce((sum, v) => sum + v.size, 0),
         scan_severity: latest.scan_severity,
+        scan_status: latest.scan_status,
+        severity_counts: latest.severity_counts,
         uploaded_at: latest.uploaded_at,
         versions: sorted,
       };
@@ -258,55 +277,80 @@ export function HelmRepoPage({ repo }: HelmRepoPageProps) {
             sort={sort}
             onSort={(col, dir) => setSort({ column: col, direction: dir })}
             stickyFirstColumn
+            isRowExpanded={(row) => expandedChart === row.chart_name}
+            renderExpanded={(row) => (
+              <div className="space-y-3">
+                <div>
+                  <h4 className="font-semibold leading-tight">
+                    {row.chart_name}
+                  </h4>
+                  <p className="text-xs text-muted-foreground">
+                    {row.version_count} version
+                    {row.version_count === 1 ? '' : 's'} · latest{' '}
+                    {row.latest_version}
+                    {row.latest_app_version
+                      ? ` (app ${row.latest_app_version})`
+                      : ''}
+                    {row.description ? ` — ${row.description}` : ''}
+                  </p>
+                </div>
+                <div className="space-y-1">
+                  {row.versions.map((v) => (
+                    <div
+                      key={v.id}
+                      className="flex items-center justify-between rounded-md border bg-background px-3 py-1.5 text-xs"
+                    >
+                      <div className="flex items-center gap-2">
+                        <a
+                          className="font-mono font-medium text-primary hover:underline"
+                          href={`/${encodeURIComponent(projectName ?? '')}/helm/${encodeURIComponent(repo.name)}/${encodeURIComponent(v.filename)}`}
+                        >
+                          {v.version}
+                        </a>
+                        {v.app_version && (
+                          <span className="text-muted-foreground">
+                            app: {v.app_version}
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <span className="text-muted-foreground">
+                          {formatBytes(v.size)}
+                        </span>
+                        <span className="text-muted-foreground">
+                          {formatDate(v.uploaded_at)}
+                        </span>
+                        <ContentScanBadge severity={v.scan_severity} />
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          title="Queue a fresh Trivy scan for this version"
+                          onClick={() => handleRescanRow(v.id)}
+                          disabled={
+                            !v.id ||
+                            rescanningID === v.id ||
+                            v.scan_severity === 'scanning'
+                          }
+                        >
+                          {rescanningID === v.id ? (
+                            <Loader2 className="mr-1.5 size-3.5 animate-spin" />
+                          ) : (
+                            <RefreshCw className="mr-1.5 size-3.5" />
+                          )}
+                          {rescanningID === v.id ? 'Rescanning…' : 'Rescan'}
+                        </Button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <SeverityStrip
+                  status={row.scan_status}
+                  counts={row.severity_counts}
+                />
+              </div>
+            )}
           />
         )}
-
-        {/* Expanded chart versions */}
-        {expandedChart && (() => {
-          const group = groups.find((g) => g.chart_name === expandedChart);
-          if (!group) return null;
-          return (
-            <div className="ml-6 rounded-md border bg-muted/30 p-4 space-y-2">
-              <h4 className="text-sm font-semibold">
-                {group.chart_name} -- {group.version_count} version(s)
-              </h4>
-              <div className="space-y-1">
-                {group.versions.map((v) => (
-                  <div
-                    key={v.id}
-                    className="flex items-center justify-between rounded-md border bg-background px-3 py-1.5 text-xs"
-                  >
-                    <div className="flex items-center gap-2">
-                      <span className="font-mono font-medium">{v.version}</span>
-                      {v.app_version && (
-                        <span className="text-muted-foreground">app: {v.app_version}</span>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-3">
-                      <span className="text-muted-foreground">{formatBytes(v.size)}</span>
-                      <span className="text-muted-foreground">{formatDate(v.uploaded_at)}</span>
-                      <ContentScanBadge severity={v.scan_severity} />
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        title="Queue a fresh Trivy scan for this version"
-                        onClick={() => handleRescanRow(v.id)}
-                        disabled={!v.id || rescanningID === v.id || v.scan_severity === 'scanning'}
-                      >
-                        {rescanningID === v.id ? (
-                          <Loader2 className="mr-1.5 size-3.5 animate-spin" />
-                        ) : (
-                          <RefreshCw className="mr-1.5 size-3.5" />
-                        )}
-                        {rescanningID === v.id ? 'Rescanning…' : 'Rescan'}
-                      </Button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          );
-        })()}
       </div>
     </RepoPageLayout>
   );

@@ -45,7 +45,7 @@ func TestPEP694Upload_MirrorRepoReturns403(t *testing.T) {
 	if err := f.db.WriteTx(context.Background(), func(tx *sql.Tx) error {
 		return f.repos.SetMirrorConfigInTx(context.Background(), tx, repoID, metadata.MirrorConfig{
 			IsMirror:    true,
-			UpstreamURL: "https://pypi.org/simple/",
+			UpstreamURL: "https://upstream.example/simple/",
 			FilterJSON:  `{}`,
 			CredID:      nil,
 			ScanOnSync:  false,

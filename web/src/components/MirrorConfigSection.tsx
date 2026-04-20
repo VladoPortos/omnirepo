@@ -260,12 +260,12 @@ export function MirrorConfigSection({
 function protocolPlaceholder(protocol: MirrorProtocol): string {
   switch (protocol) {
     case 'deb':
-      return 'https://archive.ubuntu.com/ubuntu';
+      return 'e.g. your distro mirror';
     case 'rpm':
-      return 'https://mirror.centos.org/centos/9/BaseOS/x86_64/os/';
+      return 'e.g. your distro mirror';
     case 'pypi':
-      return 'https://pypi.org/simple/';
+      return 'e.g. your PyPI index';
     case 'helm':
-      return 'https://charts.bitnami.com/bitnami';
+      return 'e.g. your chart repo';
   }
 }

@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: on 2026-04-17)
 status: executing
-stopped_at: Completed 08-01-PLAN.md — mirror backend foundation shipped (migration 024 + mirror-aware /sync + MirrorGuard + 14 new tests)
-last_updated: "2026-04-20T02:51:55.000Z"
+stopped_at: Completed 08-02-PLAN.md — sync progress tracking across all protocols (ProgressWriter + CountingReader + 18 new tests)
+last_updated: "2026-04-20T03:26:38.000Z"
 last_activity: 2026-04-20
 progress:
   total_phases: 3
   completed_phases: 2
   total_plans: 23
-  completed_plans: 18
-  percent: 78
+  completed_plans: 19
+  percent: 83
 ---
 
 # STATE: OmniRepo
@@ -27,10 +27,10 @@ progress:
 ## Current Position
 
 Phase: 8
-Plan: 01 (completed)
-Status: Ready to execute 08-02 (progress writer helper + /jobs endpoint extension)
+Plan: 02 (completed)
+Status: Ready to execute 08-03 (Docker clone modal with live progress bar)
 Last activity: 2026-04-20
-Stopped at: Completed 08-01-PLAN.md — mirror backend foundation (migration 024 + Create/Patch validation + mirror-aware /sync + MirrorGuard on 5 protocols)
+Stopped at: Completed 08-02-PLAN.md — sync progress tracking shipped (jobs.ProgressWriter + shared jobs.CountingReader + SyncJob schema extended + 5 protocols instrumented + 18 new tests; all 35 packages green)
 
 ## Phase Map
 
@@ -153,6 +153,15 @@ scoped tokens, LDAP/OIDC.
 - **[08-01] OCI per-route `r.With(mirrorGuard)` vs. a group.** Wrote-path verbs (POST/PATCH/PUT/DELETE for blob uploads, PUT/DELETE for manifests) gate on the guard; GET/HEAD don't. A group would have forced either read + write pages to carry the DB lookup cost or forked the route tree. Per-route `r.With(...)` is minimally invasive and preserves read performance.
 - **[08-01] PyPI test-name collision resolved by renaming PEP 694 tests.** Plan mandated two test files (`upload_legacy_test.go` + `upload_pep694_test.go`) with the same function names. Go forbids duplicates. Legacy keeps the canonical names (`TestUpload_MirrorRepoReturns403` / `...NonMirrorRepoStillWorks`); PEP 694 uses `TestPEP694Upload_Mirror...` / `TestPEP694Upload_NonMirror...`. Plan's verify grep matches the legacy file.
 - **[08-01] Pre-existing `make test` typography failures NOT caused by Phase 8.** `lint-typography` fails on App.tsx / ArtifactDetail.tsx / AptRepoPage.tsx / ScanReportPage.tsx — verified pre-existing via `git stash` on main at 87dcdd8. Logged to `.planning/phases/08-upstream-mirror-and-docker-clone/deferred-items.md` for a later plan (08-06 Codex rescue or walkthrough micro-fix). Out of scope per SCOPE BOUNDARY rule.
+- **[08-02] `jobs.SyncProgressRepo` interface defined locally in internal/jobs.** Mirrors the existing `jobs.LeaseRepo` idiom (lease.go). Keeps `ProgressWriter` testable with lightweight fakes that don't need a full `*metadata.DB`; `metadata.SyncJobsRepo` satisfies the interface statically. Alternative of importing `metadata.SyncJobsRepo` directly would have leaked metadata into every test spawning a progress writer fake.
+- **[08-02] ProgressWriter.Set() updates in-memory last* triple even when throttle-suppressed.** Without this, a sync that finishes within 200ms and emits a final `Set("done", ...)` would see that write throttled; the preceding `defer progress.Flush(ctx)` would then persist the stale non-terminal step (e.g. `layer 1 of 7`). Contract: callers expect Flush to emit their most-recent intent, not the most-recent WROTE. Documented in progress.go godoc; pinned by `TestPullExternal_EmitsByteProgress` which specifically asserts `current_step == "done"` after a sub-200ms pull.
+- **[08-02] Two-phase collect-then-iterate in 4 protocol handlers.** Plan 08-02 replaced the v1.0 single-pass `yieldFn` (where parse streams entries and kicks per-entry downloads as they arrive) with a two-pass design: `collectFn` builds the `[]UpstreamEntry` slice + sums totalBytes, then the download loop iterates the materialized slice. Stable denominator for the progress bar costs memory proportional to entry count (~100 bytes/entry → tolerable even for full Ubuntu focal of 60k packages = ~6 MB). Idempotency-by-digest filtering runs in the collect pass so already-present rows don't inflate total.
+- **[08-02] atomic.AddInt64 over a shared mutex for accumulatedDone.** APT/RPM/PyPI sync download in parallel (semaphore over `Cfg.MaxParallelDownloadsPerJob`). Each goroutine owns its CountingReader but they all advance the same `accumulatedDone` int64. `atomic.AddInt64(&accumulatedDone, int64(n))` in the hot-path OnRead is lockless and contention-free; the ProgressWriter's own mutex handles serialization to the DB.
+- **[08-02] Handler signature change: trailing `jobID int64` on all 5 sync handlers.** Pool adapter in `internal/app/app.go` (OCI) + `internal/app/phase3_sync.go` (apt/rpm/pypi/helm) passes `j.ID`. Legacy direct callers (rpm sync_handler_test.go smoke tests, oci pull_external_test.go `runPull`) pass 0 which exercises the nil-repo fast path (`ProgressWriter.Set` short-circuits when `p.repo == nil`). No v1.0 production code regression — the pool adapter wires the real `SyncJobsRepo`.
+- **[08-02] Progress tests placed beside the handler they exercise, not in admin_jobs_test.go.** Plan-task text referenced `admin_jobs.go` / `admin_jobs_test.go` which actually covers `/admin/jobs/summary` (D-06, Phase 7 aggregate). The real progress fields live on `GET /sync-jobs/{id}` in `repos_list.go`. Tests in `repos_list_test.go` + `sync_progress_test.go` (one per protocol) keep them next to the handler they validate; `admin_jobs_test.go` is untouched.
+- **[08-02] RPM step format renders name-version-release.arch as a single stem, not name-version.** Plan grep-check assumed `pulling %s-%s.rpm` (name + version); actual implementation uses `fmt.Sprintf("pulling %s.rpm", stem)` where stem = filename sans extension. Produces `pulling foo-1.0.0-1.el9.x86_64.rpm` — a superset of `pulling foo-1.0.0.rpm`, operator-visible intent matches. Grep letter fails; operator-facing behavior matches.
+- **[08-02] 4 atomic commits instead of the single commit per spec M2.8.** Spec M2.8 asked for one atomic commit `feat(jobs): sync progress tracking across all protocols`. GSD executor protocol mandates per-task commits for rollback points. Shipped as 4 task-scoped commits (ProgressWriter+CountingReader, API schema + handler, OCI, all-other-protocols). Net diff identical; bisectability strictly better. Process deviation, not behavior deviation.
+- **[08-02] Pre-existing `make grep-cdn` failures carry forward from 08-01.** `make grep-cdn` fails on 5 URLs in handler test files (`mirror.centos.org`, `archive.ubuntu.com`, `pypi.org`, `charts.bitnami.com`) introduced by 08-01 commit caf0a4a. Plan 08-02 adds NO new external URLs (new tests use `httptest.NewServer` localhost URLs). Logged to `deferred-items.md` for a future plan to close.
 
 ### Decisions carried forward from v1.0
 

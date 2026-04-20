@@ -68,11 +68,11 @@ prefixes (AUTH, REPO, etc.).
 - [ ] **MIRROR-05**: System rejects bodies on /sync when the target repo is a mirror (400 code=mirror_overrides_not_allowed)
 - [ ] **MIRROR-06**: System bounds /sync request bodies at 16 KiB and rejects oversized/malformed payloads with 400 code=invalid_request_body
 - [ ] **MIRROR-07**: System validates mirror_cred_id belongs to the same project as the repo (400 code=mirror_cred_wrong_project)
-- [ ] **MIRROR-08**: API GET /jobs/{id} returns progress_bytes, total_bytes, and current_step alongside status
-- [ ] **MIRROR-09**: System throttles sync-progress DB writes to at most one per 200 ms per job with change detection
-- [ ] **MIRROR-10**: System emits byte-level progress for OCI pull-external (layer N of M · done / total bytes)
-- [ ] **MIRROR-11**: System emits byte-level progress for APT / RPM / PyPI sync (step = "pulling {artifact}" · done / total bytes)
-- [ ] **MIRROR-12**: System emits step-based progress for Helm sync (chart N of M · total_bytes = 0 because index.yaml lacks sizes)
+- [x] **MIRROR-08**: API GET /jobs/{id} returns progress_bytes, total_bytes, and current_step alongside status
+- [x] **MIRROR-09**: System throttles sync-progress DB writes to at most one per 200 ms per job with change detection
+- [x] **MIRROR-10**: System emits byte-level progress for OCI pull-external (layer N of M · done / total bytes)
+- [x] **MIRROR-11**: System emits byte-level progress for APT / RPM / PyPI sync (step = "pulling {artifact}" · done / total bytes)
+- [x] **MIRROR-12**: System emits step-based progress for Helm sync (chart N of M · total_bytes = 0 because index.yaml lacks sizes)
 - [ ] **MIRROR-13**: User can pull an external Docker image into an OmniRepo docker repo via a UI modal with live byte-level progress
 - [ ] **MIRROR-14**: UI Docker clone modal renders three phases (form → progress → result) and surfaces failure via ErrorEnvelopeRenderer with retry
 - [ ] **MIRROR-15**: UI polls GET /jobs/{id} every 500 ms while a job is active and stops polling on done/failed
@@ -240,11 +240,11 @@ phases 1–5.
 | MIRROR-05 | Phase 8 | In progress |
 | MIRROR-06 | Phase 8 | In progress |
 | MIRROR-07 | Phase 8 | In progress |
-| MIRROR-08 | Phase 8 | In progress |
-| MIRROR-09 | Phase 8 | In progress |
-| MIRROR-10 | Phase 8 | In progress |
-| MIRROR-11 | Phase 8 | In progress |
-| MIRROR-12 | Phase 8 | In progress |
+| MIRROR-08 | Phase 8 Plan 02 | Delivered |
+| MIRROR-09 | Phase 8 Plan 02 | Delivered |
+| MIRROR-10 | Phase 8 Plan 02 | Delivered |
+| MIRROR-11 | Phase 8 Plan 02 | Delivered |
+| MIRROR-12 | Phase 8 Plan 02 | Delivered |
 | MIRROR-13 | Phase 8 | In progress |
 | MIRROR-14 | Phase 8 | In progress |
 | MIRROR-15 | Phase 8 | In progress |

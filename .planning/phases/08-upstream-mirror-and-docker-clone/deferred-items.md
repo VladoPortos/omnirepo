@@ -23,3 +23,24 @@ standalone walkthrough micro-fix) can close it.
 
 - Discovered: 2026-04-20 during 08-01 execution
 - Pre-existing: verified via `git stash` on main at HEAD=87dcdd8
+
+## Pre-existing `make grep-cdn` failures (NOT introduced by Phase 8 Plan 02)
+
+`make grep-cdn` fails on external URL strings introduced by plan 08-01
+(caf0a4a) in handler test files. These were not caught by the phase-08-01
+close-out self-check because plan 08-01 didn't run the `grep-cdn` gate.
+
+- internal/protocol/rpm/handler_test.go — `https://mirror.centos.org/centos/9` (mirror-guard integration test fixture)
+- internal/protocol/deb/handler_test.go — `https://archive.ubuntu.com/ubuntu`
+- internal/protocol/pypi/upload_legacy_test.go — `https://pypi.org/simple/`
+- internal/protocol/pypi/upload_pep694_test.go — `https://pypi.org/simple/`
+- internal/protocol/helm/handler_test.go — `https://charts.bitnami.com/bitnami`
+
+Plan 08-02 does NOT introduce any new external URLs (the new
+sync_progress_test.go files use only `httptest.NewServer`'s localhost URL).
+Fix path: either replace these plan-08-01 fixture URLs with the whitelisted
+`upstream.example` / `repo.example` hosts, or extend the grep-cdn allowlist
+in the Makefile for domains commonly used as stable upstream examples.
+
+- Discovered: 2026-04-20 during 08-02 self-check
+- Pre-existing source: commit caf0a4a (plan 08-01 Task 3)

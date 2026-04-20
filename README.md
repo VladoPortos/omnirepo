@@ -275,7 +275,7 @@ to be empty; object deletes are synchronous (no trash path).
 - **Docker JWT**: HS256 with a per-install random 32-byte secret stored in the `settings` table; 60-minute TTL by default.
 - **S3 SigV4**: full verifier with clock-skew window; multi-chunk streaming supported; `v4` signatures only.
 - **TLS**: min version 1.2, self-signed on first boot, hot-reloadable. The Docker Bearer realm uses `server.external_hostnames[0]` when configured (closes Host-header injection).
-- **Air-gap invariant**: no outbound HTTP from the binary without an explicit admin-user action. Enforced in CI via `make grep-cdn`.
+- **Air-gap invariant**: no outbound HTTP from the binary without an explicit admin-user action. Enforced in CI via `make test-airgap`, which boots the binary and verifies it makes no outbound network calls on its own.
 
 ---
 
@@ -287,7 +287,6 @@ make test-airgap        # asserts the air-gap invariant (no runtime outbound cal
 make bench              # perf benchmarks (SQLite, git clone memory, throughput)
 make conformance-all    # DinD conformance: real dnf/apt/pip/helm/git/crane clients
 make lint               # golangci-lint (errcheck, govet, ineffassign, staticcheck, unused)
-make grep-cdn           # asserts no external https:// URLs in the built SPA or handlers
 ```
 
 Optional live-server walkthrough (the SigV4 + CRUD + multipart suite used
@@ -309,7 +308,7 @@ npx tsc --noEmit        # TypeScript type-check
 npx playwright test     # E2E (requires dev server running)
 ```
 
-All six CI gates (`lint`, `test`, `test-airgap`, `grep-cdn`, `bench-sqlite`, plus the git-backend spike) must exit 0 for a PR to merge.
+All five CI gates (`lint`, `test`, `test-airgap`, `bench-sqlite`, plus the git-backend spike) must exit 0 for a PR to merge.
 
 ---
 

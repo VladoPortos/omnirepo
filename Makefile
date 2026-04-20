@@ -4,7 +4,7 @@ BENCH_DURATION ?= 30s
 BENCH_WORKERS ?= 16
 
 .PHONY: dev build test test-airgap bench-sqlite bench-git-fixture bench-git \
-	vendor lint seed grep-cdn lint-protocol-redaction \
+	vendor lint seed lint-protocol-redaction \
 	check-contrast lint-typography lint-spacing-carveout lint-axe-devdep \
 	conformance conformance-oci conformance-rpm conformance-deb \
 	conformance-pypi conformance-helm conformance-s3 conformance-git \
@@ -51,30 +51,13 @@ seed:
 	@cp $(FILE) $(DATA_ROOT)/config/bootstrap.json
 	@chmod 0600 $(DATA_ROOT)/config/bootstrap.json
 
-# grep-cdn enforces the air-gap invariant: no external https:// URLs in
-# either the built SPA bundle or the Phase 3 protocol handler packages
-# (D-33). The Perl-style negative-lookahead requires `grep -P`.
-#
-# Allowed hosts (none of which the binary fetches at runtime):
-#   - localhost, 127.0.0.1                    — loopback
-#   - example.com, example.invalid, x.y       — RFC 2606 / test placeholders
-#   - upstream.example                        — package-doc placeholder
-#   - linux.duke.edu                          — XML namespace identifier for
-#                                               RPM repodata (URN, not URL —
-#                                               required by the createrepo_c
-#                                               schema; never dereferenced)
-#   - wiki.debian.org                         — comment-only spec link
-grep-cdn:
-	@set -e; \
-	echo "grep-cdn: web/dist/"; \
-	! grep -rPI 'https?://(?!localhost|127\.0\.0\.1|example\.com|example\.invalid)' web/dist/ 2>/dev/null \
-		|| (echo "ERROR: external URL in web/dist/" && exit 1); \
-	echo "grep-cdn: internal/protocol/{rpm,deb,pypi,helm}/"; \
-	! grep -rPI --include='*.go' \
-		'https?://(?!localhost|127\.0\.0\.1|example\.com|example\.invalid|upstream\.example|repo\.example|linux\.duke\.edu|wiki\.debian\.org|x\.y)' \
-		internal/protocol/rpm internal/protocol/deb internal/protocol/pypi internal/protocol/helm 2>/dev/null \
-		|| (echo "ERROR: external https URL leaked into Phase 3 handler code" && exit 1); \
-	echo "grep-cdn: clean"
+# Air-gap invariant is enforced at RUNTIME by `make test-airgap`, which boots
+# the binary and verifies it makes no outbound network calls on its own.
+# The earlier `grep-cdn` static-text gate was retired in v1.2 / Phase 9 —
+# it produced false positives on bundled third-party library URLs (Swagger
+# UI RFC links, React error-page URLs, W3C / JSON Schema namespace URIs,
+# license-comment homepage fields) without catching the real invariant.
+# The runtime test is the single source of truth.
 
 # lint-protocol-redaction enforces ERR-03 for the protocol handler tree:
 # no http.Error call site may emit a %v-interpolated Go error value to

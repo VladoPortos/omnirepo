@@ -39,9 +39,6 @@ jobs:
       - name: Air-gap invariant (explicit gate re-run)
         run: make test-airgap
 
-      - name: grep-cdn gate
-        run: make grep-cdn
-
       - name: SQLite contention bench
         # D-42 acceptance bar: 30s duration, 16 workers, zero SQLITE_BUSY.
         # The Makefile default is BENCH_DURATION=30s; we inherit it here

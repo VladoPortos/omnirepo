@@ -11,12 +11,15 @@ change introduces during startup would surface as a test failure when run in
 a `--network=none` container.
 
 Phase 5 extends this with a Playwright E2E scenario running under a
-`--network=none` Docker container (see spec §14). The gate wired into CI for
-Phase 1 is:
+`--network=none` Docker container (see spec §14). The gate wired into CI is:
 
 ```
 make test-airgap    # go test -mod=vendor ./test/airgap/...
-make grep-cdn       # greps web/dist/ for non-loopback URLs (empty in Phase 1)
 ```
 
-Both are required-pass in `.github/workflows/ci.yml`.
+Required-pass in `.github/workflows/ci.yml`. This runtime test is the
+single source of truth for the air-gap invariant — the earlier
+`grep-cdn` static-text gate was retired in v1.2 because it produced
+false positives on bundled third-party library URLs (Swagger UI RFC
+links, React error-page URLs, W3C / JSON Schema namespace URIs,
+license-comment homepage fields) without catching the real invariant.

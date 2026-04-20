@@ -168,3 +168,144 @@ func TestHelmSync_EmitsStepProgress(t *testing.T) {
 		t.Errorf("done progress_bytes=%d; want 2 for 2-chart upstream", progressBytes)
 	}
 }
+
+// TestHelmSync_SkipsOCIEntries is the Phase 9 POLISH-05 regression test
+// for bug #4 uncovered during live verification against charts.bitnami.com.
+//
+// Context: Helm chart repos are gradually migrating to OCI distribution.
+// bitnami's post-2024 chart versions publish as
+// `oci://registry-1.docker.io/bitnamicharts/<chart>:<version>` inside the
+// same index.yaml alongside older https-tgz entries. OmniRepo's Helm
+// sync uses http.Client, which rejects `oci://` with
+// "unsupported protocol scheme". Before the fix, any single oci:// entry
+// failed the whole sync (downloadErrors[0] short-circuits h.fail) and
+// the job retried indefinitely, re-downloading every successfully-
+// fetched chart on each attempt.
+//
+// The fix filters oci:// (and any other non-HTTP) entries at the
+// collectFn boundary — they're recorded as a SyncProgress audit detail
+// ("skipped_oci_entries") but don't count as errors. The http-tgz
+// portion of the index mirrors cleanly. OCI chart ingestion is a
+// deferred v1.3+ feature, not an in-scope v1.2 fix.
+//
+// This test mirrors the upstream shape that live-verification saw: an
+// index.yaml with one http-tgz entry and one oci:// entry. The sync
+// MUST complete successfully, the http-tgz chart lands, the oci://
+// entry is cleanly skipped.
+func TestHelmSync_SkipsOCIEntries(t *testing.T) {
+	db := sqlitetest.New(t)
+
+	reposRepo := metadata.NewReposRepo(db)
+	projectsRepo := metadata.NewProjectsRepo(db)
+	helmCharts := metadata.NewHelmChartsRepo(db)
+	scans := metadata.NewScansRepo(db)
+
+	chartHTTP := makeChartTGZ(t, "nginx", "1.0.0", "1.25", "web server", nil)
+	dHTTP := shaHex(chartHTTP)
+
+	// Mixed index: one http-tgz chart + one oci:// chart. Real upstream
+	// shape observed against charts.bitnami.com during Phase 9 live tests.
+	index := `apiVersion: v1
+entries:
+  nginx:
+    - apiVersion: v2
+      name: nginx
+      version: 1.0.0
+      appVersion: "1.25"
+      description: web server
+      digest: ` + dHTTP + `
+      urls:
+        - charts/nginx-1.0.0.tgz
+    - apiVersion: v2
+      name: nginx
+      version: 2.0.0
+      appVersion: "1.26"
+      description: web server next-gen
+      digest: 0000000000000000000000000000000000000000000000000000000000000000
+      urls:
+        - oci://registry-1.docker.io/bitnamicharts/nginx:2.0.0
+generated: "2026-04-20T00:00:00Z"
+`
+	mux := http.NewServeMux()
+	mux.HandleFunc("/index.yaml", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/x-yaml")
+		_, _ = w.Write([]byte(index))
+	})
+	mux.HandleFunc("/charts/nginx-1.0.0.tgz", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/gzip")
+		_, _ = w.Write(chartHTTP)
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	ctx := context.Background()
+	pid, err := projectsRepo.Create(ctx, "ociproj", "oci skip regression")
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	rid, err := reposRepo.Create(ctx, pid, "helm", "r1", "", nil, nil, nil)
+	if err != nil {
+		t.Fatalf("create repo: %v", err)
+	}
+
+	dataRoot := t.TempDir()
+	repoRoot := filepath.Join(dataRoot, "repos")
+	pathStore := storage.NewPathStore(repoRoot)
+
+	h := helm.NewSyncHandler(helm.SyncDeps{
+		DB:         db,
+		Path:       pathStore,
+		HelmCharts: helmCharts,
+		Repos:      reposRepo,
+		Projects:   projectsRepo,
+		Scans:      scans,
+		Coalescer:  nil,
+		HTTPClient: srv.Client(),
+		RepoRoot:   repoRoot,
+		Cfg:        config.SyncConfig{MaxParallelDownloadsPerJob: 1},
+		SyncJobs:   metadata.NewSyncJobsRepo(db),
+	})
+
+	jobID := seedHelmSyncJobRow(t, db, rid)
+
+	payload := map[string]string{"upstream_url": srv.URL}
+	pb, _ := json.Marshal(payload)
+	if err := h.Handle(ctx, string(pb), 0, rid, jobID); err != nil {
+		t.Fatalf("Handle returned error (oci:// entry should be skipped, not fatal): %v", err)
+	}
+
+	// Sync should have landed exactly the 1 http-tgz chart (nginx-1.0.0).
+	// The oci:// entry (nginx-2.0.0) must not be counted or fetched.
+	var count int64
+	if err := db.Reader.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM helm_charts WHERE repo_id=?`, rid,
+	).Scan(&count); err != nil {
+		t.Fatalf("count helm_charts: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("helm_charts rowcount=%d; want 1 (http-tgz chart only; oci:// entry must be skipped)", count)
+	}
+
+	// Job row should show status progression to done (progress_bytes = 1
+	// chart processed, not 2).
+	var (
+		progressBytes, totalBytes int64
+		currentStep               string
+	)
+	if err := db.Reader.QueryRowContext(ctx,
+		`SELECT progress_bytes, total_bytes, current_step FROM sync_jobs WHERE id=?`, jobID,
+	).Scan(&progressBytes, &totalBytes, &currentStep); err != nil {
+		t.Fatalf("scan sync_jobs row: %v", err)
+	}
+	if totalBytes != 0 {
+		t.Errorf("total_bytes=%d; want 0 (Helm step-based)", totalBytes)
+	}
+	if currentStep != "done" {
+		t.Errorf("current_step=%q; want \"done\"", currentStep)
+	}
+	// progress_bytes is the chart count at the final Set; should be 1
+	// (only the http-tgz chart made it into entries[]).
+	if progressBytes != 1 {
+		t.Errorf("progress_bytes=%d; want 1 (oci:// chart skipped, http-tgz chart processed)", progressBytes)
+	}
+}

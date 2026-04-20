@@ -149,12 +149,34 @@ func (h *SyncHandler) Handle(ctx context.Context, payload string, projectID, rep
 	// Phase 8 Plan 02 / M2.7: collect entries first so the step format
 	// knows the total chart count. Helm is step-based — total_bytes stays
 	// 0 (D-11).
-	var entries []UpstreamEntry
+	//
+	// Phase 9 POLISH-05: upstream chart repos are migrating to OCI (e.g.
+	// bitnami post-2024 publishes newer versions as
+	// `oci://registry-1.docker.io/bitnamicharts/<chart>:<version>`). This
+	// sync only speaks HTTP(S) today — OCI chart ingestion is a deferred
+	// feature, not an in-scope v1.2 fix. We SKIP oci:// (and any other
+	// non-HTTP) entries with an audit note so the HTTP-tgz portion of the
+	// index still mirrors cleanly. Without this filter a single oci://
+	// entry fails the whole sync and the job retries indefinitely,
+	// re-downloading every successfully-fetched chart on each attempt.
+	var (
+		entries       []UpstreamEntry
+		skippedOCI    int
+		skippedOtherP int
+	)
 	collectFn := func(ent UpstreamEntry) error {
 		if ent.Digest != "" {
 			if existing, ferr := h.deps.HelmCharts.FindByDigest(ctx, repoID, ent.Digest); ferr == nil && existing != nil {
 				return nil
 			}
+		}
+		switch {
+		case strings.HasPrefix(ent.Path, "oci://"):
+			skippedOCI++
+			return nil
+		case !strings.HasPrefix(ent.Path, "http://") && !strings.HasPrefix(ent.Path, "https://"):
+			skippedOtherP++
+			return nil
 		}
 		entries = append(entries, ent)
 		return nil
@@ -162,6 +184,19 @@ func (h *SyncHandler) Handle(ctx context.Context, payload string, projectID, rep
 	_, parseErr := ParseUpstream(ctx, h.deps.HTTPClient, pl.UpstreamURL, creds, *pl.Filter, collectFn)
 	if parseErr != nil {
 		return h.fail(ctx, repoID, pl, startedAt, httpx.SanitizeUpstreamErr(parseErr))
+	}
+	if (skippedOCI > 0 || skippedOtherP > 0) && h.deps.Audit != nil {
+		_ = h.deps.Audit.Record(ctx, audit.Event{
+			Kind:       audit.EvtSyncProgress,
+			TargetKind: "repo",
+			TargetID:   strconv.FormatInt(repoID, 10),
+			Details: map[string]any{
+				"skipped_oci_entries":     skippedOCI,
+				"skipped_non_http_entries": skippedOtherP,
+				"upstream_url":            pl.UpstreamURL,
+				"note":                    "OCI chart ingestion not yet supported; http(s) tgz entries mirrored normally",
+			},
+		})
 	}
 
 	progress := jobs.NewProgressWriter(h.deps.SyncJobs, jobID)

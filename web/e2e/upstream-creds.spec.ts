@@ -361,6 +361,47 @@ test.describe('Upstream credentials tab (Phase 8 / plan 08-05)', () => {
     expect(state.creds.length).toBe(0);
   });
 
+  // POLISH-02 regression: the CRED_KINDS dropdown was 6 entries pre-9.
+  // After POLISH-02 it must be exactly 5 with no "deb alias" row.
+  test('cred-kind dropdown has 5 entries and no "deb alias" row', async ({
+    page,
+    request,
+  }) => {
+    const project = await seedProject(request, `ucreds-dropdown-${Date.now()}`);
+    await installCredRoutes(page, project);
+
+    await uiLoginAdmin(page);
+    await page.goto(`/projects/${encodeURIComponent(project)}/settings`);
+
+    // Open the Add-credential dialog from the EmptyState.
+    await expect(page.getByTestId('empty-state')).toBeVisible();
+    await page
+      .getByTestId('empty-state')
+      .getByRole('button', { name: /^Add credential$/i })
+      .click();
+
+    const dialog = page.getByRole('dialog', { name: 'Add upstream credential' });
+    await expect(dialog).toBeVisible();
+
+    const dropdown = dialog.locator('select#cred-kind');
+    await expect(dropdown.locator('option')).toHaveCount(5);
+
+    // Sorted value set must equal the canonical five.
+    const values = await dropdown
+      .locator('option')
+      .evaluateAll((opts) =>
+        opts.map((o) => (o as HTMLOptionElement).value),
+      );
+    expect(values.slice().sort()).toEqual(
+      ['apt', 'docker', 'helm', 'pypi', 'rpm'],
+    );
+
+    // Negative regression: no "deb alias" label anywhere in the options.
+    await expect(
+      dropdown.locator('option', { hasText: /deb alias/ }),
+    ).toHaveCount(0);
+  });
+
   test('secrets never disclosed: full DOM scan; secret123 never appears', async ({
     page,
     request,

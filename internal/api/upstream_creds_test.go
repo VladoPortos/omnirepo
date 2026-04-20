@@ -397,6 +397,149 @@ func TestUpstreamCreds_DuplicateHostKindReturns409(t *testing.T) {
 }
 
 // -------------------------------------------------------------------------
+// POLISH-02 / D-13 regression tests — legacy `kind="deb"` redirect.
+// -------------------------------------------------------------------------
+
+// assertDebMigrationEnvelope decodes the response body as an
+// ApiErrorEnvelope and asserts every field required by the POLISH-02
+// contract (D-13). Shared between POST + PATCH tests so the wire shape
+// cannot drift between the two handlers.
+func assertDebMigrationEnvelope(t *testing.T, buf []byte) {
+	t.Helper()
+	var env map[string]any
+	if err := json.Unmarshal(buf, &env); err != nil {
+		t.Fatalf("body is not valid JSON: %v; body=%s", err, buf)
+	}
+	// Top-level envelope (NOT nested under `.error` — verified against
+	// internal/api/errors_bridge_test.go line 135+).
+	if got, want := env["code"], "validation.invalid_cred_kind"; got != want {
+		t.Errorf("code = %v, want %q", got, want)
+	}
+	if got, want := env["class"], "validation"; got != want {
+		t.Errorf("class = %v, want %q", got, want)
+	}
+	msg, _ := env["message"].(string)
+	if !strings.Contains(msg, "deb") || !strings.Contains(msg, "apt") {
+		t.Errorf("message %q must mention both 'deb' and 'apt'", msg)
+	}
+	details, _ := env["details"].(map[string]any)
+	if details == nil {
+		t.Fatalf("details missing from envelope: %s", buf)
+	}
+	if got, want := details["field"], "kind"; got != want {
+		t.Errorf("details.field = %v, want %q", got, want)
+	}
+	if got, want := details["received"], "deb"; got != want {
+		t.Errorf("details.received = %v, want %q", got, want)
+	}
+	accSlice, _ := details["accepted"].([]any)
+	if len(accSlice) != 5 {
+		t.Fatalf("details.accepted len = %d, want 5: %v", len(accSlice), accSlice)
+	}
+	// Order-independent set membership — the handler ships
+	// {"docker","rpm","apt","pypi","helm"} but tests shouldn't couple
+	// to slice order.
+	want := map[string]bool{"docker": true, "rpm": true, "apt": true, "pypi": true, "helm": true}
+	for _, v := range accSlice {
+		s, ok := v.(string)
+		if !ok {
+			t.Fatalf("details.accepted[] non-string: %#v", v)
+		}
+		if !want[s] {
+			t.Errorf("details.accepted contains unexpected kind %q", s)
+		}
+		delete(want, s)
+	}
+	if len(want) != 0 {
+		t.Errorf("details.accepted missing kinds: %v", want)
+	}
+}
+
+// TestCreateUpstreamCred_DebKind_Returns400WithMigrationHint verifies the
+// POST pre-check: POSTing kind="deb" returns HTTP 400 with the
+// POLISH-02 redirect envelope, NOT the 422 that a generic unknown kind
+// would emit.
+func TestCreateUpstreamCred_DebKind_Returns400WithMigrationHint(t *testing.T) {
+	f := setupUpstreamCredFixture(t)
+	body := map[string]any{
+		"host":     "archive.example.com",
+		"kind":     "deb",
+		"password": "pw",
+	}
+	resp, buf := f.s.doBytes(t, "POST",
+		"/api/v1/projects/"+f.projA+"/upstream-creds/", f.aliceCookie, body)
+	if resp.StatusCode != 400 {
+		t.Fatalf("POST code=%d, want 400 (POLISH-02 redirect, not 422); body=%s",
+			resp.StatusCode, buf)
+	}
+	assertDebMigrationEnvelope(t, buf)
+}
+
+// TestUpdateUpstreamCred_DebKind_Returns400WithMigrationHint verifies the
+// same pre-check applies on PATCH. The pre-check runs BEFORE any DB
+// lookup, so the test does NOT need to pre-seed a cred — the kind check
+// is rejected first. (We still need a valid project + cred id path, so
+// seed a cred first and then PATCH it with kind="deb".)
+func TestUpdateUpstreamCred_DebKind_Returns400WithMigrationHint(t *testing.T) {
+	f := setupUpstreamCredFixture(t)
+	// Seed a cred with a valid kind so we have an id to PATCH against.
+	createBody := map[string]any{
+		"host":     "archive.example.com",
+		"kind":     "apt",
+		"password": "pw",
+	}
+	resp, buf := f.s.doBytes(t, "POST",
+		"/api/v1/projects/"+f.projA+"/upstream-creds/", f.aliceCookie, createBody)
+	if resp.StatusCode != 201 {
+		t.Fatalf("seed-create code=%d body=%s", resp.StatusCode, buf)
+	}
+	var created map[string]any
+	_ = json.Unmarshal(buf, &created)
+	id := int64(created["id"].(float64))
+
+	// PATCH with kind="deb" — should hit the redirect envelope.
+	patchBody := map[string]any{
+		"kind":     "deb",
+		"password": "pw2",
+	}
+	resp, buf = f.s.doBytes(t, "PATCH",
+		"/api/v1/projects/"+f.projA+"/upstream-creds/"+itoa(id), f.aliceCookie, patchBody)
+	if resp.StatusCode != 400 {
+		t.Fatalf("PATCH code=%d, want 400; body=%s", resp.StatusCode, buf)
+	}
+	assertDebMigrationEnvelope(t, buf)
+}
+
+// TestCreateUpstreamCred_AptKind_StillWorks is the positive-path
+// regression: proves the POLISH-02 pre-check does NOT accidentally
+// intercept `kind="apt"`. Without this, a copy-paste typo in the
+// pre-check (e.g. `== "apt"`) would silently break the canonical
+// path and the deb-redirect test would still pass.
+func TestCreateUpstreamCred_AptKind_StillWorks(t *testing.T) {
+	f := setupUpstreamCredFixture(t)
+	body := map[string]any{
+		"host":     "archive.example.com",
+		"kind":     "apt",
+		"password": "pw",
+	}
+	resp, buf := f.s.doBytes(t, "POST",
+		"/api/v1/projects/"+f.projA+"/upstream-creds/", f.aliceCookie, body)
+	if resp.StatusCode != 201 {
+		t.Fatalf("apt POST code=%d, want 201; body=%s", resp.StatusCode, buf)
+	}
+	var created map[string]any
+	if err := json.Unmarshal(buf, &created); err != nil {
+		t.Fatalf("unmarshal: %v; body=%s", err, buf)
+	}
+	if got := created["kind"]; got != "apt" {
+		t.Errorf("kind = %v, want apt", got)
+	}
+	if got := created["host"]; got != "archive.example.com" {
+		t.Errorf("host = %v, want archive.example.com", got)
+	}
+}
+
+// -------------------------------------------------------------------------
 // helpers
 // -------------------------------------------------------------------------
 

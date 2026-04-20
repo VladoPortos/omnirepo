@@ -176,9 +176,32 @@ func (h *SyncHandler) Handle(ctx context.Context, payload string, projectID, rep
 		totalBytes += ent.Size
 		return nil
 	}
-	_, parseErr := ParseUpstream(ctx, h.deps.HTTPClient, pl.UpstreamURL, suite, creds, *pl.Filter, collectFn)
-	if parseErr != nil {
-		return h.fail(ctx, repoID, pl, startedAt, httpx.SanitizeUpstreamErr(parseErr))
+	// Phase 8 live-test fix: iterate ParseUpstream over each suite the
+	// filter names. The mirror UI submits suites via `filter.Suites`
+	// (CSV input in FilterWidgetApt); the v1.0 top-level `suite` field
+	// is unset for mirror-driven syncs and would otherwise default to
+	// "stable", which Ubuntu archives don't publish — ParseUpstream
+	// then returns (0, nil) silently, yielding a 0-byte "done" with no
+	// files. Iterating matches the filter's intent: "sync every suite
+	// in this list".
+	suitesToSync := pl.Filter.Suites
+	if len(suitesToSync) == 0 {
+		suitesToSync = []string{suite}
+	}
+	// Remove the Suites narrow from the inner filter so ParseUpstream's
+	// per-suite accept gate passes (filter.acceptSuite is what blocked
+	// the whole sync when the top-level suite didn't appear in
+	// filter.Suites).
+	innerFilter := *pl.Filter
+	innerFilter.Suites = nil
+	for _, s := range suitesToSync {
+		if s == "" {
+			continue
+		}
+		_, parseErr := ParseUpstream(ctx, h.deps.HTTPClient, pl.UpstreamURL, s, creds, innerFilter, collectFn)
+		if parseErr != nil {
+			return h.fail(ctx, repoID, pl, startedAt, httpx.SanitizeUpstreamErr(parseErr))
+		}
 	}
 
 	// ProgressWriter persists (step, done, total) under the throttle

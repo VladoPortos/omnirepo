@@ -169,12 +169,11 @@ func (r *SyncJobsRepo) SetProgress(ctx context.Context, jobID int64, step string
 // (Phase 8 Plan 01, D-07) to enforce one-in-flight-sync-per-repo with
 // 409 sync_already_running.
 //
-// T-08-01-04 residual risk: the call is NOT wrapped in a tx with the
-// subsequent Enqueue; two concurrent /sync POSTs can both observe zero
-// and both enqueue. The worker pool's LeaseOne uses a single-statement
-// UPDATE ... RETURNING so only one dispatcher runs each job; the cost
-// of the race is one wasted pending row, reaped by the next
-// RecoverStale sweep.
+// Reader-pool variant (fast-path pre-check). Callers that MUST enforce
+// "exactly one in-flight at a time" should use CountRepoInflightTx within
+// the same writer tx as Enqueue — modernc SQLite serialises writer-pool
+// statements so the check+insert pair becomes atomic. See plan 08-06
+// Codex rescue Q7 for history.
 func (r *SyncJobsRepo) CountRepoInflight(ctx context.Context, repoID int64) (int, error) {
 	var n int
 	err := r.db.Reader.QueryRowContext(ctx, `
@@ -183,6 +182,25 @@ func (r *SyncJobsRepo) CountRepoInflight(ctx context.Context, repoID int64) (int
 	`, repoID).Scan(&n)
 	if err != nil {
 		return 0, fmt.Errorf("sync_jobs: count inflight %d: %w", repoID, err)
+	}
+	return n, nil
+}
+
+// CountRepoInflightTx is the tx-scoped variant of CountRepoInflight,
+// intended to be called inside the same DB.WriteTx as the subsequent
+// Enqueue so the check+insert pair is atomic against concurrent /sync
+// POSTs (plan 08-06 Codex rescue Q7). SQLite serialises writer-pool
+// statements; running the COUNT inside the tx guarantees a second caller
+// sees the first caller's pending INSERT before it gets a chance to
+// observe inflight=0.
+func (r *SyncJobsRepo) CountRepoInflightTx(ctx context.Context, tx *sql.Tx, repoID int64) (int, error) {
+	var n int
+	err := tx.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM sync_jobs
+		WHERE repo_id = ? AND status IN ('pending','running')
+	`, repoID).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("sync_jobs: count inflight tx %d: %w", repoID, err)
 	}
 	return n, nil
 }

@@ -269,8 +269,26 @@ func (d SyncRESTDeps) handleSync(w http.ResponseWriter, r *http.Request) {
 		kind = "apt_sync"
 	}
 
-	var jobID int64
+	// Plan 08-06 Codex rescue Q7: CountRepoInflight + Enqueue must be
+	// atomic against concurrent /sync POSTs. The earlier Reader-pool
+	// CountRepoInflight above is a fast-path short-circuit; the
+	// authoritative check lives inside the writer tx. SQLite serialises
+	// writer-pool statements so the tx-scoped count+insert pair is
+	// race-free — a second caller either (a) sees the first tx's pending
+	// row and returns errInflight, or (b) commits first and makes the
+	// second caller observe inflight > 0.
+	var (
+		jobID       int64
+		errInflight = errors.New("sync_already_running_tx")
+	)
 	wtxErr := d.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
+		n, err := d.SyncJobs.CountRepoInflightTx(r.Context(), tx, repo.ID)
+		if err != nil {
+			return err
+		}
+		if n > 0 {
+			return errInflight
+		}
 		id, err := d.SyncJobs.Enqueue(r.Context(), tx, kind, proj.ID, repo.ID, string(buf))
 		if err != nil {
 			return err
@@ -278,6 +296,11 @@ func (d SyncRESTDeps) handleSync(w http.ResponseWriter, r *http.Request) {
 		jobID = id
 		return nil
 	})
+	if errors.Is(wtxErr, errInflight) {
+		writeJSONErr(w, http.StatusConflict, codeSyncAlreadyRunning,
+			"a sync is already running for this repo")
+		return
+	}
 	if wtxErr != nil {
 		slog.ErrorContext(r.Context(), "sync.rest.enqueue", "err", wtxErr)
 		writeJSONErr(w, http.StatusInternalServerError, "internal", "enqueue")

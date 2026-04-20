@@ -287,3 +287,89 @@ func TestSyncJobsRepo_CountRepoInflight_Empty(t *testing.T) {
 		t.Fatalf("n = %d, want 0", n)
 	}
 }
+
+// TestSyncJobsRepo_CountRepoInflightTx — plan 08-06 Codex rescue Q7.
+// The tx-scoped variant lets callers run check+Enqueue atomically to
+// eliminate the documented T-08-01-04 race. Asserts shape parity with
+// CountRepoInflight (same SQL, writer-pool path).
+func TestSyncJobsRepo_CountRepoInflightTx(t *testing.T) {
+	t.Parallel()
+	db := sqlitetest.New(t)
+	ctx := context.Background()
+	jobs := metadata.NewSyncJobsRepo(db)
+	pid := seedProject(t, db, "inflight-tx")
+	repos := metadata.NewReposRepo(db)
+	repoA, err := repos.Create(ctx, pid, "deb", "r-a", "", nil, nil, nil)
+	if err != nil {
+		t.Fatalf("seed repo A: %v", err)
+	}
+	repoB, err := repos.Create(ctx, pid, "rpm", "r-b", "", nil, nil, nil)
+	if err != nil {
+		t.Fatalf("seed repo B: %v", err)
+	}
+
+	// Seed 2 pending rows for repoA.
+	if err := db.WriteTx(ctx, func(tx *sql.Tx) error {
+		for i := 0; i < 2; i++ {
+			if _, err := jobs.Enqueue(ctx, tx, "apt_sync", pid, repoA, `{}`); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	// Read count inside a writer tx — the path the fixed sync REST handler
+	// takes.
+	var n int
+	if err := db.WriteTx(ctx, func(tx *sql.Tx) error {
+		got, err := jobs.CountRepoInflightTx(ctx, tx, repoA)
+		if err != nil {
+			return err
+		}
+		n = got
+		return nil
+	}); err != nil {
+		t.Fatalf("count in tx: %v", err)
+	}
+	if n != 2 {
+		t.Fatalf("CountRepoInflightTx=%d; want 2", n)
+	}
+
+	// repoB has zero rows → 0.
+	if err := db.WriteTx(ctx, func(tx *sql.Tx) error {
+		got, err := jobs.CountRepoInflightTx(ctx, tx, repoB)
+		if err != nil {
+			return err
+		}
+		n = got
+		return nil
+	}); err != nil {
+		t.Fatalf("count repoB in tx: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("unrelated repo n=%d; want 0", n)
+	}
+
+	// Within the SAME tx, an Enqueue is immediately visible to a
+	// subsequent CountRepoInflightTx — this is the race-closing
+	// guarantee: a second /sync caller would observe the in-flight row
+	// before it gets to enqueue its own.
+	if err := db.WriteTx(ctx, func(tx *sql.Tx) error {
+		if _, err := jobs.Enqueue(ctx, tx, "rpm_sync", pid, repoB, `{}`); err != nil {
+			return err
+		}
+		got, err := jobs.CountRepoInflightTx(ctx, tx, repoB)
+		if err != nil {
+			return err
+		}
+		n = got
+		return nil
+	}); err != nil {
+		t.Fatalf("enqueue+count in tx: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("same-tx enqueue+count n=%d; want 1 (race-closing guarantee)", n)
+	}
+}

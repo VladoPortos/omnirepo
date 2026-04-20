@@ -30,6 +30,8 @@ import type {
   ProjectCreate,
   ProjectCreateResponse,
   ActivityItem,
+  PullExternalRequest,
+  PullExternalResponse,
   Repo,
   RepoCreate,
   RepoPatch,
@@ -993,6 +995,45 @@ export function useDeleteBucket(projectName: string) {
       qc.invalidateQueries({ queryKey: ['projects', projectName] });
       qc.invalidateQueries({ queryKey: ['dashboard'] });
       qc.invalidateQueries({ queryKey: ['dashboard', 'storage'] });
+    },
+  });
+}
+
+// -- Docker pull-external (Phase 8 / plan 08-03) ---------------------------
+
+/**
+ * usePullExternal — enqueues a Docker clone-external job via
+ * POST /api/v1/projects/{name}/repos/docker/{repo}/pull-external. Body
+ * fields match the Go wire shape in
+ * `internal/protocol/oci/pull_external.go:PullExternalRequest`:
+ *   - src_image (required)           e.g. "docker.io/library/nginx:1.27"
+ *   - dst_tag (optional)             retag under the destination repo
+ *   - cred_id (optional)             ID of a stored upstream credential
+ *   - src_username / src_password    inline creds, cleartext in v1.1
+ *
+ * Returns { job_id } — the CloneImageDialog feeds that into
+ * useJobProgress to render the live progress bar. On success the
+ * repo's content + scans caches are invalidated so the newly-cloned
+ * image appears in the tag list as soon as the job finishes.
+ */
+export function usePullExternal(projectName: string, repoName: string) {
+  const qc = useQueryClient();
+  return useMutation<PullExternalResponse, Error, PullExternalRequest>({
+    mutationFn: (body) =>
+      api.post<PullExternalResponse>(
+        `/projects/${enc(projectName)}/repos/docker/${enc(repoName)}/pull-external`,
+        body,
+      ),
+    onSuccess: () => {
+      // Invalidate lazily — the pool hasn't finished the job yet.
+      // CloneImageDialog re-invalidates these keys explicitly when the
+      // polled job flips to status=done, which is when the new tag
+      // actually shows up in /content. Keeping this invalidation here
+      // is a best-effort for any fast-path (<500ms) jobs that land
+      // done before the poll observes them.
+      qc.invalidateQueries({
+        queryKey: ['repo-content', projectName, 'docker', repoName],
+      });
     },
   });
 }

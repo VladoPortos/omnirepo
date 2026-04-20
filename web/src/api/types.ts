@@ -282,6 +282,62 @@ export interface SyncJob {
   finished_at: string;
 }
 
+// JobStatus alias for the subset used by live progress polling
+// (Phase 8 / plan 08-03). Same wire tokens as SyncJobStatus.
+export type JobStatus = SyncJobStatus;
+
+/**
+ * JobDetail mirrors the response from GET
+ * /api/v1/projects/{name}/repos/{type}/{repo}/sync-jobs/{id} per Phase 8
+ * plan 08-02 (`internal/api/repos_list.go:syncJobItem`). progress_bytes,
+ * total_bytes, and current_step are always present in the payload — the
+ * backend COALESCE-defaults them to 0 / 0 / "" so the UI can render a
+ * deterministic cold-start frame. `last_error` is a plain string (NOT
+ * an ApiErrorEnvelope) because the backend writes sync_jobs.last_error
+ * as a pre-envelope operator-facing string; the UI wraps it into a
+ * local envelope for rendering via ErrorEnvelopeRenderer.
+ */
+export interface JobDetail {
+  id: number;
+  kind: string;
+  status: JobStatus;
+  attempts: number;
+  last_error?: string;
+  payload_json?: string;
+  log?: string;
+  progress_bytes: number;
+  total_bytes: number;
+  current_step: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * PullExternalRequest matches the Go wire shape at
+ * `internal/protocol/oci/pull_external.go:PullExternalRequest`. Key
+ * naming delta from plan 08-03's original sketch: the backend uses
+ * `src_image` + `dst_tag` (NOT `src` + `retag_as`). The plan's
+ * `scan_override` field is NOT accepted by the v1.1 backend endpoint —
+ * the repo's stored `auto_scan` flag governs per-pull scanning. UI
+ * consumers may still render a scan-override checkbox, but we only
+ * send the four fields the backend accepts.
+ */
+export interface PullExternalRequest {
+  src_image: string;
+  dst_tag?: string;
+  cred_id?: number;
+  src_username?: string;
+  src_password?: string;
+}
+
+/**
+ * PullExternalResponse is the enqueue response emitted by the
+ * /pull-external handler — a plain `{ job_id }` at HTTP 202.
+ */
+export interface PullExternalResponse {
+  job_id: number;
+}
+
 // -- Scan --
 
 export type ScanStatus = 'pending' | 'running' | 'done' | 'failed';

@@ -277,4 +277,69 @@ test.describe('Mirror repo creation (Phase 8 / plan 08-04)', () => {
     await dialog.getByRole('button', { name: /Create Repository/i }).click();
     await expect(dialog.getByText('URL must use http(s)')).toBeVisible();
   });
+
+  // Plan 09-03 / POLISH-04 D-21 — the upstream-URL input's placeholder must
+  // be a short DESCRIPTION, not a URL literal. A future refactor that
+  // silently reintroduces a `https://...` placeholder regresses the
+  // air-gap posture (URL literal lands in web/dist/). This spec asserts
+  // the exact D-21 strings for all four mirror protocols AND that no
+  // `https://` ever leaks into the placeholder attribute.
+  test('upstream URL placeholder shows a description, not a URL', async ({
+    page,
+    request,
+  }) => {
+    const project = await seedProject(request, `mirror-placeholder-${Date.now()}`);
+
+    await page.route(
+      `**/api/v1/projects/${encodeURIComponent(project)}/upstream-creds/`,
+      (route) =>
+        route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify([]),
+        }),
+    );
+
+    await uiLoginAdmin(page);
+    await page.goto(`/projects/${encodeURIComponent(project)}`);
+    await page.getByRole('tab', { name: /^APT/ }).click();
+    await page
+      .getByRole('button', { name: /Create Repository/i })
+      .first()
+      .click();
+
+    const dialog = page.getByRole('dialog', { name: 'Create Repository' });
+    await expect(dialog).toBeVisible();
+
+    // Turn on the mirror checkbox so the upstream-URL input is rendered.
+    await dialog
+      .getByRole('checkbox', { name: 'This repo is a mirror of an upstream' })
+      .click();
+
+    // (protocol value, Select option label, expected D-21 placeholder)
+    const cases: Array<[string, string, string]> = [
+      ['deb', 'APT', 'e.g. your distro mirror'],
+      ['rpm', 'RPM', 'e.g. your distro mirror'],
+      ['pypi', 'PyPI', 'e.g. your PyPI index'],
+      ['helm', 'Helm', 'e.g. your chart repo'],
+    ];
+
+    for (const [, optionLabel, expected] of cases) {
+      // Switch the repo-type Select to this protocol.
+      await dialog.locator('button#repo-type').click();
+      await page.getByRole('option', { name: optionLabel, exact: true }).click();
+
+      // Placeholder is the D-21 description string, verbatim.
+      await expect(dialog.locator('input#mirror-url')).toHaveAttribute(
+        'placeholder',
+        expected,
+      );
+
+      // Defensive: no https:// ever leaks into the placeholder attribute.
+      const placeholder = await dialog
+        .locator('input#mirror-url')
+        .getAttribute('placeholder');
+      expect(placeholder ?? '').not.toMatch(/https?:\/\//);
+    }
+  });
 });

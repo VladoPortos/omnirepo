@@ -6,22 +6,30 @@
 
 ## Active milestone
 
-**v1.1 — Immediate Product Polish** (scoped 2026-04-17, rescoped 2026-04-17)
-— 2 phases, 33 requirements across 4 categories (SNIPPET, EMPTY, ERR, VISUAL).
-UI/UX quality-of-life pass on top of shipped v1.0 protocol surfaces. No core
-protocol reworks; no new backend surfaces beyond what Phase 6 already shipped.
-Invariants carried forward: single Go binary, local FS only, zero outbound at
-runtime, `make grep-cdn` green, stack frozen at Go 1.25 + React 19 + Vite +
-Tailwind 4.
+**v1.1 — Immediate Product Polish** (scoped 2026-04-17, rescoped 2026-04-17, re-extended 2026-04-19)
+— 3 phases, 33 requirements across 4 categories (SNIPPET, EMPTY, ERR, VISUAL)
+plus one net-new scope addition (MIRROR — REQ IDs TBD at phase plan time).
+UI/UX quality-of-life pass on top of shipped v1.0 protocol surfaces, plus
+UI wiring for already-shipped upstream-mirror backend before public release.
+Invariants carried forward: single Go binary, local FS only, zero outbound
+at runtime except explicit user-triggered syncs, `make grep-cdn` green,
+stack frozen at Go 1.25 + React 19 + Vite + Tailwind 4.
 
 **Rescoped 2026-04-17:** Phases 8 (FAV), 9 (HEALTH), 10 (OVERVIEW) were dropped
-from v1.1 and deferred to v1.2. v1.1 ships after Phase 7. See
-REQUIREMENTS.md "Deferred to v1.2" section for the REQ list that moves.
+from v1.1 and deferred to v1.2. See REQUIREMENTS.md "Deferred to v1.2" section
+for the REQ list that moves.
+
+**Re-extended 2026-04-19:** Phase 8 (Upstream Mirror & Docker Clone) added
+as a pre-public-release scope addition. Spec:
+`docs/superpowers/specs/2026-04-19-upstream-mirror-design.md`.
+Names "Phase 8/9/10 (deferred)" below refer to historical v1.1 scope before
+the 2026-04-17 rescope; v1.2 will re-number its own phases fresh.
 
 ### Phases
 
 - [x] **Phase 6: Error Envelope & Visual Foundation** — Stable error contract and shared design-system primitives every later v1.1 phase consumes. ✅ Shipped 2026-04-17.
 - [ ] **Phase 7: Snippet Polish, Dashboard Cards & Empty States** — Accuracy pass on existing per-protocol client snippets, additive summary cards on the existing Dashboard using already-available signal, context-aware empty states on previously-blank surfaces, plus walkthrough micro-fixes surfaced during UI screen-driving.
+- [ ] **Phase 8: Upstream Mirror & Docker Clone** — UI for already-shipped upstream-mirror backend. Adds per-repo is_mirror flag at creation (APT/RPM/PyPI/Helm), Docker per-click clone modal with live progress bar, upstream-credentials CRUD UI, upload-block for mirror repos, scan_on_sync toggle (default OFF).
 
 ### Phase Details
 
@@ -81,6 +89,27 @@ Plans:
 - [x] 07-09-PLAN.md — Codex rescue sweep (W-01) + findings triage + phase closure
 **UI hint**: yes
 
+#### Phase 8: Upstream Mirror & Docker Clone
+**Goal**: Wire the UI for OmniRepo's already-shipped upstream-mirror backend (sync_handlers for APT/RPM/PyPI/Helm; pull-external for OCI; encrypted upstream credentials; jobs pool) so the v1.1 public release lets operators point a repo at an upstream archive (Ubuntu focal main/universe amd64 etc.) or clone individual Docker images on demand. Adds per-repo `is_mirror` flag at creation time (immutable URL, editable filter), Docker per-click clone modal with live byte-level progress, upstream-credentials CRUD UI on ProjectSettingsPage, upload-block middleware for mirror repos, and a new `scan_on_sync` per-repo flag (default OFF). No scheduler — external cron or UI button only. No drift-purge — accumulator semantics only. No Git mirror. Full design spec: `docs/superpowers/specs/2026-04-19-upstream-mirror-design.md`.
+**Depends on**: Phase 7
+**Requirements**: MIRROR-01..NN (IDs assigned at plan time — see phase 08-CONTEXT.md)
+**Success Criteria** (what must be TRUE):
+  1. A user can create an APT/RPM/PyPI/Helm repo with `is_mirror=true`, fill upstream URL + protocol-specific filters + optional credential + optional scan_on_sync flag, and the repo persists those fields. Every attempt to upload to a mirror repo returns 403 envelope `code="repo_is_mirror"` from every protocol's upload handler (verified per-protocol integration tests).
+  2. The existing `POST /api/v1/projects/{name}/repos/{type}/{repo}/sync` endpoint, when called with empty body against a mirror repo, reads mirror config from the repo row and enqueues a sync_jobs row. Calls with body against a mirror repo return 400 `mirror_overrides_not_allowed`. A second sync on a repo with an in-flight sync returns 409 `sync_already_running`.
+  3. The Docker repo page's "Pull External" dialog is rewritten to actually call `POST /pull-external` with source ref + optional retag + optional cred + optional scan override, and displays a live progress bar (layer N/M · bytes / total · pct) via polling `GET /api/v1/jobs/{id}` every 500 ms. Playwright asserts progress advances and success closes the modal.
+  4. The 4 mirror-repo pages (AptRepoPage / RpmRepoPage / PypiRepoPage / HelmRepoPage) render a "Sync now" button visible only when `is_mirror=true`, which POSTs to `/sync` with empty body and surfaces the same job-progress affordance. RepoSettingsTab gains a "Mirror config" card showing URL (readonly), filter (editable), cred (editable), scan_on_sync toggle — all behind PATCH `/repos/{type}/{repo}` with URL-change rejection.
+  5. ProjectSettingsPage gains an "Upstream credentials" tab using the already-mounted `/api/v1/projects/{name}/upstream-creds` CRUD. Secrets never echoed on response. Deleting a cred referenced by a mirror repo sets `mirror_cred_id=NULL` via ON DELETE SET NULL and the next sync fails with a clear "credential missing" envelope.
+  6. `go test ./...` + `make test` + `npm run build` + `make grep-cdn` green; all Phase 6 lint gates still pass; Playwright e2e covers mirror creation, sync-now, Docker clone, and mirror-upload rejection. Codex rescue pass run per CLAUDE.md global rule.
+**Plans:** 6 plans expected (1 per milestone M1–M6 from the design spec)
+Plans:
+- [ ] 08-01-PLAN.md — M1: Backend foundation (schema + mirror-aware sync + upload-reject + concurrency guard)
+- [ ] 08-02-PLAN.md — M2: Progress tracking (writer helper + jobs endpoint + handler wraps across 5 protocols)
+- [ ] 08-03-PLAN.md — M3: Docker clone modal with progress + retag + scan override
+- [ ] 08-04-PLAN.md — M4: Mirror flag UI (CreateRepoDialog + 4 Sync Now buttons + RepoSettingsTab mirror card)
+- [ ] 08-05-PLAN.md — M5: Upstream-credentials CRUD UI tab on ProjectSettingsPage
+- [ ] 08-06-PLAN.md — M6: Integration tests (fake upstreams × 5) + Playwright e2e + Codex rescue
+**UI hint**: yes
+
 ### Deferred to v1.2 (dropped from v1.1 on 2026-04-17)
 
 The following phases were scoped into v1.1 on 2026-04-17 and then dropped the
@@ -110,6 +139,7 @@ re-planned against a fresh v1.2 ROADMAP.md when that milestone opens.
 |-------|----------------|--------|-----------|
 | 6. Error Envelope & Visual Foundation | 8/8 | ✅ Shipped | 2026-04-17 |
 | 7. Snippet Polish, Dashboard Cards & Empty States | 1/9 | In Progress | — |
+| 8. Upstream Mirror & Docker Clone | 0/6 | Not planned | — |
 
 ## Backlog
 

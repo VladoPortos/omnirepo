@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: on 2026-04-17)
 status: executing
-stopped_at: Completed 07-08-PLAN.md
-last_updated: "2026-04-18T04:35:33.011Z"
-last_activity: 2026-04-18
+stopped_at: Phase 8 planned — ready to execute (6 plans passed checker; 4 BLOCKERs + 11 WARNINGs resolved in iteration 2)
+last_updated: "2026-04-19T22:45:00.000Z"
+last_activity: 2026-04-19
 progress:
   total_phases: 3
   completed_phases: 2
-  total_plans: 17
+  total_plans: 23
   completed_plans: 17
-  percent: 100
+  percent: 74
 ---
 
 # STATE: OmniRepo
@@ -37,7 +37,8 @@ Stopped at: Completed 07-08-PLAN.md
 | Phase | Name | Requirements | Depends on |
 |-------|------|--------------|------------|
 | 6 | Error Envelope & Visual Foundation | 16 (ERR-01..07, VISUAL-01..09) — ✅ DONE | Nothing beyond v1.0 |
-| 7 | Snippet Polish, Dashboard Cards & Empty States | 17 (SNIPPET-01..09, EMPTY-01..08) | Phase 6 |
+| 7 | Snippet Polish, Dashboard Cards & Empty States | 17 (SNIPPET-01..09, EMPTY-01..08) — ✅ DONE | Phase 6 |
+| 8 | Upstream Mirror & Docker Clone | MIRROR-01..NN (IDs assigned at plan time) | Phase 7 |
 
 **Deferred to v1.2** (dropped from v1.1 2026-04-17): HEALTH-01..09, FAV-01..07, OVERVIEW-01..08. See `REQUIREMENTS.md` "Deferred to v1.2" section and `ROADMAP.md` "Deferred to v1.2" block.
 
@@ -199,6 +200,20 @@ with the tight scope below.
 - Avatar style picker — DiceBear is already in our deps (`@dicebear/core` + `@dicebear/collection` v9.2.2). Current UI uses only the `initials` collection. Swap to a user-choosable style. ~4-hour feature: picker in profile settings + seed column on users table + migration.
 - Tamagotchi ASCII pet in bottom-right — backlog item 999.1 in ROADMAP.md. Fun/morale feature.
 
+### Roadmap Evolution
+
+- **2026-04-19** — Phase 8 (Upstream Mirror & Docker Clone) added to v1.1 as a
+  pre-public-release scope addition. Brainstormed → design spec written to
+  `docs/superpowers/specs/2026-04-19-upstream-mirror-design.md`. Scope:
+  wire UI for already-shipped upstream-mirror backend across all 5 protocols
+  (Docker/APT/RPM/PyPI/Helm), add `is_mirror` flag at repo creation (for the
+  four non-Docker protocols), Docker per-click clone modal with live progress,
+  upstream-credentials CRUD UI, upload-block middleware for mirror repos,
+  new `scan_on_sync` flag (default OFF). 6 plans M1–M6 expected;
+  ~5–7 working days. No scheduler, no drift purge, no Git mirror — all
+  deferred to v1.2. Phase directory created at
+  `.planning/phases/08-upstream-mirror-and-docker-clone/`.
+
 ### Blockers
 
 (none)
@@ -237,7 +252,7 @@ with the tight scope below.
 
 ## Session Continuity
 
-- **Next action**: Run `/gsd-plan-phase 7` to generate plans for the rescoped Phase 7 (Snippet Polish, Dashboard Cards & Empty States). ROADMAP.md + REQUIREMENTS.md already reflect the tight scope.
+- **Next action**: Run `/gsd-plan-phase 8` to generate plans for Phase 8 (Upstream Mirror & Docker Clone). Design spec at `docs/superpowers/specs/2026-04-19-upstream-mirror-design.md` is the authoritative input — it already decomposes the work into 6 milestones (M1–M6) that map 1:1 to expected plans 08-01..08-06. ROADMAP.md + STATE.md + phase directory reflect the scope addition.
 - **Last session:** 2026-04-18T01:36:45.076Z
 - **Artifacts on disk**:
   - `.planning/PROJECT.md` (Current Milestone: v1.1, Phase 6 progress paragraph added)

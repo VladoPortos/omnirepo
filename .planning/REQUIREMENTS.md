@@ -59,6 +59,36 @@ prefixes (AUTH, REPO, etc.).
 - [x] **VISUAL-08**: Text colors and status colors meet WCAG AA contrast on the default theme
 - [x] **VISUAL-09**: Severity treatment for scan findings is consistent across scan summary, detail page, and drawer views
 
+### MIRROR — Upstream mirror & Docker clone (Phase 8)
+
+- [ ] **MIRROR-01**: User can mark an APT/RPM/PyPI/Helm repo as a mirror of an upstream at creation time (is_mirror flag + upstream URL + filter + cred + scan_on_sync)
+- [ ] **MIRROR-02**: System rejects edits that try to change is_mirror or mirror_upstream_url on an existing repo (400 code=mirror_url_immutable)
+- [ ] **MIRROR-03**: System rejects mirror repo upload attempts on all 5 protocols (OCI, APT, RPM, PyPI, Helm) with 403 code=repo_is_mirror
+- [ ] **MIRROR-04**: System enforces one-in-flight-sync-per-repo with 409 code=sync_already_running
+- [ ] **MIRROR-05**: System rejects bodies on /sync when the target repo is a mirror (400 code=mirror_overrides_not_allowed)
+- [ ] **MIRROR-06**: System bounds /sync request bodies at 16 KiB and rejects oversized/malformed payloads with 400 code=invalid_request_body
+- [ ] **MIRROR-07**: System validates mirror_cred_id belongs to the same project as the repo (400 code=mirror_cred_wrong_project)
+- [ ] **MIRROR-08**: API GET /jobs/{id} returns progress_bytes, total_bytes, and current_step alongside status
+- [ ] **MIRROR-09**: System throttles sync-progress DB writes to at most one per 200 ms per job with change detection
+- [ ] **MIRROR-10**: System emits byte-level progress for OCI pull-external (layer N of M · done / total bytes)
+- [ ] **MIRROR-11**: System emits byte-level progress for APT / RPM / PyPI sync (step = "pulling {artifact}" · done / total bytes)
+- [ ] **MIRROR-12**: System emits step-based progress for Helm sync (chart N of M · total_bytes = 0 because index.yaml lacks sizes)
+- [ ] **MIRROR-13**: User can pull an external Docker image into an OmniRepo docker repo via a UI modal with live byte-level progress
+- [ ] **MIRROR-14**: UI Docker clone modal renders three phases (form → progress → result) and surfaces failure via ErrorEnvelopeRenderer with retry
+- [ ] **MIRROR-15**: UI polls GET /jobs/{id} every 500 ms while a job is active and stops polling on done/failed
+- [ ] **MIRROR-16**: User can create a mirror APT/RPM/PyPI/Helm repo from the UI CreateRepoDialog (upstream URL, filter widget, cred picker, scan-on-sync toggle)
+- [ ] **MIRROR-17**: UI shows protocol-specific filter widgets (APT Suites/Components/Arches/Names/Globs; RPM Names; PyPI Names; Helm Names/Globs) using the PascalCase wire format that matches Go's default JSON encoding of SyncFilter
+- [ ] **MIRROR-18**: User can click "Sync now" on a mirror repo page to trigger POST /sync with live progress bar
+- [ ] **MIRROR-19**: UI disables the Sync now button while a sync is in-flight and surfaces 409 errors inline via ErrorEnvelopeRenderer
+- [ ] **MIRROR-20**: User can edit filter, cred, and scan_on_sync on a mirror repo from RepoSettingsTab (URL stays read-only with CopyInline)
+- [ ] **MIRROR-21**: UI never sends is_mirror or mirror_upstream_url in PATCH bodies (structural enforcement + backend guard)
+- [ ] **MIRROR-22**: User can create, edit, and delete upstream credentials from a ProjectSettingsPage Upstream credentials tab
+- [ ] **MIRROR-23**: UI never displays passwords or tokens after submission; PATCH preserves existing secrets when fields are left blank
+- [ ] **MIRROR-24**: Deleting a credential referenced by a mirror repo triggers a confirmation dialog that warns the next sync will fail with "credential missing" envelope
+- [ ] **MIRROR-25**: Each of the 5 protocols has a fake-upstream integration test proving first-sync ingest + idempotent second-sync + progress completion
+- [ ] **MIRROR-26**: Playwright spec proves the mirror-upload-rejected envelope renders correctly for at least one protocol (APT via real PUT /{project}/deb/{repo}/pool/* route)
+- [ ] **MIRROR-27**: Phase 8 passes a Codex rescue pass with real-issue findings applied and the result recorded in 08-06-CODEX-RESCUE.md
+
 ---
 
 ## Deferred to v1.2 (dropped from v1.1 on 2026-04-17)
@@ -167,7 +197,7 @@ Deferred REQs carry a "v1.2" target and will re-map to concrete phases when
 the v1.2 ROADMAP is created. Phases numbered 6–7 continue from v1.0's
 phases 1–5.
 
-### Active v1.1 (32 REQs)
+### Active v1.1 (59 REQs)
 
 | REQ-ID | Phase | Status |
 |--------|-------|--------|
@@ -203,6 +233,33 @@ phases 1–5.
 | EMPTY-05 | Phase 7 | Complete |
 | EMPTY-06 | Phase 7 | Complete |
 | EMPTY-08 | Phase 7 | Complete |
+| MIRROR-01 | Phase 8 | In progress |
+| MIRROR-02 | Phase 8 | In progress |
+| MIRROR-03 | Phase 8 | In progress |
+| MIRROR-04 | Phase 8 | In progress |
+| MIRROR-05 | Phase 8 | In progress |
+| MIRROR-06 | Phase 8 | In progress |
+| MIRROR-07 | Phase 8 | In progress |
+| MIRROR-08 | Phase 8 | In progress |
+| MIRROR-09 | Phase 8 | In progress |
+| MIRROR-10 | Phase 8 | In progress |
+| MIRROR-11 | Phase 8 | In progress |
+| MIRROR-12 | Phase 8 | In progress |
+| MIRROR-13 | Phase 8 | In progress |
+| MIRROR-14 | Phase 8 | In progress |
+| MIRROR-15 | Phase 8 | In progress |
+| MIRROR-16 | Phase 8 | In progress |
+| MIRROR-17 | Phase 8 | In progress |
+| MIRROR-18 | Phase 8 | In progress |
+| MIRROR-19 | Phase 8 | In progress |
+| MIRROR-20 | Phase 8 | In progress |
+| MIRROR-21 | Phase 8 | In progress |
+| MIRROR-22 | Phase 8 | In progress |
+| MIRROR-23 | Phase 8 | In progress |
+| MIRROR-24 | Phase 8 | In progress |
+| MIRROR-25 | Phase 8 | In progress |
+| MIRROR-26 | Phase 8 | In progress |
+| MIRROR-27 | Phase 8 | In progress |
 
 ### Deferred to v1.2 (25 REQs — re-map at v1.2 planning)
 

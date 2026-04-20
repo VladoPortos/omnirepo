@@ -171,3 +171,53 @@ func TestProgressWriter_NilRepoIsNoOp(t *testing.T) {
 		t.Fatalf("Flush on nil-repo writer: %v", err)
 	}
 }
+
+// TestProgressWriter_ClampsHugeStep — plan 08-06 Codex rescue Q5.
+// Upstream-controlled text (package names, filenames) flows into the
+// step at APT/RPM/PyPI/Helm. A hostile upstream with a megabyte-long
+// package name could otherwise blow up sync_jobs.current_step. The
+// writer clamps at MaxStepLen bytes with a trailing "…" marker.
+func TestProgressWriter_ClampsHugeStep(t *testing.T) {
+	w, repo, _ := newWriter(t, 1)
+	// 100 KiB of A — far over the 1 KiB cap.
+	huge := make([]byte, 100*1024)
+	for i := range huge {
+		huge[i] = 'A'
+	}
+	if err := w.Set(context.Background(), string(huge), 0, 0); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if len(repo.calls) != 1 {
+		t.Fatalf("calls = %d; want 1", len(repo.calls))
+	}
+	got := repo.calls[0].step
+	if len(got) > jobs.MaxStepLen {
+		t.Fatalf("persisted step length %d > MaxStepLen %d", len(got), jobs.MaxStepLen)
+	}
+	// The persisted step should be strictly shorter than the input (we
+	// truncated) AND end with the ellipsis marker so the operator sees
+	// the clamp.
+	if len(got) >= len(huge) {
+		t.Fatalf("step not truncated: len=%d", len(got))
+	}
+	if got[len(got)-len("…"):] != "…" {
+		t.Fatalf("step missing ellipsis marker; last bytes = %q", got[len(got)-3:])
+	}
+}
+
+// TestProgressWriter_ShortStepNotClamped — normal-sized steps pass
+// through byte-for-byte. Critical: no code-path change for the 99.9%
+// of real-world step strings (package names max out ~80 bytes).
+func TestProgressWriter_ShortStepNotClamped(t *testing.T) {
+	w, repo, _ := newWriter(t, 1)
+	short := "pulling redis_7.0.0"
+	if err := w.Set(context.Background(), short, 100, 200); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if len(repo.calls) != 1 {
+		t.Fatalf("calls = %d; want 1", len(repo.calls))
+	}
+	if repo.calls[0].step != short {
+		t.Fatalf("step = %q; want %q", repo.calls[0].step, short)
+	}
+}

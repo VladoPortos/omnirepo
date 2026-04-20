@@ -8,12 +8,61 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"sync"
 	"time"
 
 	"github.com/dxc-internal/omnirepo/internal/config"
 	"github.com/dxc-internal/omnirepo/internal/metadata"
 )
+
+// MaxLastErrorLen caps the handler-error string persisted into
+// sync_jobs.last_error (exposed via GET /sync-jobs/{id}). Plan 08-06 Codex
+// rescue Q2: handler errors can embed upstream response bodies or wrapped
+// Go error chains; we sanitize + truncate before persist so clients of
+// the public API never see a filesystem path, multi-KB HTTP body, or a
+// stack-trace-like error chain. Matches the truncateErr convention in
+// internal/protocol/deb/sync_handler.go (1 KiB).
+const MaxLastErrorLen = 1024
+
+// authHeaderRegex strips Authorization header bytes that some upstream
+// client libraries embed in wrapped errors. Same pattern as
+// internal/httpx/SanitizeUpstreamErr — duplicated here to keep the jobs
+// package free of a httpx import (httpx imports metadata; jobs does not).
+var authHeaderRegex = regexp.MustCompile(`(?i)Authorization:\s*[^\r\n"']*`)
+
+// fsPathRegex matches filesystem paths that could leak via wrapped errors
+// (e.g. "open /var/lib/omnirepo/repos/proj/deb/repo/pool/...: no such file").
+// Conservative shape: starts with `/var/lib/omnirepo/` or `/tmp/` up to the
+// next whitespace / end-of-string. Tighter patterns risk false-positives on
+// legitimate upstream URLs that contain path-like fragments.
+var fsPathRegex = regexp.MustCompile(`/(?:var/lib/omnirepo|tmp)/[^\s:"']+`)
+
+// sanitizeJobError scrubs + truncates a handler error before it lands in
+// sync_jobs.last_error. Applied at the pool.markFailed boundary so all
+// four sync protocols (+ pull-external) share the same redaction regardless
+// of which handler raised the error.
+//
+// Redactions: Authorization header bytes → "Authorization: REDACTED";
+// absolute /var/lib/omnirepo or /tmp paths → "[path]".
+// Truncation: MaxLastErrorLen bytes with a "...[truncated]" suffix.
+func sanitizeJobError(err error) string {
+	if err == nil {
+		return ""
+	}
+	s := err.Error()
+	s = authHeaderRegex.ReplaceAllString(s, "Authorization: REDACTED")
+	s = fsPathRegex.ReplaceAllString(s, "[path]")
+	if len(s) > MaxLastErrorLen {
+		const suffix = "...[truncated]"
+		if cut := MaxLastErrorLen - len(suffix); cut > 0 {
+			s = s[:cut] + suffix
+		} else {
+			s = s[:MaxLastErrorLen]
+		}
+	}
+	return s
+}
 
 // Handler processes one leased job. Returning nil marks the job done;
 // a non-nil error schedules a retry (or terminal failure after
@@ -237,9 +286,13 @@ func (p *Pool) markFailed(ctx context.Context, j *JobView, herr error) {
 		slog.Warn("jobs.markfailed.skipped.shutdown", "pool", p.name, "id", j.ID)
 		return
 	}
+	// Sanitize + truncate handler error before it lands in sync_jobs.last_error
+	// (plan 08-06 Codex rescue Q2). The raw error goes to slog for operators;
+	// the client-visible last_error is scrubbed.
+	safeErr := sanitizeJobError(herr)
 	if nextAttempts >= MaxAttempts {
 		if derr := p.db.WriteTx(ctx, func(tx *sql.Tx) error {
-			return p.repo.MarkPermanentlyFailed(ctx, tx, j.ID, herr.Error())
+			return p.repo.MarkPermanentlyFailed(ctx, tx, j.ID, safeErr)
 		}); derr != nil {
 			slog.Error("jobs.markpermfailed.err", "pool", p.name, "id", j.ID, "err", derr)
 		}
@@ -247,7 +300,7 @@ func (p *Pool) markFailed(ctx context.Context, j *JobView, herr error) {
 	}
 	nextRunAt := time.Now().Add(Backoff(nextAttempts))
 	if derr := p.db.WriteTx(ctx, func(tx *sql.Tx) error {
-		return p.repo.MarkFailed(ctx, tx, j.ID, herr.Error(), nextRunAt)
+		return p.repo.MarkFailed(ctx, tx, j.ID, safeErr, nextRunAt)
 	}); derr != nil {
 		slog.Error("jobs.markfailed.err", "pool", p.name, "id", j.ID, "err", derr)
 	}

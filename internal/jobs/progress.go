@@ -28,6 +28,35 @@ import (
 // writer pool from saturating under parallel sync loads.
 const ProgressMinInterval = 200 * time.Millisecond
 
+// MaxStepLen caps the size of current_step at the ProgressWriter boundary
+// so upstream-controlled strings (package names, filenames) that reach the
+// step via APT/RPM/PyPI/Helm cannot bloat SQLite with multi-megabyte rows.
+// Plan 08-06 Codex rescue Q5: the step text embeds upstream-controlled
+// fields like `pulling <Package>_<Version>` or `chart N of M · <filename>`,
+// so a hostile upstream with a 10 MB package name could otherwise persist
+// that verbatim. 1 KiB is generous enough for every realistic step shape
+// (longest observed: helm `chart 999 of 999 · some-very-long-chart-name-
+// with-vendor-prefix-1.2.3.tgz` ~80 bytes).
+const MaxStepLen = 1024
+
+// clampStep truncates step to MaxStepLen bytes on a UTF-8 boundary. Appends
+// a "…" marker on truncation so the UI / operator sees the row was clamped
+// rather than silently shortened. Uses byte truncation (not rune) because
+// SQLite TEXT columns are byte-counted and a multi-byte rune at the boundary
+// would otherwise land half-written.
+func clampStep(step string) string {
+	if len(step) <= MaxStepLen {
+		return step
+	}
+	// Find the last UTF-8 start byte at or before MaxStepLen-4 (leaving 3
+	// bytes for the "…" UTF-8 sequence + 1 byte headroom).
+	cut := MaxStepLen - 4
+	for cut > 0 && (step[cut]&0xC0) == 0x80 {
+		cut--
+	}
+	return step[:cut] + "…"
+}
+
 // SyncProgressRepo is the narrow interface ProgressWriter calls.
 // metadata.SyncJobsRepo satisfies it; tests supply a fake that records
 // calls without a real DB.
@@ -103,6 +132,8 @@ func (p *ProgressWriter) Set(ctx context.Context, step string, done, total int64
 	if p == nil || p.repo == nil {
 		return nil
 	}
+	// Clamp upstream-controlled step text at the boundary (Codex Q5).
+	step = clampStep(step)
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	// No-change: skip without updating last* (values are already current).

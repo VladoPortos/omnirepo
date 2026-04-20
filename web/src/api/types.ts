@@ -237,6 +237,71 @@ export interface Repo {
   //   (package,arch), git=ref count. 0 is a valid empty repo.
   item_count: number;
   created_at: string;
+
+  // Phase 8 Plan 04 (MIRROR-16..21) — mirror fields emitted by
+  // internal/api/repos.go:repoResponse + repoListItem. Only meaningful
+  // when `type ∈ {deb,rpm,pypi,helm}` and `is_mirror === true`. For
+  // non-mirror repos the server emits `is_mirror: false`, empty strings
+  // for the two text fields, and `mirror_cred_id: null`.
+  //
+  // `mirror_filter_json` is the raw JSON blob stored in the database
+  // (TEXT column). The UI parses it into AptFilter / RpmFilter /
+  // PypiFilter / HelmFilter — PascalCase keys matching the Go
+  // SyncFilter struct fields in
+  // internal/protocol/{deb,rpm,pypi,helm}/upstream_parse.go. Those
+  // structs carry NO `json:` tags, so encoding/json serialises field
+  // names verbatim (Names, Globs, Suites, Components, Arches).
+  is_mirror: boolean;
+  mirror_upstream_url: string;
+  mirror_filter_json: string;
+  mirror_cred_id: number | null;
+  scan_on_sync: boolean;
+}
+
+// -- Mirror filters (Phase 8 Plan 04) --------------------------------------
+//
+// Wire format is PascalCase because the Go SyncFilter structs carry no
+// `json:` tags — encoding/json falls back to field names verbatim.
+// Confirmed in internal/protocol/{deb,rpm,pypi,helm}/upstream_parse.go.
+// Do NOT rename these keys to snake_case; the backend validator
+// (internal/api/mirror_validate.go:validateMirrorFilter) matches them
+// exactly.
+
+export interface AptFilter {
+  Suites?: string[];
+  Components?: string[];
+  Arches?: string[];
+  Names?: string[];
+  Globs?: string[];
+}
+
+export interface RpmFilter {
+  Names?: string[];
+}
+
+export interface PypiFilter {
+  Names?: string[];
+  Globs?: string[];
+}
+
+export interface HelmFilter {
+  Names?: string[];
+  Globs?: string[];
+}
+
+export type AnyFilter = AptFilter | RpmFilter | PypiFilter | HelmFilter;
+
+// MirrorConfigValue is the shape the CreateRepoDialog + RepoSettingsTab
+// pass in and out of MirrorConfigSection. Aligned with the fields the
+// backend POST /repos and PATCH /repos/{type}/{repo} endpoints accept
+// (see internal/api/types_phase1.go:CreateRepoRequest +
+// internal/api/repos.go:repoPatchRequest).
+export interface MirrorConfigValue {
+  is_mirror: boolean;
+  mirror_upstream_url: string;
+  mirror_filter: AnyFilter;
+  mirror_cred_id: number | null;
+  scan_on_sync: boolean;
 }
 
 export interface RepoCreate {
@@ -246,6 +311,19 @@ export interface RepoCreate {
   auto_scan?: boolean;
   block_on_severity?: BlockSeverity;
   public_read?: boolean;
+
+  // Phase 8 Plan 04 (MIRROR-16..21) mirror creation fields. The backend
+  // validates in five branches (internal/api/repos.go + mirror_validate.go):
+  //   - type ∈ {deb,rpm,pypi,helm} when is_mirror=true
+  //   - mirror_upstream_url is http(s) with non-empty host
+  //   - mirror_filter parses as the protocol's SyncFilter (PascalCase)
+  //   - mirror_cred_id belongs to the same project as the repo
+  //   - scan_on_sync is a plain bool
+  is_mirror?: boolean;
+  mirror_upstream_url?: string;
+  mirror_filter?: AnyFilter;
+  mirror_cred_id?: number | null;
+  scan_on_sync?: boolean;
 }
 
 export interface RepoPatch {
@@ -253,6 +331,22 @@ export interface RepoPatch {
   auto_scan?: boolean;
   block_on_severity?: BlockSeverity;
   public_read?: boolean;
+
+  // Phase 8 Plan 04 — mirror-repo editable fields. is_mirror and
+  // mirror_upstream_url are NOT in this shape: the backend rejects them
+  // with 400 repo.mirror_url_immutable per D-02. Only filter, cred, and
+  // scan_on_sync may change post-creation.
+  mirror_filter?: AnyFilter;
+  mirror_cred_id?: number | null;
+  scan_on_sync?: boolean;
+}
+
+// SyncEnqueueResponse — the 202 body emitted by POST /sync for mirror
+// repos (empty body POST). Same shape as PullExternalResponse for Docker
+// clone, but scoped differently on the wire so the TS names stay clear.
+export interface SyncEnqueueResponse {
+  job_id: number;
+  kind: string;
 }
 
 export interface WipeResponse {

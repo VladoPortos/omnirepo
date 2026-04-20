@@ -40,6 +40,7 @@ import type {
   DashboardStorageResponse,
   SearchResponse,
   PaginatedResponse,
+  SyncEnqueueResponse,
   GitTreeEntry,
   GitFileContent,
   GitCommit,
@@ -1034,6 +1035,42 @@ export function usePullExternal(projectName: string, repoName: string) {
       // done before the poll observes them.
       qc.invalidateQueries({
         queryKey: ['repo-content', projectName, 'docker', repoName],
+      });
+    },
+  });
+}
+
+/**
+ * useSyncRepo — Phase 8 Plan 04 (MIRROR-19). POST /sync on a mirror
+ * repo with an empty body enqueues a sync job that reads its config
+ * from the repo row (mirror_upstream_url, mirror_filter_json,
+ * mirror_cred_id, scan_on_sync) — see
+ * internal/httpx/sync_rest.go's 3-way branch. The 409
+ * sync.sync_already_running envelope surfaces via ErrorEnvelopeRenderer
+ * when a prior job is still in flight (backend CountRepoInflight guard,
+ * plan 08-01 T-08-01-04).
+ *
+ * Used by SyncNowButton on AptRepoPage / RpmRepoPage / PypiRepoPage /
+ * HelmRepoPage. Invalidation strategy mirrors usePullExternal — the
+ * polled job (useJobProgress) invalidates /content + /scans on status
+ * flip to "done", so we only kick off a best-effort invalidation here
+ * for fast-path (<500ms) jobs.
+ */
+export function useSyncRepo(
+  projectName: string,
+  repoType: string,
+  repoName: string,
+) {
+  const qc = useQueryClient();
+  return useMutation<SyncEnqueueResponse, Error, void>({
+    mutationFn: () =>
+      api.post<SyncEnqueueResponse>(
+        `/projects/${enc(projectName)}/repos/${enc(repoType)}/${enc(repoName)}/sync`,
+        {},
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({
+        queryKey: ['repo-content', projectName, repoType, repoName],
       });
     },
   });

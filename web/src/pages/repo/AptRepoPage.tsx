@@ -188,7 +188,7 @@ export function AptRepoPage({ repo }: AptRepoPageProps) {
       sortable: true,
       render: (row) => (
         <button
-          className="text-sm font-medium text-primary hover:underline"
+          className="text-sm font-semibold text-primary hover:underline"
           onClick={() =>
             setExpandedID(expandedID === row.id ? null : row.id)
           }

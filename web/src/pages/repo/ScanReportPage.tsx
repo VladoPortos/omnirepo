@@ -183,7 +183,7 @@ export function ScanReportPage() {
       {/* Severity summary strip */}
       {totalVulns > 0 ? (
         <div className="flex flex-wrap items-center gap-2 rounded-md border bg-muted/30 px-3 py-2">
-          <span className="text-sm font-medium">
+          <span className="text-sm font-semibold">
             {totalVulns.toLocaleString()} finding{totalVulns === 1 ? '' : 's'}:
           </span>
           {SEVERITY_ORDER.map((sev) => {
@@ -203,7 +203,7 @@ export function ScanReportPage() {
         <div className="rounded-md border">
           <div className="flex items-center gap-2 border-b px-3 py-2">
             <PackageOpen className="size-4 text-muted-foreground" />
-            <h2 className="text-sm font-medium">Top affected packages</h2>
+            <h2 className="text-sm font-semibold">Top affected packages</h2>
           </div>
           <ul className="divide-y">
             {byPackage.map((p) => (
@@ -294,12 +294,12 @@ function VulnerabilityTable({
       <table className="w-full text-sm">
         <thead className="border-b bg-muted/30 text-left">
           <tr>
-            <th className="px-3 py-2 font-medium">Severity</th>
-            <th className="px-3 py-2 font-medium">CVE</th>
-            <th className="px-3 py-2 font-medium">Package</th>
-            <th className="px-3 py-2 font-medium">Installed</th>
-            <th className="px-3 py-2 font-medium">Fixed in</th>
-            <th className="px-3 py-2 font-medium">Title</th>
+            <th className="px-3 py-2 font-semibold">Severity</th>
+            <th className="px-3 py-2 font-semibold">CVE</th>
+            <th className="px-3 py-2 font-semibold">Package</th>
+            <th className="px-3 py-2 font-semibold">Installed</th>
+            <th className="px-3 py-2 font-semibold">Fixed in</th>
+            <th className="px-3 py-2 font-semibold">Title</th>
           </tr>
         </thead>
         <tbody>

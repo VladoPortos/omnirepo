@@ -125,7 +125,7 @@ export function UpstreamCredsTab({ projectName }: UpstreamCredsTabProps) {
     <div className="space-y-4 py-2">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="font-heading text-base font-semibold">
+          <h2 className="font-heading text-lg font-semibold">
             Upstream credentials
           </h2>
           <p className="text-xs text-muted-foreground">

@@ -39,7 +39,7 @@ export function ProjectSettingsPage() {
           <ChevronLeft className="size-3" />
           Back to project
         </Link>
-        <h1 className="mt-1 font-heading text-xl font-semibold">
+        <h1 className="mt-1 font-heading text-lg font-semibold">
           Project settings — <span className="font-mono">{projectName}</span>
         </h1>
         <p className="text-sm text-muted-foreground">

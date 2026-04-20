@@ -12,27 +12,31 @@ One Go binary, one HTTP/HTTPS port, one mounted volume. Drop it on a host, point
 
 ### Protocols served
 
-| Protocol | Endpoint shape | Clients | Spec |
-|----------|----------------|---------|------|
-| **OCI/Docker Registry** | `/v2/...` | `docker`, `podman`, `crane`, `skopeo` | Distribution v2, Bearer JWT |
-| **RPM/YUM repo** | `/<project>/rpm/<repo>/...` | `dnf`, `yum`, `zypper` | `repomd.xml` + signed `primary.xml.gz` |
-| **APT/Debian repo** | `/<project>/deb/<repo>/dists/<suite>/...` | `apt`, `apt-get` | `Release` + PGP `InRelease` |
-| **PyPI** | `/<project>/pypi/<repo>/simple/...` | `pip`, `uv`, `twine` | PEP 503 + 691 + 694 uploads |
-| **Helm** | `/<project>/helm/<repo>/index.yaml` | `helm` | Helm v3 `index.yaml` + `.tgz` + `.prov` |
-| **Raw blobs** | `/<project>/raw/<repo>/<path>` | `curl`, `wget`, any HTTP client | Plain HTTP with digest headers |
-| **S3-compatible** | `/<bucket>/<key>` with SigV4 | `aws-cli`, `s3cmd`, any AWS SDK | AWS SigV4 + gofakes3 backend |
-| **Git hosting** | `/<project>/git/<repo>.git` | `git` CLI (Smart HTTP) | go-git v6 backend + gitkit fallback |
+| Protocol | Endpoint shape | Clients | Spec | Mirror |
+|----------|----------------|---------|------|--------|
+| **OCI/Docker Registry** | `/v2/...` | `docker`, `podman`, `crane`, `skopeo` | Distribution v2, Bearer JWT | Clone images from external registries (see "Clone an image") |
+| **RPM/YUM repo** | `/<project>/rpm/<repo>/...` | `dnf`, `yum`, `zypper` | `repomd.xml` + signed `primary.xml.gz` | ✓ Mirror an upstream RPM repo with filters + credentials |
+| **APT/Debian repo** | `/<project>/deb/<repo>/dists/<suite>/...` | `apt`, `apt-get` | `Release` + PGP `InRelease` | ✓ Mirror an upstream APT archive (per-suite / component / arch filter) |
+| **PyPI** | `/<project>/pypi/<repo>/simple/...` | `pip`, `uv`, `twine` | PEP 503 + 691 + 694 uploads | ✓ Mirror a PEP 503 upstream (by project name) |
+| **Helm** | `/<project>/helm/<repo>/index.yaml` | `helm` | Helm v3 `index.yaml` + `.tgz` + `.prov` | ✓ Mirror a Helm chart repo (HTTP `index.yaml`; `oci://` charts skipped gracefully) |
+| **Raw blobs** | `/<project>/raw/<repo>/<path>` | `curl`, `wget`, any HTTP client | Plain HTTP with digest headers | — |
+| **S3-compatible** | `/<bucket>/<key>` with SigV4 | `aws-cli`, `s3cmd`, any AWS SDK | AWS SigV4 + gofakes3 backend | — |
+| **Git hosting** | `/<project>/git/<repo>.git` | `git` CLI (Smart HTTP) | go-git v6 backend + gitkit fallback | — |
 
 ### Core features
 
-- **Project-scoped access control** — flat user/project/member model with super-admin bypass. Every artifact lives under a project; project members get read+write, everyone else gets 403.
+- **Project-scoped access control** — flat user/project/member model with super-admin bypass. Every artifact lives under a project; project members get read+write, everyone else gets 403. Repos can opt into `public_read` for anonymous GET/HEAD.
 - **API keys** — user-owned or project-owned, shown once at creation, hashed at rest, prefix-indexed for O(1) lookup.
-- **Vulnerability scanning** — embedded Trivy subprocess with an air-gapped baked DB. Per-repo `block_on_severity` gate can refuse pulls of artifacts whose latest scan found findings ≥ threshold. RPM cpio payloads and PyPI wheel transitive deps are unpacked before the scan so Trivy sees real filesystem entries.
-- **Built-in web UI** — React 19 + Tailwind 4 + shadcn/ui, embedded in the Go binary via `//go:embed`. Zero runtime CDN. Includes a first-class S3 bucket browser (prefix drill-down, object table, delete flow).
-- **Audit log** — every auth decision, upload, admin action, and settings change recorded in SQLite with an NDJSON mirror.
-- **Air-gap by default** — no outbound network calls without an explicit admin action. Trivy DB updates only via tarball upload or admin button.
+- **Upstream mirror repos** — APT, RPM, PyPI, and Helm repos can be created as mirrors pointed at a real upstream (pypi.org, archive.ubuntu.com, charts.bitnami.com, etc.), with per-protocol allowlist filters (suite/component/arch for APT, project names for PyPI, chart names + globs for RPM/Helm), optional stored upstream credentials, and an in-UI **Sync now** button that streams byte-level progress and shows a `Sync complete · N files · X MB` confirmation pill when done. Native clients (`pip`, `apt`, `dnf`, `helm`) pull from OmniRepo's locally cached copy — no direct upstream fetch at install time.
+- **Docker clone from external registries** — operators can pull a specific image tag (or digest) from `docker.io`, `quay.io`, or any public OCI registry and retag it into a local OmniRepo repo. Same sync-job progress UI as the package mirrors.
+- **Vulnerability scanning** — embedded Trivy subprocess with an air-gapped baked DB. Per-repo `block_on_severity` gate can refuse pulls of artifacts whose latest scan found findings ≥ threshold. RPM cpio payloads and PyPI wheel transitive deps are unpacked before the scan so Trivy sees real filesystem entries. Scan-on-sync toggle per mirror repo.
+- **Built-in web UI** — React 19 + Tailwind 4 + shadcn/ui + Radix, embedded in the Go binary via `//go:embed`. Zero runtime CDN. Includes a first-class S3 bucket browser (prefix drill-down, object table, delete flow), per-repo client snippets (ready-to-copy `docker pull`, `pip install`, `helm repo add`, `apt source.list` lines with your host pre-filled), dashboard composition cards, and shared empty-state surfaces for every "nothing here yet" scenario.
+- **Structured error envelopes** — every `/api/v1` error response is a typed `ApiErrorEnvelope` with a UUID-v7 incident-id, error class (validation / auth / rate / transient / permanent), a machine-readable code, and optional field-level details. The UI renders them via a single `ErrorEnvelopeRenderer`.
+- **Audit log** — every auth decision, upload, admin action, sync job, and settings change recorded in SQLite with an NDJSON file mirror.
+- **Air-gap by default** — no outbound network calls without an explicit admin action. Trivy DB updates only via tarball upload or admin button. Mirror syncs only ever reach upstreams the operator configured. Enforced in CI by `make test-airgap` (boots the binary and verifies zero outbound network calls on its own).
 - **Hot-reloadable TLS** — admin-uploaded certs swap into the live listener without restart.
 - **Maintenance mode** — global read-only switch with an in-UI banner visible to all users.
+- **Accessibility gates** — CI runs axe-core + WCAG AA contrast + typography + spacing + reduced-motion linters against every UI PR. No merge if any gate goes red.
 
 ---
 
@@ -44,13 +48,16 @@ Everything multiplexes on one HTTP/HTTPS port via a single `chi` router. Each pr
 
 ```
 /var/lib/omnirepo/
-  db/omnirepo.sqlite      — metadata (users, projects, repos, scans, audit log)
+  db/omnirepo.sqlite      — metadata (users, projects, repos, scans, sync_jobs, audit log, mirror config, upstream creds)
   blobs/sha256/xx/...     — OCI content-addressed blob tree
   repos/<project>/...     — per-project artifact trees (rpm, deb, pypi, helm, raw, git)
+  s3/<bucket>/...         — per-bucket S3 object storage (gofakes3 backend)
+  sboms/                  — Trivy-produced SBOM JSON files
+  trivy/db/               — baked Trivy vulnerability DB (updated via admin tarball upload)
   certs/server.{crt,key}  — live TLS pair (self-signed by default)
   certs/uploaded/<ts>/    — rollback archive of admin-uploaded certs
-  tmp/                    — upload staging (truncated on boot)
-  logs/audit.ndjson       — audit log mirror
+  tmp/                    — transient CAS staging (truncated on boot)
+  logs/audit.log          — audit log NDJSON mirror (rotated per `log.audit_max_size_mb`)
   config/bootstrap.json   — first-boot seed (consumed once; see below)
 ```
 
@@ -74,8 +81,12 @@ docker run -d \
   --name omnirepo \
   -p 8080:8080 -p 8443:8443 \
   -v /srv/omnirepo:/var/lib/omnirepo \
-  omnirepo:1.0
+  omnirepo:v1.2
 ```
+
+(The `make docker` target tags with `git describe --tags` — built images land as
+`omnirepo:v1.2`, `omnirepo:v1.2-<N>-g<sha>` between tags, or `omnirepo:dev`
+when no tags are reachable.)
 
 Browse to `https://<host>:8443/` (accepting the self-signed cert) or `http://<host>:8080/` in dev.
 
@@ -102,8 +113,8 @@ make build-all    # builds frontend + go binary into bin/omnirepo
 ```bash
 make dev
 # Starts the Go server with OMNIREPO_DEV=1 + Vite dev server on :5173.
-# Vite proxies /api and /v2 to the Go server, so hot module reload works
-# against the live backend.
+# Vite proxies /api, /v2, /s3, and /git to the Go server, so hot module
+# reload works against the live backend for every protocol surface.
 ```
 
 ---
@@ -144,7 +155,7 @@ log:
 
 ### First-boot bootstrap
 
-Drop a `bootstrap.json` at the configured path to seed the super-admin (and optionally users, projects, repos, and API keys). Consumed exactly once; if any user row exists, it's skipped.
+Drop a `bootstrap.json` at the configured path to seed the super-admin (and optionally extra users, projects, repos, and API keys). Consumed exactly once; if any user row already exists, the whole file is skipped.
 
 ```json
 {
@@ -155,14 +166,40 @@ Drop a `bootstrap.json` at the configured path to seed the super-admin (and opti
     "password": "ChangeMe!",
     "must_change_password": true
   },
+  "users": [
+    {
+      "login": "alice",
+      "email": "alice@example.com",
+      "password": "TempPass1!",
+      "must_change_password": true
+    }
+  ],
   "projects": [
-    { "name": "platform", "description_md": "Shared infra artifacts", "members": [] }
+    { "name": "platform", "description_md": "Shared infra artifacts", "members": ["alice"] }
   ],
   "repos": [
-    { "project": "platform", "type": "docker", "name": "images", "auto_scan": true }
+    { "project": "platform", "type": "docker", "name": "images", "auto_scan": true, "public_read": false },
+    { "project": "platform", "type": "pypi",   "name": "pkg",    "auto_scan": true, "block_on_severity": "HIGH" }
+  ],
+  "api_keys": [
+    { "owner_kind": "user",    "owner": "alice",    "name": "ci",        "token": "omr_u_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" },
+    { "owner_kind": "project", "owner": "platform", "name": "pipelines", "token": "omr_p_yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy" }
   ]
 }
 ```
+
+Field reference:
+
+- **`super_admin`** (required): `login`, `email`, `password`, `must_change_password`.
+- **`users`** (optional): additional users with the same four fields as `super_admin`.
+- **`projects`** (optional): `name`, `description_md`, `members` (list of user logins that become project members).
+- **`repos`** (optional): `project`, `type` (`docker`/`rpm`/`deb`/`pypi`/`helm`/`raw`/`git`), `name`, `description_md`, `auto_scan` (bool), `block_on_severity` (`LOW`/`MEDIUM`/`HIGH`/`CRITICAL`), `public_read` (bool).
+- **`api_keys`** (optional): `owner_kind` (`user`/`project`), `owner` (user login or project name), `name`, `token` — the plaintext token string including its `omr_u_` / `omr_p_` prefix. Stored hashed at rest; plaintext is not recoverable after bootstrap consumption.
+
+Mirror-repo configuration (`is_mirror`, `mirror_upstream_url`, `mirror_filter`,
+`mirror_cred_id`, `scan_on_sync`) is **not** accepted in `bootstrap.json` —
+create mirror repos via the REST API or the web UI after the first login so
+upstream credentials can be encrypted with the runtime key.
 
 ---
 
@@ -247,6 +284,146 @@ The bucket detail page at `/projects/<project>/s3/<bucket>` lists every
 object with prefix drill-down. Deleting a bucket via the UI requires it
 to be empty; object deletes are synchronous (no trash path).
 
+### 6. Mirror a package upstream (APT / RPM / PyPI / Helm)
+
+Mirror repos proxy an upstream package index into OmniRepo's local cache
+so native clients (`pip`, `apt`, `dnf`, `helm`) pull from your host, not
+from the internet. Configured once, sync on demand, scan on sync.
+
+**a. (Optional) Store upstream credentials** — only if the upstream
+needs Basic auth. Username + password are encrypted at rest with the
+runtime key. Host-bound so a leaked cred can't be redirected.
+
+```bash
+curl -u admin:<pw> -X POST \
+  https://<host>:8443/api/v1/projects/platform/upstream-creds \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "kind":     "apt",
+    "host":     "archive.ubuntu.com",
+    "username": "mirror-bot",
+    "password": "<secret>"
+  }'
+# → { "id": 7, "kind": "apt", "host": "archive.ubuntu.com", ... }
+```
+
+Valid `kind` values: `apt`, `rpm`, `pypi`, `helm`, `docker` (5 total —
+`deb` is rejected with a 400 `validation.invalid_cred_kind` envelope
+redirecting to `apt`). For token-based registries send `token` instead
+of `username` + `password`.
+
+Omit this step for public mirrors (`pypi.org`, `charts.bitnami.com`).
+
+**b. Create the mirror repo** — set `is_mirror: true`, point at the
+upstream URL, and supply a protocol-specific filter so you don't
+accidentally sync the whole archive:
+
+```bash
+# APT mirror — pull Ubuntu focal main/amd64 only
+curl -u admin:<pw> -X POST \
+  https://<host>:8443/api/v1/projects/platform/repos \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "name": "ubuntu",
+    "type": "deb",
+    "is_mirror": true,
+    "mirror_upstream_url": "https://archive.ubuntu.com/ubuntu",
+    "mirror_cred_id": 7,
+    "mirror_filter": {
+      "Suites":     ["focal"],
+      "Components": ["main"],
+      "Arches":     ["amd64"]
+    },
+    "scan_on_sync": false
+  }'
+
+# PyPI mirror — allowlist specific projects
+curl -u admin:<pw> -X POST \
+  https://<host>:8443/api/v1/projects/platform/repos \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "name": "pkg",
+    "type": "pypi",
+    "is_mirror": true,
+    "mirror_upstream_url": "https://pypi.org/simple/",
+    "mirror_filter": { "Names": ["requests", "urllib3", "six"] },
+    "scan_on_sync": true
+  }'
+
+# Helm mirror — chart-name filter
+curl -u admin:<pw> -X POST \
+  https://<host>:8443/api/v1/projects/platform/repos \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "name": "charts",
+    "type": "helm",
+    "is_mirror": true,
+    "mirror_upstream_url": "https://charts.bitnami.com/bitnami",
+    "mirror_filter": { "Names": ["memcached", "redis"] }
+  }'
+```
+
+Filter shapes per protocol: APT takes `Suites`, `Components`, `Arches`;
+RPM takes `Names` + `Globs`; PyPI and Helm take `Names` (PEP 503 /
+chart name) + optional `Globs`. Empty filter = sync everything (not
+recommended for public upstreams).
+
+**c. Trigger a sync** — POST with an empty body; the mirror config is
+read from the repo row:
+
+```bash
+curl -u admin:<pw> -X POST \
+  https://<host>:8443/api/v1/projects/platform/repos/deb/ubuntu/sync \
+  -H 'Content-Type: application/json' \
+  -d '{}'
+# → 202 { "job_id": 42, "kind": "apt_sync" }
+```
+
+You can also click **Sync now** on the repo detail page. The UI shows
+a byte-level progress line during the sync and a `Sync complete · N
+files · X MB` confirmation pill when it finishes (8-second auto-dismiss).
+
+**d. Poll progress** (for scripts):
+
+```bash
+curl -u admin:<pw> \
+  https://<host>:8443/api/v1/projects/platform/repos/deb/ubuntu/sync-jobs/42
+# → { "status": "running",
+#     "progress_bytes": 8388608,  "total_bytes": 67108864,
+#     "files_synced": 0,          "current_step": "pulling libc6_2.31-0ubuntu9.16_amd64.deb",
+#     ... }
+# → eventually { "status": "done",
+#     "progress_bytes": 67108864, "total_bytes": 67108864,
+#     "files_synced": 847,        "current_step": "done", ... }
+```
+
+**e. Point a client at OmniRepo.** Now `pip`, `apt`, `dnf`, `helm` pull
+from your host instead of the public internet — use the auth shapes
+from the [Authentication section](#authentication-for-protocol-endpoints)
+below.
+
+### 7. Clone a Docker image from an external registry
+
+OmniRepo can pull an image tag (or digest) from `docker.io`, `quay.io`,
+or any public OCI registry and store it locally under a repo of your
+choice. Use the **Clone image** dialog on a Docker repo's page, or the
+REST endpoint:
+
+```bash
+curl -u admin:<pw> -X POST \
+  https://<host>:8443/api/v1/projects/platform/repos/docker/images/pull-external \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "src_image": "docker.io/library/nginx:1.27",
+    "dst_tag":   "nginx:1.27"
+  }'
+# → 202 { "job_id": 43, "kind": "pull_external" }
+```
+
+Same sync-job progress UI as the package mirrors. Upstream credentials
+(for private registries) use the same `/upstream-creds` endpoint with
+`kind: "docker"`.
+
 ---
 
 ## Authentication for protocol endpoints
@@ -320,17 +497,23 @@ Middleware chain: `AnonymousReadOK → skipIfActor(BasicOrAPIKey)`.
 
 | Task | How |
 |------|-----|
-| Web UI | `https://<host>:8443/` — dashboard, projects, search, admin panels, profile, S3 bucket browser |
+| Web UI | `https://<host>:8443/` — dashboard, projects, search, admin panels, profile, S3 bucket browser, per-repo mirror settings + snippets |
 | REST API | `/api/v1/...` — OpenAPI 3.1 spec at `/api/docs/` (Swagger UI) |
 | Health checks | `GET /healthz`, `GET /readyz` (no auth) |
 | Trigger garbage collection | `POST /api/v1/admin/gc` (super-admin). Poll `GET /api/v1/admin/gc/status` for state (`idle`/`pending`/`running`/`done`/`failed` + `bytes_freed`) |
 | Provision S3 bucket | `POST /api/v1/projects/<name>/s3-buckets/` or UI → project → S3 tab → Create Bucket |
 | Browse bucket objects | `GET /api/v1/projects/<name>/s3-buckets/<bucket>/objects?prefix=…&marker=…&limit=…` or navigate to `/projects/<name>/s3/<bucket>` in the UI |
+| Mint S3 access key | `POST /api/v1/projects/<name>/s3-access-keys` or UI → project → S3 Keys. Secret shown once |
+| Create / edit upstream credentials | `POST/PATCH/DELETE /api/v1/projects/<name>/upstream-creds` or UI → project → Upstream Creds. Host-bound, encrypted at rest |
+| Trigger mirror sync | `POST /api/v1/projects/<name>/repos/<type>/<repo>/sync` with empty body (mirror repo) or `{"upstream_url":...,"filter":...}` (non-mirror one-shot). UI → repo page → **Sync now** |
+| Check sync progress | `GET /api/v1/projects/<name>/repos/<type>/<repo>/sync-jobs` (list) or `/sync-jobs/{id}` (detail: `progress_bytes`, `total_bytes`, `current_step`, `files_synced`, `status`). UI polls every 500 ms while running |
+| Docker clone from external registry | `POST /api/v1/projects/<name>/repos/docker/<repo>/pull-external` with `{"src_image":"docker.io/library/nginx:1.27","dst_tag":"nginx:1.27"}`. UI → Docker repo page → **Clone image** dialog |
 | Apply migrations manually | `omnirepo migrate up --config <path>` |
 | Rotate TLS cert | Upload PEM pair via Admin → TLS Certificates; hot-swapped |
 | Update Trivy DB | Upload DB tarball via Admin → Trivy Database; or enable the refresh button (requires `air_gap.allow_external_actions: true`) |
 | Enter maintenance mode | Admin → Maintenance → toggle. Banner appears for all logged-in users |
 | Force user password reset | Admin → Users → edit → "Force Password Reset" toggle; optionally set a temp password in the dialog. Existing sessions for that user are revoked |
+| Copy client snippet | Navigate to any repo's detail page — the **Usage** panel renders a ready-to-copy `docker pull`, `pip install`, `helm repo add`, or `apt source.list` line pre-filled with your host, project, repo, and tag/version |
 
 ---
 
@@ -349,17 +532,21 @@ Middleware chain: `AnonymousReadOK → skipIfActor(BasicOrAPIKey)`.
 ## Testing
 
 ```bash
-make test               # unit + integration tests (in-memory + on-disk SQLite)
-make test-airgap        # asserts the air-gap invariant (no runtime outbound calls)
-make bench              # perf benchmarks (SQLite, git clone memory, throughput)
+make test               # unit + integration tests (in-memory + on-disk SQLite).
+                        # Implicitly runs the visual-lint gates as a prereq:
+                        #   lint-protocol-redaction, check-contrast,
+                        #   lint-typography, lint-spacing-carveout, lint-axe-devdep
+make test-airgap        # asserts the air-gap invariant at runtime (boots the
+                        # binary, verifies zero outbound network calls on its own)
+make bench              # perf benchmarks (bench-sqlite + bench-git + bench-throughput)
 make conformance-all    # DinD conformance: real dnf/apt/pip/helm/git/crane clients
 make lint               # golangci-lint (errcheck, govet, ineffassign, staticcheck, unused)
 ```
 
-Optional live-server walkthrough (the SigV4 + CRUD + multipart suite used
-during release verification) — skips automatically when env vars are unset:
+Optional live-server walkthroughs (skip automatically when env vars are unset):
 
 ```bash
+# S3 SigV4 + CRUD + multipart suite (used during release verification)
 OMNI_S3_ENDPOINT=http://localhost:8080 \
 OMNI_S3_BUCKET=my-bucket \
 OMNI_S3_AKID=AKIA... OMNI_S3_SECRET=... \
@@ -372,10 +559,20 @@ Frontend:
 cd web
 npm run lint            # ESLint (React hooks, react-refresh, typescript-eslint)
 npx tsc --noEmit        # TypeScript type-check
-npx playwright test     # E2E (requires dev server running)
+npm test                # vitest unit + component tests (82 tests at v1.2)
+npx playwright test     # E2E (54 specs at v1.2 — set OMNI_E2E_HTTP_PORT /
+                        # OMNI_E2E_HTTPS_PORT / OMNI_E2E_BASE_URL if 8080/8443
+                        # are held by other processes)
 ```
 
-All five CI gates (`lint`, `test`, `test-airgap`, `bench-sqlite`, plus the git-backend spike) must exit 0 for a PR to merge.
+**CI gates** (`.github/workflows/ci.yml`, all required for merge):
+
+| Job | What it runs |
+|---|---|
+| `build-test` | `make lint` → `make build` → `make test` (includes visual linters) → `make test-airgap` → `make bench-sqlite` |
+| `conformance-oci` | OCI Distribution conformance suite driven by a real `crane` client against the running binary |
+| `git-conformance` | Phase 4 D-46 — real `git` client clone/push/pull against both `go-git/v6` and `gitkit` fallback backends |
+| `bench-git` | Streaming-clone memory-ceiling benchmark (WR-07 D-42 gate) |
 
 ---
 
@@ -410,30 +607,38 @@ Every protocol handler plugs into the same `chi` router and shares the same SQLi
 ## Project layout
 
 ```
-cmd/omnirepo/             — main binary entry point + CLI
+cmd/omnirepo/             — main binary entry point + CLI (serve, migrate)
 internal/
-  api/                    — REST API handlers (admin, dashboard, projects, search, …)
-  app/                    — server composition (Run, bootstrap, TLS, jobs wiring)
-  audit/                  — audit event types + logger
-  auth/                   — Actor, password hashing, policy engine, JWT, middleware
-  config/                 — YAML config schema + koanf loader
-  crypto/                 — AEAD helpers for upstream credentials
-  jobs/                   — scan pool, sync pool, GC
-  metadata/               — SQLite repos (users, projects, repos, blobs, sessions, …)
+  api/                    — REST API handlers (admin, dashboard, projects, search, sync, upstream-creds, …)
+  app/                    — server composition (Run, bootstrap, TLS, jobs wiring, router assembly)
+  audit/                  — audit event types + logger + NDJSON mirror
+  auth/                   — Actor, password hashing (argon2id), policy engine, JWT, middleware (session, basic+api-key)
+  config/                 — YAML config schema + koanf loader + defaults
+  crypto/                 — AEAD helpers for upstream credentials at-rest encryption
+  httperr/                — canonical ApiErrorEnvelope + error-class taxonomy + incident-id (UUID-v7)
+  httpx/                  — shared HTTP helpers (reserved-prefix guard, anonymous-read middleware, sync REST wiring, readyz/healthz handlers)
+  jobs/                   — scan pool, sync pool, GC, throttled progress writer, counting reader
+  metadata/               — SQLite repos (users, projects, repos, blobs, sessions, sync_jobs, upstream_creds, …) + migrations
+  metadata/migrations/    — 025+ SQL migrations, applied at startup
   protocol/
-    oci/                  — /v2 Docker Registry handler
-    rpm/                  — .rpm upload + repomd/primary regen + detached-sig
-    deb/                  — .deb upload + Packages/Release/InRelease
-    pypi/                 — PEP 503/691/694 upload + simple index
-    helm/                 — chart upload + index.yaml regen
+    oci/                  — /v2 Docker Registry handler + pull-external (clone) orchestration
+    rpm/                  — .rpm upload + repomd/primary regen + detached-sig + upstream mirror sync
+    deb/                  — .deb upload + Packages/Release/InRelease + upstream mirror sync
+    pypi/                 — PEP 503/691/694 upload + simple index + upstream mirror sync
+    helm/                 — chart upload + index.yaml regen + upstream mirror sync (oci:// skipped)
     raw/                  — raw-blob CRUD
-    s3/                   — gofakes3 backend + SigV4 verifier + key mgmt
+    s3/                   — gofakes3 backend + SigV4 verifier + access-key mgmt
     git/                  — go-git v6 backend + gitkit fallback
-  scan/                   — Trivy subprocess wrapper
-  storage/                — CAS, PathStore, atomic rename helpers
-  tls/                    — cert holder + hot-reload + upload
-web/                      — React SPA (embedded via go:embed)
-test/                     — airgap, conformance, bench harnesses
+    protocoltest/         — shared protocol test harness (fake upstream, fixtures)
+    regen/                — metadata-regen coalescer (batches repo-state recomputation)
+  scan/                   — Trivy subprocess wrapper + SBOM plumbing
+  storage/                — CAS, PathStore, atomic rename helpers, fsync'd parent dirs
+  tls/                    — cert holder + hot-reload + upload handler
+web/                      — React SPA (embedded into binary via go:embed)
+  web/e2e/                — Playwright specs (mirror, sync, clone, auth, …)
+test/
+  airgap/                 — boots the binary, asserts zero outbound network calls on its own
+  walkthrough/            — optional live-server SigV4 / CRUD / multipart suite (env-var-gated)
 ```
 
 ---
@@ -441,9 +646,10 @@ test/                     — airgap, conformance, bench harnesses
 ## Dependencies, versions, and licenses
 
 Every dependency below is **Apache-2.0-compatible** — a hard constraint for
-corporate deployment. Versions are pinned in `go.mod` / `web/package.json`;
-the table is the canonical source of truth for upgrade decisions. No CDN
-fonts, icons, or Swagger assets — everything ships in the binary.
+corporate deployment. **Exact pins live in `go.mod` and `web/package.json`**
+— those are the source of truth. The tables below capture license + purpose
++ current major-version baseline at v1.2 ship. No CDN fonts, icons, or
+Swagger assets — everything ships in the binary.
 
 ### Go core (single binary, pure-Go)
 
@@ -461,7 +667,7 @@ fonts, icons, or Swagger assets — everything ships in the binary.
 | `github.com/knadh/koanf/v2` | v2.3.4 | MIT | YAML + env config. Modular, no global state. |
 | `github.com/golang-jwt/jwt/v5` | v5.3.1 | MIT | HS256 JWT for `/v2/token` Docker exchange. 60-min TTL; per-install secret. |
 | `golang.org/x/crypto/argon2` | tracks Go ecosystem | BSD-3 | Password hashing: `m=64MiB, t=3, p=4`. |
-| `github.com/oapi-codegen/oapi-codegen/v2` | v2.6.0 (build-time only) | Apache-2.0 | Generates Go types from the hand-written OpenAPI 3.1 spec (routes are hand-written on chi). |
+| `github.com/oapi-codegen/oapi-codegen/v2` (CLI) + `github.com/oapi-codegen/runtime` | CLI v2.6.0 (installed via `go install`, build-time only); runtime v1.4.0 in `go.mod` | Apache-2.0 | CLI generates Go types from the hand-written OpenAPI 3.1 spec; runtime package provides a tiny helper shim. Routes are hand-written on chi. |
 | `github.com/google/uuid` | v1.6.x | BSD-3 | Scan IDs, SBOM IDs, API-key IDs. |
 | `github.com/opencontainers/go-digest` | v1.0.0 | Apache-2.0 | Canonical `sha256:<hex>` digest parsing. |
 | PyPI PEP 503 Simple | stdlib `html/template` | — | Two HTML pages, no library needed. |
@@ -470,21 +676,34 @@ fonts, icons, or Swagger assets — everything ships in the binary.
 
 ### Frontend (bundled; zero CDN at runtime)
 
-| Dependency | Pinned version | License | Purpose |
+Exact pins in `web/package.json`. Versions below are current at v1.2 ship.
+
+| Dependency | v1.2 version | License | Purpose |
 |---|---|---|---|
-| React | 19.2.5 | MIT | SPA framework. |
-| TypeScript | 6.0.2 | Apache-2.0 | `"moduleResolution": "bundler"`, `"jsx": "react-jsx"`. |
-| Vite | 8.0.8 | MIT | Dev server + production build. Dev proxy forwards `/api`, `/v2`, `/s3`, `/git` to the Go backend when `OMNIREPO_DEV=1`. |
-| Tailwind CSS | 4.2.2 | MIT | Requires `@tailwindcss/vite` plugin (CSS-first config). |
-| shadcn/ui CLI | shadcn@4.2.0 | MIT | Generates Radix-based components into `web/src/components/ui/`. No runtime package. |
-| Radix UI primitives | current | MIT | Accessibility primitives underneath shadcn. |
-| TanStack Query | @tanstack/react-query 5.99.x | MIT | Server-state cache. Query keys: `['projects', name, 'buckets', …]`. |
-| React Router | react-router-dom 7.14.x | MIT | Data-router API (`createBrowserRouter`). |
-| lucide-react | 1.8.0 | ISC | Tree-shaken SVG icons. |
-| @dicebear/core + @dicebear/collection | 9.4.2 | MIT | Client-side SVG avatars from a seed string. |
-| swagger-ui-dist | 5.32.3 | Apache-2.0 | Served from `/api/docs/`. Copied into `web/public/swagger/` at build time. |
+| React | 19.1.0 | MIT | SPA framework. |
+| TypeScript | 5.8.3 | Apache-2.0 | `"moduleResolution": "bundler"`, `"jsx": "react-jsx"`. |
+| Vite | 6.3.3 | MIT | Dev server + production build. Dev proxy forwards `/api`, `/v2`, `/s3`, `/git` to the Go backend when `OMNIREPO_DEV=1`. |
+| Tailwind CSS | 4.1.4 | MIT | Requires `@tailwindcss/vite` plugin (CSS-first config). |
+| shadcn CLI | ^4.2.0 | MIT | Generates Radix-based components into `web/src/components/ui/`. No runtime package. |
+| @base-ui/react | ^1.4.0 | MIT | Base UI primitives complementing shadcn (used for some newer components). |
+| TanStack Query | @tanstack/react-query 5.74.4 | MIT | Server-state cache. Query keys: `['projects', name, 'buckets', …]`. |
+| React Router | react-router-dom 7.5.2 | MIT | Data-router API (`createBrowserRouter`). |
+| lucide-react | ^0.487.0 | ISC | Tree-shaken SVG icons. |
+| @dicebear/core + @dicebear/collection | 9.2.2 | MIT | Client-side SVG avatars from a seed string. |
+| swagger-ui-dist | 5.21.0 | Apache-2.0 | Served from `/api/docs/`. Copied into `web/public/swagger/` at build time (`npm run copy-swagger` prebuild hook). |
+| Milkdown (`@milkdown/kit`, `@milkdown/react`, `@milkdown/theme-nord`) | ^7.20.0 | MIT | Markdown editor for repo / project descriptions. |
+| shiki | ^4.0.2 | MIT | Syntax highlighting in the web UI (code snippets, audit detail diffs). |
+| framer-motion | ^12.38.0 | MIT | Motion primitives for UI transitions (respects `prefers-reduced-motion`). |
+| sonner | ^2.0.7 | MIT | Toast notifications (error envelopes, success confirmations). |
+| cmdk | ^1.1.1 | MIT | Command palette / fuzzy-search primitive. |
+| dompurify (+ `@types/dompurify`) | ^3.4.0 | Apache-2.0 or MPL-2.0 (dual) | HTML sanitiser for Milkdown-rendered markdown. |
+| next-themes | ^0.4.6 | MIT | Light/dark theme toggle. |
+| react-diff-viewer-continued | ^4.2.0 | MIT | Diff view for audit log field-level changes. |
+| class-variance-authority + clsx + tailwind-merge + tw-animate-css | current | MIT | Tailwind utility helpers shadcn templates depend on. |
 | Inter + JetBrains Mono (`.woff2`) | Inter 4.x, JetBrains Mono 2.304+ | SIL OFL 1.1 | Self-hosted fonts. |
-| Playwright | @playwright/test 1.56+ | Apache-2.0 | Developer-run E2E + pre-merge UI verification. |
+| Playwright | @playwright/test ^1.59.1 | Apache-2.0 | Developer-run E2E + pre-merge UI verification (54 specs at v1.2). |
+| @axe-core/playwright | ^4.11.2 | MPL-2.0 | WCAG AA axe-core gate, scoped to individual UI regions in Playwright specs. |
+| Vitest | ^4.1.4 | MIT | Frontend unit + component tests (82 tests at v1.2). `npm test`. |
 
 ### Build / dev tooling
 
@@ -500,15 +719,22 @@ fonts, icons, or Swagger assets — everything ships in the binary.
 
 ### License summary (ship-affecting)
 
-- **Apache-2.0** — go-containerregistry, go-git, Helm SDK, oapi-codegen,
-  opencontainers/go-digest, swagger-ui-dist, Trivy, Playwright, TypeScript.
+- **Apache-2.0** — go-containerregistry, go-git, Helm SDK, oapi-codegen
+  (CLI + runtime), opencontainers/go-digest, swagger-ui-dist, Trivy,
+  Playwright, TypeScript, dompurify.
 - **BSD-3-Clause** — modernc.org/sqlite, cavaliergopher/rpm,
   ProtonMail/go-crypto, golang.org/x/crypto, google/uuid.
 - **MIT** — chi, gofakes3, koanf, golang-jwt, sosedoff/gitkit (fallback),
-  React, Vite, Tailwind, shadcn, lucide-react, @dicebear/\*, TanStack Query,
-  React Router, Radix UI.
+  React, Vite, Tailwind, shadcn, @base-ui/react, @dicebear/\*, TanStack
+  Query, React Router, Milkdown, shiki, framer-motion, sonner, cmdk,
+  next-themes, react-diff-viewer-continued, class-variance-authority,
+  clsx, tailwind-merge, tw-animate-css, Vitest.
 - **ISC** — lucide-react.
-- **SIL OFL 1.1** — Inter, JetBrains Mono (OFL permits embedding + redistribution).
+- **MPL-2.0** — @axe-core/playwright (runs only in developer/CI Playwright
+  suites; no ship exposure — axe-core is not bundled into the production
+  SPA).
+- **SIL OFL 1.1** — Inter, JetBrains Mono (OFL permits embedding +
+  redistribution).
 - **GPLv2** — the `git` binary in the final image; not linked, only
   invoked as a subprocess by the optional `gitkit` fallback. The default
   runtime path uses pure-Go `go-git` and does not execute `git`.
@@ -536,9 +762,13 @@ fonts, icons, or Swagger assets — everything ships in the binary.
   default (v1.47+); startup verifies with `sqlite3_compileoption_used`.
 - **go-git/v6 + ProtonMail/go-crypto v1.4.1** — pinned to exactly v1.4.1
   to avoid `go mod tidy` drift (shared transitive dep).
-- **Tailwind 4 + Vite 8 + shadcn@4** — Tailwind 4 requires
+- **go-git/v6 + gofakes3** — both currently pinned to specific commit
+  hashes rather than tagged releases (go-git/v6 is pre-GA alpha;
+  gofakes3 carries post-v1.0.0 fixes we need). Upgrade audits happen per
+  milestone; see `go.mod` for exact pseudo-versions.
+- **Tailwind 4 + Vite 6 + shadcn@4** — Tailwind 4 requires
   `@tailwindcss/vite`; do not mix with Tailwind 3 docs found online.
-- **React 19.2 + React Router 7 + TanStack Query 5** — all support
+- **React 19.1 + React Router 7 + TanStack Query 5** — all support
   React 19 natively.
 - **Trivy v0.69 + baked DB** — the binary refuses a DB built by a
   significantly newer Trivy; both are pinned in the same Docker build stage.
@@ -547,7 +777,26 @@ fonts, icons, or Swagger assets — everything ships in the binary.
 
 ## Versioning
 
-**v1.0** is the first production release. Versioning follows [semver](https://semver.org/). Breaking changes to the REST API or on-disk layout bump the major version.
+Versioning follows [semver](https://semver.org/). Breaking changes to the
+REST API or on-disk layout bump the major version.
+
+Shipped releases (git tags):
+
+- **v1.2 "Polish & Stability"** (2026-04-20) — sync-complete confirmation
+  pill with `N files · X MB` shape; canonical `apt`/`deb` cred kind;
+  typography lint clean; live PyPI + Helm mirror verification (4
+  in-scope bug fixes); retired static `grep-cdn` (air-gap is a runtime
+  property, enforced by `make test-airgap`).
+- **v1.1 "Immediate Product Polish"** (2026-04-20) —
+  `ApiErrorEnvelope` + visual foundation (axe / typography / contrast /
+  spacing / reduced-motion gates); per-protocol client snippets +
+  dashboard composition cards + shared empty states; upstream mirror
+  repos for APT/RPM/PyPI/Helm; Docker clone from external registries;
+  sync-job progress hook; upstream-credentials CRUD.
+- **v1.0 MVP** (2026-04-17) — all protocol surfaces (OCI/Docker, RPM,
+  APT, PyPI, Helm, Git, RAW, S3); admin UI; Trivy scan pipeline; GC
+  loop; OpenAPI 3.1 contract; SigV4 verifier; multi-stage Docker image
+  with baked Trivy DB.
 
 ---
 

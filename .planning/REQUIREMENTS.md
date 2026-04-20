@@ -82,9 +82,9 @@ prefixes (AUTH, REPO, etc.).
 - [x] **MIRROR-19**: UI disables the Sync now button while a sync is in-flight and surfaces 409 errors inline via ErrorEnvelopeRenderer
 - [x] **MIRROR-20**: User can edit filter, cred, and scan_on_sync on a mirror repo from RepoSettingsTab (URL stays read-only with CopyInline)
 - [x] **MIRROR-21**: UI never sends is_mirror or mirror_upstream_url in PATCH bodies (structural enforcement + backend guard)
-- [ ] **MIRROR-22**: User can create, edit, and delete upstream credentials from a ProjectSettingsPage Upstream credentials tab
-- [ ] **MIRROR-23**: UI never displays passwords or tokens after submission; PATCH preserves existing secrets when fields are left blank
-- [ ] **MIRROR-24**: Deleting a credential referenced by a mirror repo triggers a confirmation dialog that warns the next sync will fail with "credential missing" envelope
+- [x] **MIRROR-22**: User can create, edit, and delete upstream credentials from a ProjectSettingsPage Upstream credentials tab
+- [x] **MIRROR-23**: UI never displays passwords or tokens after submission; PATCH preserves existing secrets when fields are left blank
+- [x] **MIRROR-24**: Deleting a credential referenced by a mirror repo triggers a confirmation dialog that warns the next sync will fail with "credential missing" envelope
 - [ ] **MIRROR-25**: Each of the 5 protocols has a fake-upstream integration test proving first-sync ingest + idempotent second-sync + progress completion
 - [ ] **MIRROR-26**: Playwright spec proves the mirror-upload-rejected envelope renders correctly for at least one protocol (APT via real PUT /{project}/deb/{repo}/pool/* route)
 - [ ] **MIRROR-27**: Phase 8 passes a Codex rescue pass with real-issue findings applied and the result recorded in 08-06-CODEX-RESCUE.md
@@ -254,9 +254,9 @@ phases 1–5.
 | MIRROR-19 | Phase 8 | ✅ Complete |
 | MIRROR-20 | Phase 8 | ✅ Complete |
 | MIRROR-21 | Phase 8 | ✅ Complete |
-| MIRROR-22 | Phase 8 | In progress |
-| MIRROR-23 | Phase 8 | In progress |
-| MIRROR-24 | Phase 8 | In progress |
+| MIRROR-22 | Phase 8 | ✅ Complete |
+| MIRROR-23 | Phase 8 | ✅ Complete |
+| MIRROR-24 | Phase 8 | ✅ Complete |
 | MIRROR-25 | Phase 8 | In progress |
 | MIRROR-26 | Phase 8 | In progress |
 | MIRROR-27 | Phase 8 | In progress |

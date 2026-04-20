@@ -130,15 +130,18 @@ func (h *Handler) Mount(parent chi.Router) {
 		r.Get("/{project}/pypi/{repo}/simple/", h.getSimpleIndex)
 		r.Get("/{project}/pypi/{repo}/simple/{name}/", h.getProjectIndex)
 
-		// File serving + delete.
+		// File serving.
 		r.Get("/{project}/pypi/{repo}/packages/{filename}", h.getPackage)
-		r.Delete("/{project}/pypi/{repo}/packages/{filename}", h.deletePackage)
 
 		// Phase 8 Plan 01 (MIRROR-03): gate write paths (twine-legacy
-		// + PEP 694 session API) behind MirrorGuardFixed so mirror
-		// repos reject uploads with 403 repo.repo_is_mirror.
+		// + PEP 694 session API + file delete) behind MirrorGuardFixed
+		// so mirror repos reject mutating ops with 403 repo.repo_is_mirror.
 		r.Group(func(rw chi.Router) {
 			rw.Use(httpx.MirrorGuardFixed(h.repos, h.projects, "pypi"))
+			// File delete — a mutating op that must not be available on
+			// mirror repos (plan 08-06 Codex rescue Q3a: previously the
+			// DELETE route sat outside the guard group).
+			rw.Delete("/{project}/pypi/{repo}/packages/{filename}", h.deletePackage)
 			// twine / uv publish — multipart legacy.
 			rw.Post("/{project}/pypi/{repo}/legacy/", h.handleLegacyUpload)
 

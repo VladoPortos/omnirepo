@@ -280,12 +280,15 @@ func (h *Handler) Mount(parent chi.Router) {
 			r.With(mirrorGuard).Put("/{project}/{type}/{repo}/{image}/manifests/{reference}", h.manifestPut)
 			r.With(mirrorGuard).Delete("/{project}/{type}/{repo}/{image}/manifests/{reference}", h.manifestDelete)
 
-			// Tag routes (02-07).
+			// Tag routes (02-07). Plan 08-06 Codex rescue Q3b: DELETE is
+			// a mutating operation and must be gated by MirrorGuard so
+			// mirror-flagged repos reject it with 403 repo.repo_is_mirror
+			// (GET /tags/list is a read and stays open).
 			r.Get("/{project}/{type}/{repo}/tags/list", h.tagsList)
-			r.Delete("/{project}/{type}/{repo}/tags/{tag}", h.tagDelete)
+			r.With(mirrorGuard).Delete("/{project}/{type}/{repo}/tags/{tag}", h.tagDelete)
 
 			r.Get("/{project}/{type}/{repo}/{image}/tags/list", h.tagsList)
-			r.Delete("/{project}/{type}/{repo}/{image}/tags/{tag}", h.tagDelete)
+			r.With(mirrorGuard).Delete("/{project}/{type}/{repo}/{image}/tags/{tag}", h.tagDelete)
 		})
 	})
 }

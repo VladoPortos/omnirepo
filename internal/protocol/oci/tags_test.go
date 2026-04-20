@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/dxc-internal/omnirepo/internal/metadata"
 )
 
 // TestTagsListPagination seeds 250 tags, requests with n=100 three times,
@@ -340,5 +342,49 @@ func TestTagDeleteUnlinks(t *testing.T) {
 		if b.RefCount != 0 {
 			t.Fatalf("%s ref_count=%d want 0", dig, b.RefCount)
 		}
+	}
+}
+
+// TestOCITagDelete_MirrorRepoReturns403 — plan 08-06 Codex rescue Q3b.
+// DELETE /v2/.../tags/<tag> is a mutating operation and must be rejected
+// on mirror-flagged repos by MirrorGuard (same contract as blob + manifest
+// mutations). Previously the tag DELETE routes sat outside mirrorGuard.
+func TestOCITagDelete_MirrorRepoReturns403(t *testing.T) {
+	f := newManifestFixture(t, false)
+	// First put a tag so there's something to try to delete.
+	cfg := f.seedBlob([]byte("cfg"))
+	body := buildManifest(cfg)
+	resp := f.putManifest("v1", body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("put: %d", resp.StatusCode)
+	}
+	// Flip repo to is_mirror=true via the real ReposRepo method.
+	if err := f.db.WriteTx(context.Background(), func(tx *sql.Tx) error {
+		return f.repos.SetMirrorConfigInTx(context.Background(), tx, f.repoID, metadata.MirrorConfig{
+			IsMirror:    true,
+			UpstreamURL: "https://registry-1.docker.io",
+			FilterJSON:  `{}`,
+			CredID:      nil,
+			ScanOnSync:  false,
+		})
+	}); err != nil {
+		t.Fatalf("set mirror cfg: %v", err)
+	}
+	url := fmt.Sprintf("%s/v2/%s/tags/v1", f.srv.URL, f.repoPath)
+	req, _ := http.NewRequest("DELETE", url, nil)
+	req.Header.Set("Authorization", "Bearer "+f.token)
+	resp2, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	defer func() { _ = resp2.Body.Close() }()
+	if resp2.StatusCode != http.StatusForbidden {
+		b, _ := io.ReadAll(resp2.Body)
+		t.Fatalf("status = %d, want 403; body=%s", resp2.StatusCode, b)
+	}
+	b, _ := io.ReadAll(resp2.Body)
+	if !strings.Contains(string(b), "repo_is_mirror") {
+		t.Fatalf("body missing repo_is_mirror: %s", b)
 	}
 }

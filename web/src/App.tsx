@@ -56,7 +56,7 @@ function ChunkLoadFailurePage({ name }: { name: string }) {
       <button
         type="button"
         onClick={() => window.location.reload()}
-        className="mt-4 inline-flex items-center rounded-md border border-input bg-background px-3 py-1.5 text-sm font-medium hover:bg-accent hover:text-accent-foreground"
+        className="mt-4 inline-flex items-center rounded-md border border-input bg-background px-3 py-1.5 text-sm font-semibold hover:bg-accent hover:text-accent-foreground"
       >
         Retry
       </button>

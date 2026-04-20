@@ -160,14 +160,14 @@ export function ArtifactDetail({
       <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 text-sm">
         {allFields.map((f) => (
           <div key={f.label} className="contents">
-            <dt className="font-medium text-muted-foreground">{f.label}</dt>
+            <dt className="text-muted-foreground">{f.label}</dt>
             <dd className="min-w-0 break-words">{f.value || '—'}</dd>
           </div>
         ))}
       </dl>
       {severity && (
         <div>
-          <p className="mb-1 text-xs font-medium text-muted-foreground">
+          <p className="mb-1 text-xs text-muted-foreground">
             Scan findings
           </p>
           <div className="flex flex-wrap items-center gap-2">

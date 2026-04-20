@@ -102,7 +102,7 @@ Plans:
   6. `go test ./...` + `make test` + `npm run build` + `make grep-cdn` green; all Phase 6 lint gates still pass; Playwright e2e covers mirror creation, sync-now, Docker clone, and mirror-upload rejection. Codex rescue pass run per CLAUDE.md global rule.
 **Plans:** 6 plans expected (1 per milestone M1–M6 from the design spec)
 Plans:
-- [ ] 08-01-PLAN.md — M1: Backend foundation (schema + mirror-aware sync + upload-reject + concurrency guard)
+- [x] 08-01-PLAN.md — M1: Backend foundation (schema + mirror-aware sync + upload-reject + concurrency guard) ✅ Shipped 2026-04-20
 - [ ] 08-02-PLAN.md — M2: Progress tracking (writer helper + jobs endpoint + handler wraps across 5 protocols)
 - [ ] 08-03-PLAN.md — M3: Docker clone modal with progress + retag + scan override
 - [ ] 08-04-PLAN.md — M4: Mirror flag UI (CreateRepoDialog + 4 Sync Now buttons + RepoSettingsTab mirror card)

@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: on 2026-04-17)
 status: executing
-stopped_at: Phase 8 planned — ready to execute (6 plans passed checker; 4 BLOCKERs + 11 WARNINGs resolved in iteration 2)
-last_updated: "2026-04-19T22:45:00.000Z"
-last_activity: 2026-04-19
+stopped_at: Completed 08-01-PLAN.md — mirror backend foundation shipped (migration 024 + mirror-aware /sync + MirrorGuard + 14 new tests)
+last_updated: "2026-04-20T02:51:55.000Z"
+last_activity: 2026-04-20
 progress:
   total_phases: 3
   completed_phases: 2
   total_plans: 23
-  completed_plans: 17
-  percent: 74
+  completed_plans: 18
+  percent: 78
 ---
 
 # STATE: OmniRepo
@@ -26,11 +26,11 @@ progress:
 
 ## Current Position
 
-Phase: 999.1
-Plan: Not started
-Status: Ready to execute
-Last activity: 2026-04-18
-Stopped at: Completed 07-08-PLAN.md
+Phase: 8
+Plan: 01 (completed)
+Status: Ready to execute 08-02 (progress writer helper + /jobs endpoint extension)
+Last activity: 2026-04-20
+Stopped at: Completed 08-01-PLAN.md — mirror backend foundation (migration 024 + Create/Patch validation + mirror-aware /sync + MirrorGuard on 5 protocols)
 
 ## Phase Map
 
@@ -142,6 +142,17 @@ scoped tokens, LDAP/OIDC.
 - **[07-08] EMPTY-04 mutation failure surfaces via ErrorEnvelopeRenderer mode="inline".** `onError` sets local `ApiErrorEnvelope` state; renderer appears directly below the EmptyState when non-null. Preserves the Phase 6 ERR-04 transient-retry surface contract.
 - **[07-08] Playwright `assertEmptyState` helper exported from `empty-states.spec.ts`.** Signature `(page, title, ctaLabel?) => Promise<void>` matches UI-SPEC §E-08. Per-surface tests import it locally; plan 07-09 can import it across the broader Phase 7 verification spec.
 - **[07-08] EMPTY-04 Playwright fixture uses route mocking, NOT a real OCI manifest push.** `page.route('**/content**' / '**/scans**' / '**/rescan')` simulates the artifacts-without-scans state. Full OCI push + Trivy scan round-trip belongs in `internal/protocol/oci/*_test.go` + `internal/api/scans_test.go`, not the UI e2e spec. Non-maintainer variant uses `test.skip` when seed user already exists from a prior run (OTP cannot be recovered).
+- **[08-01] Dotted envelope codes with plan-token local segment.** `repo.repo_is_mirror`, `sync.sync_already_running`, `repo.mirror_url_immutable`, etc. The dotted prefix satisfies the Phase-6 envelope schema regex (`^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$`); the second segment preserves the operator-facing token verbatim so plan-check greps + integration tests asserting `body contains "repo_is_mirror"` still resolve. Codes declared as `const` at the top of `internal/api/repos.go` (repo-CRUD envelope codes) and `internal/httpx/sync_rest.go` (sync envelope codes) so both CreateRepo and PatchRepo reference the same source of truth.
+- **[08-01] `SetMirrorConfigInTx` over extending `CreateInTx` signature.** `ReposRepo.CreateInTx` is called from 15+ sites across internal/api, internal/app, internal/protocol/git, and the DEB/RPM/HELM test harnesses. Extending its 7-arg signature would have cascaded mechanically; instead, added a `SetMirrorConfigInTx(ctx, tx, repoID, MirrorConfig)` method that's called in the SAME writer-tx as CreateInTx when `is_mirror=true`. Zero v1.0 callers broken.
+- **[08-01] `UpdateFields.MirrorCredIDSet` bool alongside `*int64` pointer.** A nil `*int64` means "no change" in the existing Update idiom; a set-to-NULL would need a second signal. Added a `MirrorCredIDSet bool` flag to distinguish "field absent from PATCH" vs. "PATCH says mirror_cred_id: null". Handler uses `*json.RawMessage` on the wire to detect the three states (absent / null / int) and maps them to this tuple.
+- **[08-01] `mirror_validate.go` keeps api package cycle-free.** Instead of importing `internal/protocol/{deb,rpm,pypi,helm}` to reuse their `SyncFilter` structs, duplicated the field lists in a per-protocol shape struct (~12 lines). The four SyncFilter shapes are tiny (Names, Globs, Suites/Components/Arches for deb) and change rarely; cycle-freedom is worth the copy.
+- **[08-01] `io.LimitReader(body, MaxSyncBodyBytes+1)` over-by-one trick.** Without the +1, a body at exactly MaxSyncBodyBytes is indistinguishable from one that's over; the cap check has to rely on `len(read) > MaxSyncBodyBytes`. Ship with +1 so the over-limit signal is unambiguous without allocating past cap.
+- **[08-01] 3-way /sync branch preserves v1.0 path verbatim.** Non-mirror repos keep the v1.0 body-driven flow byte-for-byte (same `SyncRequest` struct, same payload JSON, same audit shape). Mirror+empty reads config from the repo row; mirror+body returns 400. All existing sync tests stay green unchanged.
+- **[08-01] `CountRepoInflight` + Enqueue race is intentionally documented, not fixed.** Two concurrent POSTs can both observe count=0 and both insert. The worker pool's `LeaseOne` uses `UPDATE ... RETURNING` (T-02-01-02) so only one lease wins; the cost of the race is one wasted pending row reaped by `RecoverStale`. Wrapping check+insert in a single tx would require tx-aware `CountRepoInflight` (it's a reader) — deferred because the residual cost is trivial.
+- **[08-01] `MirrorGuard` vs. `MirrorGuardFixed` variants.** OCI routes expose `{type}` as a chi URL param (via `/v2/{project}/{type}/{repo}/...` since docker+helm share the `/v2` namespace), so the generic `MirrorGuard` reads the type directly. APT/RPM/PyPI/Helm mount hard-coded `/{project}/deb|rpm|pypi|helm/{repo}/...` so those callers use `MirrorGuardFixed(fixedType)`. One middleware abstraction serving both URL shapes keeps wiring uniform.
+- **[08-01] OCI per-route `r.With(mirrorGuard)` vs. a group.** Wrote-path verbs (POST/PATCH/PUT/DELETE for blob uploads, PUT/DELETE for manifests) gate on the guard; GET/HEAD don't. A group would have forced either read + write pages to carry the DB lookup cost or forked the route tree. Per-route `r.With(...)` is minimally invasive and preserves read performance.
+- **[08-01] PyPI test-name collision resolved by renaming PEP 694 tests.** Plan mandated two test files (`upload_legacy_test.go` + `upload_pep694_test.go`) with the same function names. Go forbids duplicates. Legacy keeps the canonical names (`TestUpload_MirrorRepoReturns403` / `...NonMirrorRepoStillWorks`); PEP 694 uses `TestPEP694Upload_Mirror...` / `TestPEP694Upload_NonMirror...`. Plan's verify grep matches the legacy file.
+- **[08-01] Pre-existing `make test` typography failures NOT caused by Phase 8.** `lint-typography` fails on App.tsx / ArtifactDetail.tsx / AptRepoPage.tsx / ScanReportPage.tsx — verified pre-existing via `git stash` on main at 87dcdd8. Logged to `.planning/phases/08-upstream-mirror-and-docker-clone/deferred-items.md` for a later plan (08-06 Codex rescue or walkthrough micro-fix). Out of scope per SCOPE BOUNDARY rule.
 
 ### Decisions carried forward from v1.0
 
@@ -171,6 +182,7 @@ scoped tokens, LDAP/OIDC.
 - Execute plan 07-06 (walkthrough micro-fixes: W-02 docker blob ref-counting + W-03 DEB Release-aware pool-path). ✅ Shipped; `internal/api/dashboard.go:repoSizeExpr` rewritten with `CAST(SUM(b.size_bytes * 1.0 / b.distinct_repos) AS INTEGER)` ref-count sub-expression + new `TestDashboardStorage_RefCountsSharedBlobs` verifying a 2 GiB blob shared between two repos contributes ~1 GiB to each (existing `TestDashboardStorage_ReturnsRepoBreakdown` stays green unchanged — Pitfall 5 verified); new `internal/protocol/deb/pool_release.go` with `ResolvePoolPath` helper reading `dists/<suite>/Release` via `net/mail.ReadMessage` and honouring its first-listed `Components:` entry, with `isSafeComponent` traversal mitigation (T-07-06-01); `relPoolPath` signature extended in-place in `sync_handler.go` (single caller had every param in scope); 6 sub-tests for ResolvePoolPath (default/custom/missing/malformed/traversal/nil). Four commits `a094cff` (RED W-02), `04a1f19` (GREEN W-02), `03eb808` (RED W-03), `9c60eb2` (GREEN W-03). Discovered during TDD: modernc.org/sqlite returns an error on REAL→int64 Scan rather than silently truncating — the CAST in repoSizeExpr is mandatory, not cosmetic. Full `go test ./...` + `make test` + all 5 Phase 6 lint gates clean.
 - Execute plan 07-07 (DashboardPage Composition row + D-05 string migrations). ✅ Shipped; `web/src/pages/DashboardPage.tsx` grew Row 2 Composition row with 6 cards (3 user-visible: Storage/Recent Failures/Scan Findings Trend + 3 admin-gated: Background Jobs/TLS Certificate/Trivy Database) using `<CardAction>` slot for right-aligned StatusBadge, StatusBadge variants derived from `dashboard-thresholds.ts` pure functions, cold-load extended to 6 SkeletonCard slots, errors surface via `ErrorEnvelopeRenderer mode="inline"`. Three D-05 migrations: `"No recent activity." → <EmptyState icon={Activity}>`, `"No repositories with stored data." → <EmptyState icon={HardDrive}>`, `"... Looking good!" → inline <StatusBadge status="healthy" label="All clear" />` (E-06 positive goal state). Two new TanStack hooks added to queries.ts: `useAdminTLSCurrent` + `useAdminTrivyDBStatus` with `AdminTLSCurrent` / `AdminTrivyDBStatus` interfaces verified 1:1 against Go handler JSON shapes. Per-card label pure functions (`storageStatusLabel` / `failuresStatusLabel` / `scanFindingsStatusLabel` / `jobsStatusLabel` / `tlsStatusLabel` / `trivyDBStatusLabel`) keep the variant→copy mapping next to the consumer. `jobsStatusLabel` overlays "Running" when running/queued>0 even though `jobsVariant` returns healthy — D-02's 3-variant lock preserved. New `web/e2e/dashboard-composition.spec.ts` asserts 6 cards for super-admin, 3 cards for non-admin (seeds user via POST /api/v1/admin/users, drives must_change_password wall via UI), no horizontal page scroll at 1366×768 on both flows. Three commits `b3f2eb0` (Task 1 hooks), `f7b41d0` (Task 2 Composition row + migrations), `f8f7848` (Task 3 Playwright spec). Full `npm run build` + 63/63 vitest + all 5 Phase 6 lint gates green. Plan 07-07 is the Phase 7 tentpole user-visible delivery.
 - Execute plan 07-08 (EmptyState call-site migrations — EMPTY-01..06 + EMPTY-08). ✅ Shipped; 17 EmptyState call sites across 13 pages. Task 1 ships `web/e2e/empty-states.spec.ts` with `assertEmptyState` helper + 8 tests; Task 2 migrates ProjectsPage/ProjectDetailPage (×2 variants)/SearchPage/TLSPage/TrashPage to UI-SPEC-verbatim copy; Task 3 adds EMPTY-03 with inline `<SnippetList>` on all 8 repo pages (Docker/RPM/APT/PyPI/Helm/Git/RAW/S3); Task 4 adds EMPTY-04 on the 4 scannable repo pages (Docker/RPM/APT/PyPI) with CTA triggering artifact-level rescan on the first artifact per RESEARCH §1 option (b). SearchPage chips (openssl/CVE-2024-/myorg/docker/alpine) + Clear filters reset helper land as part of EMPTY-08. TLSPage upload card gains `id="tls-upload"` scroll anchor. GitRepoPage uses early-return EmptyState when refs.length===0; RawRepoPage/S3BucketPage gate on root-level emptiness only. Four commits `c73ecdc` (Task 1 Playwright spec), `491180f` (Task 2 page migrations), `a325d0b` (Task 3 EMPTY-03), `11cdc3d` (Task 4 EMPTY-04). Full `npm run build` + all 5 Phase 6 lint gates green. EMPTY-01..06 + EMPTY-08 complete; EMPTY-07 deferred to v1.2 per E-04.
+- Execute plan 08-01 (Phase 8 M1 — mirror backend foundation). ✅ Shipped; migration 024 adds 5 columns to `repos` (is_mirror, mirror_upstream_url, mirror_filter_json, mirror_cred_id FK ON DELETE SET NULL, scan_on_sync) + 3 to `sync_jobs` (progress_bytes, total_bytes, current_step); new `ReposRepo.SetMirrorConfigInTx` + `UpdateFields` mirror-editable fields + `SyncJobsRepo.SetProgress` + `SyncJobsRepo.CountRepoInflight`; `CreateRepoRequest` + `PatchRepoRequest` grow 5 mirror fields with 4-branch validation (repo.mirror_type_unsupported / repo.mirror_url_invalid / repo.mirror_filter_invalid / repo.mirror_cred_wrong_project — T-08-01-07); PATCH rejects is_mirror / mirror_upstream_url edits with 400 repo.mirror_url_immutable; /sync gets 3-way branch (mirror+empty reads repo row; mirror+body 400 sync.mirror_overrides_not_allowed; non-mirror preserves v1.0), 16 KiB body cap (sync.invalid_request_body), concurrency guard (409 sync.sync_already_running); new `httpx.MirrorGuard` + `MirrorGuardFixed` middleware wired into all 5 protocol write paths (OCI blobs+manifests, APT pool PUT/DEL + suites PATCH, RPM packages, PyPI legacy+PEP 694, Helm charts) emitting 403 repo.repo_is_mirror. REQUIREMENTS.md coverage flipped 32/32→59/59. 25 new tests all green; full `go test ./...` green across 35 packages. Five commits `9557f95` (REQUIREMENTS bump), `06c69de` (migration + repos), `87dcdd8` (Create/Patch + /sync), `caf0a4a` (MirrorGuard wiring), `2d71bff` (deferred-items log). Pre-existing `lint-typography` failures in 4 files not caused by Phase 8 — logged in deferred-items.md.
 
 ### Phase 7 rescope (2026-04-17 — APPLIED)
 
@@ -238,6 +250,7 @@ with the tight scope below.
 | Phase 07 P06 | 6m16s | 2 tasks | 5 files |
 | Phase 07 P07 | ~7 min | 3 tasks | 3 files |
 | Phase 07 P08 | 11 min | 4 tasks | 13 files |
+| Phase 08 P01 | ~29 min | 4 tasks | 24 files |
 
 ### Research Flags
 
@@ -252,8 +265,8 @@ with the tight scope below.
 
 ## Session Continuity
 
-- **Next action**: Run `/gsd-plan-phase 8` to generate plans for Phase 8 (Upstream Mirror & Docker Clone). Design spec at `docs/superpowers/specs/2026-04-19-upstream-mirror-design.md` is the authoritative input — it already decomposes the work into 6 milestones (M1–M6) that map 1:1 to expected plans 08-01..08-06. ROADMAP.md + STATE.md + phase directory reflect the scope addition.
-- **Last session:** 2026-04-18T01:36:45.076Z
+- **Next action**: Execute `08-02-PLAN.md` (M2 — progress tracking: `internal/jobs/progress.go` writer helper with 200 ms throttle + `GET /api/v1/jobs/{id}` endpoint extension carrying `progress_bytes` / `total_bytes` / `current_step` + per-protocol progress wrapping across all 5 sync handlers). 08-01 pre-built the columns and the `SyncJobsRepo.SetProgress` method, so 08-02 can focus on the throttle + endpoint + handler wrapping.
+- **Last session:** 2026-04-20T02:51:55.000Z
 - **Artifacts on disk**:
   - `.planning/PROJECT.md` (Current Milestone: v1.1, Phase 6 progress paragraph added)
   - `.planning/REQUIREMENTS.md` (33 active v1.1 REQs + 24 deferred v1.2 REQs; traceability split by target milestone)

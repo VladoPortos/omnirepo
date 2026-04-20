@@ -499,7 +499,7 @@ func TestUpload_MirrorRepoReturns403(t *testing.T) {
 	if err := f.db.WriteTx(context.Background(), func(tx *sql.Tx) error {
 		return f.repos.SetMirrorConfigInTx(context.Background(), tx, rid, metadata.MirrorConfig{
 			IsMirror:    true,
-			UpstreamURL: "https://charts.bitnami.com/bitnami",
+			UpstreamURL: "https://upstream.example/bitnami",
 			FilterJSON:  `{}`,
 			CredID:      nil,
 			ScanOnSync:  false,

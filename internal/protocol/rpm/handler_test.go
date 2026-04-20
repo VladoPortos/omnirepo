@@ -420,7 +420,7 @@ func TestUpload_MirrorRepoReturns403(t *testing.T) {
 	if err := f.db.WriteTx(context.Background(), func(tx *sql.Tx) error {
 		return f.repos.SetMirrorConfigInTx(context.Background(), tx, repoID, metadata.MirrorConfig{
 			IsMirror:    true,
-			UpstreamURL: "https://mirror.centos.org/centos/9",
+			UpstreamURL: "https://upstream.example/centos/9/BaseOS/x86_64/os/",
 			FilterJSON:  `{}`,
 			CredID:      nil,
 			ScanOnSync:  false,

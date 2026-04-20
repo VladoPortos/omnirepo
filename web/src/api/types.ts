@@ -458,11 +458,12 @@ export interface UpstreamCred {
 /**
  * UpstreamCredKind — the five credential "kinds" the backend accepts.
  * Mirrors `metadata.ValidCredKinds` in internal/metadata/upstream_creds.go.
- * The UI's MirrorConfigSection already groups "deb" and "apt" together
- * via protocolCredKinds, so both tokens are valid choices from the UI
- * perspective.
+ * The UI surfaces a single canonical 'apt' token; the obsolete 'deb'
+ * alias was removed in Phase 9 (POLISH-02). Clients that still submit
+ * `kind="deb"` get a 400 envelope with code `validation.invalid_cred_kind`
+ * and a machine-readable migration hint.
  */
-export type UpstreamCredKind = 'docker' | 'apt' | 'deb' | 'rpm' | 'pypi' | 'helm';
+export type UpstreamCredKind = 'docker' | 'apt' | 'rpm' | 'pypi' | 'helm';
 
 /**
  * UpstreamCredCreate — POST /api/v1/projects/{name}/upstream-creds

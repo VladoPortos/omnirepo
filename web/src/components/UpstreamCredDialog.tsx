@@ -66,14 +66,13 @@ export interface UpstreamCredDialogProps {
 
 /**
  * CRED_KINDS — the five kinds accepted by the backend. Mirrors
- * metadata.ValidCredKinds; we expose 'deb' AND 'apt' here because
- * MirrorConfigSection's protocolCredKinds maps the UI 'deb' token to
- * both values interchangeably.
+ * metadata.ValidCredKinds (internal/metadata/upstream_creds.go).
+ * The UI surfaces a single canonical 'apt' entry; the obsolete 'deb'
+ * alias was removed in Phase 9 (POLISH-02).
  */
 const CRED_KINDS: { value: UpstreamCredKind; label: string }[] = [
   { value: 'docker', label: 'Docker / OCI registry' },
   { value: 'apt', label: 'APT (deb)' },
-  { value: 'deb', label: 'APT (deb alias)' },
   { value: 'rpm', label: 'RPM / YUM' },
   { value: 'pypi', label: 'PyPI' },
   { value: 'helm', label: 'Helm chart repo' },

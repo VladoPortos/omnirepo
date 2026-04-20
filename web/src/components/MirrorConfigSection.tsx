@@ -59,12 +59,11 @@ export interface MirrorConfigSectionProps {
 }
 
 // protocolCredKinds maps the UI protocol token to the `kind` values the
-// backend's upstream_creds table uses. "deb" in UI == "apt" in the cred
-// kind column (historical: the UI settled on "deb" as the repo-type
-// token but the cred kind was named after the tool, not the packaging
-// format).
+// backend's upstream_creds table uses. The UI's 'deb' repo-type token
+// maps to cred kind 'apt' — single canonical value since Phase 9 /
+// POLISH-02 retired the 'deb' cred-kind alias.
 const protocolCredKinds: Record<MirrorProtocol, string[]> = {
-  deb: ['apt', 'deb'],
+  deb: ['apt'],
   rpm: ['rpm'],
   pypi: ['pypi'],
   helm: ['helm'],

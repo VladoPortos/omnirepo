@@ -185,3 +185,90 @@ func TestPyPIFilterAcceptsByName(t *testing.T) {
 		t.Fatal("glob *.whl should accept .whl")
 	}
 }
+
+// TestPyPIUpstreamTrailingSimpleIsIdempotent is the Phase 9 POLISH-05
+// live-verification regression for the silent "0 files synced" bug.
+//
+// Operator-entered upstream URLs naturally end in `/simple/` — that's
+// what PEP 503 documents, what the MirrorConfigSection placeholder hints
+// at (`https://pypi.org/simple/`), and what REQUIREMENTS.md POLISH-05
+// itself describes. Before the fix, ParseUpstreamSimpleIndex appended
+// `/simple/` unconditionally so `https://pypi.org/simple/` became
+// `https://pypi.org/simple/simple/`, which pypi.org answers as the
+// (legitimate-shape) response for a nonexistent project literally named
+// "simple" with an empty files list. The parser unmarshaled that happily
+// and returned an empty project list; the sync handler then finished
+// "done" with zero files, silently — same class as the APT filter.Suites
+// drift (commit f11ff39): REST/upstream wire shape drifts from handler
+// expectation, and the pre-existing unit tests (which pass an upstream
+// like `srv.URL` — no trailing /simple/) never exercised the operator
+// form that triggers the bug.
+//
+// This test asserts both forms (bare base AND base+/simple/ trailing)
+// hit the same /simple/... routes on the fake upstream. Running this
+// test against the pre-fix parser fails because the second variant
+// generates GETs for /simple/simple/ and /simple/simple/flask/.
+func TestPyPIUpstreamTrailingSimpleIsIdempotent(t *testing.T) {
+	seenPaths := map[string]int{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenPaths[r.URL.Path]++
+		switch r.URL.Path {
+		case "/simple/":
+			w.Header().Set("Content-Type", "application/vnd.pypi.simple.v1+json")
+			_, _ = w.Write([]byte(pep691IndexBody))
+		case "/simple/flask/":
+			w.Header().Set("Content-Type", "application/vnd.pypi.simple.v1+json")
+			_, _ = w.Write([]byte(pep691ProjectBody))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	ctx := context.Background()
+
+	// Form A — bare base URL (existing test coverage).
+	pA, err := pypi.ParseUpstreamSimpleIndex(ctx, srv.Client(), srv.URL, pypi.AuthCreds{})
+	if err != nil {
+		t.Fatalf("form A ParseUpstreamSimpleIndex: %v", err)
+	}
+	fA, err := pypi.ParseUpstreamProject(ctx, srv.Client(), srv.URL, "flask", pypi.AuthCreds{})
+	if err != nil {
+		t.Fatalf("form A ParseUpstreamProject: %v", err)
+	}
+
+	// Form B — operator-form (upstream ends in /simple/). Must produce
+	// identical results; must NOT double the /simple/ path segment.
+	pB, err := pypi.ParseUpstreamSimpleIndex(ctx, srv.Client(), srv.URL+"/simple/", pypi.AuthCreds{})
+	if err != nil {
+		t.Fatalf("form B ParseUpstreamSimpleIndex: %v", err)
+	}
+	fB, err := pypi.ParseUpstreamProject(ctx, srv.Client(), srv.URL+"/simple/", "flask", pypi.AuthCreds{})
+	if err != nil {
+		t.Fatalf("form B ParseUpstreamProject: %v", err)
+	}
+
+	// Form C — operator-form without trailing slash. Also must normalize.
+	pC, err := pypi.ParseUpstreamSimpleIndex(ctx, srv.Client(), srv.URL+"/simple", pypi.AuthCreds{})
+	if err != nil {
+		t.Fatalf("form C ParseUpstreamSimpleIndex: %v", err)
+	}
+
+	if len(pA) != 2 || len(pB) != 2 || len(pC) != 2 {
+		t.Fatalf("all three forms must enumerate 2 projects; got A=%d B=%d C=%d", len(pA), len(pB), len(pC))
+	}
+	if len(fA) != 1 || len(fB) != 1 {
+		t.Fatalf("project Flask must resolve 1 file in both forms; got A=%d B=%d", len(fA), len(fB))
+	}
+
+	// The fake upstream must have seen only /simple/ and /simple/flask/.
+	// If the parser had appended /simple/ to a /simple/-terminated URL,
+	// the server would have seen /simple/simple/ and 404'd — the test
+	// would already have failed on the parse calls. This final check
+	// nails it down for future regressions.
+	for p := range seenPaths {
+		if p != "/simple/" && p != "/simple/flask/" {
+			t.Fatalf("parser hit unexpected path %q — /simple/ was doubled", p)
+		}
+	}
+}

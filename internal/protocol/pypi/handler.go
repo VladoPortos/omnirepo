@@ -365,6 +365,22 @@ func wantsJSON(r *http.Request) bool {
 	return false
 }
 
+// htmlContentType returns the HTML Content-Type header value to emit for
+// the PEP 503 / PEP 691 Simple responses. Returns ContentTypeHTML
+// (application/vnd.pypi.simple.v1+html) ONLY when the client's Accept
+// header explicitly mentions that PEP 691 value. Otherwise returns
+// text/html — older pip (<23), uv <0.1, and other clients reject the
+// PEP 691 +html content-type outright ("The only supported Content-Type
+// is text/html"). PEP 691 itself prescribes this backwards-compat
+// default: "servers ... SHOULD default to text/html for backwards
+// compatibility."
+func htmlContentType(r *http.Request) string {
+	if strings.Contains(r.Header.Get("Accept"), ContentTypeHTML) {
+		return ContentTypeHTML
+	}
+	return "text/html; charset=utf-8"
+}
+
 // getSimpleIndex serves the top-level /simple/ index. Honors PEP 691
 // content negotiation. On a fresh repo (no on-disk index yet), renders an
 // empty index synthetically so `pip install --index-url` doesn't 404.
@@ -385,7 +401,7 @@ func (h *Handler) getSimpleIndex(w http.ResponseWriter, r *http.Request) {
 		ct = ContentTypeJSON
 	} else {
 		name = "index.html"
-		ct = ContentTypeHTML
+		ct = htmlContentType(r)
 	}
 	abs := filepath.Join(simpleDir, name)
 	if data, err := os.ReadFile(abs); err == nil {
@@ -448,7 +464,7 @@ func (h *Handler) getProjectIndex(w http.ResponseWriter, r *http.Request) {
 		ct = ContentTypeJSON
 	} else {
 		name = "index.html"
-		ct = ContentTypeHTML
+		ct = htmlContentType(r)
 	}
 	abs := filepath.Join(simpleDir, name)
 	data, err := os.ReadFile(abs)

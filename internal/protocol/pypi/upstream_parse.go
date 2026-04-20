@@ -88,6 +88,29 @@ var htmlRequiresPythonRE = regexp.MustCompile(`(?i)data-requires-python="([^"]*)
 // htmlAnchorRE matches the project list at /simple/.
 var htmlAnchorRE = regexp.MustCompile(`(?is)<a\s+[^>]*href="[^"]+"[^>]*>([^<]+)</a>`)
 
+// simpleBaseURL normalizes an operator-supplied upstream URL to the
+// canonical base that sits ABOVE the PEP 503 `/simple/` root, so callers
+// can then append `/simple/...` deterministically. Accepts either form:
+//
+//	https://pypi.org              → https://pypi.org
+//	https://pypi.org/             → https://pypi.org
+//	https://pypi.org/simple       → https://pypi.org
+//	https://pypi.org/simple/      → https://pypi.org
+//
+// Context (Phase 9 POLISH-05): REQUIREMENTS.md, the UI placeholder in
+// MirrorConfigSection, and PEP 503 itself all describe a PyPI mirror by
+// its Simple-index URL ending in `/simple/`. Operators naturally enter
+// `https://pypi.org/simple/`. Before this normalization the handler
+// appended `/simple/` unconditionally, yielding `https://pypi.org/simple/simple/`
+// — which pypi.org answers as the (nonexistent) project literally named
+// "simple" with an empty `files` list. Sync then completed "done" with
+// zero files, silently — same class as the APT `filter.Suites` drift
+// (commit f11ff39): wire shape drifts from handler expectation, unit
+// tests bypass the REST/upstream boundary and miss it.
+func simpleBaseURL(upstream string) string {
+	return strings.TrimSuffix(strings.TrimRight(upstream, "/"), "/simple")
+}
+
 // ParseUpstreamSimpleIndex fetches <upstream>/simple/ and returns the
 // list of normalized project names. JSON is preferred via Accept; on
 // 406 / non-JSON content-type the response is reparsed as HTML.
@@ -95,7 +118,7 @@ func ParseUpstreamSimpleIndex(ctx context.Context, client *http.Client, upstream
 	if client == nil {
 		client = http.DefaultClient
 	}
-	indexURL := strings.TrimRight(upstream, "/") + "/simple/"
+	indexURL := simpleBaseURL(upstream) + "/simple/"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, indexURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("pypi upstream: build req: %w", err)
@@ -150,7 +173,7 @@ func ParseUpstreamProject(ctx context.Context, client *http.Client, upstream, no
 	if normalizedProject == "" {
 		return nil, fmt.Errorf("pypi upstream: empty project name")
 	}
-	projectURL := strings.TrimRight(upstream, "/") + "/simple/" + url.PathEscape(normalizedProject) + "/"
+	projectURL := simpleBaseURL(upstream) + "/simple/" + url.PathEscape(normalizedProject) + "/"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, projectURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("pypi upstream: build req: %w", err)

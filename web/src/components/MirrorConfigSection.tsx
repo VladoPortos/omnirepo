@@ -139,7 +139,7 @@ export function MirrorConfigSection({
             aria-label="This repo is a mirror of an upstream"
           />
           <span className="text-sm">
-            <span className="font-medium">
+            <span className="font-semibold">
               This repo is a mirror of an upstream
             </span>
             <span className="block text-xs text-muted-foreground">
@@ -231,7 +231,7 @@ export function MirrorConfigSection({
               aria-label="Scan synced artifacts with Trivy"
             />
             <span className="text-sm">
-              <span className="font-medium">
+              <span className="font-semibold">
                 Scan synced artifacts with Trivy
               </span>
               <span className="block text-xs text-muted-foreground">

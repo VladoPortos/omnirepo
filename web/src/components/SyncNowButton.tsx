@@ -113,7 +113,7 @@ export function SyncNowButton({
     <div className="rounded-lg border bg-muted/20 p-3 space-y-2">
       <div className="flex items-start justify-between gap-3">
         <div className="flex-1 text-sm min-w-0">
-          <p className="font-medium">Mirror of upstream</p>
+          <p className="font-semibold">Mirror of upstream</p>
           <p className="text-xs text-muted-foreground font-mono break-all">
             {upstreamUrl}
           </p>

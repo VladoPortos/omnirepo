@@ -32,6 +32,7 @@ import type {
   ActivityItem,
   PullExternalRequest,
   PullExternalResponse,
+  UpstreamCred,
   Repo,
   RepoCreate,
   RepoPatch,
@@ -1035,5 +1036,31 @@ export function usePullExternal(projectName: string, repoName: string) {
         queryKey: ['repo-content', projectName, 'docker', repoName],
       });
     },
+  });
+}
+
+/**
+ * useUpstreamCreds — GET /projects/{name}/upstream-creds/ project-scoped
+ * credential list. Returns a secret-free projection (id/host/kind/
+ * username/timestamps) per `internal/api/upstream_creds.go:
+ * upstreamCredResponse`.
+ *
+ * Consumers: CloneImageDialog credential picker and (plan 08-05)
+ * ProjectSettingsPage upstream-creds tab. The endpoint is skipped on
+ * the backend when no AEAD key is materialised — callers should handle
+ * an empty list gracefully (the picker just renders the "no creds"
+ * fallback in that case).
+ */
+export function useUpstreamCreds(projectName: string) {
+  return useQuery({
+    queryKey: ['projects', projectName, 'upstream-creds'],
+    queryFn: () =>
+      api.get<UpstreamCred[]>(`/projects/${enc(projectName)}/upstream-creds/`),
+    enabled: !!projectName,
+    staleTime: 30_000,
+    // If the endpoint is unmounted (no AEAD) the fetch returns 404 —
+    // treat that as "no creds" rather than a hard error so the picker
+    // just degrades gracefully.
+    retry: false,
   });
 }

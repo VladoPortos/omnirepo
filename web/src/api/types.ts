@@ -338,6 +338,21 @@ export interface PullExternalResponse {
   job_id: number;
 }
 
+/**
+ * UpstreamCred mirrors the secret-free upstreamCredResponse struct in
+ * `internal/api/upstream_creds.go`. Consumed by the CloneImageDialog
+ * credential picker — the dialog displays `host` (e.g. "ghcr.io") with
+ * an optional `username` preview and sends back just the `id`.
+ */
+export interface UpstreamCred {
+  id: number;
+  host: string;
+  kind: string;
+  username: string;
+  created_at: string;
+  updated_at: string;
+}
+
 // -- Scan --
 
 export type ScanStatus = 'pending' | 'running' | 'done' | 'failed';

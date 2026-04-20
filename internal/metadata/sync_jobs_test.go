@@ -161,3 +161,129 @@ func TestSyncJobsLeaseRace(t *testing.T) {
 		t.Fatalf("expected exactly one winner, got %d", winners)
 	}
 }
+
+// --------------------------------------------------------------------------
+// Phase 8 Plan 01 (MIRROR-04, MIRROR-08) — progress + concurrency tracking.
+// --------------------------------------------------------------------------
+
+// TestSyncJobsRepo_SetProgress_ReadsBack plants a pending job, writes a
+// progress triple via SetProgress, and reads it back to assert migration 024's
+// three new columns round-trip.
+func TestSyncJobsRepo_SetProgress_ReadsBack(t *testing.T) {
+	t.Parallel()
+	db := sqlitetest.New(t)
+	ctx := context.Background()
+	jobs := metadata.NewSyncJobsRepo(db)
+	pid := seedProject(t, db, "sync-progress")
+	repos := metadata.NewReposRepo(db)
+	repoID, err := repos.Create(ctx, pid, "deb", "p1", "", nil, nil, nil)
+	if err != nil {
+		t.Fatalf("seed repo: %v", err)
+	}
+
+	var jobID int64
+	if err := db.WriteTx(ctx, func(tx *sql.Tx) error {
+		id, err := jobs.Enqueue(ctx, tx, "apt_sync", pid, repoID, "{}")
+		jobID = id
+		return err
+	}); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+
+	if err := jobs.SetProgress(ctx, jobID, "layer 3/7", 42, 103); err != nil {
+		t.Fatalf("set progress: %v", err)
+	}
+
+	var step string
+	var done, total int64
+	if err := db.Reader.QueryRowContext(ctx,
+		`SELECT COALESCE(current_step, ''), progress_bytes, total_bytes FROM sync_jobs WHERE id=?`,
+		jobID,
+	).Scan(&step, &done, &total); err != nil {
+		t.Fatalf("readback: %v", err)
+	}
+	if step != "layer 3/7" || done != 42 || total != 103 {
+		t.Fatalf("progress mismatch: step=%q done=%d total=%d", step, done, total)
+	}
+}
+
+// TestSyncJobsRepo_CountRepoInflight plants a mix of pending/running/done
+// rows across two repos and asserts only pending+running for the target
+// repo are counted.
+func TestSyncJobsRepo_CountRepoInflight(t *testing.T) {
+	t.Parallel()
+	db := sqlitetest.New(t)
+	ctx := context.Background()
+	jobs := metadata.NewSyncJobsRepo(db)
+	pid := seedProject(t, db, "inflight")
+	repos := metadata.NewReposRepo(db)
+	repoA, err := repos.Create(ctx, pid, "deb", "r-a", "", nil, nil, nil)
+	if err != nil {
+		t.Fatalf("seed repo A: %v", err)
+	}
+	repoB, err := repos.Create(ctx, pid, "rpm", "r-b", "", nil, nil, nil)
+	if err != nil {
+		t.Fatalf("seed repo B: %v", err)
+	}
+
+	// Repo A: 2 pending + 1 running + 1 done.
+	if err := db.WriteTx(ctx, func(tx *sql.Tx) error {
+		for i := 0; i < 2; i++ {
+			if _, err := jobs.Enqueue(ctx, tx, "apt_sync", pid, repoA, "{}"); err != nil {
+				return err
+			}
+		}
+		// Manually insert a running + a done so we don't have to lease.
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO sync_jobs(kind, repo_id, status, payload_json) VALUES ('apt_sync', ?, 'running', '{}')`,
+			repoA,
+		); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO sync_jobs(kind, repo_id, status, payload_json) VALUES ('apt_sync', ?, 'done', '{}')`,
+			repoA,
+		); err != nil {
+			return err
+		}
+		// Repo B: 1 pending.
+		if _, err := jobs.Enqueue(ctx, tx, "rpm_sync", pid, repoB, "{}"); err != nil {
+			return err
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	n, err := jobs.CountRepoInflight(ctx, repoA)
+	if err != nil {
+		t.Fatalf("count repo A: %v", err)
+	}
+	if n != 3 {
+		t.Fatalf("count repo A = %d, want 3 (2 pending + 1 running)", n)
+	}
+
+	n, err = jobs.CountRepoInflight(ctx, repoB)
+	if err != nil {
+		t.Fatalf("count repo B: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("count repo B = %d, want 1", n)
+	}
+}
+
+// TestSyncJobsRepo_CountRepoInflight_Empty asserts a repo with no rows
+// returns 0 and a non-error result.
+func TestSyncJobsRepo_CountRepoInflight_Empty(t *testing.T) {
+	t.Parallel()
+	db := sqlitetest.New(t)
+	ctx := context.Background()
+	jobs := metadata.NewSyncJobsRepo(db)
+	n, err := jobs.CountRepoInflight(ctx, 9999)
+	if err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("n = %d, want 0", n)
+	}
+}

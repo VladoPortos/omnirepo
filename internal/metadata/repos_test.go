@@ -484,3 +484,158 @@ func TestReposMetadataStateMissing(t *testing.T) {
 		t.Fatalf("want ErrNotFound, got %v", err)
 	}
 }
+
+// --------------------------------------------------------------------------
+// Phase 8 Plan 01 (MIRROR-01..07) — upstream-mirror columns round-trip.
+// --------------------------------------------------------------------------
+
+// TestReposRepo_MirrorColumns_RoundTrip asserts that creating a deb repo as a
+// mirror via Create + SetMirrorConfigInTx round-trips every new mirror column
+// via FindByTriple and ListByProject. Guards D-13 / D-14 / migration 024.
+func TestReposRepo_MirrorColumns_RoundTrip(t *testing.T) {
+	t.Parallel()
+	db := sqlitetest.New(t)
+	ctx := context.Background()
+	pid := seedProject(t, db, "p")
+	r := metadata.NewReposRepo(db)
+
+	id, err := r.Create(ctx, pid, "deb", "ubuntu-focal", "", nil, nil, nil)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	filter := `{"Suites":["focal"],"Components":["main"],"Arches":["amd64"]}`
+	if err := db.WriteTx(ctx, func(tx *sql.Tx) error {
+		return r.SetMirrorConfigInTx(ctx, tx, id, metadata.MirrorConfig{
+			IsMirror:    true,
+			UpstreamURL: "https://archive.ubuntu.com/ubuntu",
+			FilterJSON:  filter,
+			CredID:      nil,
+			ScanOnSync:  true,
+		})
+	}); err != nil {
+		t.Fatalf("set mirror config: %v", err)
+	}
+
+	got, err := r.FindByTriple(ctx, pid, "deb", "ubuntu-focal")
+	if err != nil {
+		t.Fatalf("find: %v", err)
+	}
+	if !got.IsMirror {
+		t.Errorf("IsMirror = false, want true")
+	}
+	if got.MirrorUpstreamURL != "https://archive.ubuntu.com/ubuntu" {
+		t.Errorf("MirrorUpstreamURL = %q", got.MirrorUpstreamURL)
+	}
+	if got.MirrorFilterJSON != filter {
+		t.Errorf("MirrorFilterJSON = %q, want %q", got.MirrorFilterJSON, filter)
+	}
+	if got.MirrorCredID != nil {
+		t.Errorf("MirrorCredID = %v, want nil", *got.MirrorCredID)
+	}
+	if !got.ScanOnSync {
+		t.Errorf("ScanOnSync = false, want true")
+	}
+
+	// List should see the same values.
+	list, err := r.ListByProject(ctx, pid)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(list) != 1 {
+		t.Fatalf("list: want 1, got %d", len(list))
+	}
+	if !list[0].IsMirror || list[0].MirrorUpstreamURL != "https://archive.ubuntu.com/ubuntu" {
+		t.Errorf("list round-trip drift: %+v", list[0])
+	}
+}
+
+// TestReposRepo_NonMirror_NullMirrorFields asserts default values for a
+// non-mirror repo — every mirror column null / false / empty.
+func TestReposRepo_NonMirror_NullMirrorFields(t *testing.T) {
+	t.Parallel()
+	db := sqlitetest.New(t)
+	ctx := context.Background()
+	pid := seedProject(t, db, "p")
+	r := metadata.NewReposRepo(db)
+
+	_, err := r.Create(ctx, pid, "docker", "plain", "", nil, nil, nil)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	got, err := r.FindByTriple(ctx, pid, "docker", "plain")
+	if err != nil {
+		t.Fatalf("find: %v", err)
+	}
+	if got.IsMirror {
+		t.Errorf("IsMirror = true, want false")
+	}
+	if got.MirrorUpstreamURL != "" {
+		t.Errorf("MirrorUpstreamURL = %q, want empty", got.MirrorUpstreamURL)
+	}
+	if got.MirrorFilterJSON != "" {
+		t.Errorf("MirrorFilterJSON = %q, want empty", got.MirrorFilterJSON)
+	}
+	if got.MirrorCredID != nil {
+		t.Errorf("MirrorCredID = %v, want nil", got.MirrorCredID)
+	}
+	if got.ScanOnSync {
+		t.Errorf("ScanOnSync = true, want false")
+	}
+}
+
+// TestReposRepo_Update_MirrorFields asserts Update edits the 3 editable
+// mirror fields and leaves is_mirror + mirror_upstream_url untouched.
+func TestReposRepo_Update_MirrorFields(t *testing.T) {
+	t.Parallel()
+	db := sqlitetest.New(t)
+	ctx := context.Background()
+	pid := seedProject(t, db, "p")
+	r := metadata.NewReposRepo(db)
+
+	id, err := r.Create(ctx, pid, "helm", "charts", "", nil, nil, nil)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := db.WriteTx(ctx, func(tx *sql.Tx) error {
+		return r.SetMirrorConfigInTx(ctx, tx, id, metadata.MirrorConfig{
+			IsMirror:    true,
+			UpstreamURL: "https://charts.example/helm",
+			FilterJSON:  `{"Names":["foo"]}`,
+			CredID:      nil,
+			ScanOnSync:  false,
+		})
+	}); err != nil {
+		t.Fatalf("set mirror config: %v", err)
+	}
+
+	newFilter := `{"Names":["foo","bar"]}`
+	scanOn := true
+	if err := db.WriteTx(ctx, func(tx *sql.Tx) error {
+		_, err := r.Update(ctx, tx, id, metadata.UpdateFields{
+			MirrorFilterJSON: &newFilter,
+			ScanOnSync:       &scanOn,
+		})
+		return err
+	}); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+
+	got, err := r.FindByID(ctx, id)
+	if err != nil {
+		t.Fatalf("find: %v", err)
+	}
+	if got.MirrorFilterJSON != newFilter {
+		t.Errorf("filter = %q, want %q", got.MirrorFilterJSON, newFilter)
+	}
+	if !got.ScanOnSync {
+		t.Errorf("ScanOnSync = false, want true")
+	}
+	// Immutable fields unchanged.
+	if !got.IsMirror {
+		t.Errorf("IsMirror flipped false")
+	}
+	if got.MirrorUpstreamURL != "https://charts.example/helm" {
+		t.Errorf("URL mutated: %q", got.MirrorUpstreamURL)
+	}
+}

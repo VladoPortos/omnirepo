@@ -25,6 +25,14 @@ type SyncJob struct {
 	PayloadJSON string
 	Attempts   int64
 	LeaseID    string
+
+	// Phase 8 Plan 01 / 02 (MIRROR-08..12) — byte-level progress tracking.
+	// Workers call SetProgress to advance; the REST /jobs/{id} endpoint
+	// reads the triple and renders it for the UI polling path. total_bytes
+	// = 0 is legal (Helm sync is step-based per D-11).
+	ProgressBytes int64
+	TotalBytes    int64
+	CurrentStep   string
 }
 
 // NewSyncJobsRepo constructs a repo bound to db.
@@ -128,6 +136,55 @@ func (r *SyncJobsRepo) MarkPermanentlyFailed(ctx context.Context, tx *sql.Tx, id
 		return fmt.Errorf("sync_jobs: mark_perm_failed %d: %w", id, err)
 	}
 	return nil
+}
+
+// SetProgress persists the (step, done, total) triple for a running job.
+// Runs against the writer pool without a caller-supplied tx — progress
+// writes are fire-and-forget from the protocol handlers and must not
+// block or participate in the outer sync tx. Throttling (one write per
+// 200 ms with change detection) is enforced by internal/jobs/progress
+// (plan 08-02); this helper is the single SQL mutator.
+//
+// total == 0 is legal (Helm step-based progress per D-11). step may be
+// empty (initial "starting" transition). progress_bytes is capped at
+// total_bytes at the call site when total > 0 — this helper writes the
+// triple as given.
+func (r *SyncJobsRepo) SetProgress(ctx context.Context, jobID int64, step string, done, total int64) error {
+	_, err := r.db.Writer.ExecContext(ctx, `
+		UPDATE sync_jobs
+		SET progress_bytes = ?,
+		    total_bytes    = ?,
+		    current_step   = ?,
+		    updated_at     = CURRENT_TIMESTAMP
+		WHERE id = ?
+	`, done, total, step, jobID)
+	if err != nil {
+		return fmt.Errorf("sync_jobs: set progress %d: %w", jobID, err)
+	}
+	return nil
+}
+
+// CountRepoInflight reports how many sync_jobs rows for repoID are
+// currently pending or running. Used by the mirror-aware /sync endpoint
+// (Phase 8 Plan 01, D-07) to enforce one-in-flight-sync-per-repo with
+// 409 sync_already_running.
+//
+// T-08-01-04 residual risk: the call is NOT wrapped in a tx with the
+// subsequent Enqueue; two concurrent /sync POSTs can both observe zero
+// and both enqueue. The worker pool's LeaseOne uses a single-statement
+// UPDATE ... RETURNING so only one dispatcher runs each job; the cost
+// of the race is one wasted pending row, reaped by the next
+// RecoverStale sweep.
+func (r *SyncJobsRepo) CountRepoInflight(ctx context.Context, repoID int64) (int, error) {
+	var n int
+	err := r.db.Reader.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM sync_jobs
+		WHERE repo_id = ? AND status IN ('pending','running')
+	`, repoID).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("sync_jobs: count inflight %d: %w", repoID, err)
+	}
+	return n, nil
 }
 
 // RecoverStale sweeps running rows whose leased_at is older than the

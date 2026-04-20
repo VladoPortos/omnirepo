@@ -27,6 +27,19 @@ type Repo struct {
 	// global git push-size cap. NULL → inherit cfg.repos.git.max_push_bytes.
 	// Only meaningful when Type == "git"; populated by migration 017.
 	GitMaxPushBytes *int64
+
+	// Phase 8 Plan 01 (MIRROR-01..07) — upstream mirror fields added by
+	// migration 024. Only meaningful when Type ∈ {deb,rpm,pypi,helm};
+	// IsMirror + MirrorUpstreamURL are immutable post-creation (enforced
+	// at the API layer). MirrorCredID may be NULL even for mirror repos
+	// (public upstream archives); set via ON DELETE SET NULL when the
+	// referenced upstream_creds row is removed — the next sync surfaces
+	// "credential missing" rather than wedging the repo row.
+	IsMirror          bool
+	MirrorUpstreamURL string
+	MirrorFilterJSON  string
+	MirrorCredID      *int64
+	ScanOnSync        bool
 }
 
 // ReposRepo owns CRUD on repos.
@@ -101,6 +114,43 @@ func (r *ReposRepo) CreateInTx(
 	return lid, nil
 }
 
+// MirrorConfig is the tuple of mirror-repo columns set exactly once at repo
+// creation (Phase 8 Plan 01, D-02). IsMirror + UpstreamURL are immutable
+// post-creation; FilterJSON + CredID + ScanOnSync can be edited via
+// ReposRepo.Update. CredID may be nil (public upstream archives).
+type MirrorConfig struct {
+	IsMirror     bool
+	UpstreamURL  string
+	FilterJSON   string
+	CredID       *int64
+	ScanOnSync   bool
+}
+
+// SetMirrorConfigInTx flips the 5 mirror columns on repoID. Intended to be
+// called in the same writer-tx as CreateInTx so the repo row is never
+// observable in a half-mirror state. Called again via a caller-supplied
+// UPDATE would violate the immutability rule; handlers that patch mirror
+// fields go through ReposRepo.Update with UpdateFields instead.
+func (r *ReposRepo) SetMirrorConfigInTx(ctx context.Context, tx *sql.Tx, repoID int64, c MirrorConfig) error {
+	var credID sql.NullInt64
+	if c.CredID != nil {
+		credID = sql.NullInt64{Int64: *c.CredID, Valid: true}
+	}
+	_, err := tx.ExecContext(ctx, `
+		UPDATE repos SET
+		  is_mirror = ?,
+		  mirror_upstream_url = ?,
+		  mirror_filter_json = ?,
+		  mirror_cred_id = ?,
+		  scan_on_sync = ?
+		WHERE id = ?
+	`, boolInt(c.IsMirror), c.UpstreamURL, c.FilterJSON, credID, boolInt(c.ScanOnSync), repoID)
+	if err != nil {
+		return fmt.Errorf("repos: set mirror config (repo=%d): %w", repoID, err)
+	}
+	return nil
+}
+
 // FindByTriple returns the live repo with matching (projectID, type, name).
 func (r *ReposRepo) FindByTriple(ctx context.Context, projectID int64, typ, name string) (*Repo, error) {
 	return r.scanOne(ctx, `project_id=? AND type=? AND name=? AND deleted_at IS NULL`, projectID, typ, name)
@@ -137,7 +187,8 @@ func (r *ReposRepo) Restore(ctx context.Context, id int64) error {
 func (r *ReposRepo) ListByProject(ctx context.Context, projectID int64) ([]Repo, error) {
 	rows, err := r.db.Reader.QueryContext(ctx, `
 		SELECT id, project_id, type, name, description_md, auto_scan, block_on_severity,
-		       public_read, size_bytes, created_at, deleted_at, git_max_push_bytes
+		       public_read, size_bytes, created_at, deleted_at, git_max_push_bytes,
+		       is_mirror, mirror_upstream_url, mirror_filter_json, mirror_cred_id, scan_on_sync
 		FROM repos WHERE project_id=? AND deleted_at IS NULL
 		ORDER BY type, name
 	`, projectID)
@@ -274,7 +325,8 @@ func (r *ReposRepo) catalogQuery(ctx context.Context, q string, args ...any) ([]
 func (r *ReposRepo) ListAll(ctx context.Context) ([]Repo, error) {
 	rows, err := r.db.Reader.QueryContext(ctx, `
 		SELECT id, project_id, type, name, description_md, auto_scan, block_on_severity,
-		       public_read, size_bytes, created_at, deleted_at, git_max_push_bytes
+		       public_read, size_bytes, created_at, deleted_at, git_max_push_bytes,
+		       is_mirror, mirror_upstream_url, mirror_filter_json, mirror_cred_id, scan_on_sync
 		FROM repos WHERE deleted_at IS NULL ORDER BY project_id, type, name
 	`)
 	if err != nil {
@@ -295,7 +347,8 @@ func (r *ReposRepo) ListAll(ctx context.Context) ([]Repo, error) {
 func (r *ReposRepo) scanOne(ctx context.Context, where string, args ...any) (*Repo, error) {
 	row := r.db.Reader.QueryRowContext(ctx, `
 		SELECT id, project_id, type, name, description_md, auto_scan, block_on_severity,
-		       public_read, size_bytes, created_at, deleted_at, git_max_push_bytes
+		       public_read, size_bytes, created_at, deleted_at, git_max_push_bytes,
+		       is_mirror, mirror_upstream_url, mirror_filter_json, mirror_cred_id, scan_on_sync
 		FROM repos WHERE `+where, args...)
 	rr, err := scanRepoRow(row)
 	if err != nil {
@@ -320,11 +373,22 @@ func scanRepo(rs scanner) (*Repo, error) {
 // applied verbatim. Callers are responsible for validating enum values (e.g.
 // block_on_severity) BEFORE invoking Update — the DDL CHECK constraint is the
 // last line of defense.
+//
+// Phase 8 Plan 01 (D-02): MirrorFilterJSON / MirrorCredID / ScanOnSync are the
+// three editable mirror fields — is_mirror + mirror_upstream_url are
+// intentionally absent from UpdateFields so the schema cannot be mutated post-
+// creation via this path; the API-layer PATCH validator enforces the same
+// rule at the request boundary.
 type UpdateFields struct {
 	DescriptionMD   *string
 	AutoScan        *bool
 	BlockOnSeverity *string
 	PublicRead      *bool
+
+	MirrorFilterJSON *string
+	MirrorCredID     *int64 // pointer-of-pointer not needed; nil means "no change", non-nil with *val == 0 means "clear"
+	MirrorCredIDSet  bool   // distinguishes "no change" from "clear to NULL"
+	ScanOnSync       *bool
 }
 
 // Update applies a partial field update to the repo identified by repoID.
@@ -355,6 +419,22 @@ func (r *ReposRepo) Update(ctx context.Context, tx *sql.Tx, repoID int64, f Upda
 		sets = append(sets, "public_read = ?")
 		args = append(args, boolInt(*f.PublicRead))
 	}
+	if f.MirrorFilterJSON != nil {
+		sets = append(sets, "mirror_filter_json = ?")
+		args = append(args, *f.MirrorFilterJSON)
+	}
+	if f.MirrorCredIDSet {
+		sets = append(sets, "mirror_cred_id = ?")
+		if f.MirrorCredID != nil {
+			args = append(args, sql.NullInt64{Int64: *f.MirrorCredID, Valid: true})
+		} else {
+			args = append(args, sql.NullInt64{})
+		}
+	}
+	if f.ScanOnSync != nil {
+		sets = append(sets, "scan_on_sync = ?")
+		args = append(args, boolInt(*f.ScanOnSync))
+	}
 	if len(sets) > 0 {
 		args = append(args, repoID)
 		q := "UPDATE repos SET " + strings.Join(sets, ", ") + " WHERE id = ? AND deleted_at IS NULL"
@@ -370,7 +450,8 @@ func (r *ReposRepo) Update(ctx context.Context, tx *sql.Tx, repoID int64, f Upda
 	// Read-back via the same tx so the caller sees its own write before commit.
 	row := tx.QueryRowContext(ctx, `
 		SELECT id, project_id, type, name, description_md, auto_scan, block_on_severity,
-		       public_read, size_bytes, created_at, deleted_at, git_max_push_bytes
+		       public_read, size_bytes, created_at, deleted_at, git_max_push_bytes,
+		       is_mirror, mirror_upstream_url, mirror_filter_json, mirror_cred_id, scan_on_sync
 		FROM repos WHERE id = ? AND deleted_at IS NULL
 	`, repoID)
 	rr, err := scanRepoRow(row)
@@ -632,10 +713,16 @@ func extractDigests(body []byte) []string {
 
 func scanRepoRow(rs scanner) (*Repo, error) {
 	var r Repo
-	var as, pr int64
+	var as, pr, isMirror, scanOnSync int64
 	var deleted sql.NullTime
-	var gitMax sql.NullInt64
-	if err := rs.Scan(&r.ID, &r.ProjectID, &r.Type, &r.Name, &r.DescriptionMD, &as, &r.BlockOnSeverity, &pr, &r.SizeBytes, &r.CreatedAt, &deleted, &gitMax); err != nil {
+	var gitMax, mirrorCredID sql.NullInt64
+	var mirrorURL, mirrorFilter sql.NullString
+	if err := rs.Scan(
+		&r.ID, &r.ProjectID, &r.Type, &r.Name, &r.DescriptionMD,
+		&as, &r.BlockOnSeverity, &pr, &r.SizeBytes,
+		&r.CreatedAt, &deleted, &gitMax,
+		&isMirror, &mirrorURL, &mirrorFilter, &mirrorCredID, &scanOnSync,
+	); err != nil {
 		return nil, err
 	}
 	r.AutoScan = as != 0
@@ -647,6 +734,18 @@ func scanRepoRow(rs scanner) (*Repo, error) {
 	if gitMax.Valid {
 		v := gitMax.Int64
 		r.GitMaxPushBytes = &v
+	}
+	r.IsMirror = isMirror != 0
+	r.ScanOnSync = scanOnSync != 0
+	if mirrorURL.Valid {
+		r.MirrorUpstreamURL = mirrorURL.String
+	}
+	if mirrorFilter.Valid {
+		r.MirrorFilterJSON = mirrorFilter.String
+	}
+	if mirrorCredID.Valid {
+		v := mirrorCredID.Int64
+		r.MirrorCredID = &v
 	}
 	return &r, nil
 }

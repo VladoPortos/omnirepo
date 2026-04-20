@@ -37,6 +37,10 @@ import { formatBytes, formatDate } from '@/lib/format';
 import { api, envelopeFromError, type ApiErrorEnvelope, ApiError } from '@/api/client';
 import { useRepoContent, useMe, useRepoScans, useRescanArtifact } from '@/api/queries';
 import { ErrorEnvelopeRenderer } from '@/components/common/ErrorEnvelope';
+import {
+  SyncNowButton,
+  formatFilterSummary,
+} from '@/components/SyncNowButton';
 import type { Repo } from '@/api/types';
 
 interface DebPackage {
@@ -251,16 +255,36 @@ export function AptRepoPage({ repo }: AptRepoPageProps) {
   return (
     <RepoPageLayout repo={repo}>
       <div className="space-y-4">
-        {/* Actions */}
-        <div className="flex flex-wrap items-center gap-2">
-          <Button variant="outline" size="sm" onClick={() => setSyncOpen(true)}>
-            <ExternalLink className="mr-1.5 size-4" />
-            Sync from URL
-          </Button>
-        </div>
+        {/* Phase 8 Plan 04: mirror Sync Now affordance — visible only on
+            is_mirror=true repos, reads upstream config from the repo row. */}
+        {repo.is_mirror && (
+          <SyncNowButton
+            projectName={projectName ?? ''}
+            repoType="deb"
+            repoName={repo.name}
+            upstreamUrl={repo.mirror_upstream_url}
+            filterSummary={formatFilterSummary(repo.mirror_filter_json, 'deb')}
+          />
+        )}
 
-        {/* Upload dropzone */}
-        <Dropzone onUpload={handleUpload} accept=".deb" />
+        {/* Actions */}
+        {!repo.is_mirror && (
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setSyncOpen(true)}
+            >
+              <ExternalLink className="mr-1.5 size-4" />
+              Sync from URL
+            </Button>
+          </div>
+        )}
+
+        {/* Upload dropzone — hidden on mirror repos (uploads are 403'd). */}
+        {!repo.is_mirror && (
+          <Dropzone onUpload={handleUpload} accept=".deb" />
+        )}
 
         {/* Suite/Component filters */}
         <div className="flex flex-wrap gap-4">

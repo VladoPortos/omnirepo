@@ -22,6 +22,10 @@ import { formatBytes, formatDate } from '@/lib/format';
 import { api, envelopeFromError, type ApiErrorEnvelope, ApiError } from '@/api/client';
 import { useRepoContent, useMe, useRepoScans, useRescanArtifact } from '@/api/queries';
 import { ErrorEnvelopeRenderer } from '@/components/common/ErrorEnvelope';
+import {
+  SyncNowButton,
+  formatFilterSummary,
+} from '@/components/SyncNowButton';
 import type { Repo } from '@/api/types';
 
 interface PypiFile {
@@ -265,8 +269,21 @@ export function PypiRepoPage({ repo }: PypiRepoPageProps) {
   return (
     <RepoPageLayout repo={repo}>
       <div className="space-y-4">
-        {/* Upload dropzone */}
-        <Dropzone onUpload={handleUpload} accept=".whl,.tar.gz,.zip" />
+        {/* Phase 8 Plan 04: mirror Sync Now affordance. */}
+        {repo.is_mirror && (
+          <SyncNowButton
+            projectName={projectName ?? ''}
+            repoType="pypi"
+            repoName={repo.name}
+            upstreamUrl={repo.mirror_upstream_url}
+            filterSummary={formatFilterSummary(repo.mirror_filter_json, 'pypi')}
+          />
+        )}
+
+        {/* Upload dropzone — hidden on mirror repos. */}
+        {!repo.is_mirror && (
+          <Dropzone onUpload={handleUpload} accept=".whl,.tar.gz,.zip" />
+        )}
 
         {/* Filter */}
         <InlineSearch

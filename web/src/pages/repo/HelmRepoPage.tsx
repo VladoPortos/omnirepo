@@ -23,6 +23,10 @@ import { RepoPageLayout } from './RepoPageLayout';
 import { formatBytes, formatDate } from '@/lib/format';
 import { api } from '@/api/client';
 import { useRepoContent, useMe } from '@/api/queries';
+import {
+  SyncNowButton,
+  formatFilterSummary,
+} from '@/components/SyncNowButton';
 import type { Repo } from '@/api/types';
 
 interface HelmChartVersion {
@@ -240,8 +244,21 @@ export function HelmRepoPage({ repo }: HelmRepoPageProps) {
   return (
     <RepoPageLayout repo={repo}>
       <div className="space-y-4">
-        {/* Upload dropzone */}
-        <Dropzone onUpload={handleUpload} accept=".tgz,.tar.gz" />
+        {/* Phase 8 Plan 04: mirror Sync Now affordance. */}
+        {repo.is_mirror && (
+          <SyncNowButton
+            projectName={projectName ?? ''}
+            repoType="helm"
+            repoName={repo.name}
+            upstreamUrl={repo.mirror_upstream_url}
+            filterSummary={formatFilterSummary(repo.mirror_filter_json, 'helm')}
+          />
+        )}
+
+        {/* Upload dropzone — hidden on mirror repos. */}
+        {!repo.is_mirror && (
+          <Dropzone onUpload={handleUpload} accept=".tgz,.tar.gz" />
+        )}
 
         {/* Filter */}
         <InlineSearch

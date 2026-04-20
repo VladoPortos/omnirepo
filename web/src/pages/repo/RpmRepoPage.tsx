@@ -34,6 +34,10 @@ import { formatBytes, formatDate } from '@/lib/format';
 import { api, envelopeFromError, type ApiErrorEnvelope, ApiError } from '@/api/client';
 import { useRepoContentLoadMore, useMe, useRepoScans, useRescanArtifact } from '@/api/queries';
 import { ErrorEnvelopeRenderer } from '@/components/common/ErrorEnvelope';
+import {
+  SyncNowButton,
+  formatFilterSummary,
+} from '@/components/SyncNowButton';
 import type { Repo } from '@/api/types';
 
 interface RpmPackage {
@@ -223,16 +227,35 @@ export function RpmRepoPage({ repo }: RpmRepoPageProps) {
   return (
     <RepoPageLayout repo={repo}>
       <div className="space-y-4">
-        {/* Actions */}
-        <div className="flex flex-wrap items-center gap-2">
-          <Button variant="outline" size="sm" onClick={() => setSyncOpen(true)}>
-            <ExternalLink className="mr-1.5 size-4" />
-            Sync from URL
-          </Button>
-        </div>
+        {/* Phase 8 Plan 04: mirror Sync Now affordance. */}
+        {repo.is_mirror && (
+          <SyncNowButton
+            projectName={projectName ?? ''}
+            repoType="rpm"
+            repoName={repo.name}
+            upstreamUrl={repo.mirror_upstream_url}
+            filterSummary={formatFilterSummary(repo.mirror_filter_json, 'rpm')}
+          />
+        )}
 
-        {/* Upload dropzone */}
-        <Dropzone onUpload={handleUpload} accept=".rpm" />
+        {/* Actions — hidden on mirror repos. */}
+        {!repo.is_mirror && (
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setSyncOpen(true)}
+            >
+              <ExternalLink className="mr-1.5 size-4" />
+              Sync from URL
+            </Button>
+          </div>
+        )}
+
+        {/* Upload dropzone — hidden on mirror repos. */}
+        {!repo.is_mirror && (
+          <Dropzone onUpload={handleUpload} accept=".rpm" />
+        )}
 
         {/* Filter */}
         <InlineSearch

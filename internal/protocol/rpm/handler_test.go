@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -406,5 +407,47 @@ func TestRPMGetServePackage(t *testing.T) {
 	got, _ := io.ReadAll(resp.Body)
 	if !bytes.Equal(got, body) {
 		t.Errorf("body roundtrip mismatch (%d vs %d)", len(got), len(body))
+	}
+}
+
+// --------------------------------------------------------------------------
+// Phase 8 Plan 01 (MIRROR-03) — MirrorGuard rejects RPM uploads on mirror repos.
+// --------------------------------------------------------------------------
+
+func TestUpload_MirrorRepoReturns403(t *testing.T) {
+	f := newRPMFixture(t)
+	_, repoID := f.seedRepo("proj", "mirrored", false)
+	if err := f.db.WriteTx(context.Background(), func(tx *sql.Tx) error {
+		return f.repos.SetMirrorConfigInTx(context.Background(), tx, repoID, metadata.MirrorConfig{
+			IsMirror:    true,
+			UpstreamURL: "https://mirror.centos.org/centos/9",
+			FilterJSON:  `{}`,
+			CredID:      nil,
+			ScanOnSync:  false,
+		})
+	}); err != nil {
+		t.Fatalf("set mirror cfg: %v", err)
+	}
+	body := readFixtureRPM(t)
+	resp := f.put(t, "/proj/rpm/mirrored/packages/sample.rpm", body, true)
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", resp.StatusCode)
+	}
+	bodyBytes, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(bodyBytes), "repo_is_mirror") {
+		t.Fatalf("body missing repo_is_mirror: %s", bodyBytes)
+	}
+}
+
+func TestUpload_NonMirrorRepoStillWorks(t *testing.T) {
+	f := newRPMFixture(t)
+	_, _ = f.seedRepo("proj", "plain", false)
+	body := readFixtureRPM(t)
+	resp := f.put(t, "/proj/rpm/plain/packages/sample.rpm", body, true)
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusCreated {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 201 (non-mirror pass-through); body=%s", resp.StatusCode, bodyBytes)
 	}
 }

@@ -328,6 +328,11 @@ func (h *Handler) blobUploadPatch(w http.ResponseWriter, r *http.Request) {
 // chunk body, validates the claimed ?digest= against the full tmp file,
 // inserts blob_uploads(digest) BEFORE cas rename (SCAN-12), promotes
 // tmp→CAS, and commits docker_blobs + session cleanup in one tx.
+//
+// Phase 8 Plan 01 (MIRROR-03): the route is registered under the
+// httpx.MirrorGuard middleware in Handler.Mount, so mirror-flagged repos
+// reject upload attempts with 403 repo.repo_is_mirror before this
+// handler runs.
 func (h *Handler) blobUploadPut(w http.ResponseWriter, r *http.Request) {
 	rr := h.resolveRepo(w, r, true)
 	if rr == nil {

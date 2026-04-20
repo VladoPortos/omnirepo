@@ -118,6 +118,11 @@ func manifestMediaType(r *http.Request) string {
 }
 
 // manifestPut handles PUT /v2/<name>/manifests/<reference>.
+//
+// Phase 8 Plan 01 (MIRROR-03): the route is registered under the
+// httpx.MirrorGuard middleware in Handler.Mount, so mirror-flagged repos
+// reject upload attempts with 403 repo.repo_is_mirror before this
+// handler runs.
 func (h *Handler) manifestPut(w http.ResponseWriter, r *http.Request) {
 	rr := h.resolveRepo(w, r, true)
 	if rr == nil {

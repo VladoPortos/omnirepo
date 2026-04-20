@@ -3,6 +3,7 @@ package helm_test
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/base64"
 	"io"
 	"net/http"
@@ -486,4 +487,46 @@ func TestHelmInvalidFilenameRejected(t *testing.T) {
 		t.Fatalf("status=%d want 400", resp.StatusCode)
 	}
 	resp.Body.Close()
+}
+
+// --------------------------------------------------------------------------
+// Phase 8 Plan 01 (MIRROR-03) — MirrorGuard rejects Helm uploads on mirror repos.
+// --------------------------------------------------------------------------
+
+func TestUpload_MirrorRepoReturns403(t *testing.T) {
+	f := newFixture(t)
+	_, rid := f.seedRepo("proj1", "mirrored", false, false)
+	if err := f.db.WriteTx(context.Background(), func(tx *sql.Tx) error {
+		return f.repos.SetMirrorConfigInTx(context.Background(), tx, rid, metadata.MirrorConfig{
+			IsMirror:    true,
+			UpstreamURL: "https://charts.bitnami.com/bitnami",
+			FilterJSON:  `{}`,
+			CredID:      nil,
+			ScanOnSync:  false,
+		})
+	}); err != nil {
+		t.Fatalf("set mirror cfg: %v", err)
+	}
+	tgz := makeChartTGZ(t, "mychart", "1.2.3", "v1", "a test chart", nil)
+	resp := f.put(t, "/proj1/helm/mirrored/charts/mychart-1.2.3.tgz", tgz, true)
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", resp.StatusCode)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), "repo_is_mirror") {
+		t.Fatalf("body missing repo_is_mirror: %s", body)
+	}
+}
+
+func TestUpload_NonMirrorRepoStillWorks(t *testing.T) {
+	f := newFixture(t)
+	f.seedRepo("proj1", "plain", false, false)
+	tgz := makeChartTGZ(t, "mychart", "1.2.3", "v1", "a test chart", nil)
+	resp := f.put(t, "/proj1/helm/plain/charts/mychart-1.2.3.tgz", tgz, true)
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 201 (non-mirror); body=%s", resp.StatusCode, body)
+	}
 }

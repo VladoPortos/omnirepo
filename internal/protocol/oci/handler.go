@@ -245,33 +245,40 @@ func (h *Handler) Mount(parent chi.Router) {
 			// Docker clients may also use the 4-segment form to host
 			// multiple images under one OmniRepo repo. When the
 			// 3-segment route matches, resolveRepo reads image = "".
-			r.Post("/{project}/{type}/{repo}/blobs/uploads/", h.blobPostDispatch)
-			r.Patch("/{project}/{type}/{repo}/blobs/uploads/{uuid}", h.blobUploadPatch)
-			r.Put("/{project}/{type}/{repo}/blobs/uploads/{uuid}", h.blobUploadPut)
+			// Phase 8 Plan 01 (MIRROR-03): wrap OCI write paths (blob
+			// uploads + manifest PUTs) in MirrorGuard so mirror-flagged
+			// docker/helm-OCI repos reject uploads with 403
+			// repo.repo_is_mirror. {type} comes from chi URL params so
+			// the basic MirrorGuard variant is sufficient here.
+			mirrorGuard := httpx.MirrorGuard(h.repos, h.projects)
+
+			r.With(mirrorGuard).Post("/{project}/{type}/{repo}/blobs/uploads/", h.blobPostDispatch)
+			r.With(mirrorGuard).Patch("/{project}/{type}/{repo}/blobs/uploads/{uuid}", h.blobUploadPatch)
+			r.With(mirrorGuard).Put("/{project}/{type}/{repo}/blobs/uploads/{uuid}", h.blobUploadPut)
 			r.Get("/{project}/{type}/{repo}/blobs/uploads/{uuid}", h.blobUploadStatus)
 			r.Get("/{project}/{type}/{repo}/blobs/{digest}", h.blobGet)
 			r.Head("/{project}/{type}/{repo}/blobs/{digest}", h.blobHead)
-			r.Delete("/{project}/{type}/{repo}/blobs/{digest}", h.blobDelete)
+			r.With(mirrorGuard).Delete("/{project}/{type}/{repo}/blobs/{digest}", h.blobDelete)
 
-			r.Post("/{project}/{type}/{repo}/{image}/blobs/uploads/", h.blobPostDispatch)
-			r.Patch("/{project}/{type}/{repo}/{image}/blobs/uploads/{uuid}", h.blobUploadPatch)
-			r.Put("/{project}/{type}/{repo}/{image}/blobs/uploads/{uuid}", h.blobUploadPut)
+			r.With(mirrorGuard).Post("/{project}/{type}/{repo}/{image}/blobs/uploads/", h.blobPostDispatch)
+			r.With(mirrorGuard).Patch("/{project}/{type}/{repo}/{image}/blobs/uploads/{uuid}", h.blobUploadPatch)
+			r.With(mirrorGuard).Put("/{project}/{type}/{repo}/{image}/blobs/uploads/{uuid}", h.blobUploadPut)
 			r.Get("/{project}/{type}/{repo}/{image}/blobs/uploads/{uuid}", h.blobUploadStatus)
 			r.Get("/{project}/{type}/{repo}/{image}/blobs/{digest}", h.blobGet)
 			r.Head("/{project}/{type}/{repo}/{image}/blobs/{digest}", h.blobHead)
-			r.Delete("/{project}/{type}/{repo}/{image}/blobs/{digest}", h.blobDelete)
+			r.With(mirrorGuard).Delete("/{project}/{type}/{repo}/{image}/blobs/{digest}", h.blobDelete)
 
 			// Manifest routes (02-07). reference is either a tag or a
 			// digest; handler disambiguates.
 			r.Get("/{project}/{type}/{repo}/manifests/{reference}", h.manifestGet)
 			r.Head("/{project}/{type}/{repo}/manifests/{reference}", h.manifestHead)
-			r.Put("/{project}/{type}/{repo}/manifests/{reference}", h.manifestPut)
-			r.Delete("/{project}/{type}/{repo}/manifests/{reference}", h.manifestDelete)
+			r.With(mirrorGuard).Put("/{project}/{type}/{repo}/manifests/{reference}", h.manifestPut)
+			r.With(mirrorGuard).Delete("/{project}/{type}/{repo}/manifests/{reference}", h.manifestDelete)
 
 			r.Get("/{project}/{type}/{repo}/{image}/manifests/{reference}", h.manifestGet)
 			r.Head("/{project}/{type}/{repo}/{image}/manifests/{reference}", h.manifestHead)
-			r.Put("/{project}/{type}/{repo}/{image}/manifests/{reference}", h.manifestPut)
-			r.Delete("/{project}/{type}/{repo}/{image}/manifests/{reference}", h.manifestDelete)
+			r.With(mirrorGuard).Put("/{project}/{type}/{repo}/{image}/manifests/{reference}", h.manifestPut)
+			r.With(mirrorGuard).Delete("/{project}/{type}/{repo}/{image}/manifests/{reference}", h.manifestDelete)
 
 			// Tag routes (02-07).
 			r.Get("/{project}/{type}/{repo}/tags/list", h.tagsList)

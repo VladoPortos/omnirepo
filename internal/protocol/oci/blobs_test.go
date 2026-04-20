@@ -989,3 +989,62 @@ func TestBlobUpload_MalformedUUIDRejected(t *testing.T) {
 		}
 	}
 }
+
+// --------------------------------------------------------------------------
+// Phase 8 Plan 01 (MIRROR-03) — MirrorGuard rejects OCI blob POST/PUT on
+// mirror-flagged repos.
+// --------------------------------------------------------------------------
+
+func TestOCIBlobPut_MirrorRepoReturns403(t *testing.T) {
+	f := newBlobFixture(t)
+	if err := f.db.WriteTx(context.Background(), func(tx *sql.Tx) error {
+		return f.repos.SetMirrorConfigInTx(context.Background(), tx, f.repoID, metadata.MirrorConfig{
+			IsMirror:    true,
+			UpstreamURL: "https://registry-1.docker.io",
+			FilterJSON:  `{}`,
+			CredID:      nil,
+			ScanOnSync:  false,
+		})
+	}); err != nil {
+		t.Fatalf("set mirror cfg: %v", err)
+	}
+	// Monolithic POST upload.
+	body := []byte("mirror-rejected-blob")
+	digest := hexDigest(body)
+	url := f.srv.URL + "/v2/" + f.repoPath + "/blobs/uploads/?digest=" + digest
+	req, _ := http.NewRequest("POST", url, bytes.NewReader(body))
+	req.ContentLength = int64(len(body))
+	req.Header.Set("Content-Type", "application/octet-stream")
+	resp, err := http.DefaultClient.Do(f.authed(req))
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 403; body=%s", resp.StatusCode, b)
+	}
+	b, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(b), "repo_is_mirror") {
+		t.Fatalf("body missing repo_is_mirror: %s", b)
+	}
+}
+
+func TestOCIBlobPut_NonMirrorStillWorks(t *testing.T) {
+	f := newBlobFixture(t)
+	body := []byte("plain-blob")
+	digest := hexDigest(body)
+	url := f.srv.URL + "/v2/" + f.repoPath + "/blobs/uploads/?digest=" + digest
+	req, _ := http.NewRequest("POST", url, bytes.NewReader(body))
+	req.ContentLength = int64(len(body))
+	req.Header.Set("Content-Type", "application/octet-stream")
+	resp, err := http.DefaultClient.Do(f.authed(req))
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 201 (non-mirror); body=%s", resp.StatusCode, b)
+	}
+}

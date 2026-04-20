@@ -568,3 +568,46 @@ func TestDEBUploadForbiddenForOutsider(t *testing.T) {
 		t.Fatalf("status=%d", resp.StatusCode)
 	}
 }
+
+// --------------------------------------------------------------------------
+// Phase 8 Plan 01 (MIRROR-03) — MirrorGuard rejects uploads on is_mirror=1.
+// --------------------------------------------------------------------------
+
+func TestUpload_MirrorRepoReturns403(t *testing.T) {
+	f := newDEBFixture(t)
+	_, repoID := f.seedDEBRepo("proj", "mirrored", false)
+	// Flip the repo to is_mirror=true.
+	if err := f.db.WriteTx(context.Background(), func(tx *sql.Tx) error {
+		return f.repos.SetMirrorConfigInTx(context.Background(), tx, repoID, metadata.MirrorConfig{
+			IsMirror:    true,
+			UpstreamURL: "https://archive.ubuntu.com/ubuntu",
+			FilterJSON:  `{}`,
+			CredID:      nil,
+			ScanOnSync:  false,
+		})
+	}); err != nil {
+		t.Fatalf("set mirror cfg: %v", err)
+	}
+	body := buildTestDeb(t, "mypkg", "1.0-1", "amd64")
+	resp := f.do(t, http.MethodPut, "/proj/deb/mirrored/pool/m/mypkg/mypkg_1.0-1_amd64.deb?suite=stable&component=main", body, true)
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", resp.StatusCode)
+	}
+	bodyBytes, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(bodyBytes), "repo_is_mirror") {
+		t.Fatalf("body missing repo_is_mirror: %s", bodyBytes)
+	}
+}
+
+func TestUpload_NonMirrorRepoStillWorks(t *testing.T) {
+	f := newDEBFixture(t)
+	_, _ = f.seedDEBRepo("proj", "plain", false)
+	body := buildTestDeb(t, "mypkg", "1.0-1", "amd64")
+	resp := f.do(t, http.MethodPut, "/proj/deb/plain/pool/m/mypkg/mypkg_1.0-1_amd64.deb?suite=stable&component=main", body, true)
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusCreated {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 201 (non-mirror pass-through); body=%s", resp.StatusCode, bodyBytes)
+	}
+}

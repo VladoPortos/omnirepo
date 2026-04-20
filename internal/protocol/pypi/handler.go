@@ -134,13 +134,19 @@ func (h *Handler) Mount(parent chi.Router) {
 		r.Get("/{project}/pypi/{repo}/packages/{filename}", h.getPackage)
 		r.Delete("/{project}/pypi/{repo}/packages/{filename}", h.deletePackage)
 
-		// twine / uv publish — multipart legacy.
-		r.Post("/{project}/pypi/{repo}/legacy/", h.handleLegacyUpload)
+		// Phase 8 Plan 01 (MIRROR-03): gate write paths (twine-legacy
+		// + PEP 694 session API) behind MirrorGuardFixed so mirror
+		// repos reject uploads with 403 repo.repo_is_mirror.
+		r.Group(func(rw chi.Router) {
+			rw.Use(httpx.MirrorGuardFixed(h.repos, h.projects, "pypi"))
+			// twine / uv publish — multipart legacy.
+			rw.Post("/{project}/pypi/{repo}/legacy/", h.handleLegacyUpload)
 
-		// PEP 694 upload session API.
-		r.Post("/{project}/pypi/{repo}/+upload/", h.handleCreateSession)
-		r.Put("/{project}/pypi/{repo}/+upload/{session_id}/{filename}", h.handleUploadFile)
-		r.Post("/{project}/pypi/{repo}/+upload/{session_id}/commit", h.handleCommit)
+			// PEP 694 upload session API.
+			rw.Post("/{project}/pypi/{repo}/+upload/", h.handleCreateSession)
+			rw.Put("/{project}/pypi/{repo}/+upload/{session_id}/{filename}", h.handleUploadFile)
+			rw.Post("/{project}/pypi/{repo}/+upload/{session_id}/commit", h.handleCommit)
+		})
 	})
 }
 

@@ -131,8 +131,15 @@ func (h *Handler) Mount(parent chi.Router) {
 		r.Get("/{project}/rpm/{repo}/repodata/*", h.serveRepodata)
 		r.Get("/{project}/rpm/{repo}/packages/{filename}", h.servePackage)
 		r.Head("/{project}/rpm/{repo}/packages/{filename}", h.servePackage)
-		r.Put("/{project}/rpm/{repo}/packages/{filename}", h.put)
-		r.Delete("/{project}/rpm/{repo}/packages/{filename}", h.delete)
+
+		// Phase 8 Plan 01 (MIRROR-03): gate RPM write paths behind
+		// MirrorGuardFixed so mirror repos reject uploads with 403
+		// repo.repo_is_mirror.
+		r.Group(func(rw chi.Router) {
+			rw.Use(httpx.MirrorGuardFixed(h.repos, h.projects, "rpm"))
+			rw.Put("/{project}/rpm/{repo}/packages/{filename}", h.put)
+			rw.Delete("/{project}/rpm/{repo}/packages/{filename}", h.delete)
+		})
 	})
 }
 

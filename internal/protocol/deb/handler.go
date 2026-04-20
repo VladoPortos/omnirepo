@@ -121,6 +121,11 @@ func New(d Deps) *Handler {
 }
 
 // Mount registers the DEB routes on parent. Mirrors the RPM middleware chain.
+//
+// Phase 8 Plan 01 (MIRROR-03): PUT /{project}/deb/{repo}/pool/* is wrapped
+// in httpx.MirrorGuardFixed so mirror-flagged repos reject upload attempts
+// with 403 repo.repo_is_mirror. Read paths (dists, pool GET/HEAD) are
+// intentionally NOT gated — mirror repos are still publicly readable.
 func (h *Handler) Mount(parent chi.Router) {
 	midDeps := authmw.Deps{
 		Users:    h.users,
@@ -135,9 +140,14 @@ func (h *Handler) Mount(parent chi.Router) {
 		r.Get("/{project}/deb/{repo}/dists/*", h.serveDistsFile)
 		r.Get("/{project}/deb/{repo}/pool/*", h.servePoolPackage)
 		r.Head("/{project}/deb/{repo}/pool/*", h.servePoolPackage)
-		r.Put("/{project}/deb/{repo}/pool/*", h.put)
-		r.Delete("/{project}/deb/{repo}/pool/*", h.delete)
-		r.Patch("/{project}/deb/{repo}/suites", h.patchSuites)
+
+		// Write paths gated behind the mirror guard.
+		r.Group(func(rw chi.Router) {
+			rw.Use(httpx.MirrorGuardFixed(h.repos, h.projects, "deb"))
+			rw.Put("/{project}/deb/{repo}/pool/*", h.put)
+			rw.Delete("/{project}/deb/{repo}/pool/*", h.delete)
+			rw.Patch("/{project}/deb/{repo}/suites", h.patchSuites)
+		})
 	})
 }
 

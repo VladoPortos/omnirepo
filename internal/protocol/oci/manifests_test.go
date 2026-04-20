@@ -548,3 +548,47 @@ func TestManifestPutDigestRefMismatch(t *testing.T) {
 		t.Fatalf("digest mismatch: status %d; want 400", resp.StatusCode)
 	}
 }
+
+// --------------------------------------------------------------------------
+// Phase 8 Plan 01 (MIRROR-03) — MirrorGuard rejects OCI manifest PUT on
+// mirror-flagged repos.
+// --------------------------------------------------------------------------
+
+func TestOCIManifestPut_MirrorRepoReturns403(t *testing.T) {
+	f := newManifestFixture(t, false)
+	if err := f.db.WriteTx(context.Background(), func(tx *sql.Tx) error {
+		return f.repos.SetMirrorConfigInTx(context.Background(), tx, f.repoID, metadata.MirrorConfig{
+			IsMirror:    true,
+			UpstreamURL: "https://registry-1.docker.io",
+			FilterJSON:  `{}`,
+			CredID:      nil,
+			ScanOnSync:  false,
+		})
+	}); err != nil {
+		t.Fatalf("set mirror cfg: %v", err)
+	}
+	cfg := f.seedBlob([]byte("cfg"))
+	body := buildManifest(cfg)
+	resp := f.putManifest("v1", body)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 403; body=%s", resp.StatusCode, b)
+	}
+	b, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(b), "repo_is_mirror") {
+		t.Fatalf("body missing repo_is_mirror: %s", b)
+	}
+}
+
+func TestOCIManifestPut_NonMirrorStillWorks(t *testing.T) {
+	f := newManifestFixture(t, false)
+	cfg := f.seedBlob([]byte("cfg"))
+	body := buildManifest(cfg)
+	resp := f.putManifest("v1", body)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 201 (non-mirror); body=%s", resp.StatusCode, b)
+	}
+}

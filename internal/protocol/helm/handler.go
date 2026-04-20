@@ -112,15 +112,20 @@ func (h *Handler) Mount(parent chi.Router) {
 		r.Use(httpx.AnonymousReadOK(h.lookupRepoPublicRead, h.extractRepoFromHelmURL, attachAnonymous))
 		r.Use(skipIfActor(authmw.BasicOrAPIKey(midDeps)))
 
-		// Upload .tgz and .prov — same PUT handler dispatches on filename.
-		r.Put("/{project}/helm/{repo}/charts/{filename}", h.put)
-
 		// Downloads.
 		r.Get("/{project}/helm/{repo}/index.yaml", h.getIndex)
 		r.Get("/{project}/helm/{repo}/charts/{filename}", h.get)
 
-		// Delete.
-		r.Delete("/{project}/helm/{repo}/charts/{filename}", h.delete)
+		// Phase 8 Plan 01 (MIRROR-03): gate Helm write paths behind
+		// MirrorGuardFixed so mirror repos reject uploads with 403
+		// repo.repo_is_mirror. OCI-sourced mirrors for Helm go through
+		// the OCI path which is guarded separately.
+		r.Group(func(rw chi.Router) {
+			rw.Use(httpx.MirrorGuardFixed(h.repos, h.projects, "helm"))
+			// Upload .tgz and .prov — same PUT handler dispatches on filename.
+			rw.Put("/{project}/helm/{repo}/charts/{filename}", h.put)
+			rw.Delete("/{project}/helm/{repo}/charts/{filename}", h.delete)
+		})
 	})
 }
 

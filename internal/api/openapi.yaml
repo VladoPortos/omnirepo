@@ -339,6 +339,20 @@ components:
         finished_at:
           type: string
           format: date-time
+        # Phase 8 Plan 02 (M2.2) — byte-level progress tracking (MIRROR-10).
+        progress_bytes:
+          type: integer
+          format: int64
+          minimum: 0
+          description: "Bytes downloaded so far for the running sync. Always 0 for Helm (step-based progress — D-11)."
+        total_bytes:
+          type: integer
+          format: int64
+          minimum: 0
+          description: "Total bytes expected for the sync. Always 0 for Helm and when the upstream doesn't report sizes (D-11)."
+        current_step:
+          type: string
+          description: "Human-readable current step, e.g. 'layer 3 of 7' (OCI), 'pulling redis_7.2.0' (APT), or 'chart 2 of 12 · redis-17.0.0.tgz' (Helm). Empty when not yet started."
 
     # -- Scan --
     Scan:

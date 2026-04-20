@@ -108,16 +108,28 @@ func (d Deps) handleListRepos(w http.ResponseWriter, r *http.Request) {
 }
 
 // syncJobItem is the JSON projection for sync job listing.
+//
+// Phase 8 Plan 02 (M2.2) extends the projection with the byte-level
+// progress triple (progress_bytes, total_bytes, current_step) populated
+// by the ProgressWriter helper in internal/jobs/progress.go. The UI
+// polls this endpoint every 500 ms while a Sync Now / Docker clone modal
+// is open (D-10). progress_bytes and total_bytes are always emitted
+// (serialized as 0 when no progress yet) so the UI renders a deterministic
+// `0 / N bytes` at job start rather than an "n/a". current_step is emitted
+// as "" when empty for the same reason.
 type syncJobItem struct {
-	ID          int64   `json:"id"`
-	Kind        string  `json:"kind"`
-	Status      string  `json:"status"`
-	Attempts    int64   `json:"attempts"`
-	LastError   string  `json:"last_error,omitempty"`
-	PayloadJSON string  `json:"payload_json,omitempty"`
-	Log         string  `json:"log,omitempty"`
-	CreatedAt   string  `json:"created_at"`
-	UpdatedAt   string  `json:"updated_at"`
+	ID            int64  `json:"id"`
+	Kind          string `json:"kind"`
+	Status        string `json:"status"`
+	Attempts      int64  `json:"attempts"`
+	LastError     string `json:"last_error,omitempty"`
+	PayloadJSON   string `json:"payload_json,omitempty"`
+	Log           string `json:"log,omitempty"`
+	ProgressBytes int64  `json:"progress_bytes"`
+	TotalBytes    int64  `json:"total_bytes"`
+	CurrentStep   string `json:"current_step"`
+	CreatedAt     string `json:"created_at"`
+	UpdatedAt     string `json:"updated_at"`
 }
 
 func (d Deps) handleListSyncJobs(w http.ResponseWriter, r *http.Request) {
@@ -154,6 +166,9 @@ func (d Deps) handleListSyncJobs(w http.ResponseWriter, r *http.Request) {
 		       COALESCE(last_error, ''),
 		       COALESCE(payload_json, ''),
 		       COALESCE(log, ''),
+		       COALESCE(progress_bytes, 0),
+		       COALESCE(total_bytes, 0),
+		       COALESCE(current_step, ''),
 		       created_at, updated_at
 		FROM sync_jobs
 		WHERE repo_id=?
@@ -171,6 +186,7 @@ func (d Deps) handleListSyncJobs(w http.ResponseWriter, r *http.Request) {
 		var item syncJobItem
 		if err := rows.Scan(&item.ID, &item.Kind, &item.Status, &item.Attempts,
 			&item.LastError, &item.PayloadJSON, &item.Log,
+			&item.ProgressBytes, &item.TotalBytes, &item.CurrentStep,
 			&item.CreatedAt, &item.UpdatedAt); err != nil {
 			writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 			return
@@ -226,11 +242,15 @@ func (d Deps) handleGetSyncJob(w http.ResponseWriter, r *http.Request) {
 		       COALESCE(last_error, ''),
 		       COALESCE(payload_json, ''),
 		       COALESCE(log, ''),
+		       COALESCE(progress_bytes, 0),
+		       COALESCE(total_bytes, 0),
+		       COALESCE(current_step, ''),
 		       created_at, updated_at
 		FROM sync_jobs
 		WHERE id=? AND repo_id=?
 	`, jobID, rr.ID).Scan(&item.ID, &item.Kind, &item.Status, &item.Attempts,
 		&item.LastError, &item.PayloadJSON, &item.Log,
+		&item.ProgressBytes, &item.TotalBytes, &item.CurrentStep,
 		&item.CreatedAt, &item.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "sync job not found")

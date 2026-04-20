@@ -796,15 +796,24 @@ type StatusOK struct {
 
 // SyncJob defines model for SyncJob.
 type SyncJob struct {
-	CreatedAt  *time.Time     `json:"created_at,omitempty"`
-	Error      *string        `json:"error,omitempty"`
-	FinishedAt *time.Time     `json:"finished_at,omitempty"`
-	Id         *int64         `json:"id,omitempty"`
-	Kind       *string        `json:"kind,omitempty"`
-	Log        *string        `json:"log,omitempty"`
-	RepoId     *int64         `json:"repo_id,omitempty"`
-	StartedAt  *time.Time     `json:"started_at,omitempty"`
-	Status     *SyncJobStatus `json:"status,omitempty"`
+	CreatedAt *time.Time `json:"created_at,omitempty"`
+
+	// CurrentStep Human-readable current step, e.g. 'layer 3 of 7' (OCI), 'pulling redis_7.2.0' (APT), or 'chart 2 of 12 · redis-17.0.0.tgz' (Helm). Empty when not yet started.
+	CurrentStep *string    `json:"current_step,omitempty"`
+	Error       *string    `json:"error,omitempty"`
+	FinishedAt  *time.Time `json:"finished_at,omitempty"`
+	Id          *int64     `json:"id,omitempty"`
+	Kind        *string    `json:"kind,omitempty"`
+	Log         *string    `json:"log,omitempty"`
+
+	// ProgressBytes Bytes downloaded so far for the running sync. Always 0 for Helm (step-based progress — D-11).
+	ProgressBytes *int64         `json:"progress_bytes,omitempty"`
+	RepoId        *int64         `json:"repo_id,omitempty"`
+	StartedAt     *time.Time     `json:"started_at,omitempty"`
+	Status        *SyncJobStatus `json:"status,omitempty"`
+
+	// TotalBytes Total bytes expected for the sync. Always 0 for Helm and when the upstream doesn't report sizes (D-11).
+	TotalBytes *int64 `json:"total_bytes,omitempty"`
 }
 
 // SyncJobStatus defines model for SyncJob.Status.

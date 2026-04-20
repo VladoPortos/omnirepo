@@ -61,13 +61,13 @@ prefixes (AUTH, REPO, etc.).
 
 ### MIRROR — Upstream mirror & Docker clone (Phase 8)
 
-- [ ] **MIRROR-01**: User can mark an APT/RPM/PyPI/Helm repo as a mirror of an upstream at creation time (is_mirror flag + upstream URL + filter + cred + scan_on_sync)
-- [ ] **MIRROR-02**: System rejects edits that try to change is_mirror or mirror_upstream_url on an existing repo (400 code=mirror_url_immutable)
-- [ ] **MIRROR-03**: System rejects mirror repo upload attempts on all 5 protocols (OCI, APT, RPM, PyPI, Helm) with 403 code=repo_is_mirror
-- [ ] **MIRROR-04**: System enforces one-in-flight-sync-per-repo with 409 code=sync_already_running
-- [ ] **MIRROR-05**: System rejects bodies on /sync when the target repo is a mirror (400 code=mirror_overrides_not_allowed)
-- [ ] **MIRROR-06**: System bounds /sync request bodies at 16 KiB and rejects oversized/malformed payloads with 400 code=invalid_request_body
-- [ ] **MIRROR-07**: System validates mirror_cred_id belongs to the same project as the repo (400 code=mirror_cred_wrong_project)
+- [x] **MIRROR-01**: User can mark an APT/RPM/PyPI/Helm repo as a mirror of an upstream at creation time (is_mirror flag + upstream URL + filter + cred + scan_on_sync)
+- [x] **MIRROR-02**: System rejects edits that try to change is_mirror or mirror_upstream_url on an existing repo (400 code=mirror_url_immutable)
+- [x] **MIRROR-03**: System rejects mirror repo upload attempts on all 5 protocols (OCI, APT, RPM, PyPI, Helm) with 403 code=repo_is_mirror
+- [x] **MIRROR-04**: System enforces one-in-flight-sync-per-repo with 409 code=sync_already_running
+- [x] **MIRROR-05**: System rejects bodies on /sync when the target repo is a mirror (400 code=mirror_overrides_not_allowed)
+- [x] **MIRROR-06**: System bounds /sync request bodies at 16 KiB and rejects oversized/malformed payloads with 400 code=invalid_request_body
+- [x] **MIRROR-07**: System validates mirror_cred_id belongs to the same project as the repo (400 code=mirror_cred_wrong_project)
 - [x] **MIRROR-08**: API GET /jobs/{id} returns progress_bytes, total_bytes, and current_step alongside status
 - [x] **MIRROR-09**: System throttles sync-progress DB writes to at most one per 200 ms per job with change detection
 - [x] **MIRROR-10**: System emits byte-level progress for OCI pull-external (layer N of M · done / total bytes)
@@ -85,9 +85,9 @@ prefixes (AUTH, REPO, etc.).
 - [x] **MIRROR-22**: User can create, edit, and delete upstream credentials from a ProjectSettingsPage Upstream credentials tab
 - [x] **MIRROR-23**: UI never displays passwords or tokens after submission; PATCH preserves existing secrets when fields are left blank
 - [x] **MIRROR-24**: Deleting a credential referenced by a mirror repo triggers a confirmation dialog that warns the next sync will fail with "credential missing" envelope
-- [ ] **MIRROR-25**: Each of the 5 protocols has a fake-upstream integration test proving first-sync ingest + idempotent second-sync + progress completion
-- [ ] **MIRROR-26**: Playwright spec proves the mirror-upload-rejected envelope renders correctly for at least one protocol (APT via real PUT /{project}/deb/{repo}/pool/* route)
-- [ ] **MIRROR-27**: Phase 8 passes a Codex rescue pass with real-issue findings applied and the result recorded in 08-06-CODEX-RESCUE.md
+- [x] **MIRROR-25**: Each of the 5 protocols has a fake-upstream integration test proving first-sync ingest + idempotent second-sync + progress completion
+- [x] **MIRROR-26**: Playwright spec proves the mirror-upload-rejected envelope renders correctly for at least one protocol (APT via real PUT /{project}/deb/{repo}/pool/* route)
+- [x] **MIRROR-27**: Phase 8 passes a Codex rescue pass with real-issue findings applied and the result recorded in 08-06-CODEX-RESCUE.md
 
 ---
 
@@ -233,13 +233,13 @@ phases 1–5.
 | EMPTY-05 | Phase 7 | Complete |
 | EMPTY-06 | Phase 7 | Complete |
 | EMPTY-08 | Phase 7 | Complete |
-| MIRROR-01 | Phase 8 | In progress |
-| MIRROR-02 | Phase 8 | In progress |
-| MIRROR-03 | Phase 8 | In progress |
-| MIRROR-04 | Phase 8 | In progress |
-| MIRROR-05 | Phase 8 | In progress |
-| MIRROR-06 | Phase 8 | In progress |
-| MIRROR-07 | Phase 8 | In progress |
+| MIRROR-01 | Phase 8 | Complete |
+| MIRROR-02 | Phase 8 | Complete |
+| MIRROR-03 | Phase 8 | Complete |
+| MIRROR-04 | Phase 8 | Complete |
+| MIRROR-05 | Phase 8 | Complete |
+| MIRROR-06 | Phase 8 | Complete |
+| MIRROR-07 | Phase 8 | Complete |
 | MIRROR-08 | Phase 8 Plan 02 | Delivered |
 | MIRROR-09 | Phase 8 Plan 02 | Delivered |
 | MIRROR-10 | Phase 8 Plan 02 | Delivered |
@@ -257,9 +257,9 @@ phases 1–5.
 | MIRROR-22 | Phase 8 | ✅ Complete |
 | MIRROR-23 | Phase 8 | ✅ Complete |
 | MIRROR-24 | Phase 8 | ✅ Complete |
-| MIRROR-25 | Phase 8 | In progress |
-| MIRROR-26 | Phase 8 | In progress |
-| MIRROR-27 | Phase 8 | In progress |
+| MIRROR-25 | Phase 8 | Complete |
+| MIRROR-26 | Phase 8 | Complete |
+| MIRROR-27 | Phase 8 | Complete |
 
 ### Deferred to v1.2 (25 REQs — re-map at v1.2 planning)
 

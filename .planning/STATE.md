@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: on 2026-04-17)
-status: executing
-stopped_at: Completed 08-05-PLAN.md — Upstream credentials CRUD UI tab (3 new TanStack mutations + UpstreamCredDialog + UpstreamCredsTab + ProjectSettingsPage at /projects/:name/settings + 4-test Playwright spec)
-last_updated: "2026-04-20T06:00:00Z"
+status: phase-8-complete
+stopped_at: Completed 08-06-PLAN.md — Phase 8 closed. 5 fake-upstream integration tests (APT/RPM/PyPI/Helm/OCI) + mirror-upload-rejected Playwright spec + Codex rescue (5 real-issue fixes applied as atomic commits) + Phase 8 closure paperwork (08-SUMMARY.md + 08-06-SUMMARY.md + 08-06-CODEX-RESCUE.md). v1.1 upstream-mirror + Docker-clone surface is public-release ready.
+last_updated: "2026-04-20T07:00:00Z"
 last_activity: 2026-04-20
 progress:
   total_phases: 3
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 23
-  completed_plans: 22
-  percent: 96
+  completed_plans: 23
+  percent: 100
 ---
 
 # STATE: OmniRepo
@@ -27,10 +27,10 @@ progress:
 ## Current Position
 
 Phase: 8
-Plan: 05 (completed)
-Status: Ready to execute 08-06 (Integration tests + Playwright e2e + Codex rescue — phase-close wave)
+Plan: 06 (completed — Phase 8 shipped)
+Status: Phase 8 complete. v1.1 upstream-mirror + Docker-clone scope ready for public release.
 Last activity: 2026-04-20
-Stopped at: Completed 08-05-PLAN.md — Upstream credentials CRUD UI tab shipped end-to-end. 3 new TanStack mutations (useCreateUpstreamCred / usePatchUpstreamCred / useDeleteUpstreamCred) with ['projects', name, 'upstream-creds'] query-key invalidation; UpstreamCredDialog handles create + edit modes with password-blank-preserves-existing wire contract (PATCH body strips password/token keys entirely when blank — T-08-05-03); UpstreamCredsTab (Host/Kind/Username/Created/Actions table + EmptyState + inline Dialog-composed delete confirm with mirror-orphan "its next sync will fail" warning); ProjectSettingsPage (new) mounted at /projects/:name/settings BEFORE the generic projects/:name route; 4-test Playwright spec (create / edit-blank-preserves / delete-confirm / secrets-never-disclosed) parses via --list; full-run deferred per pre-existing stale-server bug (same as 08-03/04). UpstreamCred type still has zero password/token fields (T-08-05-01). Production build green at 9e2fd67.
+Stopped at: Completed 08-06-PLAN.md — Phase 8 closed end-to-end. 5 per-protocol fake-upstream integration tests land: sync_mirror_integration_test.go in deb/rpm/pypi/helm (plus pull_mirror_integration_test.go in oci) each prove first-sync ingest + progress final state + second-sync idempotency against real metadata.NewReposRepo + metadata.NewSyncJobsRepo + per-protocol repos; web/e2e/mirror-upload-rejected.spec.ts drives page.request.put against the REAL APT upload route PUT /{project}/deb/{repo}/pool/* and asserts 403 envelope code=repo_is_mirror + a page.route stubbed /sync 403 surfacing via ErrorEnvelopeRenderer (data-envelope-class="permission"); Codex rescue via codex exec --full-auto CLI fallback (Agent tool not available to the sequential executor; CLAUDE.md documents parity). 9 questions → 5 real-issue findings applied as atomic commits (4844bb1 extends MirrorGuard to PyPI + OCI tag DELETE routes, 9369e71 clamps current_step and sanitises sync_jobs.last_error, 65acd35 closes CountRepoInflight/Enqueue race with tx-scoped check), 4 noise findings discarded with rationale. 08-06-CODEX-RESCUE.md captures the verbatim dialogue + triage table. Full go test ./... green across 35 packages after every commit; npm run build clean; npx playwright test --list parses 79 tests across 22 files. MIRROR-01..27 all complete; v1.1 is shippable.
 
 ## Phase Map
 
@@ -207,6 +207,7 @@ scoped tokens, LDAP/OIDC.
 - Execute plan 07-08 (EmptyState call-site migrations — EMPTY-01..06 + EMPTY-08). ✅ Shipped; 17 EmptyState call sites across 13 pages. Task 1 ships `web/e2e/empty-states.spec.ts` with `assertEmptyState` helper + 8 tests; Task 2 migrates ProjectsPage/ProjectDetailPage (×2 variants)/SearchPage/TLSPage/TrashPage to UI-SPEC-verbatim copy; Task 3 adds EMPTY-03 with inline `<SnippetList>` on all 8 repo pages (Docker/RPM/APT/PyPI/Helm/Git/RAW/S3); Task 4 adds EMPTY-04 on the 4 scannable repo pages (Docker/RPM/APT/PyPI) with CTA triggering artifact-level rescan on the first artifact per RESEARCH §1 option (b). SearchPage chips (openssl/CVE-2024-/myorg/docker/alpine) + Clear filters reset helper land as part of EMPTY-08. TLSPage upload card gains `id="tls-upload"` scroll anchor. GitRepoPage uses early-return EmptyState when refs.length===0; RawRepoPage/S3BucketPage gate on root-level emptiness only. Four commits `c73ecdc` (Task 1 Playwright spec), `491180f` (Task 2 page migrations), `a325d0b` (Task 3 EMPTY-03), `11cdc3d` (Task 4 EMPTY-04). Full `npm run build` + all 5 Phase 6 lint gates green. EMPTY-01..06 + EMPTY-08 complete; EMPTY-07 deferred to v1.2 per E-04.
 - Execute plan 08-01 (Phase 8 M1 — mirror backend foundation). ✅ Shipped; migration 024 adds 5 columns to `repos` (is_mirror, mirror_upstream_url, mirror_filter_json, mirror_cred_id FK ON DELETE SET NULL, scan_on_sync) + 3 to `sync_jobs` (progress_bytes, total_bytes, current_step); new `ReposRepo.SetMirrorConfigInTx` + `UpdateFields` mirror-editable fields + `SyncJobsRepo.SetProgress` + `SyncJobsRepo.CountRepoInflight`; `CreateRepoRequest` + `PatchRepoRequest` grow 5 mirror fields with 4-branch validation (repo.mirror_type_unsupported / repo.mirror_url_invalid / repo.mirror_filter_invalid / repo.mirror_cred_wrong_project — T-08-01-07); PATCH rejects is_mirror / mirror_upstream_url edits with 400 repo.mirror_url_immutable; /sync gets 3-way branch (mirror+empty reads repo row; mirror+body 400 sync.mirror_overrides_not_allowed; non-mirror preserves v1.0), 16 KiB body cap (sync.invalid_request_body), concurrency guard (409 sync.sync_already_running); new `httpx.MirrorGuard` + `MirrorGuardFixed` middleware wired into all 5 protocol write paths (OCI blobs+manifests, APT pool PUT/DEL + suites PATCH, RPM packages, PyPI legacy+PEP 694, Helm charts) emitting 403 repo.repo_is_mirror. REQUIREMENTS.md coverage flipped 32/32→59/59. 25 new tests all green; full `go test ./...` green across 35 packages. Five commits `9557f95` (REQUIREMENTS bump), `06c69de` (migration + repos), `87dcdd8` (Create/Patch + /sync), `caf0a4a` (MirrorGuard wiring), `2d71bff` (deferred-items log). Pre-existing `lint-typography` failures in 4 files not caused by Phase 8 — logged in deferred-items.md.
 - Execute plan 08-05 (Upstream credentials CRUD UI tab on ProjectSettingsPage — MIRROR-22..24). ✅ Shipped; types.ts grows `UpstreamCredKind` + `UpstreamCredCreate` + `UpstreamCredPatch` (UpstreamCred retains its no-secrets shape); queries.ts grows `useCreateUpstreamCred` + `usePatchUpstreamCred` + `useDeleteUpstreamCred` with shared query-key invalidation (`['projects', name, 'upstream-creds']`) and delete-also-invalidates-project-repos so the RepoSettingsTab Mirror config card reflects `ON DELETE SET NULL`; new `UpstreamCredDialog` (create + edit; password/token `type="password"` + `autocomplete="new-password"`; edit leaves those blank and strips the keys from the PATCH body when still blank — T-08-05-03); new `UpstreamCredsTab` (Host/Kind/Username/Created/Actions table + EmptyState + inline Dialog-composed delete confirm with mirror-orphan "its next sync will fail" copy — T-08-05-08); new `ProjectSettingsPage` at `/projects/:name/settings` mounted BEFORE the generic `projects/:name` route in App.tsx; new `upstream-creds.spec.ts` (4 tests: create-happy / edit-preserves-blank / delete-confirm / secrets-never-disclosed) parses via `--list`; full-run deferred per existing 08-03 stale-server bug. Three atomic commits `f0ed29a` (hooks+Dialog), `359ea25` (Tab+Page+route), `9e2fd67` (Playwright spec + typography fix). `npm run build` green at HEAD; `make lint-typography` pre-existing failures in 4 files not caused by 08-05. MIRROR-22..24 complete.
+- Phase 8 shipped (2026-04-20). Execute plan 08-06 (M6 — integration tests + Playwright e2e + Codex rescue + phase closure). ✅ Shipped; 5 per-protocol fake-upstream integration tests (`internal/protocol/{deb,rpm,pypi,helm}/sync_mirror_integration_test.go` + `internal/protocol/oci/pull_mirror_integration_test.go`) prove first-sync ingest + progress final state + idempotent second-sync against real `metadata.NewReposRepo` / `NewSyncJobsRepo` / per-protocol repos — no shortcut harness helpers. `web/e2e/mirror-upload-rejected.spec.ts` exercises the REAL APT upload route `PUT /{project}/deb/{repo}/pool/*` on an is_mirror=true repo via `page.request.put` (asserts 403 + `code=repo_is_mirror`) and `page.route`-stubs /sync to assert ErrorEnvelopeRenderer surfaces the envelope via `[data-envelope-class="permission"]`. Codex rescue via `codex exec --full-auto` CLI fallback (Agent tool not in the executor's tool list; CLAUDE.md's CLI path documented as equivalent). 9 questions → 5 real-issue findings applied as atomic commits: `4844bb1` moves PyPI `DELETE /packages/{filename}` + OCI tag DELETE routes behind MirrorGuard; `9369e71` clamps `current_step` at 1 KiB and sanitizes `sync_jobs.last_error` (strips Authorization + /var/lib/omnirepo + /tmp paths, truncates to 1 KiB); `65acd35` closes the CountRepoInflight+Enqueue race by adding `CountRepoInflightTx` and running the inflight check inside the writer tx. 4 noise findings discarded with rationale. `08-06-CODEX-RESCUE.md` captures the verbatim dialogue + triage. All Codex fixes ship with at least one regression test. Seven atomic commits (`a2aeaa2` / `10cbc21` / `fc9be6d` / `4844bb1` / `9369e71` / `65acd35` / `a797d36`). `go test ./... -count=1 -timeout=300s` green across 35 packages after each commit; `npm run build` clean; `npm test -- --run` 78/78; `npx playwright test --list` 79 tests. MIRROR-25/26/27 complete; MIRROR-01..07 + MIRROR-25..27 flipped to Complete in REQUIREMENTS.md. Phase 8 closed; v1.1 upstream-mirror + Docker-clone surface is public-release ready.
 
 ### Phase 7 rescope (2026-04-17 — APPLIED)
 
@@ -275,6 +276,11 @@ with the tight scope below.
 | Phase 07 P07 | ~7 min | 3 tasks | 3 files |
 | Phase 07 P08 | 11 min | 4 tasks | 13 files |
 | Phase 08 P01 | ~29 min | 4 tasks | 24 files |
+| Phase 08 P02 | ~26 min | 5 tasks | 22 files |
+| Phase 08 P03 | ~12 min | 3 tasks | 8 files |
+| Phase 08 P04 | ~18 min | 4 tasks | 17 files |
+| Phase 08 P05 | ~50 min | 3 tasks | 7 files |
+| Phase 08 P06 | ~24 min | 5 tasks | 19 files |
 
 ### Research Flags
 
@@ -289,8 +295,8 @@ with the tight scope below.
 
 ## Session Continuity
 
-- **Next action**: Execute `08-02-PLAN.md` (M2 — progress tracking: `internal/jobs/progress.go` writer helper with 200 ms throttle + `GET /api/v1/jobs/{id}` endpoint extension carrying `progress_bytes` / `total_bytes` / `current_step` + per-protocol progress wrapping across all 5 sync handlers). 08-01 pre-built the columns and the `SyncJobsRepo.SetProgress` method, so 08-02 can focus on the throttle + endpoint + handler wrapping.
-- **Last session:** 2026-04-20T02:51:55.000Z
+- **Next action**: Phase 8 shipped. v1.1 upstream-mirror + Docker-clone scope is public-release ready. Options: (1) close v1.1 milestone + tag the release; (2) open v1.2 planning (HEALTH-01..09 + FAV-01..07 + OVERVIEW-01..08 + MIRROR v1.2 backlog items — drift purge, scheduled sync, Git mirror, pull-through proxy, change-upstream-URL flow); (3) address deferred items from `.planning/phases/08-upstream-mirror-and-docker-clone/deferred-items.md` (pre-existing `lint-typography` + `grep-cdn` failures inherited from plan 08-01 fixture URLs) as a standalone micro-fix plan.
+- **Last session:** 2026-04-20T07:00:00Z
 - **Artifacts on disk**:
   - `.planning/PROJECT.md` (Current Milestone: v1.1, Phase 6 progress paragraph added)
   - `.planning/REQUIREMENTS.md` (33 active v1.1 REQs + 24 deferred v1.2 REQs; traceability split by target milestone)

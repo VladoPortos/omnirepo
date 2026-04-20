@@ -29,7 +29,7 @@ the 2026-04-17 rescope; v1.2 will re-number its own phases fresh.
 
 - [x] **Phase 6: Error Envelope & Visual Foundation** — Stable error contract and shared design-system primitives every later v1.1 phase consumes. ✅ Shipped 2026-04-17.
 - [ ] **Phase 7: Snippet Polish, Dashboard Cards & Empty States** — Accuracy pass on existing per-protocol client snippets, additive summary cards on the existing Dashboard using already-available signal, context-aware empty states on previously-blank surfaces, plus walkthrough micro-fixes surfaced during UI screen-driving.
-- [ ] **Phase 8: Upstream Mirror & Docker Clone** — UI for already-shipped upstream-mirror backend. Adds per-repo is_mirror flag at creation (APT/RPM/PyPI/Helm), Docker per-click clone modal with live progress bar, upstream-credentials CRUD UI, upload-block for mirror repos, scan_on_sync toggle (default OFF).
+- [x] **Phase 8: Upstream Mirror & Docker Clone** — UI for already-shipped upstream-mirror backend. Adds per-repo is_mirror flag at creation (APT/RPM/PyPI/Helm), Docker per-click clone modal with live progress bar, upstream-credentials CRUD UI, upload-block for mirror repos, scan_on_sync toggle (default OFF). ✅ Shipped 2026-04-20.
 
 ### Phase Details
 
@@ -107,7 +107,7 @@ Plans:
 - [x] 08-03-PLAN.md — M3: Docker clone modal with progress + retag + scan override ✅ Shipped 2026-04-20
 - [x] 08-04-PLAN.md — M4: Mirror flag UI (CreateRepoDialog + MirrorConfigSection + 4 FilterWidgets + SyncNowButton on 4 pages + RepoSettingsTab mirror card) ✅ Shipped 2026-04-20
 - [x] 08-05-PLAN.md — M5: Upstream-credentials CRUD UI tab on ProjectSettingsPage ✅ Shipped 2026-04-20
-- [ ] 08-06-PLAN.md — M6: Integration tests (fake upstreams × 5) + Playwright e2e + Codex rescue
+- [x] 08-06-PLAN.md — M6: Integration tests (fake upstreams × 5) + Playwright e2e + Codex rescue ✅ Shipped 2026-04-20
 **UI hint**: yes
 
 ### Deferred to v1.2 (dropped from v1.1 on 2026-04-17)
@@ -138,8 +138,8 @@ re-planned against a fresh v1.2 ROADMAP.md when that milestone opens.
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 6. Error Envelope & Visual Foundation | 8/8 | ✅ Shipped | 2026-04-17 |
-| 7. Snippet Polish, Dashboard Cards & Empty States | 1/9 | In Progress | — |
-| 8. Upstream Mirror & Docker Clone | 0/6 | Not planned | — |
+| 7. Snippet Polish, Dashboard Cards & Empty States | 9/9 | ✅ Shipped | 2026-04-20 |
+| 8. Upstream Mirror & Docker Clone | 6/6 | ✅ Shipped | 2026-04-20 |
 
 ## Backlog
 

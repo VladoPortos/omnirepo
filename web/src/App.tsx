@@ -23,6 +23,7 @@ import { RepoDetailRouter } from '@/pages/repo/RepoDetailRouter';
 import { S3BucketPage } from '@/pages/repo/S3BucketPage';
 import { ScanReportPage } from '@/pages/repo/ScanReportPage';
 import { RepoSettingsTab } from '@/components/settings/RepoSettingsTab';
+import { ProjectSettingsPage } from '@/pages/settings/ProjectSettingsPage';
 import { useAuth } from '@/hooks/useAuth';
 import { useSetupStatus } from '@/api/queries';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -282,6 +283,14 @@ export const router = createBrowserRouter([
     children: [
       { index: true, element: <DashboardPage /> },
       { path: 'projects', element: <ProjectsPage /> },
+      // Phase 8 Plan 05 — project settings page (currently only the
+      // Upstream credentials tab). More specific path than the
+      // detail page below, so React Router 7 picks this first for
+      // /projects/{name}/settings.
+      {
+        path: 'projects/:name/settings',
+        element: <ProjectSettingsPage />,
+      },
       { path: 'projects/:name', element: <ProjectDetailPage /> },
       // Static-segment s3 bucket route must precede the generic
       // /:type/:repo pattern — React Router 7 picks the more specific

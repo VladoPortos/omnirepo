@@ -32,6 +32,7 @@ import { Loader2, RefreshCw, Settings } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
 import { ErrorEnvelopeRenderer } from '@/components/common/ErrorEnvelope';
+import { StatusBadge } from '@/components/common/StatusBadge';
 import { envelopeFromError, type ApiErrorEnvelope } from '@/api/client';
 import { useSyncRepo } from '@/api/queries';
 import { useJobProgress } from '@/hooks/useJobProgress';
@@ -62,11 +63,26 @@ export function SyncNowButton({
   const [mutationError, setMutationError] =
     useState<ApiErrorEnvelope | null>(null);
 
+  // POLISH-01 (Plan 09-05): success pill state. `pillVisible` drives
+  // rendering + auto-dismiss; `pillSnapshot` freezes the terminal progress
+  // numbers at the moment `status === 'done'` fires so the pill content
+  // stays stable even if the underlying query re-fetches after the job
+  // finishes. `progress XOR confirmation` (D-06) is enforced in handleClick
+  // which clears the pill on re-click.
+  const [pillVisible, setPillVisible] = useState(false);
+  const [pillSnapshot, setPillSnapshot] = useState<{
+    bytes: number;
+    totalBytes: number;
+    step: string;
+  } | null>(null);
+
   const isPolling = progress.isPolling;
   const disabled = mutation.isPending || isPolling;
 
   // When the polled job terminates, invalidate content + repo caches
   // so the UI reflects newly-synced artifacts without a manual refresh.
+  // POLISH-01: ALSO snapshot the terminal progress numbers and flip the
+  // pill on — the separate auto-dismiss effect below arms the 8s timer.
   useEffect(() => {
     if (jobId == null) return;
     if (progress.status === 'done') {
@@ -79,10 +95,41 @@ export function SyncNowButton({
       qc.invalidateQueries({
         queryKey: ['projects', projectName, 'repos', repoType, repoName],
       });
+      setPillSnapshot({
+        bytes: progress.progressBytes,
+        totalBytes: progress.totalBytes,
+        step: progress.currentStep,
+      });
+      setPillVisible(true);
     }
-  }, [progress.status, jobId, projectName, repoType, repoName, qc]);
+  }, [
+    progress.status,
+    jobId,
+    projectName,
+    repoType,
+    repoName,
+    qc,
+    progress.progressBytes,
+    progress.totalBytes,
+    progress.currentStep,
+  ]);
+
+  // POLISH-01: Auto-dismiss the pill 8 seconds after it becomes visible
+  // (D-02). Cleanup handles the re-click path (handleClick flips
+  // pillVisible false → this effect re-runs → previous timer cleared).
+  useEffect(() => {
+    if (!pillVisible) return;
+    const t = setTimeout(() => setPillVisible(false), 8000);
+    return () => clearTimeout(t);
+  }, [pillVisible]);
 
   const handleClick = () => {
+    // POLISH-01 (D-06): clear the confirmation pill immediately so the
+    // progress block and pill are never on-screen simultaneously
+    // (progress XOR confirmation). Timer cleanup happens via the
+    // auto-dismiss effect above.
+    setPillVisible(false);
+    setPillSnapshot(null);
     setMutationError(null);
     mutation.mutate(undefined, {
       onSuccess: (resp) => {
@@ -107,6 +154,25 @@ export function SyncNowButton({
       return `${step} · ${formatBytes(progress.progressBytes)} transferred`;
     }
     return step;
+  })();
+
+  // POLISH-01 (D-03 scope-reduced, see SUMMARY §Scope reduction): build
+  // the pill label from the frozen snapshot. The leading ✓ is provided by
+  // StatusBadge's `healthy` variant (CheckCircle2), so we must NOT prepend
+  // a ✓ glyph to the label text — that would render two checkmarks.
+  //
+  // D-03 literal shape is `✓ Sync complete · N files · X MB`. `useJobProgress`
+  // does not surface a file count today, so the pill ships
+  // `Sync complete · <X.X MB>` when bytes are known and falls back to the
+  // step string for Helm (D-04) whose `total_bytes` is 0 by design.
+  const pillContent = (() => {
+    if (!pillSnapshot) return 'Sync complete';
+    const { bytes, totalBytes, step } = pillSnapshot;
+    if (totalBytes > 0) {
+      return `Sync complete · ${formatBytes(bytes)}`;
+    }
+    if (step) return `Sync complete · ${step}`;
+    return 'Sync complete';
   })();
 
   return (
@@ -173,6 +239,17 @@ export function SyncNowButton({
             aria-valuemin={0}
             aria-valuemax={100}
           />
+        </div>
+      )}
+
+      {pillVisible && (
+        <div
+          role="status"
+          aria-live="polite"
+          data-testid="sync-complete-pill"
+          className="transition-opacity duration-150 motion-reduce:duration-0"
+        >
+          <StatusBadge status="healthy" label={pillContent} size="sm" />
         </div>
       )}
 

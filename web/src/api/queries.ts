@@ -1066,9 +1066,12 @@ export function useSyncRepo(
   const qc = useQueryClient();
   return useMutation<SyncEnqueueResponse, Error, void>({
     mutationFn: () =>
+      // POST with NO body — a non-empty body would trip the backend's
+      // mirror-overrides check (see internal/httpx/sync_rest.go:172). The
+      // trailing `{}` sent by earlier revisions JSON-encoded to 2 bytes,
+      // which is not whitespace, and produced a 400 sync.mirror_overrides_not_allowed.
       api.post<SyncEnqueueResponse>(
         `/projects/${enc(projectName)}/repos/${enc(repoType)}/${enc(repoName)}/sync`,
-        {},
       ),
     onSuccess: () => {
       qc.invalidateQueries({

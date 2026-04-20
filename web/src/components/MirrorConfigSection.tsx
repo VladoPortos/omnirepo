@@ -52,6 +52,9 @@ export interface MirrorConfigSectionProps {
   /** RepoSettingsTab: the card only shows on existing mirror repos, so
    *  the "This repo is a mirror…" checkbox is redundant there. */
   hideCheckbox?: boolean;
+  /** RepoSettingsTab: the URL is already shown as a CopyInline row at
+   *  the top of the Mirror config card. Skip the duplicate input here. */
+  hideUrl?: boolean;
   disabled?: boolean;
 }
 
@@ -116,6 +119,7 @@ export function MirrorConfigSection({
   onChange,
   urlReadonly,
   hideCheckbox,
+  hideUrl,
   disabled,
 }: MirrorConfigSectionProps) {
   const credsQ = useUpstreamCreds(projectName);
@@ -152,6 +156,7 @@ export function MirrorConfigSection({
 
       {isOpen && (
         <div className="space-y-4 pl-6">
+          {!hideUrl && (
           <div className="space-y-1.5">
             <Label htmlFor="mirror-url">Upstream URL</Label>
             <Input
@@ -173,6 +178,7 @@ export function MirrorConfigSection({
               </p>
             )}
           </div>
+          )}
 
           <div className="space-y-2">
             <Label>Filters</Label>

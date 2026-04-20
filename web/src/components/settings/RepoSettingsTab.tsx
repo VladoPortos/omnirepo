@@ -186,6 +186,7 @@ export function RepoSettingsTab() {
               onChange={setLocalCfg}
               urlReadonly
               hideCheckbox
+              hideUrl
               disabled={patchMutation.isPending}
             />
 

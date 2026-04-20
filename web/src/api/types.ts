@@ -277,6 +277,7 @@ export interface AptFilter {
 
 export interface RpmFilter {
   Names?: string[];
+  Globs?: string[];
 }
 
 export interface PypiFilter {

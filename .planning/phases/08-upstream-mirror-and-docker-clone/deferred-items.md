@@ -64,3 +64,17 @@ hosts, or refactor to generic `https://example.upstream/`) resolve both
 
 - Discovered: 2026-04-20 during 08-04 lint check
 - Source: commit 2e96abe (plan 08-04 Task 1)
+
+## Post-phase independent Codex findings — FIXED 2026-04-20
+
+Independent Codex rescue (invoked via `Agent(subagent_type="codex:codex-rescue")`) surfaced
+two minor hardening items in `internal/api/mirror_validate.go`. Both applied before v1.1 push:
+
+- **Duplicate JSON keys** — added a stateful token-walker (`filterHasUniqueKeys`) that
+  rejects any key repeating within its own object.
+- **Unicode NFC + size bounds** — NFC-normalize every filter string via
+  `golang.org/x/text/unicode/norm`; bound raw JSON to 64 KiB, array length to 4096, per-string
+  length to 1024 bytes post-NFC; reject invalid UTF-8 at the byte level before decode.
+
+`validateMirrorFilter` now returns `(ok bool, canonical json.RawMessage)` so callers store
+a single canonical byte sequence. 13 new unit tests cover all branches.

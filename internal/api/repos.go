@@ -218,12 +218,13 @@ func (d Deps) handlePatchRepo(w http.ResponseWriter, r *http.Request) {
 	// Validate editable mirror fields.
 	var patchFilterStr *string
 	if body.MirrorFilter != nil && before.IsMirror {
-		if !validateMirrorFilter(before.Type, *body.MirrorFilter) {
+		ok, canonical := validateMirrorFilter(before.Type, *body.MirrorFilter)
+		if !ok {
 			writeJSONError(w, r, http.StatusBadRequest, codeRepoMirrorFilterInvalid,
 				"mirror_filter JSON does not match the protocol SyncFilter shape")
 			return
 		}
-		s := string(*body.MirrorFilter)
+		s := string(canonical)
 		patchFilterStr = &s
 	}
 	// MirrorCredID editing: distinguish absent / null / int.

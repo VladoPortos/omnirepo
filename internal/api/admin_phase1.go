@@ -708,11 +708,13 @@ func (d Deps) handleCreateRepo(w http.ResponseWriter, r *http.Request) {
 				"upstream URL must be http(s) with a host")
 			return
 		}
-		if !validateMirrorFilter(req.Type, req.MirrorFilter) {
+		ok, canonical := validateMirrorFilter(req.Type, req.MirrorFilter)
+		if !ok {
 			writeJSONError(w, r, http.StatusBadRequest, codeRepoMirrorFilterInvalid,
 				"mirror_filter JSON does not match the protocol SyncFilter shape")
 			return
 		}
+		req.MirrorFilter = canonical
 		if req.MirrorCredID != nil {
 			ok, _ := mirrorCredOwnership(r.Context(), d.UpstreamCreds, p.ID, *req.MirrorCredID)
 			if !ok {

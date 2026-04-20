@@ -34,6 +34,7 @@ require (
 	github.com/ulikunitz/xz v0.5.15
 	golang.org/x/crypto v0.50.0
 	golang.org/x/sys v0.43.0
+	golang.org/x/text v0.36.0
 	helm.sh/helm/v3 v3.20.2
 	modernc.org/sqlite v1.48.2
 )
@@ -132,7 +133,6 @@ require (
 	golang.org/x/oauth2 v0.36.0 // indirect
 	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/term v0.42.0 // indirect
-	golang.org/x/text v0.36.0 // indirect
 	golang.org/x/time v0.14.0 // indirect
 	golang.org/x/tools v0.44.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20250528174236-200df99c418a // indirect

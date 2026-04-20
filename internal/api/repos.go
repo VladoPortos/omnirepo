@@ -80,6 +80,15 @@ type repoPatchRequest struct {
 
 // repoResponse mirrors the Repo row projected for the REST API. We do not
 // echo soft-delete or size internals the PATCH handler never touches.
+//
+// Phase 8 Plan 04 (MIRROR-16..21): mirror fields are echoed on GET so the
+// UI can render the Sync Now button + Mirror config card conditionally on
+// `is_mirror`. `mirror_filter_json` is a raw JSON string (TEXT column) —
+// the UI parses it into the protocol-specific SyncFilter shape (PascalCase
+// wire keys matching the Go SyncFilter struct fields in
+// internal/protocol/{deb,rpm,pypi,helm}/upstream_parse.go). `mirror_cred_id`
+// is a nullable pointer so JSON emits `null` (not omitted) when unset —
+// lets the UI distinguish "no cred configured" from "field missing".
 type repoResponse struct {
 	ID              int64     `json:"id"`
 	ProjectID       int64     `json:"project_id"`
@@ -95,6 +104,13 @@ type repoResponse struct {
 	// repo; callers can suppress the badge if desired.
 	ItemCount int64     `json:"item_count"`
 	CreatedAt time.Time `json:"created_at"`
+
+	// Phase 8 Plan 04 (MIRROR-16..21) mirror fields.
+	IsMirror          bool   `json:"is_mirror"`
+	MirrorUpstreamURL string `json:"mirror_upstream_url"`
+	MirrorFilterJSON  string `json:"mirror_filter_json"`
+	MirrorCredID      *int64 `json:"mirror_cred_id"`
+	ScanOnSync        bool   `json:"scan_on_sync"`
 }
 
 func repoToResponse(r metadata.Repo) repoResponse {
@@ -109,6 +125,12 @@ func repoToResponse(r metadata.Repo) repoResponse {
 		PublicRead:      r.PublicRead,
 		SizeBytes:       r.SizeBytes,
 		CreatedAt:       r.CreatedAt,
+
+		IsMirror:          r.IsMirror,
+		MirrorUpstreamURL: r.MirrorUpstreamURL,
+		MirrorFilterJSON:  r.MirrorFilterJSON,
+		MirrorCredID:      r.MirrorCredID,
+		ScanOnSync:        r.ScanOnSync,
 	}
 }
 

@@ -25,6 +25,11 @@ func (d Deps) mountReposList(r chi.Router) {
 }
 
 // repoListItem is the JSON projection for repo listing.
+//
+// Phase 8 Plan 04 (MIRROR-16..21): mirror fields echoed so the UI can
+// filter / badge mirror repos in list views. Same shape as repoResponse
+// for the single-repo endpoint; keeping the projections aligned lets
+// the UI reuse one TypeScript interface for both.
 type repoListItem struct {
 	ID              int64     `json:"id"`
 	Type            string    `json:"type"`
@@ -37,6 +42,13 @@ type repoListItem struct {
 	PublicRead      bool      `json:"public_read"`
 	BlockOnSeverity string    `json:"block_on_severity"`
 	CreatedAt       time.Time `json:"created_at"`
+
+	// Phase 8 Plan 04 (MIRROR-16..21) mirror fields.
+	IsMirror          bool   `json:"is_mirror"`
+	MirrorUpstreamURL string `json:"mirror_upstream_url"`
+	MirrorFilterJSON  string `json:"mirror_filter_json"`
+	MirrorCredID      *int64 `json:"mirror_cred_id"`
+	ScanOnSync        bool   `json:"scan_on_sync"`
 }
 
 func (d Deps) handleListRepos(w http.ResponseWriter, r *http.Request) {
@@ -91,6 +103,13 @@ func (d Deps) handleListRepos(w http.ResponseWriter, r *http.Request) {
 			ItemCount: itemCounts[rr.ID],
 			AutoScan: rr.AutoScan, PublicRead: rr.PublicRead,
 			BlockOnSeverity: rr.BlockOnSeverity, CreatedAt: rr.CreatedAt,
+
+			// Phase 8 Plan 04 (MIRROR-16..21) mirror fields.
+			IsMirror:          rr.IsMirror,
+			MirrorUpstreamURL: rr.MirrorUpstreamURL,
+			MirrorFilterJSON:  rr.MirrorFilterJSON,
+			MirrorCredID:      rr.MirrorCredID,
+			ScanOnSync:        rr.ScanOnSync,
 		})
 		count++
 	}

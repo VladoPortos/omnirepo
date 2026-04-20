@@ -37,7 +37,7 @@ func SyncActorBridge(r *http.Request) httpx.SyncActor {
 	if !ok || a.Kind == auth.ActorKindAnonymous {
 		return httpx.SyncActor{}
 	}
-	out := httpx.SyncActor{Authenticated: true}
+	out := httpx.SyncActor{Authenticated: true, IsSuperAdmin: a.IsSuperAdmin}
 	switch a.Kind {
 	case auth.ActorKindUser:
 		out.UserID = a.ID

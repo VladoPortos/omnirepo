@@ -49,11 +49,16 @@ const (
 // SyncActor is the auth-agnostic projection of the request actor used by
 // the sync REST endpoint. Authenticated reports whether any actor is
 // present (false → 401); UserID/APIKeyID feed the audit row.
+// IsSuperAdmin mirrors auth.Actor.IsSuperAdmin so this handler honors the
+// same super-admin bypass the central auth.Can policy applies (TEN-01);
+// without it, super-admins creating a mirror repo via the middleware-gated
+// path get a 403 from this endpoint when they try to sync the same repo.
 type SyncActor struct {
 	Authenticated bool
 	UserID        int64 // 0 when not a user actor
 	APIKeyID      int64 // 0 when not an API-key actor
 	ProjectID     int64 // project scope for project-owned API keys
+	IsSuperAdmin  bool
 }
 
 // SyncMembershipChecker reports whether actor (UserID) is a member of
@@ -130,9 +135,12 @@ func (d SyncRESTDeps) handleSync(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Authorization: project member (or project-scoped API key) can write.
+	// Super-admins bypass membership per auth.Can's TEN-01 rule; without
+	// this bypass a super-admin who created a mirror repo via the
+	// middleware-gated path gets a 403 trying to sync it.
 	if d.Members != nil {
-		authorized := false
-		if actor.UserID != 0 {
+		authorized := actor.IsSuperAdmin
+		if !authorized && actor.UserID != 0 {
 			isMember, mErr := d.Members.IsMember(r.Context(), proj.ID, actor.UserID)
 			if mErr != nil {
 				slog.ErrorContext(r.Context(), "sync.rest.member_check", "err", mErr)
@@ -140,7 +148,7 @@ func (d SyncRESTDeps) handleSync(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			authorized = isMember
-		} else if actor.APIKeyID != 0 && actor.ProjectID != 0 {
+		} else if !authorized && actor.APIKeyID != 0 && actor.ProjectID != 0 {
 			authorized = actor.ProjectID == proj.ID
 		}
 		if !authorized {

@@ -40,7 +40,7 @@ func TestRPMSyncJobKindStable(t *testing.T) {
 func TestRPMSyncRejectsBadPayload(t *testing.T) {
 	db := sqlitetest.New(t)
 	h := rpm.NewSyncHandler(rpm.SyncDeps{DB: db})
-	err := h.Handle(context.Background(), `{not json`, 0, 0)
+	err := h.Handle(context.Background(), `{not json`, 0, 0, 0)
 	if err == nil {
 		t.Fatal("expected payload error")
 	}
@@ -54,7 +54,7 @@ func TestRPMSyncRejectsBadPayload(t *testing.T) {
 func TestRPMSyncRejectsEmptyURL(t *testing.T) {
 	db := sqlitetest.New(t)
 	h := rpm.NewSyncHandler(rpm.SyncDeps{DB: db})
-	err := h.Handle(context.Background(), `{}`, 0, 0)
+	err := h.Handle(context.Background(), `{}`, 0, 0, 0)
 	if err == nil {
 		t.Fatal("expected upstream_url required")
 	}

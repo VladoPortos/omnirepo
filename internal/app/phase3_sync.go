@@ -52,6 +52,10 @@ func (d syncDeps) wireSync() *api.SyncRESTAdapter {
 	projectsRepo := metadata.NewProjectsRepo(d.db)
 	scansRepo := metadata.NewScansRepo(d.db)
 
+	// Phase 8 Plan 02 (M2.4–M2.7): shared SyncJobs repo threaded into all
+	// four handlers for throttled byte-level / step-based progress emit.
+	syncJobsRepo := metadata.NewSyncJobsRepo(d.db)
+
 	rpmSync := rpm.NewSyncHandler(rpm.SyncDeps{
 		DB: d.db, Path: pathStore,
 		RPMPackages: metadata.NewRPMPackagesRepo(d.db),
@@ -59,6 +63,7 @@ func (d syncDeps) wireSync() *api.SyncRESTAdapter {
 		Creds: d.creds, Scans: scansRepo, Audit: d.auditLogger,
 		Coalescer: d.rpmRegistry, HTTPClient: httpClient,
 		RepoRoot: repoRoot, Cfg: d.cfg.Sync,
+		SyncJobs: syncJobsRepo,
 	})
 	debSync := deb.NewSyncHandler(deb.SyncDeps{
 		DB: d.db, Path: pathStore,
@@ -68,6 +73,7 @@ func (d syncDeps) wireSync() *api.SyncRESTAdapter {
 		Creds: d.creds, Scans: scansRepo, Audit: d.auditLogger,
 		Coalescer: d.debRegistry, HTTPClient: httpClient,
 		RepoRoot: repoRoot, Cfg: d.cfg.Sync,
+		SyncJobs: syncJobsRepo,
 	})
 	pypiSync := pypi.NewSyncHandler(pypi.SyncDeps{
 		DB: d.db, Path: pathStore,
@@ -76,6 +82,7 @@ func (d syncDeps) wireSync() *api.SyncRESTAdapter {
 		Creds: d.creds, Scans: scansRepo, Audit: d.auditLogger,
 		Coalescer: d.pypiRegistry, HTTPClient: httpClient,
 		RepoRoot: repoRoot, Cfg: d.cfg.Sync,
+		SyncJobs: syncJobsRepo,
 	})
 	helmSync := helm.NewSyncHandler(helm.SyncDeps{
 		DB: d.db, Path: pathStore,
@@ -84,19 +91,20 @@ func (d syncDeps) wireSync() *api.SyncRESTAdapter {
 		Creds: d.creds, Scans: scansRepo, Audit: d.auditLogger,
 		Coalescer: d.helmRegistry, HTTPClient: httpClient,
 		RepoRoot: repoRoot, Cfg: d.cfg.Sync,
+		SyncJobs: syncJobsRepo,
 	})
 
 	d.syncHandlers[rpm.SyncJobKind] = func(c context.Context, j *jobs.JobView) error {
-		return rpmSync.Handle(c, j.Payload, j.ProjectID, j.RepoID)
+		return rpmSync.Handle(c, j.Payload, j.ProjectID, j.RepoID, j.ID)
 	}
 	d.syncHandlers[deb.SyncJobKind] = func(c context.Context, j *jobs.JobView) error {
-		return debSync.Handle(c, j.Payload, j.ProjectID, j.RepoID)
+		return debSync.Handle(c, j.Payload, j.ProjectID, j.RepoID, j.ID)
 	}
 	d.syncHandlers[pypi.SyncJobKind] = func(c context.Context, j *jobs.JobView) error {
-		return pypiSync.Handle(c, j.Payload, j.ProjectID, j.RepoID)
+		return pypiSync.Handle(c, j.Payload, j.ProjectID, j.RepoID, j.ID)
 	}
 	d.syncHandlers[helm.SyncJobKind] = func(c context.Context, j *jobs.JobView) error {
-		return helmSync.Handle(c, j.Payload, j.ProjectID, j.RepoID)
+		return helmSync.Handle(c, j.Payload, j.ProjectID, j.RepoID, j.ID)
 	}
 
 	return api.NewSyncRESTAdapter(httpx.SyncRESTDeps{

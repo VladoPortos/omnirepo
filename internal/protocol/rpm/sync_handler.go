@@ -25,9 +25,12 @@ import (
 	"sync"
 	"time"
 
+	"sync/atomic"
+
 	"github.com/dxc-internal/omnirepo/internal/audit"
 	"github.com/dxc-internal/omnirepo/internal/config"
 	"github.com/dxc-internal/omnirepo/internal/httpx"
+	"github.com/dxc-internal/omnirepo/internal/jobs"
 	"github.com/dxc-internal/omnirepo/internal/metadata"
 	"github.com/dxc-internal/omnirepo/internal/protocol/regen"
 	"github.com/dxc-internal/omnirepo/internal/storage"
@@ -57,6 +60,9 @@ type SyncDeps struct {
 	HTTPClient  *http.Client
 	RepoRoot    string
 	Cfg         config.SyncConfig
+	// Phase 8 Plan 02 (M2.5): sync-jobs repo for throttled byte-level
+	// progress emit. Nil-safe — if unwired, progress.Set is a no-op.
+	SyncJobs *metadata.SyncJobsRepo
 }
 
 // SyncHandler is the sync-pool handler for kind="rpm_sync".
@@ -66,8 +72,11 @@ type SyncHandler struct{ deps SyncDeps }
 func NewSyncHandler(deps SyncDeps) *SyncHandler { return &SyncHandler{deps: deps} }
 
 // Handle implements the jobs.JobHandler signature
-// (ctx, payload string, projectID, repoID int64) -> error.
-func (h *SyncHandler) Handle(ctx context.Context, payload string, projectID, repoID int64) error {
+// (ctx, payload string, projectID, repoID, jobID int64) -> error.
+//
+// Phase 8 Plan 02 / M2.5: jobID threads through so the handler can emit
+// byte-level progress via jobs.ProgressWriter.
+func (h *SyncHandler) Handle(ctx context.Context, payload string, projectID, repoID, jobID int64) error {
 	timeout := h.deps.Cfg.UpstreamHTTPTimeout
 	if timeout <= 0 {
 		timeout = 60 * time.Second
@@ -144,30 +153,59 @@ func (h *SyncHandler) Handle(ctx context.Context, payload string, projectID, rep
 	if maxParallel < 1 {
 		maxParallel = 4
 	}
-	sem := make(chan struct{}, maxParallel)
+
+	// Phase 8 Plan 02 / M2.5: collect entries first so the progress bar
+	// has a stable totalBytes denominator (sum of primary.xml <size
+	// package="..."/> values). Keeps idempotency-by-digest filtering in
+	// the collect pass to avoid listing already-present rows as
+	// "to-download".
 	var (
-		mu             sync.Mutex
-		filesAdded     int64
-		bytesDownload  int64
-		downloadErrors []error
-		wg             sync.WaitGroup
+		entries    []UpstreamEntry
+		totalBytes int64
 	)
-
-	progressEvery := func(n int64) bool { return n > 0 && n%50 == 0 }
-
-	yieldFn := func(ent UpstreamEntry) error {
-		// Idempotency by digest first (D-15).
+	collectFn := func(ent UpstreamEntry) error {
 		if ent.Digest != "" {
 			if existing, ferr := h.deps.RPMPackages.FindByDigest(ctx, repoID, ent.Digest); ferr == nil && existing != nil {
 				return nil
 			}
 		}
+		entries = append(entries, ent)
+		totalBytes += ent.Size
+		return nil
+	}
+	_, parseErr := ParseUpstream(ctx, h.deps.HTTPClient, pl.UpstreamURL, creds, *pl.Filter, collectFn)
+	if parseErr != nil {
+		return h.fail(ctx, repoID, pl, startedAt, httpx.SanitizeUpstreamErr(parseErr))
+	}
+
+	progress := jobs.NewProgressWriter(h.deps.SyncJobs, jobID)
+	defer func() { _ = progress.Flush(ctx) }()
+
+	sem := make(chan struct{}, maxParallel)
+	var (
+		mu              sync.Mutex
+		filesAdded      int64
+		bytesDownload   int64
+		accumulatedDone int64
+		downloadErrors  []error
+		wg              sync.WaitGroup
+	)
+
+	progressEvery := func(n int64) bool { return n > 0 && n%50 == 0 }
+
+	for _, ent := range entries {
+		ent := ent
 		sem <- struct{}{}
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			defer func() { <-sem }()
-			size, derr := h.fetchAndCommit(ctx, proj.Name, repo, ent, creds)
+			// RPM package filename encodes <name>-<version>-<release>.<arch>.rpm;
+			// render the step as "pulling <stem>.rpm" where stem is the
+			// filename minus extension.
+			stem := strings.TrimSuffix(ent.Filename, ".rpm")
+			step := fmt.Sprintf("pulling %s.rpm", stem)
+			size, derr := h.fetchAndCommit(ctx, proj.Name, repo, ent, creds, progress, step, &accumulatedDone, totalBytes)
 			mu.Lock()
 			defer mu.Unlock()
 			if derr != nil {
@@ -191,18 +229,15 @@ func (h *SyncHandler) Handle(ctx context.Context, payload string, projectID, rep
 				}
 			}
 		}()
-		return nil
 	}
-
-	_, parseErr := ParseUpstream(ctx, h.deps.HTTPClient, pl.UpstreamURL, creds, *pl.Filter, yieldFn)
 	wg.Wait()
 
-	if parseErr != nil {
-		return h.fail(ctx, repoID, pl, startedAt, httpx.SanitizeUpstreamErr(parseErr))
-	}
 	if len(downloadErrors) > 0 {
 		return h.fail(ctx, repoID, pl, startedAt, httpx.SanitizeUpstreamErr(downloadErrors[0]))
 	}
+
+	// Terminal progress emit so Flush writes "done" with accumulated bytes.
+	_ = progress.Set(ctx, "done", atomic.LoadInt64(&accumulatedDone), totalBytes)
 
 	// end-of-batch kick: single regen trigger after the whole sync batch.
 	// Per-file commits intentionally omit coalescer.Kick; this one call
@@ -247,14 +282,14 @@ func (h *SyncHandler) fail(ctx context.Context, repoID int64, pl SyncPayload, st
 
 // fetchAndCommit downloads ent into the path store and commits the row.
 // Returns the number of bytes downloaded (0 on idempotency skip).
-func (h *SyncHandler) fetchAndCommit(ctx context.Context, projectName string, repo *metadata.Repo, ent UpstreamEntry, creds AuthCreds) (int64, error) {
+func (h *SyncHandler) fetchAndCommit(ctx context.Context, projectName string, repo *metadata.Repo, ent UpstreamEntry, creds AuthCreds, progress *jobs.ProgressWriter, step string, accumulatedDone *int64, totalBytes int64) (int64, error) {
 	// HEAD-less fast-path: if upstream digest known and already present, skip.
 	if ent.Digest != "" {
 		if existing, ferr := h.deps.RPMPackages.FindByDigest(ctx, repo.ID, ent.Digest); ferr == nil && existing != nil {
 			return 0, nil
 		}
 	}
-	body, size, dgst, err := downloadAndHash(ctx, h.deps.HTTPClient, ent.Path, creds)
+	body, size, dgst, err := downloadAndHashWithProgress(ctx, h.deps.HTTPClient, ent.Path, creds, progress, step, accumulatedDone, totalBytes)
 	if err != nil {
 		return 0, fmt.Errorf("rpm_sync: download %s: %w", ent.Filename, err)
 	}
@@ -321,9 +356,12 @@ func (h *SyncHandler) fetchAndCommit(ctx context.Context, projectName string, re
 	return size, nil
 }
 
-// downloadAndHash GETs urlStr with creds, hashes the body inline, and
-// returns the bytes + size + hex digest.
-func downloadAndHash(ctx context.Context, client *http.Client, urlStr string, creds AuthCreds) ([]byte, int64, string, error) {
+// downloadAndHashWithProgress GETs urlStr with creds, hashes the body
+// inline, and returns the bytes + size + hex digest. When progress is
+// non-nil, the body is wrapped with jobs.CountingReader so every non-zero
+// read advances *accumulatedDone (atomic under parallel downloads) and
+// triggers a throttled progress.Set.
+func downloadAndHashWithProgress(ctx context.Context, client *http.Client, urlStr string, creds AuthCreds, progress *jobs.ProgressWriter, step string, accumulatedDone *int64, total int64) ([]byte, int64, string, error) {
 	if client == nil {
 		client = http.DefaultClient
 	}
@@ -342,7 +380,14 @@ func downloadAndHash(ctx context.Context, client *http.Client, urlStr string, cr
 	}
 	hasher := sha256.New()
 	const maxFile = 4 * 1024 * 1024 * 1024
-	body, err := io.ReadAll(io.LimitReader(io.TeeReader(resp.Body, hasher), maxFile))
+	var reader io.Reader = io.LimitReader(io.TeeReader(resp.Body, hasher), maxFile)
+	if progress != nil && accumulatedDone != nil {
+		reader = &jobs.CountingReader{R: reader, OnRead: func(n int) {
+			done := atomic.AddInt64(accumulatedDone, int64(n))
+			_ = progress.Set(ctx, step, done, total)
+		}}
+	}
+	body, err := io.ReadAll(reader)
 	if err != nil {
 		return nil, 0, "", fmt.Errorf("read %s: %w", urlStr, err)
 	}

@@ -21,6 +21,7 @@ import (
 	"github.com/dxc-internal/omnirepo/internal/audit"
 	"github.com/dxc-internal/omnirepo/internal/config"
 	"github.com/dxc-internal/omnirepo/internal/httpx"
+	"github.com/dxc-internal/omnirepo/internal/jobs"
 	"github.com/dxc-internal/omnirepo/internal/metadata"
 	"github.com/dxc-internal/omnirepo/internal/protocol/regen"
 	"github.com/dxc-internal/omnirepo/internal/storage"
@@ -50,6 +51,10 @@ type SyncDeps struct {
 	HTTPClient *http.Client
 	RepoRoot   string
 	Cfg        config.SyncConfig
+	// Phase 8 Plan 02 (M2.7): sync-jobs repo for step-based progress emit.
+	// Helm is step-based (D-11 — index.yaml lacks chart sizes), so
+	// total_bytes is always 0 and progress_bytes counts completed charts.
+	SyncJobs *metadata.SyncJobsRepo
 }
 
 // SyncHandler is the sync-pool handler for kind="helm_sync".
@@ -59,7 +64,13 @@ type SyncHandler struct{ deps SyncDeps }
 func NewSyncHandler(deps SyncDeps) *SyncHandler { return &SyncHandler{deps: deps} }
 
 // Handle runs one helm_sync job.
-func (h *SyncHandler) Handle(ctx context.Context, payload string, projectID, repoID int64) error {
+//
+// Phase 8 Plan 02 / M2.7: jobID threads through so the handler can emit
+// step-based progress via jobs.ProgressWriter. total_bytes stays 0
+// throughout (D-11): Helm's index.yaml doesn't expose chart sizes, so the
+// UI renders "chart N of M · name-version.tgz" and can't show a byte-level
+// bar. progress_bytes is the 1-based chart index for completed charts.
+func (h *SyncHandler) Handle(ctx context.Context, payload string, projectID, repoID, jobID int64) error {
 	timeout := h.deps.Cfg.UpstreamHTTPTimeout
 	if timeout <= 0 {
 		timeout = 60 * time.Second
@@ -134,6 +145,29 @@ func (h *SyncHandler) Handle(ctx context.Context, payload string, projectID, rep
 	if maxParallel < 1 {
 		maxParallel = 4
 	}
+
+	// Phase 8 Plan 02 / M2.7: collect entries first so the step format
+	// knows the total chart count. Helm is step-based — total_bytes stays
+	// 0 (D-11).
+	var entries []UpstreamEntry
+	collectFn := func(ent UpstreamEntry) error {
+		if ent.Digest != "" {
+			if existing, ferr := h.deps.HelmCharts.FindByDigest(ctx, repoID, ent.Digest); ferr == nil && existing != nil {
+				return nil
+			}
+		}
+		entries = append(entries, ent)
+		return nil
+	}
+	_, parseErr := ParseUpstream(ctx, h.deps.HTTPClient, pl.UpstreamURL, creds, *pl.Filter, collectFn)
+	if parseErr != nil {
+		return h.fail(ctx, repoID, pl, startedAt, httpx.SanitizeUpstreamErr(parseErr))
+	}
+
+	progress := jobs.NewProgressWriter(h.deps.SyncJobs, jobID)
+	defer func() { _ = progress.Flush(ctx) }()
+
+	totalCharts := len(entries)
 	sem := make(chan struct{}, maxParallel)
 	var (
 		mu             sync.Mutex
@@ -143,19 +177,20 @@ func (h *SyncHandler) Handle(ctx context.Context, payload string, projectID, rep
 		wg             sync.WaitGroup
 	)
 
-	yieldFn := func(ent UpstreamEntry) error {
-		if ent.Digest != "" {
-			if existing, ferr := h.deps.HelmCharts.FindByDigest(ctx, repoID, ent.Digest); ferr == nil && existing != nil {
-				return nil
-			}
-		}
-		entCopy := ent
+	for i, ent := range entries {
+		i, ent := i, ent
+		// Emit step-per-chart BEFORE dispatch so the UI sees the currently
+		// downloading chart label rather than a stale "chart N-1 of M".
+		// total=0 is Helm's convention (D-11); done counts completed +
+		// in-flight (1-based) so UI renders "X of Y".
+		step := fmt.Sprintf("chart %d of %d · %s", i+1, totalCharts, ent.Filename)
+		_ = progress.Set(ctx, step, int64(i+1), 0)
 		sem <- struct{}{}
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			defer func() { <-sem }()
-			size, derr := h.fetchAndCommit(ctx, proj.Name, repo, entCopy, creds)
+			size, derr := h.fetchAndCommit(ctx, proj.Name, repo, ent, creds)
 			mu.Lock()
 			defer mu.Unlock()
 			if derr != nil {
@@ -179,18 +214,15 @@ func (h *SyncHandler) Handle(ctx context.Context, payload string, projectID, rep
 				}
 			}
 		}()
-		return nil
 	}
-
-	_, parseErr := ParseUpstream(ctx, h.deps.HTTPClient, pl.UpstreamURL, creds, *pl.Filter, yieldFn)
 	wg.Wait()
 
-	if parseErr != nil {
-		return h.fail(ctx, repoID, pl, startedAt, httpx.SanitizeUpstreamErr(parseErr))
-	}
 	if len(downloadErrors) > 0 {
 		return h.fail(ctx, repoID, pl, startedAt, httpx.SanitizeUpstreamErr(downloadErrors[0]))
 	}
+
+	// Terminal emit so Flush shows completion; progress_bytes = totalCharts.
+	_ = progress.Set(ctx, "done", int64(totalCharts), 0)
 
 	// end-of-batch kick: single regen trigger after the whole sync batch.
 	if h.deps.Coalescer != nil {

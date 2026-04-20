@@ -23,9 +23,12 @@ import (
 	"sync"
 	"time"
 
+	"sync/atomic"
+
 	"github.com/dxc-internal/omnirepo/internal/audit"
 	"github.com/dxc-internal/omnirepo/internal/config"
 	"github.com/dxc-internal/omnirepo/internal/httpx"
+	"github.com/dxc-internal/omnirepo/internal/jobs"
 	"github.com/dxc-internal/omnirepo/internal/metadata"
 	"github.com/dxc-internal/omnirepo/internal/protocol/regen"
 	"github.com/dxc-internal/omnirepo/internal/storage"
@@ -55,6 +58,9 @@ type SyncDeps struct {
 	HTTPClient *http.Client
 	RepoRoot   string
 	Cfg        config.SyncConfig
+	// Phase 8 Plan 02 (M2.6): sync-jobs repo for throttled byte-level
+	// progress emit. Nil-safe — if unwired, progress.Set is a no-op.
+	SyncJobs *metadata.SyncJobsRepo
 }
 
 // SyncHandler is the sync-pool handler for kind="pypi_sync".
@@ -64,7 +70,12 @@ type SyncHandler struct{ deps SyncDeps }
 func NewSyncHandler(deps SyncDeps) *SyncHandler { return &SyncHandler{deps: deps} }
 
 // Handle runs one pypi_sync job.
-func (h *SyncHandler) Handle(ctx context.Context, payload string, projectID, repoID int64) error {
+//
+// Phase 8 Plan 02 / M2.6: jobID threads through so the handler can emit
+// byte-level progress via jobs.ProgressWriter. totalBytes is pre-computed
+// from summed PEP 691 file.size (D-11) so the progress bar has a stable
+// denominator throughout the sync.
+func (h *SyncHandler) Handle(ctx context.Context, payload string, projectID, repoID, jobID int64) error {
 	timeout := h.deps.Cfg.UpstreamHTTPTimeout
 	if timeout <= 0 {
 		timeout = 60 * time.Second
@@ -139,19 +150,25 @@ func (h *SyncHandler) Handle(ctx context.Context, payload string, projectID, rep
 	if maxParallel < 1 {
 		maxParallel = 4
 	}
-	sem := make(chan struct{}, maxParallel)
-	var (
-		mu             sync.Mutex
-		filesAdded     int64
-		bytesDownload  int64
-		downloadErrors []error
-		wg             sync.WaitGroup
-	)
 
 	projects, parseErr := ParseUpstreamSimpleIndex(ctx, h.deps.HTTPClient, pl.UpstreamURL, creds)
 	if parseErr != nil {
 		return h.fail(ctx, repoID, pl, startedAt, httpx.SanitizeUpstreamErr(parseErr))
 	}
+
+	// Phase 8 Plan 02 / M2.6: collect all project/file pairs first so we
+	// can emit byte-level progress with a stable totalBytes denominator
+	// (sum of PEP 691 file.size entries). Filter + idempotency checks run
+	// in the collect pass so already-present files don't inflate total.
+	type fileToFetch struct {
+		project string
+		file    UpstreamFile
+	}
+	var (
+		toFetch         []fileToFetch
+		totalBytes      int64
+		downloadErrors  []error
+	)
 	for _, project := range projects {
 		if err := ctx.Err(); err != nil {
 			break
@@ -172,44 +189,63 @@ func (h *SyncHandler) Handle(ctx context.Context, payload string, projectID, rep
 			if existing, ferr := h.deps.PyPIFiles.FindByFilename(ctx, repoID, f.Filename); ferr == nil && existing != nil {
 				continue
 			}
-			f := f
-			project := project
-			sem <- struct{}{}
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				defer func() { <-sem }()
-				size, derr := h.fetchAndCommit(ctx, proj.Name, repo, project, f, creds)
-				mu.Lock()
-				defer mu.Unlock()
-				if derr != nil {
-					downloadErrors = append(downloadErrors, derr)
-					return
-				}
-				if size > 0 {
-					filesAdded++
-					bytesDownload += size
-					if filesAdded%50 == 0 && h.deps.Audit != nil {
-						_ = h.deps.Audit.Record(ctx, audit.Event{
-							Kind:       audit.EvtSyncProgress,
-							TargetKind: "repo",
-							TargetID:   strconv.FormatInt(repoID, 10),
-							Details: map[string]any{
-								"files_added":      filesAdded,
-								"bytes_downloaded": bytesDownload,
-								"upstream_url":     pl.UpstreamURL,
-							},
-						})
-					}
-				}
-			}()
+			toFetch = append(toFetch, fileToFetch{project: project, file: f})
+			totalBytes += f.Size
 		}
+	}
+
+	progress := jobs.NewProgressWriter(h.deps.SyncJobs, jobID)
+	defer func() { _ = progress.Flush(ctx) }()
+
+	sem := make(chan struct{}, maxParallel)
+	var (
+		mu              sync.Mutex
+		filesAdded      int64
+		bytesDownload   int64
+		accumulatedDone int64
+		wg              sync.WaitGroup
+	)
+
+	for _, tf := range toFetch {
+		tf := tf
+		sem <- struct{}{}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
+			step := fmt.Sprintf("pulling %s", tf.file.Filename)
+			size, derr := h.fetchAndCommit(ctx, proj.Name, repo, tf.project, tf.file, creds, progress, step, &accumulatedDone, totalBytes)
+			mu.Lock()
+			defer mu.Unlock()
+			if derr != nil {
+				downloadErrors = append(downloadErrors, derr)
+				return
+			}
+			if size > 0 {
+				filesAdded++
+				bytesDownload += size
+				if filesAdded%50 == 0 && h.deps.Audit != nil {
+					_ = h.deps.Audit.Record(ctx, audit.Event{
+						Kind:       audit.EvtSyncProgress,
+						TargetKind: "repo",
+						TargetID:   strconv.FormatInt(repoID, 10),
+						Details: map[string]any{
+							"files_added":      filesAdded,
+							"bytes_downloaded": bytesDownload,
+							"upstream_url":     pl.UpstreamURL,
+						},
+					})
+				}
+			}
+		}()
 	}
 	wg.Wait()
 
 	if len(downloadErrors) > 0 {
 		return h.fail(ctx, repoID, pl, startedAt, httpx.SanitizeUpstreamErr(downloadErrors[0]))
 	}
+
+	_ = progress.Set(ctx, "done", atomic.LoadInt64(&accumulatedDone), totalBytes)
 
 	// end-of-batch kick: single regen trigger after the whole sync batch.
 	if h.deps.Coalescer != nil {
@@ -249,12 +285,12 @@ func (h *SyncHandler) fail(ctx context.Context, repoID int64, pl SyncPayload, st
 	return err
 }
 
-func (h *SyncHandler) fetchAndCommit(ctx context.Context, projectName string, repo *metadata.Repo, normalizedProject string, f UpstreamFile, creds AuthCreds) (int64, error) {
+func (h *SyncHandler) fetchAndCommit(ctx context.Context, projectName string, repo *metadata.Repo, normalizedProject string, f UpstreamFile, creds AuthCreds, progress *jobs.ProgressWriter, step string, accumulatedDone *int64, totalBytes int64) (int64, error) {
 	// Re-check FindByFilename inside the goroutine for race safety.
 	if existing, ferr := h.deps.PyPIFiles.FindByFilename(ctx, repo.ID, f.Filename); ferr == nil && existing != nil {
 		return 0, nil
 	}
-	body, size, dgst, err := downloadAndHash(ctx, h.deps.HTTPClient, f.URL, creds)
+	body, size, dgst, err := downloadAndHashWithProgress(ctx, h.deps.HTTPClient, f.URL, creds, progress, step, accumulatedDone, totalBytes)
 	if err != nil {
 		return 0, fmt.Errorf("pypi_sync: download %s: %w", f.Filename, err)
 	}
@@ -319,7 +355,11 @@ func (h *SyncHandler) fetchAndCommit(ctx context.Context, projectName string, re
 	return size, nil
 }
 
-func downloadAndHash(ctx context.Context, client *http.Client, urlStr string, creds AuthCreds) ([]byte, int64, string, error) {
+// downloadAndHashWithProgress GETs urlStr with creds and hashes the body
+// inline. When progress is non-nil, the body is wrapped with
+// jobs.CountingReader so every non-zero read advances *accumulatedDone
+// (atomic under parallel downloads) and triggers a throttled progress.Set.
+func downloadAndHashWithProgress(ctx context.Context, client *http.Client, urlStr string, creds AuthCreds, progress *jobs.ProgressWriter, step string, accumulatedDone *int64, total int64) ([]byte, int64, string, error) {
 	if client == nil {
 		client = http.DefaultClient
 	}
@@ -337,7 +377,14 @@ func downloadAndHash(ctx context.Context, client *http.Client, urlStr string, cr
 		return nil, 0, "", fmt.Errorf("%s -> %d", urlStr, resp.StatusCode)
 	}
 	hasher := sha256.New()
-	body, err := io.ReadAll(io.LimitReader(io.TeeReader(resp.Body, hasher), 2*1024*1024*1024))
+	var reader io.Reader = io.LimitReader(io.TeeReader(resp.Body, hasher), 2*1024*1024*1024)
+	if progress != nil && accumulatedDone != nil {
+		reader = &jobs.CountingReader{R: reader, OnRead: func(n int) {
+			done := atomic.AddInt64(accumulatedDone, int64(n))
+			_ = progress.Set(ctx, step, done, total)
+		}}
+	}
+	body, err := io.ReadAll(reader)
 	if err != nil {
 		return nil, 0, "", fmt.Errorf("read %s: %w", urlStr, err)
 	}

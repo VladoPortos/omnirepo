@@ -26,8 +26,9 @@
  */
 
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
-import { Loader2, RefreshCw } from 'lucide-react';
+import { Loader2, RefreshCw, Settings } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
 import { ErrorEnvelopeRenderer } from '@/components/common/ErrorEnvelope';
@@ -122,23 +123,39 @@ export function SyncNowButton({
             </p>
           )}
         </div>
-        <Button
-          onClick={handleClick}
-          disabled={disabled}
-          size="sm"
-          title={
-            isPolling
-              ? 'A sync is already in progress for this mirror'
-              : 'Run the mirror sync now'
-          }
-        >
-          {disabled ? (
-            <Loader2 className="mr-1.5 size-3.5 animate-spin" />
-          ) : (
-            <RefreshCw className="mr-1.5 size-3.5" />
-          )}
-          {disabled ? 'Syncing…' : 'Sync now'}
-        </Button>
+        <div className="flex items-center gap-2 shrink-0">
+          <Button
+            variant="outline"
+            size="sm"
+            nativeButton={false}
+            render={
+              <Link
+                to={`/projects/${encodeURIComponent(projectName)}/${encodeURIComponent(repoType)}/${encodeURIComponent(repoName)}/settings`}
+              />
+            }
+            title="Edit mirror filter / credential / scan settings"
+          >
+            <Settings className="mr-1.5 size-3.5" />
+            Settings
+          </Button>
+          <Button
+            onClick={handleClick}
+            disabled={disabled}
+            size="sm"
+            title={
+              isPolling
+                ? 'A sync is already in progress for this mirror'
+                : 'Run the mirror sync now'
+            }
+          >
+            {disabled ? (
+              <Loader2 className="mr-1.5 size-3.5 animate-spin" />
+            ) : (
+              <RefreshCw className="mr-1.5 size-3.5" />
+            )}
+            {disabled ? 'Syncing…' : 'Sync now'}
+          </Button>
+        </div>
       </div>
 
       {jobId !== null && isPolling && (

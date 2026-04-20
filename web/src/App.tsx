@@ -22,6 +22,7 @@ import { ProjectDetailPage } from '@/pages/ProjectDetailPage';
 import { RepoDetailRouter } from '@/pages/repo/RepoDetailRouter';
 import { S3BucketPage } from '@/pages/repo/S3BucketPage';
 import { ScanReportPage } from '@/pages/repo/ScanReportPage';
+import { RepoSettingsTab } from '@/components/settings/RepoSettingsTab';
 import { useAuth } from '@/hooks/useAuth';
 import { useSetupStatus } from '@/api/queries';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -289,6 +290,16 @@ export const router = createBrowserRouter([
       {
         path: 'projects/:name/:type/:repo/scans/:id',
         element: <ScanReportPage />,
+      },
+      // Phase 8 Plan 04 — repo settings page (currently only Mirror
+      // config card; generic settings added in later plans). More
+      // specific suffix than the RepoDetailRouter match below, so
+      // ordering matters for intent — React Router 7 resolves on
+      // specificity, but keeping it above the generic fallback keeps
+      // the route table top-to-bottom readable.
+      {
+        path: 'projects/:name/:type/:repo/settings',
+        element: <RepoSettingsTab />,
       },
       { path: 'projects/:name/:type/:repo', element: <RepoDetailRouter /> },
       { path: 'search', element: <SearchPage /> },

@@ -695,9 +695,37 @@ func (d Deps) handleCreateRepo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Compose repo INSERT + optional hook in a single writer tx so a hook
-	// failure (e.g. RPM signing-key generation breaking) rolls back the
-	// repos row (T-03-04-06).
+	// Phase 8 Plan 01 (MIRROR-01..07): optional mirror-flag validation.
+	// Envelope codes: codeRepoMirror* constants defined in repos.go.
+	if req.IsMirror {
+		if _, ok := mirrorSupportedTypes[req.Type]; !ok {
+			writeJSONError(w, r, http.StatusBadRequest, codeRepoMirrorTypeUnsupported,
+				"mirror flag only supported for deb/rpm/pypi/helm")
+			return
+		}
+		if !validateMirrorUpstreamURL(req.MirrorUpstreamURL) {
+			writeJSONError(w, r, http.StatusBadRequest, codeRepoMirrorURLInvalid,
+				"upstream URL must be http(s) with a host")
+			return
+		}
+		if !validateMirrorFilter(req.Type, req.MirrorFilter) {
+			writeJSONError(w, r, http.StatusBadRequest, codeRepoMirrorFilterInvalid,
+				"mirror_filter JSON does not match the protocol SyncFilter shape")
+			return
+		}
+		if req.MirrorCredID != nil {
+			ok, _ := mirrorCredOwnership(r.Context(), d.UpstreamCreds, p.ID, *req.MirrorCredID)
+			if !ok {
+				writeJSONError(w, r, http.StatusBadRequest, codeRepoMirrorCredWrongProject,
+					"mirror_cred_id must belong to the same project as the repo")
+				return
+			}
+		}
+	}
+
+	// Compose repo INSERT + optional hook + optional mirror-config UPDATE
+	// in a single writer tx so a hook failure (e.g. RPM signing-key
+	// generation breaking) rolls back the repos row (T-03-04-06).
 	var (
 		id     int64
 		extras map[string]any
@@ -707,6 +735,18 @@ func (d Deps) handleCreateRepo(w http.ResponseWriter, r *http.Request) {
 		id, insErr = d.Repos.CreateInTx(r.Context(), tx, p.ID, req.Type, req.Name, req.DescriptionMD, req.AutoScan, req.BlockOnSeverity, req.PublicRead)
 		if insErr != nil {
 			return insErr
+		}
+		if req.IsMirror {
+			mc := metadata.MirrorConfig{
+				IsMirror:    true,
+				UpstreamURL: req.MirrorUpstreamURL,
+				FilterJSON:  string(req.MirrorFilter),
+				CredID:      req.MirrorCredID,
+				ScanOnSync:  req.ScanOnSync,
+			}
+			if err := d.Repos.SetMirrorConfigInTx(r.Context(), tx, id, mc); err != nil {
+				return err
+			}
 		}
 		if d.RepoCreateHook != nil {
 			ex, herr := d.RepoCreateHook(r.Context(), tx, id, req.Type, p.Name, req.Name)

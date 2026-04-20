@@ -13,10 +13,12 @@
 package httpx
 
 import (
+	"bytes"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -25,6 +27,23 @@ import (
 
 	"github.com/dxc-internal/omnirepo/internal/audit"
 	"github.com/dxc-internal/omnirepo/internal/metadata"
+)
+
+// MaxSyncBodyBytes caps POST /sync request bodies (Phase 8 Plan 01,
+// MIRROR-06). Sync payloads carry only filter JSON + metadata — 16 KiB is
+// generous for the largest realistic allowlist. The io.LimitReader uses
+// MaxSyncBodyBytes+1 so the handler can detect "exactly at or over limit"
+// without allocating past the cap.
+const MaxSyncBodyBytes = 16 * 1024
+
+// Phase 8 Plan 01 canonical sync envelope codes. Dotted wire form
+// satisfies the envelope schema regex while the second segment keeps the
+// operator-facing token verbatim so grep-based plan-check assertions
+// resolve against this file.
+const (
+	codeSyncMirrorOverridesNotAllowed = "sync.mirror_overrides_not_allowed"
+	codeSyncAlreadyRunning            = "sync.sync_already_running"
+	codeSyncInvalidRequestBody        = "sync.invalid_request_body"
 )
 
 // SyncActor is the auth-agnostic projection of the request actor used by
@@ -130,16 +149,75 @@ func (d SyncRESTDeps) handleSync(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	r.Body = http.MaxBytesReader(w, r.Body, 64*1024)
+	// Phase 8 Plan 01 (MIRROR-06): cap body at 16 KiB with io.LimitReader.
+	// The +1 over-by-one trick lets us detect "at or over limit" without
+	// allocating past the cap. Explicit ReadAll (rather than decoder +
+	// MaxBytesReader) so we can inspect body length BEFORE JSON parsing
+	// for the mirror-overrides-not-allowed branch below.
+	bodyBytes, readErr := io.ReadAll(io.LimitReader(r.Body, MaxSyncBodyBytes+1))
+	_ = r.Body.Close()
+	if readErr != nil {
+		writeJSONErr(w, http.StatusBadRequest, codeSyncInvalidRequestBody, "request body read failed")
+		return
+	}
+	if int64(len(bodyBytes)) > MaxSyncBodyBytes {
+		writeJSONErr(w, http.StatusBadRequest, codeSyncInvalidRequestBody, "request body exceeds 16 KiB limit")
+		return
+	}
+	bodyEmpty := len(bytes.TrimSpace(bodyBytes)) == 0
+
+	// Phase 8 Plan 01 (MIRROR-05): mirror repos read config from the repo
+	// row; a non-empty body would risk operators accidentally overriding the
+	// locked-at-creation filter/URL. Reject with 400 before anything else.
+	if repo.IsMirror && !bodyEmpty {
+		writeJSONErr(w, http.StatusBadRequest, codeSyncMirrorOverridesNotAllowed,
+			"mirror repos read config from the repo row; do not send a body")
+		return
+	}
+
+	// Phase 8 Plan 01 (MIRROR-04): one-in-flight-sync-per-repo. The
+	// CountRepoInflight + subsequent Enqueue are NOT atomic; a race between
+	// two concurrent POSTs can produce two pending rows. The worker pool's
+	// LeaseOne uses UPDATE ... RETURNING so only one lease wins, capping
+	// the residual cost at one wasted pending row (T-08-01-04).
+	inflight, cerr := d.SyncJobs.CountRepoInflight(r.Context(), repo.ID)
+	if cerr != nil {
+		slog.ErrorContext(r.Context(), "sync.rest.inflight_count", "err", cerr)
+		writeJSONErr(w, http.StatusInternalServerError, "internal", "")
+		return
+	}
+	if inflight > 0 {
+		writeJSONErr(w, http.StatusConflict, codeSyncAlreadyRunning,
+			"a sync is already running for this repo")
+		return
+	}
+
+	// Branch on IsMirror to source the sync payload.
 	var req SyncRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSONErr(w, http.StatusBadRequest, "validation_failed", "invalid JSON: "+err.Error())
-		return
+	if repo.IsMirror {
+		// bodyEmpty asserted above; read config from the repo row.
+		req.UpstreamURL = repo.MirrorUpstreamURL
+		if repo.MirrorCredID != nil {
+			v := *repo.MirrorCredID
+			req.CredID = &v
+		}
+		if repo.MirrorFilterJSON != "" {
+			req.Filter = json.RawMessage(repo.MirrorFilterJSON)
+		}
+	} else {
+		// Non-mirror repos keep the v1.0 body-driven flow verbatim.
+		if !bodyEmpty {
+			if err := json.Unmarshal(bodyBytes, &req); err != nil {
+				writeJSONErr(w, http.StatusBadRequest, codeSyncInvalidRequestBody, "invalid JSON: "+err.Error())
+				return
+			}
+		}
+		if req.UpstreamURL == "" {
+			writeJSONErr(w, http.StatusBadRequest, "validation_failed", "upstream_url required")
+			return
+		}
 	}
-	if req.UpstreamURL == "" {
-		writeJSONErr(w, http.StatusBadRequest, "validation_failed", "upstream_url required")
-		return
-	}
+
 	u, perr := url.Parse(req.UpstreamURL)
 	if perr != nil || (u.Scheme != "http" && u.Scheme != "https") {
 		writeJSONErr(w, http.StatusBadRequest, "validation_failed", "upstream_url must be http(s)")
@@ -180,8 +258,8 @@ func (d SyncRESTDeps) handleSync(w http.ResponseWriter, r *http.Request) {
 	if repoType == "deb" && req.Suite != "" {
 		payload["suite"] = req.Suite
 	}
-	buf, err := json.Marshal(payload)
-	if err != nil {
+	buf, merr := json.Marshal(payload)
+	if merr != nil {
 		writeJSONErr(w, http.StatusInternalServerError, "internal", "marshal payload")
 		return
 	}
@@ -192,7 +270,7 @@ func (d SyncRESTDeps) handleSync(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var jobID int64
-	err = d.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
+	wtxErr := d.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
 		id, err := d.SyncJobs.Enqueue(r.Context(), tx, kind, proj.ID, repo.ID, string(buf))
 		if err != nil {
 			return err
@@ -200,8 +278,8 @@ func (d SyncRESTDeps) handleSync(w http.ResponseWriter, r *http.Request) {
 		jobID = id
 		return nil
 	})
-	if err != nil {
-		slog.ErrorContext(r.Context(), "sync.rest.enqueue", "err", err)
+	if wtxErr != nil {
+		slog.ErrorContext(r.Context(), "sync.rest.enqueue", "err", wtxErr)
 		writeJSONErr(w, http.StatusInternalServerError, "internal", "enqueue")
 		return
 	}

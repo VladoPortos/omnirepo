@@ -15,6 +15,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -40,13 +41,41 @@ import (
 // itself.
 const maxRepoPatchBodyBytes = 64 * 1024
 
+// Phase 8 Plan 01 (MIRROR-01..07): canonical envelope codes emitted by
+// CreateRepo and PatchRepo mirror-validation branches. Dotted wire form
+// satisfies the envelope schema regex (^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$)
+// while the second segment keeps the operator-facing token verbatim so
+// tests, docs, and grep-based plan-check assertions resolve directly.
+const (
+	codeRepoMirrorTypeUnsupported    = "repo.mirror_type_unsupported"
+	codeRepoMirrorURLInvalid         = "repo.mirror_url_invalid"
+	codeRepoMirrorFilterInvalid      = "repo.mirror_filter_invalid"
+	codeRepoMirrorURLImmutable       = "repo.mirror_url_immutable"
+	codeRepoMirrorCredWrongProject   = "repo.mirror_cred_wrong_project"
+)
+
 // repoPatchRequest is the PATCH body shape. All fields optional; nil pointers
 // leave the column untouched (see metadata.UpdateFields).
+//
+// Phase 8 Plan 01 (MIRROR-02, MIRROR-07): IsMirror / MirrorUpstreamURL are
+// accepted on the wire but always rejected with 400 repo.mirror_url_immutable
+// so the wire shape matches CreateRepoRequest and the UI library can reuse
+// one TypeScript interface for both requests. The three editable fields
+// (MirrorFilter / MirrorCredID / ScanOnSync) flow through to UpdateFields.
 type repoPatchRequest struct {
 	DescriptionMD   *string `json:"description_md,omitempty"`
 	AutoScan        *bool   `json:"auto_scan,omitempty"`
 	BlockOnSeverity *string `json:"block_on_severity,omitempty"`
 	PublicRead      *bool   `json:"public_read,omitempty"`
+
+	IsMirror          *bool            `json:"is_mirror,omitempty"`
+	MirrorUpstreamURL *string          `json:"mirror_upstream_url,omitempty"`
+	MirrorFilter      *json.RawMessage `json:"mirror_filter,omitempty"`
+	// MirrorCredIDRaw uses json.RawMessage so the handler can distinguish
+	// "field absent" (nil) from "set to null" (4-byte `null`) from
+	// "set to int" — mirroring UpdateFields.MirrorCredIDSet semantics.
+	MirrorCredIDRaw *json.RawMessage `json:"mirror_cred_id,omitempty"`
+	ScanOnSync      *bool            `json:"scan_on_sync,omitempty"`
 }
 
 // repoResponse mirrors the Repo row projected for the REST API. We do not
@@ -155,6 +184,52 @@ func (d Deps) handlePatchRepo(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Phase 8 Plan 01 (MIRROR-02): reject attempts to change is_mirror or
+	// mirror_upstream_url via PATCH. The constants below (codeRepoMirror*)
+	// live at the top of this file so grep-based plan-check assertions
+	// resolve against a single canonical source.
+	if body.IsMirror != nil || body.MirrorUpstreamURL != nil {
+		writeJSONError(w, r, http.StatusBadRequest, codeRepoMirrorURLImmutable,
+			"is_mirror and mirror_upstream_url cannot be changed after creation")
+		return
+	}
+	// Validate editable mirror fields.
+	var patchFilterStr *string
+	if body.MirrorFilter != nil && before.IsMirror {
+		if !validateMirrorFilter(before.Type, *body.MirrorFilter) {
+			writeJSONError(w, r, http.StatusBadRequest, codeRepoMirrorFilterInvalid,
+				"mirror_filter JSON does not match the protocol SyncFilter shape")
+			return
+		}
+		s := string(*body.MirrorFilter)
+		patchFilterStr = &s
+	}
+	// MirrorCredID editing: distinguish absent / null / int.
+	var patchCredID *int64
+	var patchCredIDSet bool
+	if body.MirrorCredIDRaw != nil {
+		raw := bytes.TrimSpace(*body.MirrorCredIDRaw)
+		if len(raw) == 0 || string(raw) == "null" {
+			patchCredIDSet = true // clear to NULL
+		} else {
+			var v int64
+			if err := json.Unmarshal(raw, &v); err != nil {
+				writeJSONError(w, r, http.StatusBadRequest, ErrValidationFailed,
+					"mirror_cred_id must be an integer or null")
+				return
+			}
+			// Cross-project ownership check (T-08-01-07). before.ProjectID
+			// is populated by resolveRepoFromURL above.
+			if ok, _ := mirrorCredOwnership(r.Context(), d.UpstreamCreds, before.ProjectID, v); !ok {
+				writeJSONError(w, r, http.StatusBadRequest, codeRepoMirrorCredWrongProject,
+					"mirror_cred_id must belong to the same project as the repo")
+				return
+			}
+			patchCredID = &v
+			patchCredIDSet = true
+		}
+	}
+
 	// Compute the diff BEFORE the UPDATE so the audit row reflects
 	// intended-state changes only. Unchanged fields (same value submitted as
 	// already stored) are omitted.
@@ -171,14 +246,27 @@ func (d Deps) handlePatchRepo(w http.ResponseWriter, r *http.Request) {
 	if body.PublicRead != nil && *body.PublicRead != before.PublicRead {
 		diff["public_read"] = map[string]any{"from": before.PublicRead, "to": *body.PublicRead}
 	}
+	if patchFilterStr != nil && *patchFilterStr != before.MirrorFilterJSON {
+		diff["mirror_filter_json"] = map[string]any{"from": before.MirrorFilterJSON, "to": *patchFilterStr}
+	}
+	if patchCredIDSet {
+		diff["mirror_cred_id"] = map[string]any{"from": before.MirrorCredID, "to": patchCredID}
+	}
+	if body.ScanOnSync != nil && *body.ScanOnSync != before.ScanOnSync {
+		diff["scan_on_sync"] = map[string]any{"from": before.ScanOnSync, "to": *body.ScanOnSync}
+	}
 
 	var updated metadata.Repo
 	err := d.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
 		u, err := d.Repos.Update(r.Context(), tx, before.ID, metadata.UpdateFields{
-			DescriptionMD:   body.DescriptionMD,
-			AutoScan:        body.AutoScan,
-			BlockOnSeverity: body.BlockOnSeverity,
-			PublicRead:      body.PublicRead,
+			DescriptionMD:    body.DescriptionMD,
+			AutoScan:         body.AutoScan,
+			BlockOnSeverity:  body.BlockOnSeverity,
+			PublicRead:       body.PublicRead,
+			MirrorFilterJSON: patchFilterStr,
+			MirrorCredID:     patchCredID,
+			MirrorCredIDSet:  patchCredIDSet,
+			ScanOnSync:       body.ScanOnSync,
 		})
 		if err != nil {
 			return err

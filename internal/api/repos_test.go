@@ -344,3 +344,241 @@ func itoaShort(i int) string {
 	}
 	return string(b[pos:])
 }
+
+// --------------------------------------------------------------------------
+// Phase 8 Plan 01 (MIRROR-01..07) — CreateRepo + PatchRepo mirror validation.
+// --------------------------------------------------------------------------
+
+// bootProjectOnly is bootProjectAndRepo without the repo. Used by mirror
+// tests that post a CreateRepoRequest with is_mirror=true and want to
+// assert on the handler response, not a pre-seeded repo row.
+func bootProjectOnly(t *testing.T, s *testServer, proj string) string {
+	t.Helper()
+	seedTestUser(t, s.db, "super", "s@x", true, false)
+	cookie, _, _ := s.login(t, "super", "pw-super")
+	if resp, body := s.do(t, "POST", "/api/v1/projects", cookie, api.CreateProjectRequest{Name: proj}); resp.StatusCode != 200 {
+		t.Fatalf("create project: %d %+v", resp.StatusCode, body)
+	}
+	return cookie
+}
+
+func TestCreateRepo_MirrorRejectsUnsupportedType(t *testing.T) {
+	s := newTestServer(t)
+	cookie := bootProjectOnly(t, s, "p-mirror")
+	resp, body := s.do(t, "POST", "/api/v1/projects/p-mirror/repos", cookie, map[string]any{
+		"name":                "r1",
+		"type":                "raw",
+		"is_mirror":           true,
+		"mirror_upstream_url": "https://archive.example/raw",
+	})
+	if resp.StatusCode != 400 {
+		t.Fatalf("status = %d, want 400; body=%+v", resp.StatusCode, body)
+	}
+	if code, _ := body["code"].(string); !strings.Contains(code, "mirror_type_unsupported") {
+		t.Fatalf("code = %q, want *mirror_type_unsupported; body=%+v", code, body)
+	}
+}
+
+func TestCreateRepo_MirrorRejectsBadURL(t *testing.T) {
+	s := newTestServer(t)
+	cookie := bootProjectOnly(t, s, "p-mirror")
+	resp, body := s.do(t, "POST", "/api/v1/projects/p-mirror/repos", cookie, map[string]any{
+		"name":                "r1",
+		"type":                "deb",
+		"is_mirror":           true,
+		"mirror_upstream_url": "file:///etc/passwd",
+	})
+	if resp.StatusCode != 400 {
+		t.Fatalf("status = %d, want 400; body=%+v", resp.StatusCode, body)
+	}
+	if code, _ := body["code"].(string); !strings.Contains(code, "mirror_url_invalid") {
+		t.Fatalf("code = %q, want *mirror_url_invalid; body=%+v", code, body)
+	}
+}
+
+func TestCreateRepo_MirrorRejectsBadFilter(t *testing.T) {
+	s := newTestServer(t)
+	cookie := bootProjectOnly(t, s, "p-mirror")
+	resp, body := s.do(t, "POST", "/api/v1/projects/p-mirror/repos", cookie, map[string]any{
+		"name":                "r1",
+		"type":                "deb",
+		"is_mirror":           true,
+		"mirror_upstream_url": "https://archive.ubuntu.com/ubuntu",
+		"mirror_filter":       map[string]any{"NotAKey": true},
+	})
+	if resp.StatusCode != 400 {
+		t.Fatalf("status = %d, want 400; body=%+v", resp.StatusCode, body)
+	}
+	if code, _ := body["code"].(string); !strings.Contains(code, "mirror_filter_invalid") {
+		t.Fatalf("code = %q, want *mirror_filter_invalid; body=%+v", code, body)
+	}
+}
+
+func TestCreateRepo_MirrorRejectsCrossProjectCred(t *testing.T) {
+	s := newTestServerWithUpstream(t)
+	// Boot two projects with the super-admin.
+	seedTestUser(t, s.db, "super", "s@x", true, false)
+	cookie, _, _ := s.login(t, "super", "pw-super")
+	if resp, body := s.do(t, "POST", "/api/v1/projects", cookie, api.CreateProjectRequest{Name: "proj-a"}); resp.StatusCode != 200 {
+		t.Fatalf("create project a: %d %+v", resp.StatusCode, body)
+	}
+	if resp, body := s.do(t, "POST", "/api/v1/projects", cookie, api.CreateProjectRequest{Name: "proj-b"}); resp.StatusCode != 200 {
+		t.Fatalf("create project b: %d %+v", resp.StatusCode, body)
+	}
+	// Create a cred in proj-b directly via the repo API to get its id.
+	var projBID int64
+	_ = s.db.Reader.QueryRowContext(context.Background(), `SELECT id FROM projects WHERE name='proj-b'`).Scan(&projBID)
+	credID, err := s.deps.UpstreamCreds.Create(context.Background(), projBID, "archive.example", metadata.CredKindAPT, "u", "pw", "", 0)
+	if err != nil {
+		t.Fatalf("seed cred in proj-b: %v", err)
+	}
+	// Try to create a mirror repo in proj-a that references proj-b's cred.
+	resp, body := s.do(t, "POST", "/api/v1/projects/proj-a/repos", cookie, map[string]any{
+		"name":                "r1",
+		"type":                "deb",
+		"is_mirror":           true,
+		"mirror_upstream_url": "https://archive.example/ubuntu",
+		"mirror_cred_id":      credID,
+	})
+	if resp.StatusCode != 400 {
+		t.Fatalf("status = %d, want 400; body=%+v", resp.StatusCode, body)
+	}
+	if code, _ := body["code"].(string); !strings.Contains(code, "mirror_cred_wrong_project") {
+		t.Fatalf("code = %q, want *mirror_cred_wrong_project; body=%+v", code, body)
+	}
+}
+
+func TestCreateRepo_MirrorHappyPath(t *testing.T) {
+	s := newTestServer(t)
+	cookie := bootProjectOnly(t, s, "p-mirror")
+	resp, body := s.do(t, "POST", "/api/v1/projects/p-mirror/repos", cookie, map[string]any{
+		"name":                "ubuntu-focal",
+		"type":                "deb",
+		"is_mirror":           true,
+		"mirror_upstream_url": "https://archive.ubuntu.com/ubuntu",
+		"mirror_filter":       map[string]any{"Suites": []string{"focal"}, "Components": []string{"main"}},
+		"scan_on_sync":        true,
+	})
+	if resp.StatusCode != 200 {
+		t.Fatalf("status = %d, want 200; body=%+v", resp.StatusCode, body)
+	}
+	// Read the row to assert the 5 mirror columns were persisted.
+	ctx := context.Background()
+	var pid int64
+	_ = s.db.Reader.QueryRowContext(ctx, `SELECT id FROM projects WHERE name='p-mirror'`).Scan(&pid)
+	rr, err := s.deps.Repos.FindByTriple(ctx, pid, "deb", "ubuntu-focal")
+	if err != nil {
+		t.Fatalf("find: %v", err)
+	}
+	if !rr.IsMirror {
+		t.Errorf("IsMirror = false")
+	}
+	if rr.MirrorUpstreamURL != "https://archive.ubuntu.com/ubuntu" {
+		t.Errorf("URL = %q", rr.MirrorUpstreamURL)
+	}
+	if !strings.Contains(rr.MirrorFilterJSON, "Suites") {
+		t.Errorf("filter missing Suites: %q", rr.MirrorFilterJSON)
+	}
+	if !rr.ScanOnSync {
+		t.Errorf("ScanOnSync = false")
+	}
+}
+
+func TestPatchRepo_RejectsIsMirrorEdit(t *testing.T) {
+	s := newTestServer(t)
+	cookie := bootProjectAndRepo(t, s, "pr", "deb", "r1")
+	want := true
+	resp, body := s.do(t, "PATCH", "/api/v1/projects/pr/repos/deb/r1", cookie, map[string]any{
+		"is_mirror": want,
+	})
+	if resp.StatusCode != 400 {
+		t.Fatalf("status = %d, want 400; body=%+v", resp.StatusCode, body)
+	}
+	if code, _ := body["code"].(string); !strings.Contains(code, "mirror_url_immutable") {
+		t.Fatalf("code = %q; body=%+v", code, body)
+	}
+}
+
+func TestPatchRepo_RejectsURLEdit(t *testing.T) {
+	s := newTestServer(t)
+	cookie := bootProjectAndRepo(t, s, "pr", "deb", "r1")
+	resp, body := s.do(t, "PATCH", "/api/v1/projects/pr/repos/deb/r1", cookie, map[string]any{
+		"mirror_upstream_url": "https://mutated.example/ubuntu",
+	})
+	if resp.StatusCode != 400 {
+		t.Fatalf("status = %d, want 400; body=%+v", resp.StatusCode, body)
+	}
+	if code, _ := body["code"].(string); !strings.Contains(code, "mirror_url_immutable") {
+		t.Fatalf("code = %q; body=%+v", code, body)
+	}
+}
+
+func TestPatchRepo_RejectsCrossProjectCred(t *testing.T) {
+	s := newTestServerWithUpstream(t)
+	seedTestUser(t, s.db, "super", "s@x", true, false)
+	cookie, _, _ := s.login(t, "super", "pw-super")
+	// Two projects + a mirror repo in proj-a.
+	if resp, _ := s.do(t, "POST", "/api/v1/projects", cookie, api.CreateProjectRequest{Name: "proj-a"}); resp.StatusCode != 200 {
+		t.Fatal("create proj-a")
+	}
+	if resp, _ := s.do(t, "POST", "/api/v1/projects", cookie, api.CreateProjectRequest{Name: "proj-b"}); resp.StatusCode != 200 {
+		t.Fatal("create proj-b")
+	}
+	if resp, body := s.do(t, "POST", "/api/v1/projects/proj-a/repos", cookie, map[string]any{
+		"name":                "r1",
+		"type":                "deb",
+		"is_mirror":           true,
+		"mirror_upstream_url": "https://archive.example/ubuntu",
+	}); resp.StatusCode != 200 {
+		t.Fatalf("create mirror repo: %d %+v", resp.StatusCode, body)
+	}
+	// Cred in proj-b.
+	ctx := context.Background()
+	var projBID int64
+	_ = s.db.Reader.QueryRowContext(ctx, `SELECT id FROM projects WHERE name='proj-b'`).Scan(&projBID)
+	credID, err := s.deps.UpstreamCreds.Create(ctx, projBID, "archive.example", metadata.CredKindAPT, "u", "pw", "", 0)
+	if err != nil {
+		t.Fatalf("seed cred: %v", err)
+	}
+	resp, body := s.do(t, "PATCH", "/api/v1/projects/proj-a/repos/deb/r1", cookie, map[string]any{
+		"mirror_cred_id": credID,
+	})
+	if resp.StatusCode != 400 {
+		t.Fatalf("status = %d, want 400; body=%+v", resp.StatusCode, body)
+	}
+	if code, _ := body["code"].(string); !strings.Contains(code, "mirror_cred_wrong_project") {
+		t.Fatalf("code = %q; body=%+v", code, body)
+	}
+}
+
+func TestPatchRepo_AllowsFilterEdit(t *testing.T) {
+	s := newTestServer(t)
+	cookie := bootProjectOnly(t, s, "pr")
+	if resp, body := s.do(t, "POST", "/api/v1/projects/pr/repos", cookie, map[string]any{
+		"name":                "r1",
+		"type":                "deb",
+		"is_mirror":           true,
+		"mirror_upstream_url": "https://archive.example/ubuntu",
+		"mirror_filter":       map[string]any{"Suites": []string{"focal"}},
+	}); resp.StatusCode != 200 {
+		t.Fatalf("create mirror repo: %d %+v", resp.StatusCode, body)
+	}
+	newFilter := map[string]any{"Suites": []string{"focal", "bionic"}, "Components": []string{"main"}}
+	resp, body := s.do(t, "PATCH", "/api/v1/projects/pr/repos/deb/r1", cookie, map[string]any{
+		"mirror_filter": newFilter,
+	})
+	if resp.StatusCode != 200 {
+		t.Fatalf("status = %d, want 200; body=%+v", resp.StatusCode, body)
+	}
+	// Re-read the row.
+	ctx := context.Background()
+	var pid int64
+	_ = s.db.Reader.QueryRowContext(ctx, `SELECT id FROM projects WHERE name='pr'`).Scan(&pid)
+	rr, err := s.deps.Repos.FindByTriple(ctx, pid, "deb", "r1")
+	if err != nil {
+		t.Fatalf("find: %v", err)
+	}
+	if !strings.Contains(rr.MirrorFilterJSON, "bionic") {
+		t.Errorf("filter not updated: %q", rr.MirrorFilterJSON)
+	}
+}

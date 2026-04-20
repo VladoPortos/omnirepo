@@ -266,6 +266,24 @@ func (r *UpstreamCredsRepo) Delete(ctx context.Context, projectID, id int64) err
 	})
 }
 
+// GetProjectID returns the project_id that owns the upstream_creds row with
+// id. Used by Phase 8 Plan 01's cross-project validation (T-08-01-07): when
+// a user passes mirror_cred_id on Create/Patch repo, the handler checks
+// that the cred belongs to the same project as the repo before allowing
+// the association. Returns ErrNotFound when the id does not exist.
+func (r *UpstreamCredsRepo) GetProjectID(ctx context.Context, id int64) (int64, error) {
+	var pid int64
+	err := r.db.Reader.QueryRowContext(ctx,
+		`SELECT project_id FROM upstream_creds WHERE id=?`, id).Scan(&pid)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, ErrNotFound
+		}
+		return 0, fmt.Errorf("upstream_creds: get project_id: %w", err)
+	}
+	return pid, nil
+}
+
 // Lookup is the ONLY method that returns plaintext secrets. It is consumed
 // at pull-external time (Phase 02-10) — never by REST responses. Callers
 // must treat the returned password/token as write-only: feed into the

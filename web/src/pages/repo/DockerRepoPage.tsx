@@ -46,6 +46,7 @@ import { formatBytes, formatDate } from '@/lib/format';
 import { useMe, useRepoContent, useRepoScans, useRescanArtifact } from '@/api/queries';
 import { api, ApiError, envelopeFromError, type ApiErrorEnvelope } from '@/api/client';
 import { ErrorEnvelopeRenderer } from '@/components/common/ErrorEnvelope';
+import { CloneImageDialog } from '@/components/CloneImageDialog';
 import type { Repo } from '@/api/types';
 
 /** Represents a Docker image tag -- populated from /content API. */
@@ -72,7 +73,7 @@ export function DockerRepoPage({ repo }: DockerRepoPageProps) {
   const { name: projectName } = useParams<{ name: string }>();
   const [filter, setFilter] = useState('');
   const [sort, setSort] = useState<SortState>({ column: 'pushed_at', direction: 'desc' });
-  const [pullOpen, setPullOpen] = useState(false);
+  const [cloneOpen, setCloneOpen] = useState(false);
   const [promoteOpen, setPromoteOpen] = useState(false);
   const [expandedTag, setExpandedTag] = useState<string | null>(null);
 
@@ -320,7 +321,7 @@ export function DockerRepoPage({ repo }: DockerRepoPageProps) {
       <div className="space-y-4">
         {/* Actions bar */}
         <div className="flex flex-wrap items-center gap-2">
-          <Button variant="outline" size="sm" onClick={() => setPullOpen(true)}>
+          <Button variant="outline" size="sm" onClick={() => setCloneOpen(true)}>
             <Download className="mr-1.5 size-4" />
             Pull External
           </Button>
@@ -430,41 +431,15 @@ export function DockerRepoPage({ repo }: DockerRepoPageProps) {
         )}
       </div>
 
-      {/* Pull External dialog */}
-      <Dialog open={pullOpen} onOpenChange={setPullOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Pull External Image</DialogTitle>
-            <DialogDescription>
-              Pull an image from an external registry into this repository.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-3 py-2">
-            <div className="space-y-1.5">
-              <Label>Source URL</Label>
-              <Input placeholder="docker.io/library/nginx:latest" />
-            </div>
-            <div className="space-y-1.5">
-              <Label>Retag as (optional)</Label>
-              <Input placeholder="my-nginx:v1" />
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setPullOpen(false)}>
-              Cancel
-            </Button>
-            <Button
-              onClick={() => {
-                toast.info('Pull requested (API not yet connected).');
-                setPullOpen(false);
-              }}
-            >
-              <Download className="mr-1.5 size-4" />
-              Pull
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {/* Pull External dialog (Phase 8 / plan 08-03 — CloneImageDialog
+          replaces the previous stub block). */}
+      <CloneImageDialog
+        open={cloneOpen}
+        onClose={() => setCloneOpen(false)}
+        projectName={projectName ?? ''}
+        repoName={repo.name}
+        repoId={repo.id}
+      />
 
       {/* Promote/Retag dialog */}
       <Dialog open={promoteOpen} onOpenChange={setPromoteOpen}>

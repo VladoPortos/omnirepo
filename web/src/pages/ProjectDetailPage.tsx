@@ -22,19 +22,12 @@ import {
   DialogTitle,
   DialogFooter,
 } from '@/components/ui/dialog';
-import {
-  Select,
-  SelectTrigger,
-  SelectValue,
-  SelectContent,
-  SelectItem,
-} from '@/components/ui/select';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { TypeBadge } from '@/components/common/TypeBadge';
+import { CreateRepoDialog } from '@/components/CreateRepoDialog';
 import {
   useProject,
   useProjectActivity,
-  useCreateRepo,
   useDeleteProject,
   useProjectBuckets,
   useCreateBucket,
@@ -60,10 +53,9 @@ const REPO_TYPES: { value: RepoType; label: string }[] = [
   { value: 's3', label: 'S3' },
 ];
 
-// ME-09: repo types creatable via the POST /repos handler. S3 is managed
-// as a separate resource (buckets, not repos) — the create dialog omits
-// it to avoid a guaranteed 422 from the backend validator.
-const CREATABLE_REPO_TYPES = REPO_TYPES.filter((t) => t.value !== 's3');
+// Phase 8 Plan 04: the creatable-type allowlist now lives inside
+// CreateRepoDialog (which also owns mirror-protocol gating).
+// ME-09 still applies — S3 is managed via /s3-buckets/, not /repos.
 
 const ALL_TABS = ['overview', ...REPO_TYPES.map((t) => t.value)] as const;
 
@@ -72,17 +64,11 @@ export function ProjectDetailPage() {
   const navigate = useNavigate();
   const { data: project, isLoading } = useProject(name);
   const { data: activityData } = useProjectActivity(name);
-  const createRepo = useCreateRepo();
   const deleteProject = useDeleteProject();
 
   const [activeTab, setActiveTab] = useState<string>('overview');
   const [dialogOpen, setDialogOpen] = useState(false);
-  const [repoName, setRepoName] = useState('');
-  const [repoType, setRepoType] = useState<RepoType>(
-    activeTab !== 'overview' ? (activeTab as RepoType) : 'docker',
-  );
-  const [createError, setCreateError] = useState<ApiErrorEnvelope | null>(null);
-  const createFieldErrors = fieldErrorsFromEnvelope(createError);
+  const [dialogInitialType, setDialogInitialType] = useState<RepoType>('docker');
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState('');
   const [deleteError, setDeleteError] = useState<ApiErrorEnvelope | null>(null);
@@ -113,28 +99,8 @@ export function ProjectDetailPage() {
 
   const bucketCount = project?.buckets?.length ?? 0;
 
-  const handleCreateRepo = async (e: FormEvent) => {
-    e.preventDefault();
-    setCreateError(null);
-    try {
-      await createRepo.mutateAsync({
-        projectName: name,
-        data: {
-          name: repoName,
-          type: repoType,
-        },
-      });
-      toast.success(`Repository "${repoName}" created.`);
-      setDialogOpen(false);
-      setRepoName('');
-      setActiveTab(repoType);
-    } catch (err) {
-      setCreateError(envelopeFromError(err, 'Failed to create repository.'));
-    }
-  };
-
   const openCreateDialog = (preselectedType?: RepoType) => {
-    if (preselectedType) setRepoType(preselectedType);
+    if (preselectedType) setDialogInitialType(preselectedType);
     setDialogOpen(true);
   };
 
@@ -453,63 +419,15 @@ export function ProjectDetailPage() {
         })}
       </Tabs>
 
-      {/* Create Repo Dialog */}
-      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent>
-          <form onSubmit={handleCreateRepo}>
-            <DialogHeader>
-              <DialogTitle>Create Repository</DialogTitle>
-            </DialogHeader>
-            <div className="space-y-4 py-4">
-              {createError && (
-                <ErrorEnvelopeRenderer envelope={createError} />
-              )}
-              <div className="space-y-2">
-                <Label htmlFor="repo-type">Type</Label>
-                <Select
-                  value={repoType}
-                  onValueChange={(val) => setRepoType(val as RepoType)}
-                >
-                  <SelectTrigger id="repo-type">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {CREATABLE_REPO_TYPES.map((rt) => (
-                      <SelectItem key={rt.value} value={rt.value}>
-                        {rt.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="repo-name">Repository Name</Label>
-                <Input
-                  id="repo-name"
-                  value={repoName}
-                  onChange={(e) => setRepoName(e.target.value)}
-                  placeholder="my-repo"
-                  required
-                  autoFocus
-                  aria-invalid={
-                    !!createFieldErrors['name'] ||
-                    !!createFieldErrors['repo-name'] ||
-                    undefined
-                  }
-                />
-              </div>
-            </div>
-            <DialogFooter>
-              <Button
-                type="submit"
-                disabled={createRepo.isPending || !repoName.trim()}
-              >
-                {createRepo.isPending ? 'Creating...' : 'Create Repository'}
-              </Button>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
+      {/* Create Repo Dialog (extracted to CreateRepoDialog for mirror
+          config wiring — Phase 8 Plan 04) */}
+      <CreateRepoDialog
+        open={dialogOpen}
+        onClose={() => setDialogOpen(false)}
+        projectName={name}
+        initialType={dialogInitialType}
+        onCreated={(repo) => setActiveTab(repo.type)}
+      />
     </div>
   );
 }

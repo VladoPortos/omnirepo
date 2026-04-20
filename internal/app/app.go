@@ -467,10 +467,12 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 		Projects:  metadata.NewProjectsRepo(db),
 		Creds:     upstreamCreds,
 		Audit:     auditLogger,
-		OCI:       ociHandler,
+		// Plan 08-02 (M2.3): sync-jobs repo for throttled progress writes.
+		SyncJobs: metadata.NewSyncJobsRepo(db),
+		OCI:      ociHandler,
 	})
 	syncHandlers[oci.PullExternalJobKind] = func(c context.Context, j *jobs.JobView) error {
-		return pullExternalJob.Handle(c, j.Payload, j.ProjectID, j.RepoID)
+		return pullExternalJob.Handle(c, j.Payload, j.ProjectID, j.RepoID, j.ID)
 	}
 	pullExternalREST := oci.NewPullExternalREST(ociHandler, upstreamCreds,
 		metadata.NewSyncJobsRepo(db), syncPool.Kick)

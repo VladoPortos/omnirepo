@@ -43,6 +43,7 @@ import (
 
 	"github.com/dxc-internal/omnirepo/internal/audit"
 	"github.com/dxc-internal/omnirepo/internal/auth"
+	"github.com/dxc-internal/omnirepo/internal/jobs"
 	"github.com/dxc-internal/omnirepo/internal/metadata"
 	"github.com/dxc-internal/omnirepo/internal/storage"
 )
@@ -96,6 +97,11 @@ type PullExternalDeps struct {
 	Projects  *metadata.ProjectsRepo
 	Creds     *metadata.UpstreamCredsRepo
 	Audit     audit.Logger
+	// SyncJobs is the sync_jobs repo the handler uses to emit throttled
+	// byte-level progress (Phase 8 Plan 02 / M2.3). Nil-safe: when unwired
+	// the handler still runs but progress writes are silently skipped
+	// (ProgressWriter.Set short-circuits on a nil repo).
+	SyncJobs *metadata.SyncJobsRepo
 	// Handler is the /v2 handler whose writeManifestWithRefcounts helper
 	// the job reuses. The job needs the full Handler (not just the
 	// manifests repo) so the refcount+FTS+auto-scan logic stays in one
@@ -136,7 +142,12 @@ func sanitizeUpstreamErr(err error) error {
 }
 
 // Handle implements jobs.Handler for kind="pull_external".
-func (p *PullExternalHandler) Handle(ctx context.Context, payload string, projectID, repoID int64) error {
+//
+// Phase 8 Plan 02 / M2.3: accepts jobID so the handler can emit
+// throttled sync_jobs progress via ProgressWriter. The shim in
+// internal/app/app.go passes j.ID; older unit tests that call Handle
+// directly may pass 0 — the ProgressWriter is nil-safe in that case.
+func (p *PullExternalHandler) Handle(ctx context.Context, payload string, projectID, repoID, jobID int64) error {
 	timeout := p.deps.Timeout
 	if timeout <= 0 {
 		timeout = DefaultPullExternalTimeout
@@ -152,6 +163,12 @@ func (p *PullExternalHandler) Handle(ctx context.Context, payload string, projec
 	if err != nil {
 		return fmt.Errorf("pull_external: parse ref %q: %w", job.SrcImage, err)
 	}
+
+	// progress is shared across image+index flows. Construct once per job
+	// so the throttle state persists across every layer of every child
+	// manifest when an index is being imported.
+	progress := jobs.NewProgressWriter(p.deps.SyncJobs, jobID)
+	defer func() { _ = progress.Flush(ctx) }()
 
 	// Resolve dst repo early so we can fail fast if it vanished between
 	// enqueue and lease.
@@ -232,9 +249,9 @@ func (p *PullExternalHandler) Handle(ctx context.Context, payload string, projec
 	}
 
 	if desc.MediaType.IsIndex() {
-		return p.handleIndex(ctx, desc, srcRef, opts, dstRepo, repoPath, dstTag)
+		return p.handleIndex(ctx, desc, srcRef, opts, dstRepo, repoPath, dstTag, progress)
 	}
-	return p.handleImage(ctx, desc, srcRef, opts, dstRepo, repoPath, dstTag)
+	return p.handleImage(ctx, desc, srcRef, opts, dstRepo, repoPath, dstTag, progress)
 }
 
 // handleImage imports a single-image manifest.
@@ -246,12 +263,31 @@ func (p *PullExternalHandler) handleImage(
 	dstRepo *metadata.Repo,
 	repoPath string,
 	dstTag string,
+	progress *jobs.ProgressWriter,
 ) error {
 	img, err := desc.Image()
 	if err != nil {
 		return sanitizeUpstreamErr(fmt.Errorf("pull_external: image: %w", err))
 	}
-	if err := p.streamImageBlobs(ctx, img); err != nil {
+	// Single-image pull: compute totalBytes from manifest layers + config,
+	// then stream with byte-level progress ("layer N of M · accum/total").
+	// We pre-walk Size() once (cheap — layer structs cache remote-descriptor
+	// sizes from the manifest response) to get a stable denominator.
+	layers, lerr := img.Layers()
+	if lerr != nil {
+		return sanitizeUpstreamErr(fmt.Errorf("pull_external: layers: %w", lerr))
+	}
+	var totalBytes int64
+	for _, l := range layers {
+		if sz, err2 := l.Size(); err2 == nil {
+			totalBytes += sz
+		}
+	}
+	if cb, err2 := img.RawConfigFile(); err2 == nil {
+		totalBytes += int64(len(cb))
+	}
+	var accumulatedDone int64
+	if err := p.streamImageBlobs(ctx, img, progress, &accumulatedDone, totalBytes, ""); err != nil {
 		return err
 	}
 	raw, err := img.RawManifest()
@@ -262,6 +298,8 @@ func (p *PullExternalHandler) handleImage(
 	if err != nil {
 		return sanitizeUpstreamErr(fmt.Errorf("pull_external: media type: %w", err))
 	}
+	// End-of-pull progress ping so UI renders "done · total/total".
+	_ = progress.Set(ctx, "done", accumulatedDone, totalBytes)
 	return p.commitManifest(ctx, dstRepo, repoPath, dstTag, raw, string(mt), srcRef, false)
 }
 
@@ -275,6 +313,7 @@ func (p *PullExternalHandler) handleIndex(
 	dstRepo *metadata.Repo,
 	repoPath string,
 	dstTag string,
+	progress *jobs.ProgressWriter,
 ) error {
 	idx, err := desc.ImageIndex()
 	if err != nil {
@@ -284,16 +323,43 @@ func (p *PullExternalHandler) handleIndex(
 	if err != nil {
 		return sanitizeUpstreamErr(fmt.Errorf("pull_external: index manifest: %w", err))
 	}
+	// Compute total bytes across ALL child images up-front so the progress
+	// bar has a stable denominator for the whole multi-arch pull. Each
+	// child's layer Size() + config size sums into indexTotal; sizes are
+	// advisory per T-08-02-02 (upstream-reported, not validated here).
+	var indexTotal int64
+	for _, cd := range mf.Manifests {
+		ci, err := idx.Image(cd.Digest)
+		if err != nil {
+			continue
+		}
+		if layers, err2 := ci.Layers(); err2 == nil {
+			for _, l := range layers {
+				if sz, err3 := l.Size(); err3 == nil {
+					indexTotal += sz
+				}
+			}
+		}
+		if cb, err2 := ci.RawConfigFile(); err2 == nil {
+			indexTotal += int64(len(cb))
+		}
+	}
+
+	// accumulatedDone is read+written by the CountingReader OnRead callback
+	// from inside streamImageBlobs — single-goroutine loop, no lock needed.
+	var accumulatedDone int64
 	// Pull every child image and commit its manifest BEFORE the index,
 	// because the index commit requires each child digest to already exist
 	// in docker_manifests (incRefs for indexes uses manifests.IncRef).
-	for _, childDesc := range mf.Manifests {
+	for i, childDesc := range mf.Manifests {
 		childImg, err := idx.Image(childDesc.Digest)
 		if err != nil {
 			return sanitizeUpstreamErr(fmt.Errorf("pull_external: child image %s: %w",
 				childDesc.Digest, err))
 		}
-		if err := p.streamImageBlobs(ctx, childImg); err != nil {
+		imageStep := fmt.Sprintf("image %d of %d", i+1, len(mf.Manifests))
+		_ = progress.Set(ctx, imageStep, accumulatedDone, indexTotal)
+		if err := p.streamImageBlobs(ctx, childImg, progress, &accumulatedDone, indexTotal, imageStep); err != nil {
 			return err
 		}
 		childRaw, err := childImg.RawManifest()
@@ -326,13 +392,32 @@ func (p *PullExternalHandler) handleIndex(
 // streamImageBlobs downloads every layer + the config blob into CAS. The
 // CAS promotes each blob atomically by its sha256 so concurrent pulls
 // don't fight over the same on-disk file.
-func (p *PullExternalHandler) streamImageBlobs(ctx context.Context, img v1.Image) error {
+//
+// Phase 8 Plan 02 / M2.3: wraps each layer's compressed ReadCloser with
+// jobs.CountingReader so ProgressWriter receives per-read byte counts
+// (advancing *accumDone). When imagePrefix is non-empty (index child
+// images pass "image 2 of 3"), the emitted step is
+// "<imagePrefix> · layer N of M"; otherwise just "layer N of M".
+// A totalBytes == 0 is valid (caller couldn't compute total) — in that
+// case progress still emits with total=0 and the UI renders step text.
+func (p *PullExternalHandler) streamImageBlobs(
+	ctx context.Context,
+	img v1.Image,
+	progress *jobs.ProgressWriter,
+	accumDone *int64,
+	totalBytes int64,
+	imagePrefix string,
+) error {
 	layers, err := img.Layers()
 	if err != nil {
 		return sanitizeUpstreamErr(fmt.Errorf("pull_external: layers: %w", err))
 	}
-	for _, l := range layers {
-		if err := p.streamLayer(ctx, l); err != nil {
+	for i, l := range layers {
+		layerStep := fmt.Sprintf("layer %d of %d", i+1, len(layers))
+		if imagePrefix != "" {
+			layerStep = imagePrefix + " · " + layerStep
+		}
+		if err := p.streamLayer(ctx, l, progress, accumDone, totalBytes, layerStep); err != nil {
 			return err
 		}
 	}
@@ -340,25 +425,51 @@ func (p *PullExternalHandler) streamImageBlobs(ctx context.Context, img v1.Image
 	if err != nil {
 		return sanitizeUpstreamErr(fmt.Errorf("pull_external: raw config: %w", err))
 	}
-	if _, _, err := p.deps.CAS.Put(ctx, bytes.NewReader(cfg)); err != nil {
+	// Config blob: wrap bytes.Reader with CountingReader too so the tiny
+	// config download is reflected in progress. For single-goroutine
+	// correctness, the OnRead callback mutates *accumDone directly.
+	cfgStep := "config"
+	if imagePrefix != "" {
+		cfgStep = imagePrefix + " · config"
+	}
+	cr := &jobs.CountingReader{R: bytes.NewReader(cfg), OnRead: func(n int) {
+		if accumDone != nil {
+			*accumDone += int64(n)
+			_ = progress.Set(ctx, cfgStep, *accumDone, totalBytes)
+		}
+	}}
+	if _, _, err := p.deps.CAS.Put(ctx, cr); err != nil {
 		return fmt.Errorf("pull_external: cas put config: %w", err)
 	}
 	return nil
 }
 
-func (p *PullExternalHandler) streamLayer(ctx context.Context, l v1.Layer) error {
+func (p *PullExternalHandler) streamLayer(
+	ctx context.Context,
+	l v1.Layer,
+	progress *jobs.ProgressWriter,
+	accumDone *int64,
+	totalBytes int64,
+	step string,
+) error {
 	rc, err := l.Compressed()
 	if err != nil {
 		return sanitizeUpstreamErr(fmt.Errorf("pull_external: layer compressed: %w", err))
 	}
 	defer func() { _ = rc.Close() }()
-	if _, _, err := p.deps.CAS.Put(ctx, rc); err != nil {
+	cr := &jobs.CountingReader{R: rc, OnRead: func(n int) {
+		if accumDone != nil {
+			*accumDone += int64(n)
+			_ = progress.Set(ctx, step, *accumDone, totalBytes)
+		}
+	}}
+	if _, _, err := p.deps.CAS.Put(ctx, cr); err != nil {
 		return fmt.Errorf("pull_external: cas put layer: %w", err)
 	}
 	// Drain any remaining bytes (go-containerregistry sometimes leaves
 	// unread tail when we close early; harmless here but keep the stream
 	// symmetric).
-	_, _ = io.Copy(io.Discard, rc)
+	_, _ = io.Copy(io.Discard, cr)
 	return nil
 }
 

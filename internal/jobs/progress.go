@@ -88,6 +88,13 @@ func (p *ProgressWriter) SetNow(now func() time.Time) {
 //     Callers typically log-and-continue: a failed progress write must
 //     not abort the sync.
 //
+// Even when the DB write is throttle-suppressed, Set ALWAYS updates the
+// in-memory (lastStep, lastDone, lastTotal) triple. This guarantees that
+// a subsequent Flush emits the caller's most-recent intended values —
+// not a stale "layer 1 of 7" when the handler already emitted a "done"
+// sentinel that hit the 200 ms gate. Without this, a fast sync that
+// finishes within 200 ms would persist a misleading non-terminal step.
+//
 // If repo is nil (e.g. legacy call site that hasn't been wired yet),
 // Set is a no-op returning nil. This lets protocol handlers defensively
 // construct a ProgressWriter even when the sync-jobs repo isn't plumbed
@@ -98,18 +105,21 @@ func (p *ProgressWriter) Set(ctx context.Context, step string, done, total int64
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	// No-change: skip without updating last* (values are already current).
 	if p.dirty && step == p.lastStep && done == p.lastDone && total == p.lastTotal {
-		return nil // no change
+		return nil
 	}
+	// Always remember the caller's most-recent intended triple so Flush
+	// emits it even if the DB write is throttled below.
+	p.lastStep, p.lastDone, p.lastTotal = step, done, total
 	now := p.now()
 	if p.dirty && now.Sub(p.lastAt) < ProgressMinInterval {
-		return nil // too soon
+		return nil // throttled — state captured, will be flushed.
 	}
 	if err := p.repo.SetProgress(ctx, p.jobID, step, done, total); err != nil {
 		return err
 	}
 	p.lastAt = now
-	p.lastStep, p.lastDone, p.lastTotal = step, done, total
 	p.dirty = true
 	return nil
 }
@@ -120,21 +130,25 @@ func (p *ProgressWriter) Set(ctx context.Context, step string, done, total int64
 // last Set(...) was throttle-suppressed.
 //
 // Flush does NOT attempt to re-derive a "final" state — it writes what
-// Set was last called with. Callers that need a sentinel like "done"
-// should Set("done", total, total) just before Flush.
+// Set was last called with (including a throttle-suppressed Set, since
+// Set still updates the in-memory triple in that case). Callers that
+// need a sentinel like "done" should Set("done", total, total) just
+// before the handler returns; defer progress.Flush(ctx) guarantees the
+// sentinel lands.
 func (p *ProgressWriter) Flush(ctx context.Context) error {
 	if p == nil || p.repo == nil {
 		return nil
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if !p.dirty {
-		// Nothing was ever set; nothing to flush.
+	if !p.dirty && p.lastStep == "" && p.lastDone == 0 && p.lastTotal == 0 {
+		// Nothing was ever set (truly pristine); nothing to flush.
 		return nil
 	}
 	if err := p.repo.SetProgress(ctx, p.jobID, p.lastStep, p.lastDone, p.lastTotal); err != nil {
 		return err
 	}
 	p.lastAt = p.now()
+	p.dirty = true
 	return nil
 }

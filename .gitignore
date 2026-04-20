@@ -34,3 +34,4 @@ iana-after.png
 # Stray TS→JS compilation output (Vite builds into dist/, these are accidental)
 web/src/**/*.js
 !web/src/**/*.config.js
+test-results/

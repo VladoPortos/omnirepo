@@ -184,12 +184,18 @@ export function CreateRepoDialog({
 
   return (
     <Dialog open={open} onOpenChange={(v) => (!v ? onClose() : null)}>
-      <DialogContent aria-label="Create Repository">
-        <form onSubmit={handleSubmit}>
+      <DialogContent
+        aria-label="Create Repository"
+        className="flex max-h-[calc(100vh-4rem)] flex-col"
+      >
+        <form
+          onSubmit={handleSubmit}
+          className="flex min-h-0 flex-1 flex-col"
+        >
           <DialogHeader>
             <DialogTitle>Create Repository</DialogTitle>
           </DialogHeader>
-          <div className="space-y-4 py-4">
+          <div className="flex-1 space-y-4 overflow-y-auto py-4">
             {serverError && <ErrorEnvelopeRenderer envelope={serverError} />}
             {clientError && (
               <p

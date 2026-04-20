@@ -272,11 +272,7 @@ export function UpstreamCredDialog({
             />
           </div>
 
-          {mode === 'edit' ? (
-            <p className="text-xs text-muted-foreground">
-              Leave password or token blank to keep the existing value.
-            </p>
-          ) : (
+          {mode !== 'edit' && (
             <p className="text-xs text-muted-foreground">
               Provide at least one of password or token. The backend
               encrypts secrets at rest and never echoes them back.

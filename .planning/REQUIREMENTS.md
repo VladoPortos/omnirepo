@@ -291,8 +291,9 @@ phases 1–5.
 | OVERVIEW-07 | v1.2 | Deferred |
 | OVERVIEW-08 | v1.2 | Deferred |
 
-**Coverage:** 32/32 active v1.1 REQ-IDs mapped to exactly one v1.1 phase;
-25 REQ-IDs deferred to v1.2 with phase mapping TBD.
+**Coverage:** 59/59 active v1.1 REQ-IDs mapped to exactly one v1.1 phase
+(32 shipped in Phases 6–7 + 27 MIRROR IDs being delivered across Phase 8
+plans 08-01..08-06); 25 REQ-IDs deferred to v1.2 with phase mapping TBD.
 
 ---
 

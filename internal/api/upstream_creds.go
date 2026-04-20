@@ -19,8 +19,43 @@ import (
 
 	"github.com/dxc-internal/omnirepo/internal/audit"
 	"github.com/dxc-internal/omnirepo/internal/auth"
+	"github.com/dxc-internal/omnirepo/internal/httperr"
 	"github.com/dxc-internal/omnirepo/internal/metadata"
 )
+
+// debCredKindMigrationEnvelope returns the 400 envelope used by both the
+// POST and PATCH pre-checks when a client submits kind="deb". The
+// ApiErrorEnvelope contract is the Phase-6 canonical shape (top-level
+// code/message/class/details) — not wrapped under a `.error` key — per
+// web/src/api/client.ts:33-40 and errors_bridge_test.go. `details.received`
+// + `details.accepted` ride on the `[key: string]: unknown` index signature
+// in ApiErrorDetails, so no TS widening is required on the client side.
+//
+// Code is the dotted form `validation.invalid_cred_kind` so it matches the
+// OpenAPI envelope regex `^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$`. This is a
+// stricter choice than the `invalid_cred_kind` alternative; the UI regex
+// check `isApiErrorEnvelope` doesn't enforce it, but the OpenAPI schema
+// does, and tests downstream of the schema would fail validation.
+//
+// Status is deliberately 400, NOT the 422 that the generic
+// ValidCredKinds fallback emits: 400 = "you sent a recognised-but-retired
+// value, here is a migration hint"; 422 = "you sent a value the server
+// has never heard of". POLISH-02 / D-13.
+func debCredKindMigrationEnvelope() *httperr.Error {
+	return &httperr.Error{
+		Envelope: httperr.Envelope{
+			Code:    "validation.invalid_cred_kind",
+			Message: `kind "deb" is not accepted; use "apt"`,
+			Class:   httperr.ClassValidation,
+			Details: map[string]any{
+				"field":    "kind",
+				"received": "deb",
+				"accepted": []string{"docker", "rpm", "apt", "pypi", "helm"},
+			},
+		},
+		Status: http.StatusBadRequest,
+	}
+}
 
 // maxUpstreamCredsBodyBytes caps request bodies to 64 KiB (T-02-02-06).
 const maxUpstreamCredsBodyBytes = 64 * 1024
@@ -158,6 +193,13 @@ func (d Deps) handleCreateUpstreamCred(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, r, http.StatusUnprocessableEntity, ErrValidationFailed, "host required")
 		return
 	}
+	// POLISH-02 / D-13: reject legacy `kind="deb"` submissions with a
+	// machine-readable migration hint BEFORE the generic ValidCredKinds
+	// lookup. See debCredKindMigrationEnvelope for the full wire shape.
+	if req.Kind == "deb" {
+		writeEnvelope(w, r, debCredKindMigrationEnvelope())
+		return
+	}
 	kind := metadata.CredKind(req.Kind)
 	if _, ok := metadata.ValidCredKinds[kind]; !ok {
 		writeJSONError(w, r, http.StatusUnprocessableEntity, ErrValidationFailed, "invalid kind")
@@ -215,6 +257,15 @@ func (d Deps) handleUpdateUpstreamCred(w http.ResponseWriter, r *http.Request) {
 	var req upstreamCredCreateRequest
 	if err := decodeCredBody(r, &req); err != nil {
 		writeJSONError(w, r, http.StatusBadRequest, ErrValidationFailed, err.Error())
+		return
+	}
+	// POLISH-02 / D-13: reject legacy `kind="deb"` on PATCH too, even
+	// though Update() doesn't persist the kind field — an upgraded client
+	// whose cached form state still carries "deb" gets the same 400
+	// migration hint as on POST. This keeps the contract uniform across
+	// POST + PATCH. See debCredKindMigrationEnvelope.
+	if req.Kind == "deb" {
+		writeEnvelope(w, r, debCredKindMigrationEnvelope())
 		return
 	}
 	if err := d.UpstreamCreds.Update(r.Context(), projectID, id, req.Username, req.Password, req.Token); err != nil {

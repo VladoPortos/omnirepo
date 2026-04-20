@@ -435,8 +435,15 @@ export interface PullExternalResponse {
 /**
  * UpstreamCred mirrors the secret-free upstreamCredResponse struct in
  * `internal/api/upstream_creds.go`. Consumed by the CloneImageDialog
- * credential picker — the dialog displays `host` (e.g. "ghcr.io") with
- * an optional `username` preview and sends back just the `id`.
+ * credential picker AND by the Phase 8 Plan 05 Upstream credentials
+ * tab on ProjectSettingsPage.
+ *
+ * CRITICAL SECURITY PROPERTY (T-08-05-01): password and token fields
+ * are absent from this type on purpose. The backend's
+ * `upstreamCredResponse` (internal/api/upstream_creds.go) never echoes
+ * secrets; adding them to this type would violate the shape contract
+ * AND make it possible for the UI to render a secret by accident. Do
+ * NOT add them.
  */
 export interface UpstreamCred {
   id: number;
@@ -445,6 +452,50 @@ export interface UpstreamCred {
   username: string;
   created_at: string;
   updated_at: string;
+}
+
+/**
+ * UpstreamCredKind — the five credential "kinds" the backend accepts.
+ * Mirrors `metadata.ValidCredKinds` in internal/metadata/upstream_creds.go.
+ * The UI's MirrorConfigSection already groups "deb" and "apt" together
+ * via protocolCredKinds, so both tokens are valid choices from the UI
+ * perspective.
+ */
+export type UpstreamCredKind = 'docker' | 'apt' | 'deb' | 'rpm' | 'pypi' | 'helm';
+
+/**
+ * UpstreamCredCreate — POST /api/v1/projects/{name}/upstream-creds
+ * body. Matches `upstreamCredCreateRequest` in
+ * internal/api/upstream_creds.go. password and token are write-only;
+ * the backend rejects with `password_or_token_required` if BOTH are
+ * blank. The UI normalises empty strings to `undefined` before POST so
+ * the server sees the field as absent.
+ */
+export interface UpstreamCredCreate {
+  host: string;
+  kind: UpstreamCredKind;
+  username?: string;
+  password?: string;
+  token?: string;
+}
+
+/**
+ * UpstreamCredPatch — PATCH body shape. Mirrors
+ * `upstreamCredCreateRequest` reused by handleUpdateUpstreamCred.
+ * CONTRACT (T-08-05-03): password and token fields, when OMITTED from
+ * the JSON body, instruct the backend to KEEP the existing secret. An
+ * empty string would also be treated as "no change" by the backend's
+ * metadata.UpstreamCreds.Update — but the UI MUST never send an empty
+ * string for these fields, because any future backend change might
+ * reinterpret `""` as "wipe". The safe client contract is: omit the
+ * key entirely when the operator leaves the field blank in edit mode.
+ */
+export interface UpstreamCredPatch {
+  host?: string;
+  kind?: UpstreamCredKind;
+  username?: string;
+  password?: string;
+  token?: string;
 }
 
 // -- Scan --

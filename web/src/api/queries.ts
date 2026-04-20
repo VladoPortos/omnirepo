@@ -33,6 +33,8 @@ import type {
   PullExternalRequest,
   PullExternalResponse,
   UpstreamCred,
+  UpstreamCredCreate,
+  UpstreamCredPatch,
   Repo,
   RepoCreate,
   RepoPatch,
@@ -1099,5 +1101,88 @@ export function useUpstreamCreds(projectName: string) {
     // treat that as "no creds" rather than a hard error so the picker
     // just degrades gracefully.
     retry: false,
+  });
+}
+
+/**
+ * useCreateUpstreamCred — POST /projects/{name}/upstream-creds (Phase 8
+ * Plan 05 / MIRROR-22). On success invalidates the list cache so both
+ * the CloneImageDialog and MirrorConfigSection cred pickers, plus the
+ * new UpstreamCredsTab table, all refetch.
+ *
+ * Response is an UpstreamCred (secret-free projection — password/token
+ * never round-trip). Error is ApiError from api.post, which the caller
+ * surfaces via ErrorEnvelopeRenderer.
+ */
+export function useCreateUpstreamCred(projectName: string) {
+  const qc = useQueryClient();
+  return useMutation<UpstreamCred, Error, UpstreamCredCreate>({
+    mutationFn: (body) =>
+      api.post<UpstreamCred>(
+        `/projects/${enc(projectName)}/upstream-creds/`,
+        body,
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({
+        queryKey: ['projects', projectName, 'upstream-creds'],
+      });
+    },
+  });
+}
+
+/**
+ * usePatchUpstreamCred — PATCH /projects/{name}/upstream-creds/{id}.
+ *
+ * Blank-preserves-existing contract (T-08-05-03): the caller MUST omit
+ * `password` / `token` keys from the body when the operator leaves the
+ * edit-form fields blank. The backend's handleUpdateUpstreamCred reads
+ * the cred request struct with `omitempty` and treats unset strings as
+ * "keep existing" — but the safe client idiom is to strip the key
+ * entirely so no future backend change can reinterpret `""`.
+ */
+export function usePatchUpstreamCred(projectName: string, credId: number) {
+  const qc = useQueryClient();
+  return useMutation<UpstreamCred, Error, UpstreamCredPatch>({
+    mutationFn: (body) =>
+      api.patch<UpstreamCred>(
+        `/projects/${enc(projectName)}/upstream-creds/${credId}`,
+        body,
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({
+        queryKey: ['projects', projectName, 'upstream-creds'],
+      });
+    },
+  });
+}
+
+/**
+ * useDeleteUpstreamCred — DELETE /projects/{name}/upstream-creds/{id}
+ * returns 204. Mirror repos that reference the deleted cred have their
+ * `mirror_cred_id` set to NULL by the schema's `ON DELETE SET NULL`
+ * (plan 08-01); the next sync on those repos fails with a
+ * `credential missing` envelope rather than silently continuing.
+ * The UI surfaces this consequence in a confirmation dialog before the
+ * mutation fires (UpstreamCredsTab delete handler).
+ */
+export function useDeleteUpstreamCred(projectName: string, credId: number) {
+  const qc = useQueryClient();
+  return useMutation<void, Error, void>({
+    mutationFn: () =>
+      api.del<void>(
+        `/projects/${enc(projectName)}/upstream-creds/${credId}`,
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({
+        queryKey: ['projects', projectName, 'upstream-creds'],
+      });
+      // A deleted cred may have been referenced by a mirror repo — the
+      // backend sets mirror_cred_id = NULL on those rows (ON DELETE
+      // SET NULL). Invalidate the project repo list so the Mirror
+      // config card in RepoSettingsTab reflects the new null state.
+      qc.invalidateQueries({
+        queryKey: ['projects', projectName, 'repos'],
+      });
+    },
   });
 }

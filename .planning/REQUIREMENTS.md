@@ -76,12 +76,12 @@ prefixes (AUTH, REPO, etc.).
 - [x] **MIRROR-13**: User can pull an external Docker image into an OmniRepo docker repo via a UI modal with live byte-level progress
 - [x] **MIRROR-14**: UI Docker clone modal renders three phases (form → progress → result) and surfaces failure via ErrorEnvelopeRenderer with retry
 - [x] **MIRROR-15**: UI polls the per-repo sync-job endpoint every 500 ms while a job is active and stops polling on done/failed
-- [ ] **MIRROR-16**: User can create a mirror APT/RPM/PyPI/Helm repo from the UI CreateRepoDialog (upstream URL, filter widget, cred picker, scan-on-sync toggle)
-- [ ] **MIRROR-17**: UI shows protocol-specific filter widgets (APT Suites/Components/Arches/Names/Globs; RPM Names; PyPI Names; Helm Names/Globs) using the PascalCase wire format that matches Go's default JSON encoding of SyncFilter
-- [ ] **MIRROR-18**: User can click "Sync now" on a mirror repo page to trigger POST /sync with live progress bar
-- [ ] **MIRROR-19**: UI disables the Sync now button while a sync is in-flight and surfaces 409 errors inline via ErrorEnvelopeRenderer
-- [ ] **MIRROR-20**: User can edit filter, cred, and scan_on_sync on a mirror repo from RepoSettingsTab (URL stays read-only with CopyInline)
-- [ ] **MIRROR-21**: UI never sends is_mirror or mirror_upstream_url in PATCH bodies (structural enforcement + backend guard)
+- [x] **MIRROR-16**: User can create a mirror APT/RPM/PyPI/Helm repo from the UI CreateRepoDialog (upstream URL, filter widget, cred picker, scan-on-sync toggle)
+- [x] **MIRROR-17**: UI shows protocol-specific filter widgets (APT Suites/Components/Arches/Names/Globs; RPM Names; PyPI Names; Helm Names/Globs) using the PascalCase wire format that matches Go's default JSON encoding of SyncFilter
+- [x] **MIRROR-18**: User can click "Sync now" on a mirror repo page to trigger POST /sync with live progress bar
+- [x] **MIRROR-19**: UI disables the Sync now button while a sync is in-flight and surfaces 409 errors inline via ErrorEnvelopeRenderer
+- [x] **MIRROR-20**: User can edit filter, cred, and scan_on_sync on a mirror repo from RepoSettingsTab (URL stays read-only with CopyInline)
+- [x] **MIRROR-21**: UI never sends is_mirror or mirror_upstream_url in PATCH bodies (structural enforcement + backend guard)
 - [ ] **MIRROR-22**: User can create, edit, and delete upstream credentials from a ProjectSettingsPage Upstream credentials tab
 - [ ] **MIRROR-23**: UI never displays passwords or tokens after submission; PATCH preserves existing secrets when fields are left blank
 - [ ] **MIRROR-24**: Deleting a credential referenced by a mirror repo triggers a confirmation dialog that warns the next sync will fail with "credential missing" envelope
@@ -248,12 +248,12 @@ phases 1–5.
 | MIRROR-13 | Phase 8 | Shipped (2026-04-20 · plan 08-03) |
 | MIRROR-14 | Phase 8 | Shipped (2026-04-20 · plan 08-03) |
 | MIRROR-15 | Phase 8 | Shipped (2026-04-20 · plan 08-03) |
-| MIRROR-16 | Phase 8 | In progress |
-| MIRROR-17 | Phase 8 | In progress |
-| MIRROR-18 | Phase 8 | In progress |
-| MIRROR-19 | Phase 8 | In progress |
-| MIRROR-20 | Phase 8 | In progress |
-| MIRROR-21 | Phase 8 | In progress |
+| MIRROR-16 | Phase 8 | ✅ Complete |
+| MIRROR-17 | Phase 8 | ✅ Complete |
+| MIRROR-18 | Phase 8 | ✅ Complete |
+| MIRROR-19 | Phase 8 | ✅ Complete |
+| MIRROR-20 | Phase 8 | ✅ Complete |
+| MIRROR-21 | Phase 8 | ✅ Complete |
 | MIRROR-22 | Phase 8 | In progress |
 | MIRROR-23 | Phase 8 | In progress |
 | MIRROR-24 | Phase 8 | In progress |

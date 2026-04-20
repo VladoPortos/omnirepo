@@ -44,3 +44,23 @@ in the Makefile for domains commonly used as stable upstream examples.
 
 - Discovered: 2026-04-20 during 08-02 self-check
 - Pre-existing source: commit caf0a4a (plan 08-01 Task 3)
+
+## Plan 08-04 UI-placeholder URLs (cosmetic, not fetched)
+
+Plan 08-04's `MirrorConfigSection.tsx:protocolPlaceholder` uses the same
+four upstream domains as `<input placeholder=...>` hints so the operator
+knows what kind of URL to paste:
+
+- `https://archive.ubuntu.com/ubuntu` (APT)
+- `https://mirror.centos.org/centos/9/BaseOS/x86_64/os/` (RPM)
+- `https://pypi.org/simple/` (PyPI)
+- `https://charts.bitnami.com/bitnami` (Helm)
+
+These strings are never fetched — they exist only as placeholder text for
+empty form fields. The `grep-cdn` check is pattern-based and can't tell
+the difference; the same fix paths listed above (allowlist known upstream
+hosts, or refactor to generic `https://example.upstream/`) resolve both
+08-01's test fixtures and 08-04's placeholders in one go.
+
+- Discovered: 2026-04-20 during 08-04 lint check
+- Source: commit 2e96abe (plan 08-04 Task 1)

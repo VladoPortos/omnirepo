@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: on 2026-04-17)
 status: executing
-stopped_at: Completed 08-03-PLAN.md — Docker clone-external modal (CloneImageDialog + useJobProgress + 15 vitest + 2 Playwright specs)
-last_updated: "2026-04-20T03:51:07.000Z"
+stopped_at: Completed 08-04-PLAN.md — Mirror flag UI (CreateRepoDialog + MirrorConfigSection + 4 FilterWidgets + SyncNowButton on 4 pages + RepoSettingsTab + 3 Playwright specs)
+last_updated: "2026-04-20T04:14:27Z"
 last_activity: 2026-04-20
 progress:
   total_phases: 3
   completed_phases: 2
   total_plans: 23
-  completed_plans: 20
-  percent: 87
+  completed_plans: 21
+  percent: 91
 ---
 
 # STATE: OmniRepo
@@ -27,10 +27,10 @@ progress:
 ## Current Position
 
 Phase: 8
-Plan: 03 (completed)
-Status: Ready to execute 08-04 (Mirror flag UI — CreateRepoDialog + 4 Sync Now buttons + RepoSettingsTab mirror card)
+Plan: 04 (completed)
+Status: Ready to execute 08-05 (Upstream credentials CRUD UI tab on ProjectSettingsPage)
 Last activity: 2026-04-20
-Stopped at: Completed 08-03-PLAN.md — Docker clone-external modal shipped (web/src/hooks/useJobProgress.ts with 500ms polling + per-repo sync-jobs endpoint; web/src/components/CloneImageDialog.tsx 3-state form→progress→result machine; DockerRepoPage stub Dialog deleted; 15 vitest tests + 2 Playwright specs; full suite 78/78 green; real wire surface corrected vs plan-sketch deltas for pull-external body and jobs endpoint)
+Stopped at: Completed 08-04-PLAN.md — Mirror flag UI shipped end-to-end. Backend prereq: 5 mirror fields now echoed on repoResponse (GET /projects/{p}/repos/{t}/{r}) and repoListItem. Frontend: 5 new shared components (MirrorConfigSection + 4 FilterWidgets) emitting PascalCase SyncFilter JSON matching the Go struct defaults; CreateRepoDialog extracted from inline ProjectDetailPage and extended with conditional MirrorConfigSection; SyncNowButton wired into Apt/Rpm/Pypi/Helm repo pages with repo.is_mirror gate; RepoSettingsTab at /projects/:name/:type/:repo/settings with Mirror config card (URL readonly, filter/cred/scan editable). 3 new Playwright specs (8 tests total) parse via --list; full-run deferred due to pre-existing stale-server bug (same as plan 08-03). Production bundle contains "Mirror of upstream", "Sync now", "Mirror config", "Upstream URL" strings.
 
 ## Phase Map
 

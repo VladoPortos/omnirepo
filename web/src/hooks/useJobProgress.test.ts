@@ -46,6 +46,7 @@ function job(overrides: Partial<JobDetail>): JobDetail {
     progress_bytes: 0,
     total_bytes: 0,
     current_step: '',
+    files_synced: 0,
     created_at: '2026-04-20T00:00:00Z',
     updated_at: '2026-04-20T00:00:00Z',
     ...overrides,
@@ -161,6 +162,38 @@ describe('useJobProgress — defensive coercion (T-08-03-04)', () => {
       job({ current_step: undefined as unknown as string }),
     );
     expect(p.currentStep).toBe('');
+  });
+});
+
+describe('useJobProgress — files_synced (quick task 260420-d03)', () => {
+  it('plain integer passes through unchanged', () => {
+    const p = computeJobProgress(
+      job({
+        status: 'done',
+        progress_bytes: 1_048_576,
+        total_bytes: 1_048_576,
+        files_synced: 42,
+      }),
+    );
+    expect(p.filesSynced).toBe(42);
+  });
+
+  it('zero is preserved (running jobs / back-compat with pre-025 rows)', () => {
+    const p = computeJobProgress(
+      job({ status: 'running', progress_bytes: 100, total_bytes: 200 }),
+    );
+    expect(p.filesSynced).toBe(0);
+  });
+
+  it('NaN files_synced coerces to 0 (defensive wire-shape guard)', () => {
+    const p = computeJobProgress(
+      job({ files_synced: NaN as unknown as number }),
+    );
+    expect(p.filesSynced).toBe(0);
+  });
+
+  it('idleJobProgress exposes filesSynced=0 so pill cold-start is deterministic', () => {
+    expect(idleJobProgress.filesSynced).toBe(0);
   });
 });
 

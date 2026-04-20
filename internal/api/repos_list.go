@@ -147,8 +147,14 @@ type syncJobItem struct {
 	ProgressBytes int64  `json:"progress_bytes"`
 	TotalBytes    int64  `json:"total_bytes"`
 	CurrentStep   string `json:"current_step"`
-	CreatedAt     string `json:"created_at"`
-	UpdatedAt     string `json:"updated_at"`
+	// Quick task 260420-d03: files newly added during sync. Written once
+	// at sync completion by each protocol handler via
+	// SyncJobsRepo.SetFilesSynced (NOT through the throttled progress
+	// path). 0 for running jobs; the UI pill renders the "N files" piece
+	// of "Sync complete · N files · X MB" when this is > 0.
+	FilesSynced int64  `json:"files_synced"`
+	CreatedAt   string `json:"created_at"`
+	UpdatedAt   string `json:"updated_at"`
 }
 
 func (d Deps) handleListSyncJobs(w http.ResponseWriter, r *http.Request) {
@@ -188,6 +194,7 @@ func (d Deps) handleListSyncJobs(w http.ResponseWriter, r *http.Request) {
 		       COALESCE(progress_bytes, 0),
 		       COALESCE(total_bytes, 0),
 		       COALESCE(current_step, ''),
+		       COALESCE(files_synced, 0),
 		       created_at, updated_at
 		FROM sync_jobs
 		WHERE repo_id=?
@@ -206,6 +213,7 @@ func (d Deps) handleListSyncJobs(w http.ResponseWriter, r *http.Request) {
 		if err := rows.Scan(&item.ID, &item.Kind, &item.Status, &item.Attempts,
 			&item.LastError, &item.PayloadJSON, &item.Log,
 			&item.ProgressBytes, &item.TotalBytes, &item.CurrentStep,
+			&item.FilesSynced,
 			&item.CreatedAt, &item.UpdatedAt); err != nil {
 			writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 			return
@@ -264,12 +272,14 @@ func (d Deps) handleGetSyncJob(w http.ResponseWriter, r *http.Request) {
 		       COALESCE(progress_bytes, 0),
 		       COALESCE(total_bytes, 0),
 		       COALESCE(current_step, ''),
+		       COALESCE(files_synced, 0),
 		       created_at, updated_at
 		FROM sync_jobs
 		WHERE id=? AND repo_id=?
 	`, jobID, rr.ID).Scan(&item.ID, &item.Kind, &item.Status, &item.Attempts,
 		&item.LastError, &item.PayloadJSON, &item.Log,
 		&item.ProgressBytes, &item.TotalBytes, &item.CurrentStep,
+		&item.FilesSynced,
 		&item.CreatedAt, &item.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "sync job not found")

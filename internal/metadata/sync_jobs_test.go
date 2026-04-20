@@ -207,6 +207,68 @@ func TestSyncJobsRepo_SetProgress_ReadsBack(t *testing.T) {
 	}
 }
 
+// TestSyncJobsRepo_SetFilesSynced plants a pending job, writes a file
+// count via SetFilesSynced, and reads it back to assert migration 025's
+// new column round-trips. Covers the D-03 closure path for the "Sync
+// complete · N files · X MB" pill shape.
+func TestSyncJobsRepo_SetFilesSynced(t *testing.T) {
+	t.Parallel()
+	db := sqlitetest.New(t)
+	ctx := context.Background()
+	jobs := metadata.NewSyncJobsRepo(db)
+	pid := seedProject(t, db, "sync-files")
+	repos := metadata.NewReposRepo(db)
+	repoID, err := repos.Create(ctx, pid, "pypi", "p1", "", nil, nil, nil)
+	if err != nil {
+		t.Fatalf("seed repo: %v", err)
+	}
+
+	var jobID int64
+	if err := db.WriteTx(ctx, func(tx *sql.Tx) error {
+		id, err := jobs.Enqueue(ctx, tx, "pypi_sync", pid, repoID, "{}")
+		jobID = id
+		return err
+	}); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+
+	// Default value for a fresh row is 0 (migration 025 DEFAULT 0).
+	var got int64
+	if err := db.Reader.QueryRowContext(ctx,
+		`SELECT files_synced FROM sync_jobs WHERE id=?`, jobID,
+	).Scan(&got); err != nil {
+		t.Fatalf("readback zero: %v", err)
+	}
+	if got != 0 {
+		t.Fatalf("initial files_synced=%d; want 0", got)
+	}
+
+	if err := jobs.SetFilesSynced(ctx, jobID, 42); err != nil {
+		t.Fatalf("set files_synced: %v", err)
+	}
+	if err := db.Reader.QueryRowContext(ctx,
+		`SELECT files_synced FROM sync_jobs WHERE id=?`, jobID,
+	).Scan(&got); err != nil {
+		t.Fatalf("readback: %v", err)
+	}
+	if got != 42 {
+		t.Fatalf("files_synced=%d; want 42", got)
+	}
+
+	// Second write overwrites (single-shot per job — last-writer wins).
+	if err := jobs.SetFilesSynced(ctx, jobID, 7); err != nil {
+		t.Fatalf("second set: %v", err)
+	}
+	if err := db.Reader.QueryRowContext(ctx,
+		`SELECT files_synced FROM sync_jobs WHERE id=?`, jobID,
+	).Scan(&got); err != nil {
+		t.Fatalf("readback 2: %v", err)
+	}
+	if got != 7 {
+		t.Fatalf("files_synced=%d; want 7 (overwrite)", got)
+	}
+}
+
 // TestSyncJobsRepo_CountRepoInflight plants a mix of pending/running/done
 // rows across two repos and asserts only pending+running for the target
 // repo are counted.

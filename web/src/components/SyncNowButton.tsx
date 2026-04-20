@@ -74,6 +74,11 @@ export function SyncNowButton({
     bytes: number;
     totalBytes: number;
     step: string;
+    // Quick task 260420-d03 (D-03 closure): files newly added during the
+    // sync. Written once by the backend at sync completion; snapshotting
+    // here freezes the value so the pill stays stable during its 8s life
+    // even if the underlying query re-fetches.
+    filesSynced: number;
   } | null>(null);
 
   const isPolling = progress.isPolling;
@@ -99,6 +104,7 @@ export function SyncNowButton({
         bytes: progress.progressBytes,
         totalBytes: progress.totalBytes,
         step: progress.currentStep,
+        filesSynced: progress.filesSynced,
       });
       setPillVisible(true);
     }
@@ -112,6 +118,7 @@ export function SyncNowButton({
     progress.progressBytes,
     progress.totalBytes,
     progress.currentStep,
+    progress.filesSynced,
   ]);
 
   // POLISH-01: Auto-dismiss the pill 8 seconds after it becomes visible
@@ -156,18 +163,31 @@ export function SyncNowButton({
     return step;
   })();
 
-  // POLISH-01 (D-03 scope-reduced, see SUMMARY §Scope reduction): build
-  // the pill label from the frozen snapshot. The leading ✓ is provided by
+  // POLISH-01 + quick task 260420-d03 (D-03 closure): build the pill
+  // label from the frozen snapshot. The leading ✓ is provided by
   // StatusBadge's `healthy` variant (CheckCircle2), so we must NOT prepend
   // a ✓ glyph to the label text — that would render two checkmarks.
   //
-  // D-03 literal shape is `✓ Sync complete · N files · X MB`. `useJobProgress`
-  // does not surface a file count today, so the pill ships
-  // `Sync complete · <X.X MB>` when bytes are known and falls back to the
-  // step string for Helm (D-04) whose `total_bytes` is 0 by design.
+  // D-03 literal shape: `✓ Sync complete · N files · X MB`. Now that the
+  // backend surfaces files_synced at sync completion (migration 025 +
+  // SyncJobsRepo.SetFilesSynced), the pill renders the full shape when
+  // both bytes and files are known.
+  // Fallback ladder:
+  //   1. totalBytes > 0 && filesSynced > 0 → `Sync complete · N file(s) · X MB`
+  //      (the full D-03 shape; singular "file" at N=1, plural "files" otherwise)
+  //   2. totalBytes > 0                    → `Sync complete · X MB`
+  //      (e.g. RPM/APT/PyPI where the sync persisted 0 newly-added files —
+  //      every package was already present — but bytes were scanned)
+  //   3. step present (Helm, total_bytes=0) → `Sync complete · <step>`
+  //      (preserves 09-05's Helm fallback; e.g. "chart 5 of 5")
+  //   4. otherwise                         → `Sync complete`
   const pillContent = (() => {
     if (!pillSnapshot) return 'Sync complete';
-    const { bytes, totalBytes, step } = pillSnapshot;
+    const { bytes, totalBytes, step, filesSynced } = pillSnapshot;
+    if (totalBytes > 0 && filesSynced > 0) {
+      const noun = filesSynced === 1 ? 'file' : 'files';
+      return `Sync complete · ${filesSynced} ${noun} · ${formatBytes(bytes)}`;
+    }
     if (totalBytes > 0) {
       return `Sync complete · ${formatBytes(bytes)}`;
     }

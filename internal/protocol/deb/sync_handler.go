@@ -264,6 +264,12 @@ func (h *SyncHandler) Handle(ctx context.Context, payload string, projectID, rep
 	// reading "pulling foo_1.0" forever on zero-entry syncs).
 	_ = progress.Set(ctx, "done", atomic.LoadInt64(&accumulatedDone), totalBytes)
 
+	// D-03 closure: persist per-job file count once so the UI pill can
+	// render "Sync complete · N files · X MB". wg.Wait() synced all goroutines.
+	if h.deps.SyncJobs != nil {
+		_ = h.deps.SyncJobs.SetFilesSynced(ctx, jobID, filesAdded)
+	}
+
 	// end-of-batch kick: single regen trigger after the whole sync batch.
 	if h.deps.Coalescer != nil {
 		h.deps.Coalescer.Get(repoID).Kick()

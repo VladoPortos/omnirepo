@@ -34,6 +34,12 @@ export interface JobProgress {
   progressBytes: number;
   totalBytes: number;
   currentStep: string;
+  /**
+   * Quick task 260420-d03 (D-03 closure): files newly added during the
+   * sync. 0 for running jobs; the success pill renders
+   * "Sync complete · N files · X MB" when this is > 0 and totalBytes > 0.
+   */
+  filesSynced: number;
   percent: number | null;
   error: ApiErrorEnvelope | null;
   isPolling: boolean;
@@ -49,6 +55,7 @@ export const idleJobProgress: JobProgress = {
   progressBytes: 0,
   totalBytes: 0,
   currentStep: '',
+  filesSynced: 0,
   percent: null,
   error: null,
   isPolling: false,
@@ -69,6 +76,7 @@ export function computeJobProgress(detail: JobDetail | undefined): JobProgress {
   const progressBytes = Number(detail.progress_bytes) || 0;
   const totalBytes = Number(detail.total_bytes) || 0;
   const currentStep = String(detail.current_step ?? '');
+  const filesSynced = Number(detail.files_synced) || 0;
   const percent =
     totalBytes > 0 ? Math.round((progressBytes / totalBytes) * 100) : null;
   const status = detail.status;
@@ -84,6 +92,7 @@ export function computeJobProgress(detail: JobDetail | undefined): JobProgress {
     progressBytes,
     totalBytes,
     currentStep,
+    filesSynced,
     percent,
     error,
     isPolling: status === 'pending' || status === 'running',

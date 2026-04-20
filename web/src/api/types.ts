@@ -403,6 +403,14 @@ export interface JobDetail {
   progress_bytes: number;
   total_bytes: number;
   current_step: string;
+  /**
+   * Quick task 260420-d03: count of files newly added during the sync.
+   * Written once at sync completion by each protocol handler (not via the
+   * throttled progress path) so it's 0 for running jobs. The success pill
+   * uses this to render "Sync complete · N files · X MB" (D-03 literal
+   * shape). Backend COALESCEs missing rows to 0.
+   */
+  files_synced: number;
   created_at: string;
   updated_at: string;
 }

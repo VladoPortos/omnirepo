@@ -95,6 +95,9 @@ function buildProgression(doneBody: Record<string, unknown>): Array<Record<strin
       progress_bytes: 0,
       total_bytes: Number(doneBody.total_bytes) || 0,
       current_step: 'starting',
+      // Running jobs always serialise files_synced as 0 (quick task
+      // 260420-d03). The full count lands in the terminal tick.
+      files_synced: 0,
       created_at: now,
       updated_at: now,
     },
@@ -170,6 +173,9 @@ test.describe('Sync complete pill (Phase 9 / plan 09-05 / POLISH-01)', () => {
       progress_bytes: 1_048_576,
       total_bytes: 1_048_576,
       current_step: 'completed',
+      // Quick task 260420-d03: full D-03 literal shape now that backend
+      // surfaces files_synced at completion.
+      files_synced: 42,
     });
 
     await uiLoginAdmin(page);
@@ -179,10 +185,11 @@ test.describe('Sync complete pill (Phase 9 / plan 09-05 / POLISH-01)', () => {
     await expect(btn).toBeVisible();
     await btn.click();
 
-    // A) Pill renders after the job flips to done.
+    // A) Pill renders after the job flips to done, with the full D-03
+    //    literal shape "Sync complete · N files · X MB".
     const pill = page.getByTestId('sync-complete-pill');
     await expect(pill).toBeVisible({ timeout: 3000 });
-    await expect(pill).toContainText('Sync complete');
+    await expect(pill).toContainText('Sync complete · 42 files · 1.0 MB');
 
     // XOR invariant: progress line must NOT be visible while the pill is.
     await expect(page.getByTestId('sync-progress-line')).toHaveCount(0);
@@ -244,6 +251,67 @@ test.describe('Sync complete pill (Phase 9 / plan 09-05 / POLISH-01)', () => {
     await expect(page.getByTestId('sync-complete-pill')).toHaveCount(0);
     // Progress block comes back for the new run.
     await expect(page.getByTestId('sync-progress-line')).toBeVisible({ timeout: 2000 });
+  });
+
+  test('F: pluralization — files_synced=1 renders singular "1 file" (quick task 260420-d03)', async ({
+    page,
+    request,
+  }) => {
+    const { project, repo } = await seedAptMirrorRepo(
+      request,
+      `pill-singular-${Date.now()}`,
+      'focal',
+    );
+    await installMocks(page, project, repo, {
+      status: 'done',
+      progress_bytes: 524_288,
+      total_bytes: 524_288,
+      current_step: 'completed',
+      files_synced: 1,
+    });
+
+    await uiLoginAdmin(page);
+    await page.goto(`/projects/${project}/deb/${repo}`);
+
+    await page.getByRole('button', { name: 'Sync now', exact: true }).click();
+
+    const pill = page.getByTestId('sync-complete-pill');
+    await expect(pill).toBeVisible({ timeout: 3000 });
+    // Singular noun at N=1 — must NOT read "1 files".
+    await expect(pill).toContainText('Sync complete · 1 file · 512.0 KB');
+    await expect(pill).not.toContainText('1 files');
+  });
+
+  test('G: files_synced=0 falls back to bytes-only shape (sync scanned but added nothing)', async ({
+    page,
+    request,
+  }) => {
+    const { project, repo } = await seedAptMirrorRepo(
+      request,
+      `pill-zero-files-${Date.now()}`,
+      'focal',
+    );
+    // Scenario: every upstream package was already present; totalBytes
+    // reflects what was scanned but no new files landed. Pill drops the
+    // "N files" piece rather than rendering "0 files".
+    await installMocks(page, project, repo, {
+      status: 'done',
+      progress_bytes: 1_048_576,
+      total_bytes: 1_048_576,
+      current_step: 'completed',
+      files_synced: 0,
+    });
+
+    await uiLoginAdmin(page);
+    await page.goto(`/projects/${project}/deb/${repo}`);
+
+    await page.getByRole('button', { name: 'Sync now', exact: true }).click();
+
+    const pill = page.getByTestId('sync-complete-pill');
+    await expect(pill).toBeVisible({ timeout: 3000 });
+    await expect(pill).toContainText('Sync complete · 1.0 MB');
+    await expect(pill).not.toContainText('0 files');
+    await expect(pill).not.toContainText('0 file');
   });
 
   test('E: Helm fallback — total_bytes==0, currentStep "chart 5 of 5" surfaced verbatim', async ({

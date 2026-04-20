@@ -799,8 +799,11 @@ type SyncJob struct {
 	CreatedAt *time.Time `json:"created_at,omitempty"`
 
 	// CurrentStep Human-readable current step, e.g. 'layer 3 of 7' (OCI), 'pulling redis_7.2.0' (APT), or 'chart 2 of 12 · redis-17.0.0.tgz' (Helm). Empty when not yet started.
-	CurrentStep *string    `json:"current_step,omitempty"`
-	Error       *string    `json:"error,omitempty"`
+	CurrentStep *string `json:"current_step,omitempty"`
+	Error       *string `json:"error,omitempty"`
+
+	// FilesSynced Count of files newly added during sync. Written once at sync completion by each protocol handler (not the throttled progress path). 0 for running jobs and legacy rows.
+	FilesSynced *int64     `json:"files_synced,omitempty"`
 	FinishedAt  *time.Time `json:"finished_at,omitempty"`
 	Id          *int64     `json:"id,omitempty"`
 	Kind        *string    `json:"kind,omitempty"`

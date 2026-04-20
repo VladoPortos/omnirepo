@@ -155,3 +155,74 @@ func TestListSyncJobs_IncludesProgressFields(t *testing.T) {
 		t.Errorf("list[0].current_step=%q; want 'chart 2 of 12 · redis-17.0.0.tgz'", got)
 	}
 }
+
+// TestGetSyncJob_IncludesFilesSynced — quick task 260420-d03 (D-03 closure).
+//
+// REST-layer regression per the filter.Suites pattern (D-29): the
+// files_synced column is written by SyncJobsRepo.SetFilesSynced and must
+// round-trip through both sync-jobs GET and list endpoints so the UI
+// pill can render "Sync complete · N files · X MB". Unit tests that
+// call the repo directly would miss a wire-shape drift here — this test
+// hits the real REST surface.
+func TestGetSyncJob_IncludesFilesSynced(t *testing.T) {
+	s := newTestServer(t)
+	cookie := bootProjectAndRepo(t, s, "dfs1", "pypi", "r1")
+	repoID := lookupRepoID(t, s.db, "dfs1", "pypi", "r1")
+
+	jobID := seedSyncJob(t, s.db, repoID, "pypi_sync")
+	jobsRepo := metadata.NewSyncJobsRepo(s.db)
+	if err := jobsRepo.SetFilesSynced(context.Background(), jobID, 7); err != nil {
+		t.Fatalf("SetFilesSynced: %v", err)
+	}
+
+	// By-id endpoint.
+	path := "/api/v1/projects/dfs1/repos/pypi/r1/sync-jobs/" + strconv.FormatInt(jobID, 10)
+	resp, body := s.do(t, "GET", path, cookie, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET sync-job: code=%d body=%+v", resp.StatusCode, body)
+	}
+	if _, ok := body["files_synced"]; !ok {
+		t.Errorf("response missing files_synced key; got %+v", body)
+	}
+	if got, ok := body["files_synced"].(float64); !ok || int64(got) != 7 {
+		t.Errorf("files_synced=%v (%T); want 7", body["files_synced"], body["files_synced"])
+	}
+
+	// List endpoint — UI timelines depend on the same shape on both.
+	resp, body = s.do(t, "GET", "/api/v1/projects/dfs1/repos/pypi/r1/sync-jobs", cookie, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("list code=%d body=%+v", resp.StatusCode, body)
+	}
+	items, ok := body["items"].([]any)
+	if !ok || len(items) < 1 {
+		t.Fatalf("items=%v; want >=1 entry", body["items"])
+	}
+	first := items[0].(map[string]any)
+	if got, ok := first["files_synced"].(float64); !ok || int64(got) != 7 {
+		t.Errorf("list[0].files_synced=%v; want 7", first["files_synced"])
+	}
+}
+
+// TestGetSyncJob_FilesSyncedDefaultZero asserts a freshly-enqueued job
+// (no SetFilesSynced yet) serializes files_synced as 0 rather than
+// omitting the key — the UI relies on a deterministic cold-start frame
+// to decide whether to render the "N files" piece of the pill.
+func TestGetSyncJob_FilesSyncedDefaultZero(t *testing.T) {
+	s := newTestServer(t)
+	cookie := bootProjectAndRepo(t, s, "dfs2", "helm", "r1")
+	repoID := lookupRepoID(t, s.db, "dfs2", "helm", "r1")
+
+	jobID := seedSyncJob(t, s.db, repoID, "helm_sync")
+
+	path := "/api/v1/projects/dfs2/repos/helm/r1/sync-jobs/" + strconv.FormatInt(jobID, 10)
+	resp, body := s.do(t, "GET", path, cookie, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET sync-job: code=%d body=%+v", resp.StatusCode, body)
+	}
+	if _, ok := body["files_synced"]; !ok {
+		t.Errorf("response missing files_synced key; got %+v", body)
+	}
+	if got, ok := body["files_synced"].(float64); !ok || got != 0 {
+		t.Errorf("files_synced=%v; want 0", body["files_synced"])
+	}
+}

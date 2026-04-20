@@ -164,6 +164,30 @@ func (r *SyncJobsRepo) SetProgress(ctx context.Context, jobID int64, step string
 	return nil
 }
 
+// SetFilesSynced persists files_synced for a job. Called once at the end
+// of a successful sync by each protocol handler (pypi, helm, rpm, deb)
+// right after the terminal progress.Set(...,"done",...) — one write per
+// job, no throttling needed. Kept out of SyncProgressRepo/ProgressWriter
+// (which handle the hot-loop byte-progress path) so adding this field
+// doesn't force every SyncProgressRepo test fake to widen.
+//
+// Semantics: files is the count of newly-stored files for this sync
+// (matches each handler's existing filesAdded counter — cached/skipped
+// files are NOT counted). This is what the UI's success pill renders
+// as "Sync complete · N files · X MB" (D-03 closure).
+func (r *SyncJobsRepo) SetFilesSynced(ctx context.Context, jobID, files int64) error {
+	_, err := r.db.Writer.ExecContext(ctx, `
+		UPDATE sync_jobs
+		SET files_synced = ?,
+		    updated_at   = CURRENT_TIMESTAMP
+		WHERE id = ?
+	`, files, jobID)
+	if err != nil {
+		return fmt.Errorf("sync_jobs: set files_synced %d: %w", jobID, err)
+	}
+	return nil
+}
+
 // CountRepoInflight reports how many sync_jobs rows for repoID are
 // currently pending or running. Used by the mirror-aware /sync endpoint
 // (Phase 8 Plan 01, D-07) to enforce one-in-flight-sync-per-repo with

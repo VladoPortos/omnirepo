@@ -259,6 +259,12 @@ func (h *SyncHandler) Handle(ctx context.Context, payload string, projectID, rep
 	// Terminal emit so Flush shows completion; progress_bytes = totalCharts.
 	_ = progress.Set(ctx, "done", int64(totalCharts), 0)
 
+	// D-03 closure: persist per-job file count once so the UI pill can
+	// render "Sync complete · N files". wg.Wait() synced all goroutines.
+	if h.deps.SyncJobs != nil {
+		_ = h.deps.SyncJobs.SetFilesSynced(ctx, jobID, filesAdded)
+	}
+
 	// end-of-batch kick: single regen trigger after the whole sync batch.
 	if h.deps.Coalescer != nil {
 		h.deps.Coalescer.Get(repoID).Kick()

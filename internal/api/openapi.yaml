@@ -353,6 +353,12 @@ components:
         current_step:
           type: string
           description: "Human-readable current step, e.g. 'layer 3 of 7' (OCI), 'pulling redis_7.2.0' (APT), or 'chart 2 of 12 · redis-17.0.0.tgz' (Helm). Empty when not yet started."
+        # Quick task 260420-d03-sync-pill-file-count — D-03 closure.
+        files_synced:
+          type: integer
+          format: int64
+          minimum: 0
+          description: "Count of files newly added during sync. Written once at sync completion by each protocol handler (not the throttled progress path). 0 for running jobs and legacy rows."
 
     # -- Scan --
     Scan:

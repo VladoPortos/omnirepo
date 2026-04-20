@@ -249,6 +249,73 @@ to be empty; object deletes are synchronous (no trash path).
 
 ---
 
+## Authentication for protocol endpoints
+
+The browser session cookie authenticates the **web UI** and the
+**`/api/v1/...` REST API** only. Every other surface — the native
+package-manager endpoints exposed at `/{project}/pypi/{repo}/…`,
+`/{project}/helm/{repo}/…`, `/{project}/rpm/{repo}/…`,
+`/{project}/deb/{repo}/dists/…`, `/{project}/raw/{repo}/…`, plus the
+OCI registry at `/v2/` and S3 at `/s3/…` — uses **HTTP Basic auth or
+an API key**. Session cookies are ignored there, because `pip`,
+`helm`, `docker`, `apt`, `rpm`/`dnf`, and AWS SDKs have no way to send
+one.
+
+If `curl https://<host>/platform/pypi/<repo>/simple/` returns 401 even
+after you've logged into the web UI, that's expected. Send credentials
+in `-u` / `Authorization: Basic …` instead.
+
+### Three credential shapes
+
+| Shape | Basic-auth form | Use case |
+|---|---|---|
+| User password | `-u <login>:<password>` | Interactive, not recommended for automation |
+| User API key | `-u <any-login>:omr_u_…` (or `-u __token__:omr_u_…`) | CI, per-user tokens. The login field is ignored — the `omr_` prefix is how the middleware routes |
+| Project API key | `-u project:<projname>:omr_p_…` | Per-project tokens (Go's `BasicAuth` splits on the first `:`, so the projname lands in the password field alongside the key) |
+
+Examples:
+
+```bash
+# PyPI install with a user API key (pip convention: login = __token__)
+pip install --index-url \
+  https://__token__:omr_u_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@<host>:8443/platform/pypi/pkg/simple/ mypackage
+
+# Helm repo add with password Basic auth
+helm repo add omnirepo https://<host>:8443/platform/helm/charts \
+  --username alice --password '<password>'
+
+# APT InRelease fetch with a project-scoped API key
+echo "deb https://project:platform:omr_p_xxxxxxxxxxxxxxxx@<host>:8443/platform/deb/stable bookworm main" | \
+  sudo tee /etc/apt/sources.list.d/omnirepo.list
+```
+
+Mint API keys from **Profile → API Keys** (user-owned) or **Project →
+Settings → API Keys** (project-owned). Each key's plaintext is shown
+exactly once; OmniRepo stores a SHA-256 hash with a prefix index.
+
+### Anonymous reads (`public_read=true`)
+
+Repos created with the `public_read` flag skip auth for GET/HEAD —
+native clients can pull without credentials, e.g. `pip install` against
+a public mirror. Writes always require an authenticated actor.
+Middleware chain: `AnonymousReadOK → skipIfActor(BasicOrAPIKey)`.
+
+### Two exceptions
+
+- **OCI (`/v2/`)**: Docker clients follow the Bearer-token dance.
+  `/v2/` returns `401 WWW-Authenticate: Bearer realm="…/v2/token"`;
+  the client exchanges Basic creds (any of the three shapes above) at
+  `/v2/token` for a 60-minute HS256 JWT, then uses the Bearer token
+  for subsequent manifest/blob requests. `docker login` handles this
+  transparently.
+- **S3 (`/s3/`)**: AWS SigV4 only — no Basic auth. Mint a
+  project-scoped S3 access key + secret via **Project → S3 Keys** (or
+  `POST /api/v1/projects/<name>/s3-access-keys`) and pass them through
+  the standard `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`
+  environment variables. The secret is shown exactly once.
+
+---
+
 ## Common operations
 
 | Task | How |

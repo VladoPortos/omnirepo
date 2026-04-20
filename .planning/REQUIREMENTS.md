@@ -73,9 +73,9 @@ prefixes (AUTH, REPO, etc.).
 - [x] **MIRROR-10**: System emits byte-level progress for OCI pull-external (layer N of M · done / total bytes)
 - [x] **MIRROR-11**: System emits byte-level progress for APT / RPM / PyPI sync (step = "pulling {artifact}" · done / total bytes)
 - [x] **MIRROR-12**: System emits step-based progress for Helm sync (chart N of M · total_bytes = 0 because index.yaml lacks sizes)
-- [ ] **MIRROR-13**: User can pull an external Docker image into an OmniRepo docker repo via a UI modal with live byte-level progress
-- [ ] **MIRROR-14**: UI Docker clone modal renders three phases (form → progress → result) and surfaces failure via ErrorEnvelopeRenderer with retry
-- [ ] **MIRROR-15**: UI polls GET /jobs/{id} every 500 ms while a job is active and stops polling on done/failed
+- [x] **MIRROR-13**: User can pull an external Docker image into an OmniRepo docker repo via a UI modal with live byte-level progress
+- [x] **MIRROR-14**: UI Docker clone modal renders three phases (form → progress → result) and surfaces failure via ErrorEnvelopeRenderer with retry
+- [x] **MIRROR-15**: UI polls the per-repo sync-job endpoint every 500 ms while a job is active and stops polling on done/failed
 - [ ] **MIRROR-16**: User can create a mirror APT/RPM/PyPI/Helm repo from the UI CreateRepoDialog (upstream URL, filter widget, cred picker, scan-on-sync toggle)
 - [ ] **MIRROR-17**: UI shows protocol-specific filter widgets (APT Suites/Components/Arches/Names/Globs; RPM Names; PyPI Names; Helm Names/Globs) using the PascalCase wire format that matches Go's default JSON encoding of SyncFilter
 - [ ] **MIRROR-18**: User can click "Sync now" on a mirror repo page to trigger POST /sync with live progress bar
@@ -245,9 +245,9 @@ phases 1–5.
 | MIRROR-10 | Phase 8 Plan 02 | Delivered |
 | MIRROR-11 | Phase 8 Plan 02 | Delivered |
 | MIRROR-12 | Phase 8 Plan 02 | Delivered |
-| MIRROR-13 | Phase 8 | In progress |
-| MIRROR-14 | Phase 8 | In progress |
-| MIRROR-15 | Phase 8 | In progress |
+| MIRROR-13 | Phase 8 | Shipped (2026-04-20 · plan 08-03) |
+| MIRROR-14 | Phase 8 | Shipped (2026-04-20 · plan 08-03) |
+| MIRROR-15 | Phase 8 | Shipped (2026-04-20 · plan 08-03) |
 | MIRROR-16 | Phase 8 | In progress |
 | MIRROR-17 | Phase 8 | In progress |
 | MIRROR-18 | Phase 8 | In progress |

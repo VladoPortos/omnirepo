@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: on 2026-04-17)
 status: executing
-stopped_at: Completed 08-02-PLAN.md — sync progress tracking across all protocols (ProgressWriter + CountingReader + 18 new tests)
-last_updated: "2026-04-20T03:26:38.000Z"
+stopped_at: Completed 08-03-PLAN.md — Docker clone-external modal (CloneImageDialog + useJobProgress + 15 vitest + 2 Playwright specs)
+last_updated: "2026-04-20T03:51:07.000Z"
 last_activity: 2026-04-20
 progress:
   total_phases: 3
   completed_phases: 2
   total_plans: 23
-  completed_plans: 19
-  percent: 83
+  completed_plans: 20
+  percent: 87
 ---
 
 # STATE: OmniRepo
@@ -27,10 +27,10 @@ progress:
 ## Current Position
 
 Phase: 8
-Plan: 02 (completed)
-Status: Ready to execute 08-03 (Docker clone modal with live progress bar)
+Plan: 03 (completed)
+Status: Ready to execute 08-04 (Mirror flag UI — CreateRepoDialog + 4 Sync Now buttons + RepoSettingsTab mirror card)
 Last activity: 2026-04-20
-Stopped at: Completed 08-02-PLAN.md — sync progress tracking shipped (jobs.ProgressWriter + shared jobs.CountingReader + SyncJob schema extended + 5 protocols instrumented + 18 new tests; all 35 packages green)
+Stopped at: Completed 08-03-PLAN.md — Docker clone-external modal shipped (web/src/hooks/useJobProgress.ts with 500ms polling + per-repo sync-jobs endpoint; web/src/components/CloneImageDialog.tsx 3-state form→progress→result machine; DockerRepoPage stub Dialog deleted; 15 vitest tests + 2 Playwright specs; full suite 78/78 green; real wire surface corrected vs plan-sketch deltas for pull-external body and jobs endpoint)
 
 ## Phase Map
 
@@ -162,6 +162,14 @@ scoped tokens, LDAP/OIDC.
 - **[08-02] RPM step format renders name-version-release.arch as a single stem, not name-version.** Plan grep-check assumed `pulling %s-%s.rpm` (name + version); actual implementation uses `fmt.Sprintf("pulling %s.rpm", stem)` where stem = filename sans extension. Produces `pulling foo-1.0.0-1.el9.x86_64.rpm` — a superset of `pulling foo-1.0.0.rpm`, operator-visible intent matches. Grep letter fails; operator-facing behavior matches.
 - **[08-02] 4 atomic commits instead of the single commit per spec M2.8.** Spec M2.8 asked for one atomic commit `feat(jobs): sync progress tracking across all protocols`. GSD executor protocol mandates per-task commits for rollback points. Shipped as 4 task-scoped commits (ProgressWriter+CountingReader, API schema + handler, OCI, all-other-protocols). Net diff identical; bisectability strictly better. Process deviation, not behavior deviation.
 - **[08-02] Pre-existing `make grep-cdn` failures carry forward from 08-01.** `make grep-cdn` fails on 5 URLs in handler test files (`mirror.centos.org`, `archive.ubuntu.com`, `pypi.org`, `charts.bitnami.com`) introduced by 08-01 commit caf0a4a. Plan 08-02 adds NO new external URLs (new tests use `httptest.NewServer` localhost URLs). Logged to `deferred-items.md` for a future plan to close.
+- **[08-03] useJobProgress signature grew to `(projectName, repoType, repoName, jobId)` because the backend exposes only the per-repo `GET /api/v1/projects/{name}/repos/{type}/{repo}/sync-jobs/{id}` endpoint.** Plan 08-03 sketched a non-existent `/api/v1/jobs/{id}` global endpoint. Reading `internal/api/repos_list.go` confirmed the real URL shape (the plan-02 SUMMARY already documented this). The hook's signature was grown to carry the triple; CloneImageDialog passes `(projectName, 'docker', repoName, jobId)`. Plan 08-04 `Sync Now` buttons on apt/rpm/pypi/helm pages can pass their protocol token identically.
+- **[08-03] PullExternalRequest body uses `src_image`/`dst_tag`, NOT plan's `src`/`retag_as`/`scan_override`.** Real Go wire struct in `internal/protocol/oci/pull_external.go` has five fields: `src_image` (required), `dst_tag`, `cred_id`, `src_username`, `src_password`. NO `scan_override` field exists server-side — the repo's stored `auto_scan` flag governs per-pull scanning. D-09 mentions a per-modal scan-override checkbox; server wiring is deferred (v1.1 UI honestly surfaces the auto_scan policy as read-only text rather than adding a no-op toggle).
+- **[08-03] Pure-helper extraction over @testing-library/react.** `computeJobProgress` + `pollingDecision` exported from `useJobProgress.ts` so unit tests hit the decision points (idle / polling cadence / percent edges / T-08-03-04 defensive coercion) without React rendering. 15 vitest tests pass; adding `@testing-library/react + jsdom` would have expanded the devDep footprint by ~4 packages plus the jsdom tree solely for a polling-cadence fake-timer assertion. Plan's 4 renderHook test names map 1:1 to pure-helper tests with the same assertion semantics.
+- **[08-03] vitest include pattern extended to colocated `src/**/*.test.ts`.** Phase 7/07-03 shipped vitest with `include: ['src/**/__tests__/**/*.test.ts']`; the hooks dir has no `__tests__/` subdir so a single test file forced the choice between creating one for one file vs. extending the include glob. Chose the extension. Existing snippets + dashboard-thresholds tests (under `__tests__/`) continue to pass unchanged.
+- **[08-03] CloneImageDialog failed-status wrapping via `localEnvelope`.** Backend's sync_jobs.last_error is a plain string (pre-envelope operator text). `computeJobProgress` wraps it into a transient-class `ApiErrorEnvelope` so `ErrorEnvelopeRenderer` sees a well-formed envelope and Phase 6's "every error renders through the envelope renderer" invariant is preserved without a round-trip backend migration. Envelope code is `job.failed`, message is the raw last_error.
+- **[08-03] Cancel-during-progress is label-honest.** v1.1 has no server-side job cancellation (design-spec §Risks — deferred to v1.2). Progress-phase footer reads `"Close (pull continues in background)"` with a tooltip documenting the behaviour, rather than exposing a `Cancel` button that close+no-ops.
+- **[08-03] DockerRepoPage Promote/Retag stub LEFT IN PLACE.** Plan's acceptance-grep asked for zero occurrences of `API not yet connected` in DockerRepoPage.tsx. The Pull External stub was removed in full (grep confirms the stub Dialog title `Pull External Image` is gone). The Promote/Retag stub on line ~473 (`Promote requested (API not yet connected).`) predates plan 08-03 and is a separate Dialog surfacing a separate unimplemented feature. Documented in SUMMARY so a future plan (v1.2 Promote/Retag wiring or an 08-06 Codex-rescue micro-fix) can close it.
+- **[08-03] Playwright full-run deferred; --list is the minimum bar.** Plan explicitly permits this deferral if the pre-existing webServer bug from STATE.md [07-03] resurfaces. The currently-running background server on localhost:8443 was started in a prior session with a different admin-password state; `reuseExistingServer: !process.env.CI` in playwright.config.ts prevents Playwright from restarting it. The freshly-built `bin/omnirepo` contains the new UI strings (`strings` check confirms `Clone external image`, `clone-src`); when the running server is restarted with a fresh DATA_ROOT the spec runs clean. `--list` parses 2 tests cleanly ("success flow: form → progress advances → result close" + "failure flow: failed job renders error envelope + retry resets to form").
 
 ### Decisions carried forward from v1.0
 

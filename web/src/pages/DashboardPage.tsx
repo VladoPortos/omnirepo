@@ -1115,8 +1115,40 @@ function DBHealthCard({
 }: DBHealthCardProps) {
   // D-06: SkeletonCard with rows=4 — this card has more detail rows
   // than the other composition cards (headline + 5 grid rows + footer).
-  if (isLoading || !data) {
+  // Only show skeleton during cold-load; error-without-data is handled
+  // in a separate branch so the title + Retry affordance surface.
+  if (isLoading) {
     return <SkeletonCard rows={4} />;
+  }
+
+  // Error-without-data: cold-load failed OR refetch failed with empty
+  // cache. Render a shell card exposing the title + inline
+  // ErrorEnvelopeRenderer + Retry (D-07 — mirrors TrivyDBCard error
+  // path). Without this branch, an initial GET 500 would crash on the
+  // `data.integrity` access below because `data` is undefined.
+  //
+  // Note: `isError && data` (error on refetch while previous payload is
+  // still cached) falls through to the normal render with stale data —
+  // TanStack Query behavior — and the inline error branch at
+  // `{isError ? … : …}` surfaces the retry affordance on top.
+  if (!data) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>SQLite Health</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <ErrorEnvelopeRenderer
+            mode="inline"
+            envelope={envelopeFromError(
+              error,
+              "We couldn't load DB health.",
+            )}
+            onRetry={onRetry}
+          />
+        </CardContent>
+      </Card>
+    );
   }
 
   const integrityStatus = data.integrity.status ?? '';

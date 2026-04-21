@@ -524,7 +524,13 @@ function S3KeysSection() {
               <Label>Project</Label>
               <Select value={selectedProject} onValueChange={(val) => setSelectedProject(val ?? '')}>
                 <SelectTrigger className="w-full">
-                  <SelectValue placeholder="Select project" />
+                  {/* F-12: explicitly render the project name, not the id.
+                      Radix Select's SelectValue surface-displays the raw
+                      value string when it can't resolve the SelectItem
+                      child text, which shows "4" instead of "walkthru2". */}
+                  <SelectValue placeholder="Select project">
+                    {projects.find((p) => String(p.id) === selectedProject)?.name ?? 'Select project'}
+                  </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   {projects.map((p) => (

@@ -152,14 +152,29 @@ func (r *UsersRepo) scanOne(ctx context.Context, where string, args ...any) (*Us
 
 // ListAll returns every live (non-soft-deleted) user ordered by login.
 func (r *UsersRepo) ListAll(ctx context.Context) ([]User, error) {
-	rows, err := r.db.Reader.QueryContext(ctx, `
-		SELECT id, login, email, avatar_seed, password_hash, is_super_admin,
+	return r.listOrdered(ctx, false)
+}
+
+// ListAllIncludingDeleted returns every user including soft-deleted rows,
+// ordered by login. Used by the admin "show deleted" toggle so operators
+// can see users whose schema UNIQUE slot is held by a deleted_at IS NOT
+// NULL row (F-7 admin half) — without this there was no path to find out
+// why a previously-used login was still reserved.
+func (r *UsersRepo) ListAllIncludingDeleted(ctx context.Context) ([]User, error) {
+	return r.listOrdered(ctx, true)
+}
+
+func (r *UsersRepo) listOrdered(ctx context.Context, includeDeleted bool) ([]User, error) {
+	q := `SELECT id, login, email, avatar_seed, password_hash, is_super_admin,
 		       must_change_password, password_changed_at, created_at, deleted_at
-		FROM users WHERE deleted_at IS NULL
-		ORDER BY login
-	`)
+		 FROM users`
+	if !includeDeleted {
+		q += ` WHERE deleted_at IS NULL`
+	}
+	q += ` ORDER BY login`
+	rows, err := r.db.Reader.QueryContext(ctx, q)
 	if err != nil {
-		return nil, fmt.Errorf("users: list all: %w", err)
+		return nil, fmt.Errorf("users: list: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 	var out []User

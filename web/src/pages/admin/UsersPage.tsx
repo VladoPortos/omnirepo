@@ -38,11 +38,12 @@ import { initials } from '@dicebear/collection';
 
 // ---------- API hooks ----------
 
-function useAdminUsers(cursor?: string) {
+function useAdminUsers(cursor?: string, includeDeleted = false) {
   const params: Record<string, string> = {};
   if (cursor) params.cursor = cursor;
+  if (includeDeleted) params.include_deleted = 'true';
   return useQuery({
-    queryKey: ['admin', 'users', cursor],
+    queryKey: ['admin', 'users', cursor, includeDeleted],
     queryFn: () => api.get<PaginatedResponse<User>>('/admin/users', params),
     staleTime: 15_000,
   });
@@ -94,7 +95,8 @@ function DicebearAvatar({ seed }: { seed: string }) {
 
 export default function UsersPage() {
   const [cursor, setCursor] = useState<string | undefined>();
-  const { data, isLoading } = useAdminUsers(cursor);
+  const [includeDeleted, setIncludeDeleted] = useState(false);
+  const { data, isLoading } = useAdminUsers(cursor, includeDeleted);
   const createMutation = useAdminCreateUser();
   const updateMutation = useAdminUpdateUser();
   const deleteMutation = useAdminDeleteUser();
@@ -203,15 +205,23 @@ export default function UsersPage() {
     {
       id: 'role',
       name: 'Role',
-      render: (row) =>
-        row.is_super_admin ? (
-          <Badge variant="default">
-            <ShieldCheck className="mr-1 size-3" />
-            Super Admin
-          </Badge>
-        ) : (
-          <Badge variant="secondary">User</Badge>
-        ),
+      render: (row) => (
+        <div className="flex flex-wrap gap-1">
+          {row.is_super_admin ? (
+            <Badge variant="default">
+              <ShieldCheck className="mr-1 size-3" />
+              Super Admin
+            </Badge>
+          ) : (
+            <Badge variant="secondary">User</Badge>
+          )}
+          {row.deleted_at && (
+            <Badge variant="destructive" title={`Deleted ${formatDate(row.deleted_at)}`}>
+              Deleted
+            </Badge>
+          )}
+        </div>
+      ),
     },
     {
       id: 'created_at',
@@ -259,10 +269,26 @@ export default function UsersPage() {
             Manage user accounts for this OmniRepo instance.
           </p>
         </div>
-        <Button onClick={() => setCreateOpen(true)}>
-          <Plus className="mr-1 size-4" data-icon="inline-start" />
-          Create User
-        </Button>
+        <div className="flex items-center gap-4">
+          {/* F-7 admin-half: surface soft-deleted rows so operators can see
+              which logins are still holding the UNIQUE slot. Read-only for
+              now; restore/purge is a follow-up. */}
+          <label className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Switch
+              checked={includeDeleted}
+              onCheckedChange={(v) => {
+                setIncludeDeleted(v);
+                setCursor(undefined);
+              }}
+              aria-label="Show deleted users"
+            />
+            Show deleted
+          </label>
+          <Button onClick={() => setCreateOpen(true)}>
+            <Plus className="mr-1 size-4" data-icon="inline-start" />
+            Create User
+          </Button>
+        </div>
       </div>
 
       <DataTable

@@ -29,6 +29,61 @@ func TestAdminUsersFull_ListUsers(t *testing.T) {
 	}
 }
 
+// TestAdminUsersFull_ListIncludeDeleted verifies F-7 admin half: soft-deleted
+// users are invisible by default (existing contract) but become visible when
+// the admin passes include_deleted=true. Each surfaced soft-deleted row
+// carries a deleted_at timestamp so operators can tell which rows are
+// zombies holding their login slot.
+func TestAdminUsersFull_ListIncludeDeleted(t *testing.T) {
+	s := newTestServer(t)
+	_, pw := seedTestUser(t, s.db, "root", "r@x", true, false)
+	aliceID, _ := seedTestUser(t, s.db, "alice", "a@x", false, false)
+	seedTestUser(t, s.db, "bob", "b@x", false, false)
+	cookie, _, _ := s.login(t, "root", pw)
+
+	// Soft-delete alice directly so we don't depend on the DELETE handler.
+	if _, err := s.db.Writer.Exec(
+		`UPDATE users SET deleted_at=CURRENT_TIMESTAMP WHERE id=?`, aliceID); err != nil {
+		t.Fatalf("soft-delete: %v", err)
+	}
+
+	// Default: 2 live users (root, bob). alice invisible.
+	resp, body := s.do(t, "GET", "/api/v1/admin/users?limit=10", cookie, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("code=%d body=%v", resp.StatusCode, body)
+	}
+	if items := body["items"].([]any); len(items) != 2 {
+		t.Fatalf("default list should skip soft-deleted; got %d users (want 2)", len(items))
+	}
+
+	// include_deleted=true: all 3 visible, alice carries deleted_at.
+	resp, body = s.do(t, "GET", "/api/v1/admin/users?limit=10&include_deleted=true", cookie, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("include_deleted code=%d body=%v", resp.StatusCode, body)
+	}
+	items := body["items"].([]any)
+	if len(items) != 3 {
+		t.Fatalf("include_deleted should surface soft-deleted; got %d (want 3)", len(items))
+	}
+	var foundAlice bool
+	for _, it := range items {
+		m := it.(map[string]any)
+		if m["login"] == "alice" {
+			foundAlice = true
+			if ts, _ := m["deleted_at"].(string); ts == "" {
+				t.Fatalf("alice should carry a deleted_at string, got %v", m["deleted_at"])
+			}
+		} else {
+			if _, present := m["deleted_at"]; present {
+				t.Fatalf("live user %q should omit deleted_at key, got %v", m["login"], m["deleted_at"])
+			}
+		}
+	}
+	if !foundAlice {
+		t.Fatalf("expected alice in include_deleted response, got items=%v", items)
+	}
+}
+
 func TestAdminUsersFull_ListPagination(t *testing.T) {
 	s := newTestServer(t)
 	_, pw := seedTestUser(t, s.db, "root", "r@x", true, false)

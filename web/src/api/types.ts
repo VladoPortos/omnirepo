@@ -81,6 +81,10 @@ export interface User {
   must_change_password: boolean;
   avatar_seed: string;
   created_at: string;
+  // Populated only when /admin/users was queried with include_deleted=true
+  // and this row is soft-deleted (F-7 admin half). Absent on live rows so
+  // existing callers stay unaffected.
+  deleted_at?: string;
 }
 
 export interface MeResponse {

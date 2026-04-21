@@ -17,6 +17,7 @@ import (
 	"github.com/dxc-internal/omnirepo/internal/audit"
 	"github.com/dxc-internal/omnirepo/internal/auth"
 	authmw "github.com/dxc-internal/omnirepo/internal/auth/middleware"
+	"github.com/dxc-internal/omnirepo/internal/metadata"
 )
 
 // mountAdminUsersFull installs the extended user CRUD endpoints on r.
@@ -36,13 +37,25 @@ type userListItem struct {
 	IsSuperAdmin       bool     `json:"is_super_admin"`
 	MustChangePassword bool     `json:"must_change_password"`
 	CreatedAt          string   `json:"created_at"`
+	DeletedAt          *string  `json:"deleted_at,omitempty"`
 	Projects           []string `json:"projects"`
 }
 
 func (d Deps) handleListUsers(w http.ResponseWriter, r *http.Request) {
 	pp := ParsePaginationParams(r)
+	// include_deleted=true surfaces soft-deleted users for the admin so the
+	// UNIQUE(login) slot they still hold becomes visible and diagnosable
+	// (F-7 admin half). Default stays false to match the existing contract
+	// where listings show only live rows.
+	includeDeleted := r.URL.Query().Get("include_deleted") == "true"
 
-	users, err := d.Users.ListAll(r.Context())
+	var users []metadata.User
+	var err error
+	if includeDeleted {
+		users, err = d.Users.ListAllIncludingDeleted(r.Context())
+	} else {
+		users, err = d.Users.ListAll(r.Context())
+	}
 	if err != nil {
 		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
@@ -87,6 +100,11 @@ func (d Deps) handleListUsers(w http.ResponseWriter, r *http.Request) {
 		if projNames == nil {
 			projNames = []string{}
 		}
+		var deletedAt *string
+		if u.DeletedAt != nil {
+			s := u.DeletedAt.UTC().Format(time.RFC3339)
+			deletedAt = &s
+		}
 		items = append(items, userListItem{
 			ID:                 u.ID,
 			Login:              u.Login,
@@ -94,6 +112,7 @@ func (d Deps) handleListUsers(w http.ResponseWriter, r *http.Request) {
 			IsSuperAdmin:       u.IsSuperAdmin,
 			MustChangePassword: u.MustChangePassword,
 			CreatedAt:          u.CreatedAt.UTC().Format(time.RFC3339),
+			DeletedAt:          deletedAt,
 			Projects:           projNames,
 		})
 	}

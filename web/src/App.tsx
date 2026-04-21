@@ -8,6 +8,7 @@ import { lazy, Suspense, type ReactNode } from 'react';
 import {
   createBrowserRouter,
   Navigate,
+  Outlet,
   useLocation,
   type RouteObject,
 } from 'react-router-dom';
@@ -215,6 +216,21 @@ function MustChangePasswordGuard({ children }: { children: ReactNode }) {
   return <>{children}</>;
 }
 
+// F-14: super-admin guard. AuthGuard already ensures isAuthenticated, so
+// when useAuth().user is null we are still loading; render nothing to
+// avoid a flash of forbidden content. Non-admins land on dashboard.
+function RequireSuperAdmin({ children }: { children: ReactNode }) {
+  const { user, isLoading, isSuperAdmin } = useAuth();
+
+  if (isLoading || !user) {
+    return null;
+  }
+  if (!isSuperAdmin) {
+    return <Navigate to="/" replace />;
+  }
+  return <>{children}</>;
+}
+
 // Dev-only routes appended to the top-level router when Vite is in dev
 // mode. Conditional at module scope (not inside JSX) so the branch is
 // statically eliminated at build time.
@@ -315,6 +331,15 @@ export const router = createBrowserRouter([
       { path: 'profile', element: <ProfilePage /> },
       {
         path: 'admin',
+        // F-14: every /admin/* route is super-admin-only. The backend
+        // already returns 403 on the underlying data fetches, but the
+        // SPA used to render the page shell + empty tables for non-
+        // admins. Guarding at the route level redirects to dashboard.
+        element: (
+          <RequireSuperAdmin>
+            <Outlet />
+          </RequireSuperAdmin>
+        ),
         children: [
           {
             path: 'users',

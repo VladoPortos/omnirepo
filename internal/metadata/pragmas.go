@@ -32,6 +32,27 @@ var pragmaDSNValues = []string{
 	"temp_store(MEMORY)",
 }
 
+// PragmaDSNSnapshot returns a copy of the pragmas applied to every connection
+// at open time via the modernc.org/sqlite `_pragma=` DSN extension. The admin
+// DB-health endpoint (plan 10-02 / internal/api/admin_db_health.go) uses this
+// as the SOURCE-OF-TRUTH for the `driver.pragmas` map and for the
+// `journal_mode` response field.
+//
+// Why a snapshot, not a runtime `PRAGMA journal_mode` probe: per research
+// PITFALLS §2, per-connection pragma state in modernc.org/sqlite can drift
+// across the pool (a runtime probe hits whichever connection the pool hands
+// out). The DSN list is the only canonical declaration — every new connection
+// is guaranteed to have applied these values. See internal/metadata/db.go
+// `ensureDSN` for the wiring.
+//
+// Returns a fresh slice each call so callers cannot mutate the package-level
+// list by aliasing.
+func PragmaDSNSnapshot() []string {
+	out := make([]string, len(pragmaDSNValues))
+	copy(out, pragmaDSNValues)
+	return out
+}
+
 // checkCompileOptions asserts the modernc.org/sqlite build has the features
 // OmniRepo relies on: ENABLE_FTS5 (global search) and the JSON1 extension
 // (audit details, settings blobs).

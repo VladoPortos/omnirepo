@@ -26,7 +26,6 @@ package api
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"io/fs"
 	"log/slog"
@@ -476,17 +475,6 @@ func computeRetryAfterSec(lastRunAt time.Time, window time.Duration) int {
 		secs = 1
 	}
 	return secs
-}
-
-// mustJSON serialises v to JSON bytes, returning nil on error. Used for the
-// audit Details passthrough where serialisation failure is non-fatal — the
-// audit table's details_json column accepts NULL/empty (OQ-9 best-effort).
-func mustJSON(v any) []byte {
-	b, err := json.Marshal(v)
-	if err != nil {
-		return nil
-	}
-	return b
 }
 
 // handleDBHealthCheck is the POST handler for manual integrity-check

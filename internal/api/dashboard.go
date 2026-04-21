@@ -233,11 +233,12 @@ func (d Deps) handleDashboard(w http.ResponseWriter, r *http.Request) {
 			vulnArgs...).Scan(&critical, &high, &medium, &low), "scan_findings_scoped")
 	}
 
-	// Project count.
+	// Project count. Exclude soft-deleted projects so the dashboard tile
+	// matches /api/v1/projects list semantics (F-4).
 	var projectCount int64
 	if scopeClause == "" {
 		logDashErr(d.DB.Reader.QueryRowContext(r.Context(),
-			`SELECT COUNT(*) FROM projects`).Scan(&projectCount), "project_count")
+			`SELECT COUNT(*) FROM projects WHERE deleted_at IS NULL`).Scan(&projectCount), "project_count")
 	} else {
 		projArgs := make([]any, len(scopeArgs))
 		copy(projArgs, scopeArgs)
@@ -246,7 +247,7 @@ func (d Deps) handleDashboard(w http.ResponseWriter, r *http.Request) {
 			ph[i] = "?"
 		}
 		logDashErr(d.DB.Reader.QueryRowContext(r.Context(),
-			`SELECT COUNT(*) FROM projects WHERE id IN (`+strings.Join(ph, ",")+`)`, projArgs...).Scan(&projectCount),
+			`SELECT COUNT(*) FROM projects WHERE deleted_at IS NULL AND id IN (`+strings.Join(ph, ",")+`)`, projArgs...).Scan(&projectCount),
 			"project_count_scoped")
 	}
 

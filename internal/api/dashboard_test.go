@@ -46,6 +46,35 @@ func TestDashboard_ReturnsStats(t *testing.T) {
 	}
 }
 
+// TestDashboard_ProjectCountExcludesSoftDeleted verifies F-4: the dashboard's
+// "Projects" tile shouldn't count rows with deleted_at IS NOT NULL, so it
+// matches the behaviour of GET /api/v1/projects.
+func TestDashboard_ProjectCountExcludesSoftDeleted(t *testing.T) {
+	s := newTestServer(t)
+	_, pw := seedTestUser(t, s.db, "root", "r@x", true, false)
+	cookie, _, code := s.login(t, "root", pw)
+	if code != 200 {
+		t.Fatalf("login code=%d", code)
+	}
+
+	ctx := context.Background()
+	liveID, _ := s.deps.Projects.Create(ctx, "live-proj", "")
+	_ = liveID
+	deadID, _ := s.deps.Projects.Create(ctx, "dead-proj", "")
+	if err := s.deps.Projects.SoftDelete(ctx, deadID); err != nil {
+		t.Fatalf("soft delete: %v", err)
+	}
+
+	resp, body := s.do(t, "GET", "/api/v1/dashboard", cookie, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("code=%d body=%v", resp.StatusCode, body)
+	}
+	got := int(body["project_count"].(float64))
+	if got != 1 {
+		t.Fatalf("project_count=%d, want 1 (soft-deleted row must be excluded)", got)
+	}
+}
+
 func TestDashboard_Unauthenticated(t *testing.T) {
 	s := newTestServer(t)
 	resp, _ := s.do(t, "GET", "/api/v1/dashboard", "", nil)

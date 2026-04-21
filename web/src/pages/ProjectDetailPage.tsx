@@ -239,11 +239,17 @@ export function ProjectDetailPage() {
               {tab === 'overview'
                 ? 'Overview'
                 : REPO_TYPES.find((t) => t.value === tab)?.label ?? tab}
-              {tab !== 'overview' && reposByType[tab]?.length > 0 && (
-                <span className="ml-1 text-xs text-muted-foreground tabular-nums">
-                  ({reposByType[tab].length})
-                </span>
-              )}
+              {tab === 's3'
+                ? bucketCount > 0 && (
+                    <span className="ml-1 text-xs text-muted-foreground tabular-nums">
+                      ({bucketCount})
+                    </span>
+                  )
+                : tab !== 'overview' && reposByType[tab]?.length > 0 && (
+                    <span className="ml-1 text-xs text-muted-foreground tabular-nums">
+                      ({reposByType[tab].length})
+                    </span>
+                  )}
             </TabsTrigger>
           ))}
         </TabsList>

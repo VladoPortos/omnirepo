@@ -227,10 +227,22 @@ export default function UsersPage() {
       className: 'w-24 text-right',
       render: (row) => (
         <div className="flex justify-end gap-1">
-          <Button variant="ghost" size="icon-xs" onClick={() => openEdit(row)}>
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            onClick={() => openEdit(row)}
+            aria-label={`Edit user ${row.login}`}
+            title="Edit user"
+          >
             <Pencil className="size-3.5" />
           </Button>
-          <Button variant="ghost" size="icon-xs" onClick={() => setDeleteUser(row)}>
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            onClick={() => setDeleteUser(row)}
+            aria-label={`Delete user ${row.login}`}
+            title="Delete user"
+          >
             <Trash2 className="size-3.5 text-destructive" />
           </Button>
         </div>

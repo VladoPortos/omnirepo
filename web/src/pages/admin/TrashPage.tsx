@@ -192,6 +192,8 @@ export default function TrashPage() {
             size="xs"
             onClick={() => setPurgeTarget([row.id])}
             className="text-destructive"
+            aria-label={`Purge ${row.name}`}
+            title="Purge"
           >
             <Trash2 className="size-3" />
           </Button>

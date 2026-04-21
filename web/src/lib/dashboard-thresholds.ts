@@ -225,3 +225,49 @@ export function trivyDBVariant(
   if (ageDays > warn) return 'warning';
   return 'healthy';
 }
+
+// -----------------------------------------------------------------------------
+// SQLite Health (C-7, admin-only — Phase 10 / plan 10-04)
+// -----------------------------------------------------------------------------
+
+/**
+ * dbHealthVariant — maps the GET /api/v1/admin/db/health payload's
+ * integrity.status + wal.bytes onto a 3-state StatusVariant per
+ * Phase 10 CONTEXT D-03.
+ *
+ * Precedence rules (per D-03):
+ *   1. integrity.status != 'ok' AND status != '' AND status != 'unknown'
+ *      → 'failure' (dominant; corruption overrides WAL bloat).
+ *   2. wal.bytes > walWarnOverBytes → 'warning' (operator can actionable-
+ *      restart to trigger a WAL checkpoint).
+ *   3. otherwise → 'healthy'.
+ *
+ * Notes on '' / 'unknown':
+ *   CONTEXT D-03 explicitly rejects an 'unknown' variant. When the
+ *   integrity_check hasn't run yet (empty string from the settings row)
+ *   or the boot hook captured an 'unknown' status, the card still renders
+ *   with the healthy/warning badge; the WAL threshold still applies so
+ *   WAL bloat on a never-run DB still surfaces.
+ *
+ * walWarnOverBytes is required (not a default) because the server
+ * sources it from the cached payload — the frontend never hardcodes
+ * 100 MB, matching plan 10-04's no-hardcoded-threshold invariant.
+ *
+ * Returns a subset of StatusVariant ('healthy' | 'warning' | 'failure')
+ * matching the 3-state locked-down set in D-03.
+ */
+export function dbHealthVariant(
+  integrityStatus: string,
+  walBytes: number,
+  walWarnOverBytes: number,
+): Extract<StatusVariant, 'healthy' | 'warning' | 'failure'> {
+  if (
+    integrityStatus &&
+    integrityStatus !== 'ok' &&
+    integrityStatus !== 'unknown'
+  ) {
+    return 'failure';
+  }
+  if (walBytes > walWarnOverBytes) return 'warning';
+  return 'healthy';
+}

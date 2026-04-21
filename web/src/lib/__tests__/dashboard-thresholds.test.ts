@@ -15,6 +15,7 @@ import {
   jobsVariant,
   tlsVariant,
   trivyDBVariant,
+  dbHealthVariant,
 } from '../dashboard-thresholds';
 
 describe('storageVariant', () => {
@@ -250,5 +251,64 @@ describe('trivyDBVariant', () => {
 
   it('override: warnDays=3, failDays=14 → 5 days is warning', () => {
     expect(trivyDBVariant(5, true, { warnDays: 3, failDays: 14 })).toBe('warning');
+  });
+});
+
+describe('dbHealthVariant', () => {
+  // 100 MB in bytes — the server-returned wal.warn_over_bytes constant
+  // per plan 10-02 SUMMARY's LOCKED response payload shape. Kept local
+  // to the test so call-site intent stays self-documenting.
+  const ONE_HUNDRED_MB = 100 * 1024 * 1024;
+
+  it("status='ok', wal=50MB → healthy", () => {
+    expect(dbHealthVariant('ok', 50 * 1024 * 1024, ONE_HUNDRED_MB)).toBe(
+      'healthy',
+    );
+  });
+
+  it("status='ok', wal=100MB → healthy (boundary — equal to threshold, not above)", () => {
+    expect(dbHealthVariant('ok', ONE_HUNDRED_MB, ONE_HUNDRED_MB)).toBe(
+      'healthy',
+    );
+  });
+
+  it("status='ok', wal=150MB → warning", () => {
+    expect(dbHealthVariant('ok', 150 * 1024 * 1024, ONE_HUNDRED_MB)).toBe(
+      'warning',
+    );
+  });
+
+  it("status='database disk image is malformed', wal=10MB → failure", () => {
+    expect(
+      dbHealthVariant(
+        'database disk image is malformed',
+        10 * 1024 * 1024,
+        ONE_HUNDRED_MB,
+      ),
+    ).toBe('failure');
+  });
+
+  it("status='database disk image is malformed', wal=200MB → failure (status dominates warning)", () => {
+    expect(
+      dbHealthVariant(
+        'database disk image is malformed',
+        200 * 1024 * 1024,
+        ONE_HUNDRED_MB,
+      ),
+    ).toBe('failure');
+  });
+
+  it("status='', wal=0 → healthy (never-run, no WAL bloat — D-03 rejects 'unknown' variant)", () => {
+    expect(dbHealthVariant('', 0, ONE_HUNDRED_MB)).toBe('healthy');
+  });
+
+  it("status='unknown', wal=0 → healthy (boot-failure-preread — D-03 rejects 'unknown' variant)", () => {
+    expect(dbHealthVariant('unknown', 0, ONE_HUNDRED_MB)).toBe('healthy');
+  });
+
+  it("status='', wal=150MB → warning (never-run + WAL bloat — still surfaces WAL warning)", () => {
+    expect(dbHealthVariant('', 150 * 1024 * 1024, ONE_HUNDRED_MB)).toBe(
+      'warning',
+    );
   });
 });

@@ -541,6 +541,131 @@ export function useAdminTrivyDBStatus(enabled: boolean) {
   });
 }
 
+// -- Admin DB health (Phase 10 / plan 10-04 — DBHEALTH-01..05) -------------
+
+/**
+ * DBHealth mirrors the GET /api/v1/admin/db/health response shape locked
+ * by plan 10-02 SUMMARY (internal/api/admin_db_health.go:handleDBHealth).
+ * The full shape is quoted in-comment below each field so future
+ * refactors spot drift quickly.
+ *
+ * Key invariants (enforced by plan-10-02 regression tests):
+ *   - `wal.warn_over_bytes` is server-sourced (currently 100 MB) — the
+ *     frontend never hardcodes it (CONTEXT D-03 threshold locked on the
+ *     server).
+ *   - `can_run_now` / `next_available_at` are server-computed — the
+ *     frontend never does client-side time math beyond a one-shot
+ *     render-time minutes computation for the tooltip (CONTEXT D-10
+ *     static-on-render invariant).
+ *   - `running=true` triggers 5s polling via refetchInterval below
+ *     (CONTEXT D-09); polling stops the moment the server reports
+ *     running=false.
+ *   - `checked_at`, `next_available_at`, `last_manual_run_at` are
+ *     RFC3339 strings or empty ('') — never null.
+ */
+export type DBHealth = {
+  integrity: {
+    /** "ok" on success; multi-line integrity_check error text on failure;
+     *  "boot_*_failed: <err>" from plan-10-01 boot path; "" before first
+     *  run; "panicked" from plan-10-03 panic-recovery path. */
+    status: string;
+    /** RFC3339; "" before first boot hook runs. */
+    checked_at: string;
+    duration_ms: number;
+  };
+  size: {
+    on_disk_bytes: number;
+    logical_bytes: number;
+    page_count: number;
+    page_size: number;
+    freelist_count: number;
+    freelist_bytes: number;
+  };
+  wal: {
+    bytes: number;
+    /** Server-sourced threshold — UI reads this instead of hardcoding
+     *  100 MB. 100 MB (104857600) at time of plan 10-04 per plan 10-02. */
+    warn_over_bytes: number;
+  };
+  /** Lowercase from DSN pragma snapshot, typically "wal". */
+  journal_mode: string;
+  driver: {
+    /** e.g. "modernc v1.48.2 (FTS5, JSON1)". */
+    label: string;
+    pragmas: Record<string, string>;
+  };
+  /** In-process lease state — `true` while manual integrity check is in flight. */
+  running: boolean;
+  /** Server-computed eligibility — frontend never recomputes. */
+  can_run_now: boolean;
+  /** RFC3339; "" when can_run_now=true. */
+  next_available_at: string;
+  /** RFC3339; "" if never run manually (prefers lease, falls back to settings). */
+  last_manual_run_at: string;
+};
+
+/**
+ * useAdminDBHealth — TanStack hook for the Phase 10 C-7 SQLite Health
+ * card. Pass `enabled = !!currentUser?.is_super_admin` so non-admins
+ * never issue a request (server gate = RequireCan(ActionTriggerGC)).
+ *
+ * Polling model (CONTEXT D-09 — fire-and-forget with 5s refetch window):
+ *   - Quiet default: staleTime 30s, no refetchInterval when running=false.
+ *   - Active: when `running=true`, refetchInterval returns 5_000 (5 s) so
+ *     the card re-renders with fresh lease state until the goroutine
+ *     flips back to idle.
+ *   - Mirrors useJobProgress.ts:108-143 pollingDecision pattern exactly:
+ *     the callback receives the query object (v5), not the data value;
+ *     we read `query.state.data` and return a number or `false`.
+ */
+export function useAdminDBHealth(enabled: boolean) {
+  return useQuery<DBHealth>({
+    queryKey: ['admin', 'db', 'health'],
+    queryFn: () => api.get<DBHealth>('/admin/db/health'),
+    staleTime: 30_000,
+    enabled,
+    refetchInterval: (query) => {
+      const d = query.state.data;
+      if (!d) return false;
+      // 5 s default polling while lease is held — CONTEXT D-09 (any
+      // 5-30 s is acceptable; 5 s matches plan 10-03 SUMMARY's pattern).
+      return d.running ? 5_000 : false;
+    },
+  });
+}
+
+/**
+ * useTriggerDBHealthCheck — Bodyless POST to /admin/db/health/check
+ * (plan 10-03 manual integrity_check trigger). Returns `{ job_started_at }`
+ * on 202; onSuccess invalidates the ['admin','db','health'] query so the
+ * card immediately refetches and picks up `running=true`, which in turn
+ * activates the 5s polling window until the goroutine completes.
+ *
+ * Bodyless call matches the verified api.post<T>(path, body?) signature
+ * (web/src/api/client.ts:211) and the existing bodyless site at
+ * queries.ts:396 (api.post<void>('/auth/logout')). Passing `null` or
+ * `{}` would send a Content-Type: application/json header for a payload
+ * the server doesn't expect.
+ *
+ * Error surface: 429 `integrity_check.rate_limited` (rate-limited; UI
+ * should never reach this path because the button is server-gated via
+ * `can_run_now`, but the mutation still propagates the envelope for
+ * defense-in-depth); 409 `integrity_check.already_running` (another
+ * tab/admin raced the click — extremely rare in practice).
+ */
+export function useTriggerDBHealthCheck() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      api.post<{ job_started_at: string }>('/admin/db/health/check'),
+    onSuccess: () => {
+      // Invalidate the health query so the card refetches immediately
+      // and sees running=true, kicking off the 5s polling loop.
+      qc.invalidateQueries({ queryKey: ['admin', 'db', 'health'] });
+    },
+  });
+}
+
 // -- Projects --
 
 export function useProjects() {

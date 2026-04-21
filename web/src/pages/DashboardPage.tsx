@@ -918,8 +918,8 @@ function TLSCertCard({
         ) : (
           <p className="text-sm tabular-nums">
             {daysRemaining >= 0
-              ? `${daysRemaining} days remaining`
-              : `Expired ${Math.abs(daysRemaining)} days ago`}
+              ? `${daysRemaining} ${daysRemaining === 1 ? 'day' : 'days'} remaining`
+              : `Expired ${Math.abs(daysRemaining)} ${Math.abs(daysRemaining) === 1 ? 'day' : 'days'} ago`}
           </p>
         )}
         <p className="mt-1 text-xs text-muted-foreground">
@@ -984,7 +984,7 @@ function TrivyDBCard({
         ) : data && data.age_hours < 0 ? (
           <p className="text-sm tabular-nums">Age unknown (baked-in)</p>
         ) : (
-          <p className="text-sm tabular-nums">Updated {ageDays} days ago</p>
+          <p className="text-sm tabular-nums">Updated {ageDays} {ageDays === 1 ? 'day' : 'days'} ago</p>
         )}
         <Button
           variant="link"

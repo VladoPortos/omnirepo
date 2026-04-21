@@ -44,6 +44,7 @@ export function LoginPage() {
           localEnvelope('Invalid login or password. Please try again.', {
             class: 'permission',
             code: 'auth.invalid_credentials',
+            hint: 'Check your Caps Lock or contact an administrator to reset your password.',
           }),
         );
       } else {

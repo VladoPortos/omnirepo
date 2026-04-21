@@ -404,7 +404,9 @@ export const router = createBrowserRouter([
       // authenticated paths. The top-level `path: '*'` below still renders
       // NotFoundPage chrome-less for pre-auth routes (e.g. /bogus on a fresh
       // install) — no AppShell is available before AuthGuard anyway.
-      { path: '*', element: <NotFoundPage /> },
+      // F-11: id="not-found" lets Breadcrumbs detect the catch-all and stop
+      // emitting clickable links to made-up paths.
+      { id: 'not-found', path: '*', element: <NotFoundPage /> },
     ],
   },
   { path: '*', element: <NotFoundPage /> },

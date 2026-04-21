@@ -3,7 +3,7 @@
  * Uses shadcn Breadcrumb components.
  */
 
-import { Link, useLocation } from 'react-router-dom';
+import { Link, useLocation, useMatches } from 'react-router-dom';
 import {
   Breadcrumb,
   BreadcrumbList,
@@ -49,9 +49,18 @@ function segmentLabel(segment: string, context?: { parent?: string }): string {
 
 export function Breadcrumbs() {
   const location = useLocation();
+  const matches = useMatches();
   const segments = location.pathname.split('/').filter(Boolean);
 
   if (segments.length === 0) return null;
+
+  // F-11: when the current route is our nested catch-all NotFoundPage,
+  // render every segment as a non-link BreadcrumbPage. Keeping the
+  // breadcrumbs visible preserves the chrome (sidebar, path context) but
+  // we stop advertising clickable hrefs that would 404 themselves. The
+  // AppShell-scoped catch-all route is tagged `id: 'not-found'` in
+  // App.tsx.
+  const isNotFound = matches.some((m) => m.id === 'not-found');
 
   return (
     <Breadcrumb className="px-8 pt-4 pb-2">
@@ -103,11 +112,12 @@ export function Breadcrumbs() {
             index === 4 &&
             segments.length === 6;
 
+          const nonLink = isLast || isScansPrefixCrumb || isNotFound;
           return (
             <span key={segmentPath} className="contents">
               <BreadcrumbSeparator />
               <BreadcrumbItem>
-                {isLast || isScansPrefixCrumb ? (
+                {nonLink ? (
                   <BreadcrumbPage>
                     {segmentLabel(segment, { parent: segments[index - 1] })}
                   </BreadcrumbPage>

@@ -10,7 +10,7 @@ OmniRepo does not include an in-process scheduler. To run mirror syncs on a fixe
 
 Use a **project-scoped API key** (prefix `omr_p_`) with permission to trigger syncs. Mint one from the web UI under **Project → Settings → API Keys** — the plaintext is shown exactly once.
 
-Pass the key via the **`Authorization: Bearer <omr_p_...>`** header. OmniRepo does not accept an `X-API-Key` header — scripts or documentation suggesting one are wrong and will get a 401.
+Pass the key via the **`Authorization: Bearer <omr_p_...>`** header. OmniRepo does not accept custom API-key headers — the Bearer scheme (or HTTP Basic with `__token__:<key>`) is the only supported path, enforced in `internal/auth/middleware/session_or_apikey.go`.
 
 Do not embed the key literal in the script. Load it from a file (chmod 600) or a Kubernetes Secret and export it into the script's environment, as shown below.
 

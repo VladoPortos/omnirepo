@@ -26,11 +26,18 @@ import {
   Plus,
   Activity,
   HardDrive,
+  Loader2,
 } from 'lucide-react';
+import { toast } from 'sonner';
 import { Card, CardContent, CardHeader, CardTitle, CardAction } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Progress } from '@/components/ui/progress';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
 import { SeverityBadge } from '@/components/common/SeverityBadge';
 import { SkeletonCard } from '@/components/common/SkeletonCard';
 import { SkeletonMetric } from '@/components/common/SkeletonMetric';
@@ -44,8 +51,11 @@ import {
   useAdminJobsSummary,
   useAdminTLSCurrent,
   useAdminTrivyDBStatus,
+  useAdminDBHealth,
+  useTriggerDBHealthCheck,
+  type DBHealth,
 } from '@/api/queries';
-import { envelopeFromError } from '@/api/client';
+import { envelopeFromError, ApiError } from '@/api/client';
 import {
   storageVariant,
   failuresVariant,
@@ -53,6 +63,7 @@ import {
   jobsVariant,
   tlsVariant,
   trivyDBVariant,
+  dbHealthVariant,
 } from '@/lib/dashboard-thresholds';
 import { formatBytes, formatDate } from '@/lib/format';
 import { activityTargetHref } from '@/lib/activity';
@@ -182,6 +193,23 @@ function trivyDBStatusLabel(v: StatusVariant): string {
   }
 }
 
+// dbHealthStatusLabel — CONTEXT D-03 3-state copy for the Phase 10 C-7
+// SQLite Health card. dbHealthVariant() only returns
+// healthy/warning/failure (the 3 locked states from D-03), so we don't
+// handle disabled/maintenance/neutral here.
+function dbHealthStatusLabel(v: StatusVariant): string {
+  switch (v) {
+    case 'healthy':
+      return 'Healthy';
+    case 'warning':
+      return 'WAL bloat';
+    case 'failure':
+      return 'Integrity failure';
+    default:
+      return 'Unknown';
+  }
+}
+
 // countRecentFailures — derive the Recent Failures C-2 count from the
 // existing dashboard.recent_activity[] field. The server already scopes
 // to the actor's visible projects (visibleProjectIDs in dashboard.go),
@@ -223,6 +251,44 @@ export function DashboardPage() {
   const jobsQ = useAdminJobsSummary(isSuperAdmin);
   const tlsQ = useAdminTLSCurrent(isSuperAdmin);
   const trivyQ = useAdminTrivyDBStatus(isSuperAdmin);
+  // Phase 10 / plan 10-04 — 7th composition card, super-admin only.
+  // The refetchInterval inside useAdminDBHealth polls every 5 s while
+  // data.running=true and stops the moment the server reports idle,
+  // so the card's "Running…" label + spinner resolve without any
+  // client-side timer (CONTEXT D-09).
+  const dbHealthQ = useAdminDBHealth(isSuperAdmin);
+  const triggerDBHealthCheck = useTriggerDBHealthCheck();
+
+  // onClick handler for the Run-Now button — awaits the mutation so we
+  // can surface 429 rate-limit and 409 already-running envelopes as
+  // toasts. Both edge cases are uncommon because:
+  //   - 429 is gated by `can_run_now` which disables the button.
+  //   - 409 is only reachable if another tab/admin races the click.
+  // Error surface uses the envelope codes LOCKED by plan 10-03 SUMMARY.
+  const handleRunNow = () => {
+    triggerDBHealthCheck.mutate(undefined, {
+      onError: (err) => {
+        if (err instanceof ApiError) {
+          if (err.envelope.code === 'integrity_check.rate_limited') {
+            const secs = Number(
+              (err.envelope.details as Record<string, unknown> | undefined)
+                ?.retry_after_seconds ?? 0,
+            );
+            const mins = Math.ceil(secs / 60);
+            toast.error(
+              `Rate-limited: try again in ${mins} ${mins === 1 ? 'minute' : 'minutes'}.`,
+            );
+            return;
+          }
+          if (err.envelope.code === 'integrity_check.already_running') {
+            toast.error('A check is already in progress.');
+            return;
+          }
+        }
+        toast.error("Couldn't trigger the integrity check.");
+      },
+    });
+  };
 
   const findings = data?.scan_findings;
   const totalFindings =
@@ -457,6 +523,15 @@ export function DashboardPage() {
                 error={trivyQ.error}
                 data={trivyQ.data}
                 onRetry={() => void trivyQ.refetch()}
+              />
+              <DBHealthCard
+                isLoading={dbHealthQ.isLoading}
+                isError={dbHealthQ.isError}
+                error={dbHealthQ.error}
+                data={dbHealthQ.data}
+                onRetry={() => void dbHealthQ.refetch()}
+                onTrigger={handleRunNow}
+                isTriggering={triggerDBHealthCheck.isPending}
               />
             </>
           )}
@@ -994,6 +1069,206 @@ function TrivyDBCard({
           nativeButton={false}
           render={<Link to="/admin/trivy">Manage Trivy DB →</Link>}
         />
+      </CardContent>
+    </Card>
+  );
+}
+
+// -- C-7 SQLite Health (admin-only, Phase 10 / plan 10-04) -------------------
+
+/**
+ * DBHealthCard — SQLite DB health + manual integrity-check trigger.
+ *
+ * Layout (CONTEXT D-01 + D-02):
+ *   - CardTitle "SQLite Health" + StatusBadge in CardAction slot.
+ *   - Headline: `Integrity <OK|FAIL> · checked <relative-age>`.
+ *   - 2-col detail grid: Size (with tooltip), WAL, Journal, Free, Driver.
+ *   - Footer: inline "Run integrity check now" link-button (D-08).
+ *
+ * Threshold sources:
+ *   - Status variant: dbHealthVariant(status, wal.bytes, wal.warn_over_bytes).
+ *     `wal.warn_over_bytes` is ALWAYS read from the server payload —
+ *     never hardcoded — per plan 10-04 <key_constraints>.
+ *   - Rate-limit eligibility: `data.can_run_now` + `data.next_available_at`
+ *     are server-computed. The frontend never recomputes (CONTEXT D-11).
+ *
+ * Tooltip N-minute invariant (CONTEXT D-10 static-on-render):
+ *   `minutesUntilAvailable` is computed ONCE at render from
+ *   `Date.parse(next_available_at) - Date.now()`. No setInterval, no
+ *   useEffect-based live tick. Drift up to 5 s (the refetch window) is
+ *   accepted; the polling refetch is the update vehicle.
+ */
+type DBHealthCardProps = CompositionCardCommon & {
+  data: DBHealth | undefined;
+  onTrigger: () => void;
+  isTriggering: boolean;
+};
+
+function DBHealthCard({
+  isLoading,
+  isError,
+  error,
+  data,
+  onRetry,
+  onTrigger,
+  isTriggering,
+}: DBHealthCardProps) {
+  // D-06: SkeletonCard with rows=4 — this card has more detail rows
+  // than the other composition cards (headline + 5 grid rows + footer).
+  if (isLoading || !data) {
+    return <SkeletonCard rows={4} />;
+  }
+
+  const integrityStatus = data.integrity.status ?? '';
+  const integrityOk = integrityStatus === 'ok' || integrityStatus === '';
+  const variant = dbHealthVariant(
+    integrityStatus,
+    data.wal.bytes,
+    data.wal.warn_over_bytes,
+  );
+
+  // "checked <relative-age>": empty checked_at → "never" (pre-boot-hook).
+  const checkedLabel = data.integrity.checked_at
+    ? formatDate(data.integrity.checked_at)
+    : 'never';
+
+  // D-04: single "Size" value surfaced; tooltip reveals the logical /
+  // freelist breakdown. Middot separator matches the Phase 9 sync-pill
+  // visual convention.
+  const sizeTooltip = `On-disk ${formatBytes(data.size.on_disk_bytes)} · Logical ${formatBytes(data.size.logical_bytes)} · Freelist ${data.size.freelist_count} pages (${formatBytes(data.size.freelist_bytes)})`;
+
+  // D-10: N computed ONCE at render — no setInterval. The polling
+  // refetch (D-09) is the update vehicle; accepted drift is up to 5 s.
+  const minutesUntilAvailable = data.next_available_at
+    ? Math.max(
+        0,
+        Math.ceil((Date.parse(data.next_available_at) - Date.now()) / 60_000),
+      )
+    : 0;
+
+  // Button state resolution (D-10 / D-12):
+  //   - Running: spinner + "Running…" label, disabled.
+  //   - Pending mutation: also disabled, "Running…" (server will echo
+  //     running=true on the next poll tick).
+  //   - Rate-limited (!can_run_now): disabled, tooltip shows N-minute
+  //     countdown; no live tick.
+  //   - Enabled: normal click.
+  const running = data.running || isTriggering;
+  const rateLimited = !running && !data.can_run_now;
+  const buttonDisabled = running || rateLimited;
+  const buttonLabel = running ? 'Running…' : 'Run integrity check now';
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>SQLite Health</CardTitle>
+        <CardAction>
+          <StatusBadge
+            status={variant}
+            label={dbHealthStatusLabel(variant)}
+            size="sm"
+          />
+        </CardAction>
+      </CardHeader>
+      <CardContent>
+        {isError ? (
+          <ErrorEnvelopeRenderer
+            mode="inline"
+            envelope={envelopeFromError(
+              error,
+              "We couldn't load DB health.",
+            )}
+            onRetry={onRetry}
+          />
+        ) : (
+          <>
+            {/* D-02 item 1: headline — "Integrity OK · checked <age>". */}
+            <p className="text-sm tabular-nums">
+              Integrity {integrityOk ? 'OK' : 'FAIL'} · checked {checkedLabel}
+            </p>
+            {/* D-02 items 2-6: compact 2-col detail grid.
+                `grid-cols-[auto_1fr]` sizes the label column tight and
+                lets values flex; `tabular-nums` aligns numeric values. */}
+            <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-sm tabular-nums">
+              <dt className="text-muted-foreground">Size</dt>
+              <dd>
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <span
+                        className="cursor-help underline decoration-dotted decoration-muted-foreground/50 underline-offset-2"
+                        aria-label={sizeTooltip}
+                      >
+                        {formatBytes(data.size.on_disk_bytes)}
+                      </span>
+                    }
+                  />
+                  <TooltipContent>{sizeTooltip}</TooltipContent>
+                </Tooltip>
+              </dd>
+              <dt className="text-muted-foreground">WAL</dt>
+              <dd
+                className={
+                  variant === 'warning'
+                    ? 'text-status-warning-foreground'
+                    : undefined
+                }
+              >
+                {formatBytes(data.wal.bytes)}
+              </dd>
+              <dt className="text-muted-foreground">Journal</dt>
+              <dd>{data.journal_mode || '—'}</dd>
+              <dt className="text-muted-foreground">Free</dt>
+              <dd>
+                {data.size.freelist_count}{' '}
+                {data.size.freelist_count === 1 ? 'page' : 'pages'}
+              </dd>
+              <dt className="text-muted-foreground">Driver</dt>
+              <dd className="truncate">{data.driver.label}</dd>
+            </dl>
+
+            {/* D-08: inline link-button footer action. Run-Now button.
+                When rate-limited, wrapped in a Tooltip showing the
+                static-at-render "Available in N min" text (D-10). */}
+            {rateLimited ? (
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button
+                      variant="link"
+                      size="sm"
+                      className="px-0 mt-2"
+                      disabled
+                      aria-label={`Run integrity check now — available in ${minutesUntilAvailable} minutes`}
+                    >
+                      {buttonLabel}
+                    </Button>
+                  }
+                />
+                <TooltipContent>
+                  Available in {minutesUntilAvailable}{' '}
+                  {minutesUntilAvailable === 1 ? 'min' : 'min'}
+                </TooltipContent>
+              </Tooltip>
+            ) : (
+              <Button
+                variant="link"
+                size="sm"
+                className="px-0 mt-2"
+                disabled={buttonDisabled}
+                onClick={onTrigger}
+              >
+                {running && (
+                  <Loader2
+                    className="size-3.5 animate-spin"
+                    aria-hidden="true"
+                  />
+                )}
+                {buttonLabel}
+              </Button>
+            )}
+          </>
+        )}
       </CardContent>
     </Card>
   );

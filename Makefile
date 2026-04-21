@@ -3,7 +3,7 @@ DATA_ROOT ?= /var/lib/omnirepo
 BENCH_DURATION ?= 30s
 BENCH_WORKERS ?= 16
 
-.PHONY: dev build test test-airgap bench-sqlite bench-git-fixture bench-git \
+.PHONY: dev build test test-airgap test-perf bench-sqlite bench-git-fixture bench-git \
 	vendor lint seed lint-protocol-redaction \
 	check-contrast lint-typography lint-spacing-carveout lint-axe-devdep \
 	conformance conformance-oci conformance-rpm conformance-deb \
@@ -20,6 +20,16 @@ test: lint-protocol-redaction check-contrast lint-typography lint-spacing-carveo
 
 test-airgap:
 	$(GO) test -mod=vendor ./test/airgap/...
+
+# test-perf (DBHEALTH-07 / SC3): runs the build-tagged perf500 suite with
+# a 20-minute budget. Grows the test DB to 500 MB before exercising
+# GET /api/v1/admin/db/health; asserts p95 < 100 ms per the spec budget.
+# NOT a prerequisite of `test` — invoked separately in CI so the fast
+# merge-gate stays fast. The 10-MB proxy in admin_db_health_test.go is
+# the fast merge-gate; this target is the authoritative spec assertion.
+test-perf:
+	$(GO) test -mod=vendor -tags=perf500 -timeout=20m \
+		-run TestAdminDBHealth_PerfBudget_500MB ./internal/api/...
 
 bench-sqlite:
 	$(GO) run -mod=vendor ./cmd/bench/sqlite --duration=$(BENCH_DURATION) --workers=$(BENCH_WORKERS)

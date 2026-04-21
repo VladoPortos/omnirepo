@@ -68,6 +68,12 @@ const (
 	// semantics as ActionManageUpstreamCreds.
 	ActionManageS3Keys Action = "s3_key.manage"
 
+	// D-1 — Project-owned API key management (project-scoped). Same
+	// member-or-super-admin policy as ManageS3Keys today, but a distinct
+	// action so a future S3-keys policy tweak can't silently widen or
+	// narrow API-token management. Per Codex review on D-1.
+	ActionManageProjectAPIKeys Action = "project_api_key.manage"
+
 	// Phase 04 Plan 09 — Git repo permission actions (D-30).
 	// Read/Write both require project membership (flat model) or super-admin.
 	// Project-scoped API keys count as members of their bound project.
@@ -107,6 +113,7 @@ var AllActions = []Action{
 	ActionS3BucketWrite,
 	ActionS3BucketAdmin,
 	ActionManageS3Keys,
+	ActionManageProjectAPIKeys,
 	ActionGitRepoRead,
 	ActionGitRepoWrite,
 }
@@ -243,6 +250,7 @@ func Can(ctx context.Context, actor Actor, action Action, target Target) (bool, 
 		ActionUpdateRepo, ActionWipeRepo,
 		ActionAddProjectMember, ActionRemoveProjectMember,
 		ActionManageUpstreamCreds, ActionManageS3Keys,
+		ActionManageProjectAPIKeys,
 		ActionRPMUpload, ActionDEBUpload,
 		ActionPyPIUpload, ActionHelmUpload:
 		if target.ProjectID != 0 && isMemberOfProject(ctx, target.ProjectID) {

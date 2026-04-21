@@ -69,7 +69,7 @@ func (d Deps) resolveProjectAndCheckAPIKeysMembership(w http.ResponseWriter, r *
 		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "project not found")
 		return 0, "", auth.Actor{}, false
 	}
-	if allowed, reason := auth.Can(r.Context(), actor, auth.ActionManageS3Keys,
+	if allowed, reason := auth.Can(r.Context(), actor, auth.ActionManageProjectAPIKeys,
 		auth.Target{Kind: "project", ProjectID: p.ID}); !allowed {
 		writeJSONError(w, r, http.StatusForbidden, ErrForbidden, reason)
 		return 0, "", auth.Actor{}, false

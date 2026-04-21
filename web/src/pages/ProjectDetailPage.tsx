@@ -32,7 +32,17 @@ import {
   useProjectBuckets,
   useCreateBucket,
   useDeleteBucket,
+  useAddProjectMember,
+  useRemoveProjectMember,
+  useAdminUserList,
 } from '@/api/queries';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { formatBytes, formatDate } from '@/lib/format';
 import {
   envelopeFromError,
@@ -72,6 +82,15 @@ export function ProjectDetailPage() {
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState('');
   const [deleteError, setDeleteError] = useState<ApiErrorEnvelope | null>(null);
+
+  // Member picker state
+  const [memberOpen, setMemberOpen] = useState(false);
+  const [memberLogin, setMemberLogin] = useState('');
+  const [memberError, setMemberError] = useState<ApiErrorEnvelope | null>(null);
+  const [removeTarget, setRemoveTarget] = useState<{ login: string } | null>(null);
+  const { data: userListData } = useAdminUserList();
+  const addMember = useAddProjectMember(name);
+  const removeMember = useRemoveProjectMember(name);
 
   // Group repos by type
   const reposByType = useMemo(() => {
@@ -240,7 +259,15 @@ export function ProjectDetailPage() {
                     <Users className="size-4 text-muted-foreground" />
                     <CardTitle>Members</CardTitle>
                   </div>
-                  <Button variant="outline" size="sm" nativeButton={false} render={<Link to="/admin/users" />}>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      setMemberError(null);
+                      setMemberLogin('');
+                      setMemberOpen(true);
+                    }}
+                  >
                     Add Member
                   </Button>
                 </div>
@@ -251,32 +278,156 @@ export function ProjectDetailPage() {
                     icon={Users}
                     title="No teammates yet"
                     description="Add a teammate so someone else can publish to this project."
-                    primaryCTA={{ label: 'Add member', to: '/admin/users' }}
+                    primaryCTA={{
+                      label: 'Add member',
+                      onClick: () => {
+                        setMemberError(null);
+                        setMemberLogin('');
+                        setMemberOpen(true);
+                      },
+                    }}
                   />
                 ) : (
                   <div className="space-y-2">
                     {project.members.map((m) => (
                       <div
                         key={m.user_id}
-                        className="flex items-center gap-3 text-sm"
+                        className="flex items-center justify-between gap-3 text-sm"
                       >
-                        <Avatar size="sm">
-                          <AvatarFallback>
-                            {m.login.slice(0, 2).toUpperCase()}
-                          </AvatarFallback>
-                        </Avatar>
-                        <div>
-                          <p className="font-medium">{m.login}</p>
-                          <p className="text-xs text-muted-foreground">
-                            {m.email}
-                          </p>
+                        <div className="flex items-center gap-3">
+                          <Avatar size="sm">
+                            <AvatarFallback>
+                              {m.login.slice(0, 2).toUpperCase()}
+                            </AvatarFallback>
+                          </Avatar>
+                          <div>
+                            <p className="font-medium">{m.login}</p>
+                            <p className="text-xs text-muted-foreground">
+                              {m.email}
+                            </p>
+                          </div>
                         </div>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="text-destructive hover:bg-destructive/10"
+                          onClick={() => setRemoveTarget({ login: m.login })}
+                          title={`Remove ${m.login}`}
+                          aria-label={`Remove ${m.login}`}
+                        >
+                          <Trash2 className="size-4" />
+                        </Button>
                       </div>
                     ))}
                   </div>
                 )}
               </CardContent>
             </Card>
+
+            {/* Add Member dialog */}
+            <Dialog open={memberOpen} onOpenChange={setMemberOpen}>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>Add member to {project.name}</DialogTitle>
+                </DialogHeader>
+                <div className="space-y-4 py-2">
+                  {memberError && <ErrorEnvelopeRenderer envelope={memberError} />}
+                  <div className="space-y-2">
+                    <Label>User</Label>
+                    <Select
+                      value={memberLogin}
+                      onValueChange={(val) => setMemberLogin(val ?? '')}
+                    >
+                      <SelectTrigger className="w-full">
+                        <SelectValue placeholder="Select a user" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {(userListData?.items ?? [])
+                          .filter(
+                            (u) =>
+                              !project.members.some((m) => m.login === u.login),
+                          )
+                          .map((u) => (
+                            <SelectItem key={u.id} value={u.login}>
+                              {u.login}
+                              {u.email ? ` — ${u.email}` : ''}
+                            </SelectItem>
+                          ))}
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground">
+                      Super-admins always have implicit access; this picker lists
+                      only users who can be explicitly assigned.
+                    </p>
+                  </div>
+                </div>
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setMemberOpen(false)}>
+                    Cancel
+                  </Button>
+                  <Button
+                    disabled={!memberLogin || addMember.isPending}
+                    onClick={async () => {
+                      try {
+                        await addMember.mutateAsync(memberLogin);
+                        toast.success(`${memberLogin} added to ${project.name}.`);
+                        setMemberOpen(false);
+                      } catch (err) {
+                        setMemberError(
+                          envelopeFromError(err, 'Failed to add member.'),
+                        );
+                      }
+                    }}
+                  >
+                    {addMember.isPending ? 'Adding…' : 'Add Member'}
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+
+            {/* Remove confirmation */}
+            <Dialog
+              open={!!removeTarget}
+              onOpenChange={(open) => !open && setRemoveTarget(null)}
+            >
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>
+                    Remove {removeTarget?.login} from {project.name}?
+                  </DialogTitle>
+                </DialogHeader>
+                <p className="py-2 text-sm text-muted-foreground">
+                  They will lose access to this project immediately. You can add
+                  them back at any time.
+                </p>
+                <DialogFooter>
+                  <Button
+                    variant="outline"
+                    onClick={() => setRemoveTarget(null)}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    variant="destructive"
+                    disabled={removeMember.isPending}
+                    onClick={async () => {
+                      if (!removeTarget) return;
+                      try {
+                        await removeMember.mutateAsync(removeTarget.login);
+                        toast.success(`${removeTarget.login} removed.`);
+                        setRemoveTarget(null);
+                      } catch (err) {
+                        toast.error(
+                          envelopeFromError(err, 'Failed to remove member.').message,
+                        );
+                      }
+                    }}
+                  >
+                    {removeMember.isPending ? 'Removing…' : 'Remove'}
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
 
             {/* Storage — plain total, no gauge. OmniRepo v1 has no
                 per-project quota, so the old `used of max(2×used, 1 GB)`

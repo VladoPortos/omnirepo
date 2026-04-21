@@ -592,6 +592,72 @@ export function useDeleteProject() {
   });
 }
 
+// -- Project Members --
+//
+// Walkthrough 2026-04-20: the ProjectDetailPage picker needs the full user
+// list so the operator can pick a non-member to add. The admin-users hook
+// in UsersPage.tsx is local, so we expose a thin shared query here.
+
+export interface ProjectMemberUser {
+  id: number;
+  login: string;
+  email: string;
+  is_super_admin: boolean;
+}
+
+export function useAdminUserList() {
+  return useQuery({
+    queryKey: ['admin', 'users', 'list'],
+    // Codex review 2026-04-21: chase next_cursor so the project-member
+    // picker isn't capped at the API's default page size. The server
+    // enforces MaxPageLimit=200 per request; we request the max and loop
+    // so deployments with >200 users still see every account.
+    queryFn: async () => {
+      const items: ProjectMemberUser[] = [];
+      let cursor: string | undefined;
+      // Hard cap loop iterations as a runaway-paging safety net.
+      for (let i = 0; i < 50; i++) {
+        const params: Record<string, string> = { limit: '200' };
+        if (cursor) params.cursor = cursor;
+        const page = await api.get<PaginatedResponse<ProjectMemberUser>>(
+          '/admin/users',
+          params,
+        );
+        items.push(...(page.items ?? []));
+        if (!page.next_cursor) break;
+        cursor = page.next_cursor;
+      }
+      return { items, next_cursor: null };
+    },
+    staleTime: 30_000,
+  });
+}
+
+export function useAddProjectMember(projectName: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (login: string) =>
+      api.post<void>(
+        `/projects/${enc(projectName)}/members/${enc(login)}`,
+        undefined,
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['projects', projectName] });
+    },
+  });
+}
+
+export function useRemoveProjectMember(projectName: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (login: string) =>
+      api.del<void>(`/projects/${enc(projectName)}/members/${enc(login)}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['projects', projectName] });
+    },
+  });
+}
+
 // -- Repos --
 
 export function useRepos(projectName: string) {

@@ -30,9 +30,11 @@ func MaintenanceMode(settings *metadata.SettingsRepo) func(next http.Handler) ht
 				next.ServeHTTP(w, r)
 				return
 			}
-			// Self-unbrick: always allow the maintenance-toggle endpoint so
-			// the operator can disable maintenance once it's enabled.
-			if r.URL.Path == maintenanceToggleRoute {
+			// Self-unbrick: allow the POST that toggles maintenance so the
+			// operator can disable it once it's enabled. PUT/PATCH/DELETE
+			// on the same path stay gated (chi 405s them anyway since the
+			// handler only registers POST + GET, but be explicit).
+			if r.Method == http.MethodPost && r.URL.Path == maintenanceToggleRoute {
 				next.ServeHTTP(w, r)
 				return
 			}

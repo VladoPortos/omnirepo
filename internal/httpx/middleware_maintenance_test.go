@@ -86,20 +86,30 @@ func TestMaintenanceMode_ToggleRoutePassThroughWhenEnabled(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
-	// The toggle route must remain reachable so operators can disable
-	// maintenance mode once it has been enabled.
-	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodPatch} {
+	// The toggle route must remain reachable on POST so operators can
+	// disable maintenance mode once it has been enabled.
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/maintenance", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST /api/v1/admin/maintenance: expected 200 (toggle bypass), got %d", rec.Code)
+	}
+
+	// Other write methods on the toggle route stay gated — the handler
+	// only registers POST + GET, so PUT/PATCH would 405 from chi anyway,
+	// but the middleware should not silently widen the bypass.
+	for _, method := range []string{http.MethodPut, http.MethodPatch, http.MethodDelete} {
 		req := httptest.NewRequest(method, "/api/v1/admin/maintenance", nil)
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
-		if rec.Code != http.StatusOK {
-			t.Fatalf("%s /api/v1/admin/maintenance: expected 200 (toggle bypass), got %d", method, rec.Code)
+		if rec.Code != http.StatusServiceUnavailable {
+			t.Fatalf("%s /api/v1/admin/maintenance: expected 503 (bypass is POST-only), got %d", method, rec.Code)
 		}
 	}
 
 	// Any other admin write path must still be blocked.
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/gc/run", nil)
-	rec := httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/admin/gc/run", nil)
+	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("expected non-toggle admin writes to stay blocked, got %d", rec.Code)

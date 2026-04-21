@@ -3,7 +3,8 @@
  * Breadcrumb, tabs per repo type, overview with members + activity.
  */
 
-import { useState, useMemo, type FormEvent } from 'react';
+import { useState, useMemo, useCallback, type FormEvent } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { Plus, Users, Activity, FolderGit2, Trash2 } from 'lucide-react';
@@ -93,6 +94,18 @@ export function ProjectDetailPage() {
   const { data: userListData } = useAdminUserList();
   const addMember = useAddProjectMember(name);
   const removeMember = useRemoveProjectMember(name);
+  const qc = useQueryClient();
+  // openAddMember invalidates the cached users list so the picker sees
+  // accounts added since this page mounted (F-8: the underlying hook is
+  // mounted at page-load and cached with a 30s staleTime, so without this
+  // a user created in another tab or via API wouldn't appear until a full
+  // page reload).
+  const openAddMember = useCallback(() => {
+    setMemberError(null);
+    setMemberLogin('');
+    setMemberOpen(true);
+    qc.invalidateQueries({ queryKey: ['admin', 'users', 'list'] });
+  }, [qc]);
 
   // Group repos by type
   const reposByType = useMemo(() => {
@@ -270,11 +283,7 @@ export function ProjectDetailPage() {
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={() => {
-                      setMemberError(null);
-                      setMemberLogin('');
-                      setMemberOpen(true);
-                    }}
+                    onClick={openAddMember}
                   >
                     Add Member
                   </Button>
@@ -288,11 +297,7 @@ export function ProjectDetailPage() {
                     description="Add a teammate so someone else can publish to this project."
                     primaryCTA={{
                       label: 'Add member',
-                      onClick: () => {
-                        setMemberError(null);
-                        setMemberLogin('');
-                        setMemberOpen(true);
-                      },
+                      onClick: openAddMember,
                     }}
                   />
                 ) : (

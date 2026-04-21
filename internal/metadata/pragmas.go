@@ -4,6 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log/slog"
+	"strconv"
+	"strings"
+	"time"
 )
 
 // pragmaDSNValues is the D-09 pragma list carried into every connection via
@@ -53,4 +57,154 @@ func checkCompileOptions(ctx context.Context, conn *sql.Conn) error {
 		return fmt.Errorf("metadata: sqlite build missing required compile option ENABLE_JSON1: %w", err)
 	}
 	return nil
+}
+
+// Settings key names used by RunBootIntegrityCheck (Phase 10 DBHEALTH-06, D-16).
+// Exported so admin endpoints (plans 10-02, 10-03) and the Dashboard card can
+// read the cached state without duplicating string literals.
+const (
+	SettingDBIntegrityCheckStatus       = "db.integrity_check.status"
+	SettingDBIntegrityCheckCheckedAt    = "db.integrity_check.checked_at"
+	SettingDBIntegrityCheckDurationMs   = "db.integrity_check.duration_ms"
+	SettingDBIntegrityCheckLastManualAt = "db.integrity_check.last_manual_at"
+)
+
+// AuditRecorder is the minimal audit-emission interface RunBootIntegrityCheck
+// depends on. Defined here (rather than imported from internal/audit) to avoid
+// a metadata → audit import cycle — audit itself already imports metadata.
+//
+// Callers (internal/app/app.go) supply an adapter that translates these kind
+// strings back to audit.EventKind values and invokes the real audit logger.
+// A nil AuditRecorder is tolerated: RunBootIntegrityCheck skips the Record
+// call entirely, which keeps unit tests and bootstrap paths simple.
+type AuditRecorder interface {
+	Record(ctx context.Context, kind string, details map[string]any)
+}
+
+// Audit event kind strings mirrored from internal/audit/events.go. Duplicated
+// as constants here ONLY so RunBootIntegrityCheck can emit the correct kinds
+// without importing the audit package (cycle avoidance — see AuditRecorder
+// doc comment). If either side diverges the emission will silently miss the
+// TestEveryStateChangingActionEmitsEvent coverage — guard by keeping these
+// in sync with audit.EvtIntegrityCheck*.
+const (
+	auditKindIntegrityCheckCompleted = "admin.integrity_check.completed"
+	auditKindIntegrityCheckFailed    = "admin.integrity_check.failed"
+)
+
+// RunBootIntegrityCheck executes PRAGMA integrity_check(256) exactly once at
+// boot against the reader pool, caches the result (status + checked_at +
+// duration_ms) to the settings table, and emits a single audit event
+// (completed on "ok", failed otherwise). Per CONTEXT D-15 / DBHEALTH-06 this
+// runs once post-migrations and before HTTP Listen — no ticker, no
+// GC-piggyback.
+//
+// Failure disposition (Pitfall 10.3 / A1): log + cache + continue. Any error
+// obtaining a connection, executing the pragma, or writing settings is
+// logged via slog.WarnContext but never propagated — the function always
+// returns nil. The Dashboard card (CONTEXT D-03) surfaces the failure via
+// the destructive variant.
+//
+// Reader-pool invariant (Pitfall 10.1): uses db.Reader.Conn(ctx) with one
+// pinned connection. Readers never block the size-1 writer pool in WAL
+// mode. Do NOT switch to db.Writer — that would wedge every concurrent
+// write for the check's duration.
+//
+// DSN invariant (Pitfall 10.2): integrity_check is NOT added to
+// pragmaDSNValues. Every new connection would otherwise pay the cost.
+//
+// auditRec may be nil (tests, bootstrap-only paths). When nil, audit
+// emission is skipped entirely — the caching behavior still runs.
+func RunBootIntegrityCheck(ctx context.Context, db *DB, settings *SettingsRepo, auditRec AuditRecorder) error {
+	start := time.Now()
+
+	// Acquire a pinned reader connection. Failure here means the pool is
+	// closed/unavailable — cache the failure and continue.
+	conn, err := db.Reader.Conn(ctx)
+	if err != nil {
+		status := "boot_conn_failed: " + err.Error()
+		slog.WarnContext(ctx, "db.integrity_check.boot.conn_failed", "err", err)
+		writeBootIntegrityCache(ctx, settings, status, time.Since(start))
+		emitBootIntegrityAudit(ctx, auditRec, false, status, time.Since(start))
+		return nil
+	}
+	defer func() { _ = conn.Close() }()
+
+	// PRAGMA integrity_check(N) returns a single row "ok" on pass; up to N
+	// rows of error descriptions on failure [sqlite.org/pragma.html].
+	rows, qerr := conn.QueryContext(ctx, "PRAGMA integrity_check(256)")
+	if qerr != nil {
+		status := "boot_query_failed: " + qerr.Error()
+		slog.WarnContext(ctx, "db.integrity_check.boot.query_failed", "err", qerr)
+		writeBootIntegrityCache(ctx, settings, status, time.Since(start))
+		emitBootIntegrityAudit(ctx, auditRec, false, status, time.Since(start))
+		return nil
+	}
+	defer func() { _ = rows.Close() }()
+
+	var lines []string
+	for rows.Next() {
+		var s string
+		if serr := rows.Scan(&s); serr == nil {
+			lines = append(lines, s)
+		}
+	}
+	if rerr := rows.Err(); rerr != nil {
+		status := "boot_scan_failed: " + rerr.Error()
+		slog.WarnContext(ctx, "db.integrity_check.boot.scan_failed", "err", rerr)
+		writeBootIntegrityCache(ctx, settings, status, time.Since(start))
+		emitBootIntegrityAudit(ctx, auditRec, false, status, time.Since(start))
+		return nil
+	}
+
+	duration := time.Since(start)
+	status := strings.Join(lines, "\n")
+	if status == "" {
+		status = "unknown"
+	}
+
+	writeBootIntegrityCache(ctx, settings, status, duration)
+	emitBootIntegrityAudit(ctx, auditRec, status == "ok", status, duration)
+
+	slog.InfoContext(ctx, "db.integrity_check.boot",
+		"status", status,
+		"duration_ms", duration.Milliseconds(),
+	)
+	return nil
+}
+
+// writeBootIntegrityCache persists the three cache rows. Errors are logged
+// but not returned — per Pitfall 10.3 the function must never propagate.
+func writeBootIntegrityCache(ctx context.Context, settings *SettingsRepo, status string, duration time.Duration) {
+	if settings == nil {
+		return
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	if err := settings.Set(ctx, SettingDBIntegrityCheckStatus, status); err != nil {
+		slog.WarnContext(ctx, "db.integrity_check.boot.cache_status_failed", "err", err)
+	}
+	if err := settings.Set(ctx, SettingDBIntegrityCheckCheckedAt, now); err != nil {
+		slog.WarnContext(ctx, "db.integrity_check.boot.cache_checked_at_failed", "err", err)
+	}
+	if err := settings.Set(ctx, SettingDBIntegrityCheckDurationMs,
+		strconv.FormatInt(duration.Milliseconds(), 10)); err != nil {
+		slog.WarnContext(ctx, "db.integrity_check.boot.cache_duration_failed", "err", err)
+	}
+}
+
+// emitBootIntegrityAudit emits exactly one audit event. ok=true → completed;
+// ok=false → failed. Nil-safe on auditRec.
+func emitBootIntegrityAudit(ctx context.Context, auditRec AuditRecorder, ok bool, status string, duration time.Duration) {
+	if auditRec == nil {
+		return
+	}
+	kind := auditKindIntegrityCheckCompleted
+	if !ok {
+		kind = auditKindIntegrityCheckFailed
+	}
+	auditRec.Record(ctx, kind, map[string]any{
+		"source":      "boot",
+		"status":      status,
+		"duration_ms": duration.Milliseconds(),
+	})
 }

@@ -150,4 +150,11 @@ const (
 	// post-ReceivePack hook after a successful git_refs sync.
 	// Details: {repo_id, ref_count, project}.
 	EvtGitRefsSynced EventKind = "git.refs.synced"
+
+	// Phase 10 — DB integrity_check (DBHEALTH-05, DBHEALTH-06). Emitted
+	// by internal/metadata/pragmas.go (source=boot) and internal/api/
+	// admin_db_health.go (source=manual).
+	EvtIntegrityCheckTriggered EventKind = "admin.integrity_check.triggered"
+	EvtIntegrityCheckCompleted EventKind = "admin.integrity_check.completed"
+	EvtIntegrityCheckFailed    EventKind = "admin.integrity_check.failed"
 )

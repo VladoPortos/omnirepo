@@ -45,6 +45,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { formatBytes, formatDate } from '@/lib/format';
+import { bucketNameSeemsValid } from '@/lib/validators';
 import {
   envelopeFromError,
   fieldErrorsFromEnvelope,
@@ -746,7 +747,7 @@ function S3BucketsTab({ projectName }: { projectName: string }) {
               <Button variant="outline" type="button" onClick={() => setDialogOpen(false)}>
                 Cancel
               </Button>
-              <Button type="submit" disabled={createBucket.isPending || !bucketName.trim()}>
+              <Button type="submit" disabled={createBucket.isPending || !bucketNameSeemsValid(bucketName)}>
                 {createBucket.isPending ? 'Creating...' : 'Create Bucket'}
               </Button>
             </DialogFooter>

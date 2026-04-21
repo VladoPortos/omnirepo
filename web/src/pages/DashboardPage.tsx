@@ -55,6 +55,7 @@ import {
   trivyDBVariant,
 } from '@/lib/dashboard-thresholds';
 import { formatBytes, formatDate } from '@/lib/format';
+import { activityTargetHref } from '@/lib/activity';
 import type {
   StorageRepoRow,
   DashboardVulnRow,
@@ -1035,28 +1036,6 @@ function HighSeverityList({ items }: { items: DashboardVulnRow[] }) {
 // if the backend hasn't populated it yet for legacy rows.
 function vulnRepoType(v: DashboardVulnRow): string {
   return v.repo_type || 'docker';
-}
-
-// activityTargetHref maps a dashboard activity row to a navigable URL using
-// the action + target_id shape the backend actually emits:
-//   project.*          target_id = "<name>"               → /projects/<name>
-//   member.*           target_id = "<project>"            → /projects/<project>
-//   repo.*             target_id = "<project>/<type>/<name>" → /projects/.../type/name
-//   signing_key.*      same shape as repo.*
-// Anything else (auth.*, user.*, tls.*, trivy.*) has no useful drill-through
-// and stays rendered as plain text.
-function activityTargetHref(action: string, targetID: string): string {
-  if (!targetID) return '';
-  const parts = targetID.split('/');
-  if (action.startsWith('project.') || action.startsWith('member.')) {
-    return parts.length >= 1 && parts[0] ? `/projects/${parts[0]}` : '';
-  }
-  if (action.startsWith('repo.') || action.startsWith('signing_key.')) {
-    if (parts.length >= 3 && parts[0] && parts[1] && parts[2]) {
-      return `/projects/${parts[0]}/${parts[1]}/${parts[2]}`;
-    }
-  }
-  return '';
 }
 
 function StorageBreakdown({

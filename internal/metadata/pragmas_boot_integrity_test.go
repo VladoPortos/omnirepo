@@ -272,3 +272,101 @@ func TestRunBootIntegrityCheck_NilAuditRecorderSafe(t *testing.T) {
 		t.Fatalf("RunBootIntegrityCheck(nil auditRec) returned %v, want nil", err)
 	}
 }
+
+// -----------------------------------------------------------------------------
+// RunIntegrityCheckNow tests (plan 10-03 Task 1)
+//
+// RunIntegrityCheckNow is the extracted shared core invoked by both
+// RunBootIntegrityCheck (source="boot") and the manual POST handler in
+// plan 10-03 (source="manual"). The manual branch writes an extra settings
+// row (db.integrity_check.last_manual_at) so the health card can surface
+// cross-restart continuity of the last manual run timestamp; the boot
+// branch must NOT write that key — it is reserved for manual runs only.
+// -----------------------------------------------------------------------------
+
+// TestRunIntegrityCheckNow_ManualWritesLastManualAt — source="manual" writes
+// db.integrity_check.last_manual_at as an RFC3339 timestamp alongside the
+// three existing cache rows. Plan 10-03's POST handler relies on this key
+// for its 429 rate-limit envelope + the GET endpoint's last_manual_run_at
+// cross-restart fallback.
+func TestRunIntegrityCheckNow_ManualWritesLastManualAt(t *testing.T) {
+	db := sqlitetest.New(t)
+	settings := metadata.NewSettingsRepo(db)
+	rec := &fakeAuditRecorder{}
+	ctx := context.Background()
+
+	status, durMs := metadata.RunIntegrityCheckNow(ctx, db, settings, rec, "manual")
+	if status != "ok" {
+		t.Fatalf("status = %q, want %q", status, "ok")
+	}
+	if durMs < 0 {
+		t.Fatalf("durationMs = %d, want >= 0", durMs)
+	}
+
+	v, err := settings.Get(ctx, metadata.SettingDBIntegrityCheckLastManualAt)
+	if err != nil {
+		t.Fatalf("settings.Get(last_manual_at): %v", err)
+	}
+	if _, err := time.Parse(time.RFC3339, v); err != nil {
+		t.Fatalf("last_manual_at %q not RFC3339: %v", v, err)
+	}
+
+	// Audit event must carry source="manual" (plan 10-03 asserts this in
+	// integration tests — the kind is .completed on healthy DBs).
+	calls := rec.snapshot()
+	if len(calls) != 1 {
+		t.Fatalf("audit.Record called %d times, want 1; calls=%+v", len(calls), calls)
+	}
+	if calls[0].Details["source"] != "manual" {
+		t.Fatalf("details.source = %v, want manual", calls[0].Details["source"])
+	}
+}
+
+// TestRunIntegrityCheckNow_BootSkipsLastManualAt — source="boot" must NOT
+// touch db.integrity_check.last_manual_at. The key is reserved for manual
+// runs only per plan 10-01 Task 3 and the SUMMARY's "reserved — plan 10-03
+// writes it" note.
+func TestRunIntegrityCheckNow_BootSkipsLastManualAt(t *testing.T) {
+	db := sqlitetest.New(t)
+	settings := metadata.NewSettingsRepo(db)
+	rec := &fakeAuditRecorder{}
+	ctx := context.Background()
+
+	status, _ := metadata.RunIntegrityCheckNow(ctx, db, settings, rec, "boot")
+	if status != "ok" {
+		t.Fatalf("status = %q, want %q", status, "ok")
+	}
+
+	// last_manual_at row should NOT exist. SettingsRepo.Get returns an
+	// error when the key is absent — that is the expected outcome here.
+	if v, err := settings.Get(ctx, metadata.SettingDBIntegrityCheckLastManualAt); err == nil {
+		t.Fatalf("last_manual_at unexpectedly present with value %q after source=boot run", v)
+	}
+
+	// Audit event must carry source="boot".
+	calls := rec.snapshot()
+	if len(calls) != 1 {
+		t.Fatalf("audit.Record called %d times, want 1; calls=%+v", len(calls), calls)
+	}
+	if calls[0].Details["source"] != "boot" {
+		t.Fatalf("details.source = %v, want boot", calls[0].Details["source"])
+	}
+}
+
+// TestRunIntegrityCheckNow_ReturnsStatusAndDuration — the extracted helper
+// returns (status, durationMs) so callers (plan 10-03's goroutine) can
+// update in-process lease fields without re-reading the settings row it
+// just wrote. Healthy DB: status="ok", durationMs >= 0.
+func TestRunIntegrityCheckNow_ReturnsStatusAndDuration(t *testing.T) {
+	db := sqlitetest.New(t)
+	settings := metadata.NewSettingsRepo(db)
+	ctx := context.Background()
+
+	status, durMs := metadata.RunIntegrityCheckNow(ctx, db, settings, nil, "manual")
+	if status != "ok" {
+		t.Fatalf("status = %q, want %q", status, "ok")
+	}
+	if durMs < 0 {
+		t.Fatalf("durationMs = %d, want >= 0", durMs)
+	}
+}

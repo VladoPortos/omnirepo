@@ -114,17 +114,42 @@ const (
 )
 
 // RunBootIntegrityCheck executes PRAGMA integrity_check(256) exactly once at
-// boot against the reader pool, caches the result (status + checked_at +
-// duration_ms) to the settings table, and emits a single audit event
-// (completed on "ok", failed otherwise). Per CONTEXT D-15 / DBHEALTH-06 this
-// runs once post-migrations and before HTTP Listen — no ticker, no
-// GC-piggyback.
+// boot. Thin wrapper delegating to RunIntegrityCheckNow with source="boot"
+// so the boot sequence and plan 10-03's manual-trigger goroutine share
+// exactly one code path for the PRAGMA + cache write + audit emit.
+//
+// Per CONTEXT D-15 / DBHEALTH-06 this runs once post-migrations and before
+// HTTP Listen — no ticker, no GC-piggyback. Failure disposition (Pitfall
+// 10.3 / A1): log + cache + continue; always returns nil.
+func RunBootIntegrityCheck(ctx context.Context, db *DB, settings *SettingsRepo, auditRec AuditRecorder) error {
+	_, _ = RunIntegrityCheckNow(ctx, db, settings, auditRec, "boot")
+	return nil
+}
+
+// RunIntegrityCheckNow executes PRAGMA integrity_check(256) against the
+// reader pool, caches the result (status + checked_at + duration_ms) to
+// the settings table, and emits a single audit event (.completed on "ok",
+// .failed otherwise). The source parameter is echoed back into the audit
+// event details and controls whether db.integrity_check.last_manual_at is
+// also written.
+//
+// source="boot"   — called from RunBootIntegrityCheck at app startup. Does
+//                   NOT write last_manual_at (that key is reserved for
+//                   operator-triggered runs).
+// source="manual" — called from plan 10-03's POST /admin/db/health/check
+//                   goroutine. Writes last_manual_at=now RFC3339 so the
+//                   GET /admin/db/health endpoint can surface the last
+//                   manual run timestamp across process restarts.
+//
+// Returns (status, durationMs) so the manual-trigger goroutine can update
+// the in-process lease (dbHealthJob.lastStatus / lastRunAt) without
+// re-reading the settings row it just wrote.
 //
 // Failure disposition (Pitfall 10.3 / A1): log + cache + continue. Any error
 // obtaining a connection, executing the pragma, or writing settings is
 // logged via slog.WarnContext but never propagated — the function always
-// returns nil. The Dashboard card (CONTEXT D-03) surfaces the failure via
-// the destructive variant.
+// returns a (status, durationMs) pair. The Dashboard card (CONTEXT D-03)
+// surfaces the failure via the destructive variant.
 //
 // Reader-pool invariant (Pitfall 10.1): uses db.Reader.Conn(ctx) with one
 // pinned connection. Readers never block the size-1 writer pool in WAL
@@ -136,7 +161,7 @@ const (
 //
 // auditRec may be nil (tests, bootstrap-only paths). When nil, audit
 // emission is skipped entirely — the caching behavior still runs.
-func RunBootIntegrityCheck(ctx context.Context, db *DB, settings *SettingsRepo, auditRec AuditRecorder) error {
+func RunIntegrityCheckNow(ctx context.Context, db *DB, settings *SettingsRepo, auditRec AuditRecorder, source string) (string, int64) {
 	start := time.Now()
 
 	// Acquire a pinned reader connection. Failure here means the pool is
@@ -144,10 +169,11 @@ func RunBootIntegrityCheck(ctx context.Context, db *DB, settings *SettingsRepo, 
 	conn, err := db.Reader.Conn(ctx)
 	if err != nil {
 		status := "boot_conn_failed: " + err.Error()
-		slog.WarnContext(ctx, "db.integrity_check.boot.conn_failed", "err", err)
-		writeBootIntegrityCache(ctx, settings, status, time.Since(start))
-		emitBootIntegrityAudit(ctx, auditRec, false, status, time.Since(start))
-		return nil
+		slog.WarnContext(ctx, "db.integrity_check.conn_failed", "err", err, "source", source)
+		dur := time.Since(start)
+		writeIntegrityCache(ctx, settings, status, dur, source)
+		emitIntegrityAudit(ctx, auditRec, false, status, dur, source)
+		return status, dur.Milliseconds()
 	}
 	defer func() { _ = conn.Close() }()
 
@@ -156,10 +182,11 @@ func RunBootIntegrityCheck(ctx context.Context, db *DB, settings *SettingsRepo, 
 	rows, qerr := conn.QueryContext(ctx, "PRAGMA integrity_check(256)")
 	if qerr != nil {
 		status := "boot_query_failed: " + qerr.Error()
-		slog.WarnContext(ctx, "db.integrity_check.boot.query_failed", "err", qerr)
-		writeBootIntegrityCache(ctx, settings, status, time.Since(start))
-		emitBootIntegrityAudit(ctx, auditRec, false, status, time.Since(start))
-		return nil
+		slog.WarnContext(ctx, "db.integrity_check.query_failed", "err", qerr, "source", source)
+		dur := time.Since(start)
+		writeIntegrityCache(ctx, settings, status, dur, source)
+		emitIntegrityAudit(ctx, auditRec, false, status, dur, source)
+		return status, dur.Milliseconds()
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -172,10 +199,11 @@ func RunBootIntegrityCheck(ctx context.Context, db *DB, settings *SettingsRepo, 
 	}
 	if rerr := rows.Err(); rerr != nil {
 		status := "boot_scan_failed: " + rerr.Error()
-		slog.WarnContext(ctx, "db.integrity_check.boot.scan_failed", "err", rerr)
-		writeBootIntegrityCache(ctx, settings, status, time.Since(start))
-		emitBootIntegrityAudit(ctx, auditRec, false, status, time.Since(start))
-		return nil
+		slog.WarnContext(ctx, "db.integrity_check.scan_failed", "err", rerr, "source", source)
+		dur := time.Since(start)
+		writeIntegrityCache(ctx, settings, status, dur, source)
+		emitIntegrityAudit(ctx, auditRec, false, status, dur, source)
+		return status, dur.Milliseconds()
 	}
 
 	duration := time.Since(start)
@@ -184,38 +212,54 @@ func RunBootIntegrityCheck(ctx context.Context, db *DB, settings *SettingsRepo, 
 		status = "unknown"
 	}
 
-	writeBootIntegrityCache(ctx, settings, status, duration)
-	emitBootIntegrityAudit(ctx, auditRec, status == "ok", status, duration)
+	writeIntegrityCache(ctx, settings, status, duration, source)
+	emitIntegrityAudit(ctx, auditRec, status == "ok", status, duration, source)
 
-	slog.InfoContext(ctx, "db.integrity_check.boot",
+	slog.InfoContext(ctx, "db.integrity_check",
 		"status", status,
 		"duration_ms", duration.Milliseconds(),
+		"source", source,
 	)
-	return nil
+	return status, duration.Milliseconds()
 }
 
-// writeBootIntegrityCache persists the three cache rows. Errors are logged
-// but not returned — per Pitfall 10.3 the function must never propagate.
-func writeBootIntegrityCache(ctx context.Context, settings *SettingsRepo, status string, duration time.Duration) {
+// writeIntegrityCache persists the three common cache rows (status,
+// checked_at, duration_ms) and, when source="manual", the additional
+// last_manual_at row. Errors are logged but not returned — per Pitfall
+// 10.3 the boot path must never propagate; the manual path follows the
+// same convention so a partial settings write does not cause the POST
+// goroutine to leave the lease in an inconsistent state.
+func writeIntegrityCache(ctx context.Context, settings *SettingsRepo, status string, duration time.Duration, source string) {
 	if settings == nil {
 		return
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
 	if err := settings.Set(ctx, SettingDBIntegrityCheckStatus, status); err != nil {
-		slog.WarnContext(ctx, "db.integrity_check.boot.cache_status_failed", "err", err)
+		slog.WarnContext(ctx, "db.integrity_check.cache_status_failed", "err", err, "source", source)
 	}
 	if err := settings.Set(ctx, SettingDBIntegrityCheckCheckedAt, now); err != nil {
-		slog.WarnContext(ctx, "db.integrity_check.boot.cache_checked_at_failed", "err", err)
+		slog.WarnContext(ctx, "db.integrity_check.cache_checked_at_failed", "err", err, "source", source)
 	}
 	if err := settings.Set(ctx, SettingDBIntegrityCheckDurationMs,
 		strconv.FormatInt(duration.Milliseconds(), 10)); err != nil {
-		slog.WarnContext(ctx, "db.integrity_check.boot.cache_duration_failed", "err", err)
+		slog.WarnContext(ctx, "db.integrity_check.cache_duration_failed", "err", err, "source", source)
+	}
+	// Manual runs also stamp last_manual_at so the GET /admin/db/health
+	// endpoint has a cross-restart fallback for its last_manual_run_at
+	// response field (plan 10-02 reads this when the in-process lease is
+	// empty, e.g. after a restart that lost the lease's lastRunAt).
+	if source == "manual" {
+		if err := settings.Set(ctx, SettingDBIntegrityCheckLastManualAt, now); err != nil {
+			slog.WarnContext(ctx, "db.integrity_check.cache_last_manual_at_failed", "err", err, "source", source)
+		}
 	}
 }
 
-// emitBootIntegrityAudit emits exactly one audit event. ok=true → completed;
-// ok=false → failed. Nil-safe on auditRec.
-func emitBootIntegrityAudit(ctx context.Context, auditRec AuditRecorder, ok bool, status string, duration time.Duration) {
+// emitIntegrityAudit emits exactly one audit event. ok=true → completed;
+// ok=false → failed. source is echoed into details.source so plan 10-03's
+// .triggered→.completed/.failed pairs are filterable by source in the
+// audit UI. Nil-safe on auditRec.
+func emitIntegrityAudit(ctx context.Context, auditRec AuditRecorder, ok bool, status string, duration time.Duration, source string) {
 	if auditRec == nil {
 		return
 	}
@@ -224,7 +268,7 @@ func emitBootIntegrityAudit(ctx context.Context, auditRec AuditRecorder, ok bool
 		kind = auditKindIntegrityCheckFailed
 	}
 	auditRec.Record(ctx, kind, map[string]any{
-		"source":      "boot",
+		"source":      source,
 		"status":      status,
 		"duration_ms": duration.Milliseconds(),
 	})

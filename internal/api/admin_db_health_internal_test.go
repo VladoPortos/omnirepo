@@ -2,13 +2,17 @@
 // package api so it can touch the package-private dbHealthJob without
 // exporting a test-only hook.
 //
-// Black-box HTTP tests are in admin_db_health_test.go (package api_test).
+// Black-box HTTP tests are in admin_db_health_test.go (package api_test)
+// and admin_db_health_check_test.go (package api_test, plan 10-03).
 package api
 
 import (
+	"context"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/dxc-internal/omnirepo/internal/metadata"
 )
 
 // ResetDBHealthJobForTest restores dbHealthJob to its zero/idle state
@@ -156,4 +160,86 @@ func TestAdminDBHealth_LeaseSnapshotConcurrency(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+// -----------------------------------------------------------------------------
+// Test hooks used by admin_db_health_check_test.go (plan 10-03, package
+// api_test). These live in an _test.go file so the symbols do not ship in
+// production binaries.
+// -----------------------------------------------------------------------------
+
+// SetDBHealthJobLastRunAtForTest overwrites dbHealthJob.lastRunAt so
+// tests can simulate "a manual run completed N ago" without driving the
+// goroutine. The previous value is restored on t.Cleanup.
+//
+// Callers should have already invoked ResetDBHealthJobForTest(t) in the
+// same test body — otherwise state leaks from whatever test ran before.
+func SetDBHealthJobLastRunAtForTest(t *testing.T, when time.Time) {
+	t.Helper()
+	dbHealthJob.mu.Lock()
+	prev := dbHealthJob.lastRunAt
+	dbHealthJob.lastRunAt = when
+	dbHealthJob.mu.Unlock()
+	t.Cleanup(func() {
+		dbHealthJob.mu.Lock()
+		dbHealthJob.lastRunAt = prev
+		dbHealthJob.mu.Unlock()
+	})
+}
+
+// SetDBHealthJobRunningForTest forces the lease into state="running" with
+// startedAt=when. Used by the 409 already_running test. Previous fields
+// are captured & restored on t.Cleanup. Callers should still invoke
+// ResetDBHealthJobForTest(t) first to isolate from other tests.
+func SetDBHealthJobRunningForTest(t *testing.T, when time.Time) {
+	t.Helper()
+	dbHealthJob.mu.Lock()
+	prevState := dbHealthJob.state
+	prevStartedAt := dbHealthJob.startedAt
+	dbHealthJob.state = "running"
+	dbHealthJob.startedAt = when
+	dbHealthJob.mu.Unlock()
+	t.Cleanup(func() {
+		dbHealthJob.mu.Lock()
+		dbHealthJob.state = prevState
+		dbHealthJob.startedAt = prevStartedAt
+		dbHealthJob.mu.Unlock()
+	})
+}
+
+// DBHealthJobStateForTest returns the current dbHealthJob.state under
+// lock. Used by the goroutine-polling tests in plan 10-03 to wait for
+// the goroutine to flip state back to "idle".
+func DBHealthJobStateForTest() string {
+	dbHealthJob.mu.Lock()
+	defer dbHealthJob.mu.Unlock()
+	return dbHealthJob.state
+}
+
+// DBHealthJobLastStatusForTest returns dbHealthJob.lastStatus under lock.
+// The panic-recovery test asserts this is "panicked" after the goroutine
+// unwinds on a forced runner panic.
+func DBHealthJobLastStatusForTest() string {
+	dbHealthJob.mu.Lock()
+	defer dbHealthJob.mu.Unlock()
+	return dbHealthJob.lastStatus
+}
+
+// SetIntegrityCheckRunnerForTest swaps the package-level
+// integrityCheckRunner with the supplied function and registers a
+// t.Cleanup that restores the original (metadata.RunIntegrityCheckNow).
+//
+// Used by the panic-recovery test to inject a runner that panics on
+// every call, and by the audit-emission test to run the real runner
+// against the harness DB. The type signature here mirrors
+// metadata.RunIntegrityCheckNow verbatim so swapping does not widen the
+// contract the handler depends on.
+func SetIntegrityCheckRunnerForTest(
+	t *testing.T,
+	runner func(ctx context.Context, db *metadata.DB, settings *metadata.SettingsRepo, auditRec metadata.AuditRecorder, source string) (string, int64),
+) {
+	t.Helper()
+	prev := integrityCheckRunner
+	integrityCheckRunner = runner
+	t.Cleanup(func() { integrityCheckRunner = prev })
 }

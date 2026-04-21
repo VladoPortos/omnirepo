@@ -110,7 +110,7 @@ export function GitRepoPage({ repo }: GitRepoPageProps) {
     setViewingCommit(null);
   }, []);
 
-  const cloneUrl = `${window.location.protocol}//${hostname}/git/${projectName}/${repo.name}.git`;
+  const cloneUrl = `${window.location.protocol}//${hostname}/${projectName}/git/${repo.name}.git`;
 
   // EMPTY-03 for empty git repos: no refs = no commits pushed yet.
   // When zero refs, show an EmptyState with the git push snippet inline

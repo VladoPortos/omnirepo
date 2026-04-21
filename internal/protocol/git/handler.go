@@ -87,6 +87,11 @@ func New(d Deps) *Handler {
 //  5. PushSizeLimit — MaxBytesReader cap on wire bytes (D-33)
 //  6. AuditMiddleware — defer-style capture
 //
+// Two URL shapes are mounted with the same handler chain:
+//   - "/git/{project}/{repo}"   — legacy form (kept for compatibility)
+//   - "/{project}/git/{repo}"   — canonical form, matches every other
+//     protocol's "/{project}/{proto}/{repo}/..." layout.
+//
 // Plan 11 will wrap ReceivePack completion with a post-hook for refs walker.
 func (h *Handler) Mount(parent chi.Router) {
 	authDeps := authmw.Deps{
@@ -95,8 +100,15 @@ func (h *Handler) Mount(parent chi.Router) {
 		APIKeys:  h.apiKeys,
 		Projects: h.projects,
 	}
+	h.mountAt(parent, "/git/{project}/{repo}", authDeps)
+	h.mountAt(parent, "/{project}/git/{repo}", authDeps)
+}
 
-	parent.Route("/git/{project}/{repo}", func(r chi.Router) {
+// mountAt installs the full Git Smart-HTTP middleware chain at route on
+// parent. Extracted so Mount can install both the legacy and canonical
+// URL shapes without duplicating the chain.
+func (h *Handler) mountAt(parent chi.Router, route string, authDeps authmw.Deps) {
+	parent.Route(route, func(r chi.Router) {
 		r.Use(authmw.BasicOrAPIKey(authDeps))
 		r.Use(resolveMembership(h.members))
 		r.Use(ResolveRepoFromURL(h.projects, h.repos))
@@ -173,10 +185,14 @@ func SelectBackend(cfg config.Config) GitServer {
 func (h *Handler) TestRouter(t testing.TB) http.Handler {
 	t.Helper()
 	r := chi.NewRouter()
-	r.Route("/git/{project}/{repo}", func(sub chi.Router) {
-		sub.Use(ResolveRepoFromURL(h.projects, h.repos))
-		sub.Use(PerRepoMutex(h.locks))
-		sub.Handle("/*", http.HandlerFunc(h.dispatchToBackend))
-	})
+	mountTest := func(route string) {
+		r.Route(route, func(sub chi.Router) {
+			sub.Use(ResolveRepoFromURL(h.projects, h.repos))
+			sub.Use(PerRepoMutex(h.locks))
+			sub.Handle("/*", http.HandlerFunc(h.dispatchToBackend))
+		})
+	}
+	mountTest("/git/{project}/{repo}")
+	mountTest("/{project}/git/{repo}")
 	return r
 }

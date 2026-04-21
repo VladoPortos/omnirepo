@@ -141,7 +141,7 @@ export function getSnippets(
       return [
         {
           label: 'Clone',
-          cmd: `git clone https://${host}/git/${project}/${repo}.git`,
+          cmd: `git clone https://${host}/${project}/git/${repo}.git`,
         },
         {
           label: 'Authenticate',

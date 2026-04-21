@@ -118,7 +118,7 @@ describe('getSnippets', () => {
     const s = getSnippets('git', P, 'repo', HOST);
     expect(s).toHaveLength(2);
     expect(s[0].label).toBe('Clone');
-    expect(s[0].cmd).toBe(`git clone https://${HOST}/git/${P}/repo.git`);
+    expect(s[0].cmd).toBe(`git clone https://${HOST}/${P}/git/repo.git`);
     // No inline userinfo URL (credential leakage per S-05)
     for (const entry of s) {
       expect(entry.cmd).not.toMatch(/https:\/\/[^/\s]+:[^@\s]+@/);

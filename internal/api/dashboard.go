@@ -113,6 +113,12 @@ type vulnRow struct {
 	Project  string `json:"project"`
 	Repo     string `json:"repo"`
 	RepoType string `json:"repo_type"`
+	// Occurrences is how many vulnerability rows (i.e. how many scanned
+	// artifacts in this repo) share this CVE+package+severity tuple. The
+	// UI renders it as a "× N" badge so the list stops being dominated by
+	// ~20 identical rows when a popular CVE hits every mirrored version of
+	// a single package (F-3).
+	Occurrences int64 `json:"occurrences"`
 }
 
 type scanFindings struct {
@@ -257,16 +263,19 @@ func (d Deps) handleDashboard(w http.ResponseWriter, r *http.Request) {
 			"project_count_scoped")
 	}
 
-	// High-severity findings: top 20 CRITICAL/HIGH vulnerabilities with repo context.
-	// Single SQL shape for both global and scoped — scopeClause is empty for
-	// super-admin, so the strings.Replace below no-ops there. The
-	// p.deleted_at IS NULL join is what's new vs the pre-F-2 version.
+	// High-severity findings: top 20 distinct CRITICAL/HIGH
+	// (CVE, package, severity, repo) groups with an occurrence count,
+	// so a CVE that hits every mirrored version of a popular package
+	// collapses to one row with "× N" (F-3) instead of dominating the
+	// widget with ~20 identical entries. scopeClause is empty for
+	// super-admin, so the strings.Replace below no-ops there.
 	highSev := make([]vulnRow, 0)
 	{
 		hsArgs := make([]any, len(scopeArgs))
 		copy(hsArgs, scopeArgs)
 		hsSQL := `
-			SELECT v.cve_id, v.severity, v.package_name, p.name, r.name, r.type
+			SELECT v.cve_id, v.severity, v.package_name, p.name, r.name, r.type,
+			       COUNT(v.id) AS occurrences
 			FROM vulnerabilities v
 			JOIN scans s ON s.id = v.scan_id
 			JOIN repos r ON r.id = s.repo_id
@@ -274,13 +283,17 @@ func (d Deps) handleDashboard(w http.ResponseWriter, r *http.Request) {
 			WHERE v.severity IN ('CRITICAL','HIGH')
 			  AND r.deleted_at IS NULL
 			  AND p.deleted_at IS NULL` + strings.Replace(scopeClause, "project_id", "r.project_id", 1) + `
-			ORDER BY CASE v.severity WHEN 'CRITICAL' THEN 0 ELSE 1 END, v.id DESC
+			GROUP BY v.cve_id, v.severity, v.package_name, r.id
+			ORDER BY CASE v.severity WHEN 'CRITICAL' THEN 0 ELSE 1 END,
+			         occurrences DESC,
+			         MAX(v.id) DESC
 			LIMIT 20`
 		if hsRowsQ, err := d.DB.Reader.QueryContext(r.Context(), hsSQL, hsArgs...); err == nil {
 			defer func() { _ = hsRowsQ.Close() }()
 			for hsRowsQ.Next() {
 				var v vulnRow
-				if err := hsRowsQ.Scan(&v.CVEID, &v.Severity, &v.Package, &v.Project, &v.Repo, &v.RepoType); err != nil {
+				if err := hsRowsQ.Scan(&v.CVEID, &v.Severity, &v.Package,
+					&v.Project, &v.Repo, &v.RepoType, &v.Occurrences); err != nil {
 					break
 				}
 				highSev = append(highSev, v)

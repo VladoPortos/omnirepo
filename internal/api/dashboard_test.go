@@ -46,6 +46,56 @@ func TestDashboard_ReturnsStats(t *testing.T) {
 	}
 }
 
+// TestDashboard_HighSeverityDedupes verifies F-3: the High-Severity Findings
+// widget collapses identical (cve, package, severity, repo) tuples into one
+// row with an `occurrences` count instead of repeating the same CVE ~20x
+// because a popular package has 20 mirrored versions all flagged.
+func TestDashboard_HighSeverityDedupes(t *testing.T) {
+	s := newTestServer(t)
+	_, pw := seedTestUser(t, s.db, "root", "r@x", true, false)
+	cookie, _, code := s.login(t, "root", pw)
+	if code != 200 {
+		t.Fatalf("login code=%d", code)
+	}
+
+	ctx := context.Background()
+	pid, _ := s.deps.Projects.Create(ctx, "vulnproj", "")
+	repoID, _ := s.deps.Repos.Create(ctx, pid, "pypi", "wheels", "", nil, nil, nil)
+
+	// One scan, 5 vulnerability rows sharing the same CVE+package+severity —
+	// pre-F-3 the dashboard would return all 5 as separate rows.
+	res, err := s.db.Writer.ExecContext(ctx,
+		`INSERT INTO scans(repo_id, artifact_kind, artifact_id, status, started_at, finished_at)
+		 VALUES (?, 'pypi', 'requests-1.0.whl', 'done', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`, repoID)
+	if err != nil {
+		t.Fatalf("seed scan: %v", err)
+	}
+	scanID, _ := res.LastInsertId()
+	for range 5 {
+		if _, err := s.db.Writer.ExecContext(ctx,
+			`INSERT INTO vulnerabilities(scan_id, cve_id, severity, package_name)
+			 VALUES (?, 'CVE-2026-0001', 'HIGH', 'requests')`, scanID); err != nil {
+			t.Fatalf("seed vuln: %v", err)
+		}
+	}
+
+	resp, body := s.do(t, "GET", "/api/v1/dashboard", cookie, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("code=%d body=%v", resp.StatusCode, body)
+	}
+	hs, _ := body["high_severity"].([]any)
+	if len(hs) != 1 {
+		t.Fatalf("expected 1 deduped row, got %d: %v", len(hs), hs)
+	}
+	row := hs[0].(map[string]any)
+	if occ, _ := row["occurrences"].(float64); int(occ) != 5 {
+		t.Fatalf("expected occurrences=5 for the collapsed row, got %v", row["occurrences"])
+	}
+	if row["cve_id"] != "CVE-2026-0001" {
+		t.Fatalf("unexpected cve: %v", row["cve_id"])
+	}
+}
+
 // TestDashboard_SoftDeletedProjectDoesNotBleed verifies the Codex F-1/F-2/F-3
 // follow-up to F-4: a soft-deleted project's repos and their vulnerabilities
 // must not contribute to the dashboard aggregate tiles. Before the fix,

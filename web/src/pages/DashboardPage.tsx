@@ -1008,13 +1008,23 @@ function HighSeverityList({ items }: { items: DashboardVulnRow[] }) {
     <div className="space-y-2">
       {items.map((v, i) => (
         <Link
-          key={`${v.cve_id}-${i}`}
+          key={`${v.cve_id}-${v.project}-${v.repo}-${i}`}
           to={`/projects/${v.project}/${vulnRepoType(v)}/${v.repo}`}
           className="flex items-start gap-2 text-sm rounded-md px-1 -mx-1 py-0.5 hover:bg-muted/40 transition-colors"
         >
           <SeverityBadge severity={v.severity.toLowerCase()} className="mt-0.5 shrink-0" />
           <div className="min-w-0 flex-1">
             <span className="font-mono font-medium">{v.cve_id}</span>
+            {v.occurrences > 1 && (
+              // F-3: collapse duplicate rows into a single entry with an
+              // occurrence badge. Single-instance rows stay visually quiet.
+              <span
+                className="ml-1.5 rounded bg-muted px-1 py-0 text-[10px] font-medium tabular-nums text-muted-foreground"
+                title={`${v.occurrences} scanned artifacts in this repo share this CVE`}
+              >
+                ×{v.occurrences}
+              </span>
+            )}
             <span className="mx-1.5 text-muted-foreground">in</span>
             <span className="text-muted-foreground">
               {v.project}/{v.repo}

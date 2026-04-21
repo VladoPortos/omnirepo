@@ -704,6 +704,11 @@ export interface DashboardVulnRow {
   project: string;
   repo: string;
   repo_type: string;
+  // Count of scanned artifacts in this repo that share this CVE+package+
+  // severity. The dashboard widget surfaces it as a "× N" badge so a CVE
+  // hitting every mirrored version of a popular package doesn't dominate
+  // the list (F-3).
+  occurrences: number;
 }
 
 export interface DashboardResponse {

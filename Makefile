@@ -6,6 +6,7 @@ BENCH_WORKERS ?= 16
 .PHONY: dev build test test-airgap test-perf bench-sqlite bench-git-fixture bench-git \
 	vendor lint seed lint-protocol-redaction \
 	check-contrast lint-typography lint-spacing-carveout lint-axe-devdep \
+	lint-docs \
 	conformance conformance-oci conformance-rpm conformance-deb \
 	conformance-pypi conformance-helm conformance-s3 conformance-git \
 	test-git-conformance conformance-all \
@@ -14,7 +15,7 @@ BENCH_WORKERS ?= 16
 build:
 	$(GO) build -mod=vendor -o bin/omnirepo ./cmd/omnirepo
 
-test: lint-protocol-redaction check-contrast lint-typography lint-spacing-carveout lint-axe-devdep
+test: lint-protocol-redaction check-contrast lint-typography lint-spacing-carveout lint-axe-devdep lint-docs
 	$(GO) test -mod=vendor ./...
 	$(MAKE) test-airgap
 
@@ -259,3 +260,32 @@ lint-axe-devdep:
 		exit 1; \
 	fi; \
 	echo "lint-axe-devdep: clean (axe is devDep only)"
+
+# lint-docs (CRONDOCS-04 / Phase 10 D-22..D-25): shellcheck the canonical
+# bash snippet embedded in docs/operations/scheduled-sync.md. The doc IS
+# the fixture — no sidecar script — so any edit to the documented cron
+# example goes through shellcheck on the same PR.
+#
+# Extraction: scripts/extract-doc-snippet.go walks the markdown line by
+# line, finds `<!-- shellcheck-id: scheduled-sync -->`, and pipes the
+# body of the following ```bash fence to a tmpfile.
+# Linting:    default severity bar (error + warning) per D-24 — NO `-S`
+# override that would hide real issues. Inline disables (if ever needed)
+# must be added in the doc itself as `# shellcheck disable=SCxxxx`.
+# Local dev: shellcheck is not a hard install dep; the target exits 0
+# with a skip note when absent (D-25) so `make test` stays green on
+# fresh laptops. CI installs shellcheck explicitly via apt-get in
+# .github/workflows/ci.yml so the gate fires there.
+lint-docs:
+	@set -e; \
+	if ! command -v shellcheck >/dev/null 2>&1; then \
+		echo "lint-docs: shellcheck not installed — skipping (install via apt-get install shellcheck)"; \
+		exit 0; \
+	fi; \
+	TMP=$$(mktemp); \
+	trap 'rm -f $$TMP' EXIT; \
+	$(GO) run -mod=vendor scripts/extract-doc-snippet.go \
+		--id scheduled-sync \
+		--file docs/operations/scheduled-sync.md > $$TMP; \
+	shellcheck $$TMP; \
+	echo "lint-docs: clean"

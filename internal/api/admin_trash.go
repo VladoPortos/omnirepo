@@ -265,7 +265,13 @@ func formatRetention(d time.Duration) string {
 		return fmt.Sprintf("%s%dd %dh", neg, days, hours)
 	case hours > 0:
 		return fmt.Sprintf("%s%dh %dm", neg, hours, minutes)
-	default:
+	case minutes > 0:
 		return fmt.Sprintf("%s%dm", neg, minutes)
+	case neg != "":
+		// Entry just tipped into GC-eligible territory; avoid rendering
+		// "-0m" which reads as a no-op. "<1m past" communicates intent.
+		return "<1m past"
+	default:
+		return "<1m"
 	}
 }

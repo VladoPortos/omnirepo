@@ -26,8 +26,11 @@ package api
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"io/fs"
+	"log/slog"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -38,8 +41,10 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/dxc-internal/omnirepo/internal/audit"
 	"github.com/dxc-internal/omnirepo/internal/auth"
 	authmw "github.com/dxc-internal/omnirepo/internal/auth/middleware"
+	"github.com/dxc-internal/omnirepo/internal/httperr"
 	"github.com/dxc-internal/omnirepo/internal/metadata"
 )
 
@@ -287,16 +292,19 @@ func journalModeFromDSN() string {
 
 // mountAdminDBHealth installs the DB-health admin endpoints on r.
 //
-// This plan (10-02) mounts only the GET route. Plan 10-03 will append
-// the POST /admin/db/health/check route under the same super-admin gate
-// and the same dbHealthJob lease. Keep the mount function the single
-// entry point so admin_phase1.go's registration remains one line.
+// Two routes, same super-admin gate (auth.ActionTriggerGC — the GC/DB
+// operator policy), same dbHealthJob lease:
+//
+//   - GET  /admin/db/health        — read cached payload (plan 10-02)
+//   - POST /admin/db/health/check  — trigger manual integrity_check (plan 10-03)
+//
+// Keep the mount function the single entry point so admin_phase1.go's
+// registration remains one line.
 func (d Deps) mountAdminDBHealth(r chi.Router) {
 	r.With(authmw.RequireCan(auth.ActionTriggerGC)).
 		Get("/admin/db/health", d.handleDBHealth)
-	// Plan 10-03 will append:
-	//   r.With(authmw.RequireCan(auth.ActionTriggerGC)).
-	//       Post("/admin/db/health/check", d.handleDBHealthCheck)
+	r.With(authmw.RequireCan(auth.ActionTriggerGC)).
+		Post("/admin/db/health/check", d.handleDBHealthCheck)
 }
 
 // handleDBHealth assembles the full DBHealthCard payload. Route-level
@@ -398,4 +406,249 @@ func (d Deps) handleDBHealth(w http.ResponseWriter, r *http.Request) {
 		"last_manual_run_at": lastManualRunAt,
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// -----------------------------------------------------------------------------
+// POST /admin/db/health/check — manual-trigger integrity_check (plan 10-03)
+// -----------------------------------------------------------------------------
+
+// integrityCheckRunner is the function invoked by handleDBHealthCheck's
+// goroutine to actually run the PRAGMA. Package-level indirection lets
+// tests swap in a panicking stub to verify the defer+recover lease unwind
+// (Pitfall 10.4). Production value is metadata.RunIntegrityCheckNow.
+//
+// Signature matches metadata.RunIntegrityCheckNow verbatim: (ctx, db,
+// settings, auditRec, source) -> (status, durationMs).
+var integrityCheckRunner = metadata.RunIntegrityCheckNow
+
+// apiAuditAdapter bridges metadata.AuditRecorder (the minimal interface
+// RunIntegrityCheckNow emits through) to the concrete audit.Logger wired
+// on Deps. Same cycle-break pattern internal/app/boot_integrity.go uses
+// for the boot-time call; duplicated here so plan 10-03's manual-trigger
+// goroutine can emit .completed/.failed with an actor attribution that
+// the boot path (nil user) cannot supply.
+type apiAuditAdapter struct {
+	logger     audit.Logger
+	actorID    *int64 // captured from request context before the goroutine runs
+	remoteAddr string
+	userAgent  string
+}
+
+// Record implements metadata.AuditRecorder. Translates the string kind
+// back to audit.EventKind and attaches the captured actor attribution.
+// Best-effort: any error from the underlying logger is logged at WARN
+// but never propagated — the integrity-check path is log+cache+continue
+// (Pitfall 10.3).
+func (a *apiAuditAdapter) Record(ctx context.Context, kind string, details map[string]any) {
+	if a == nil || a.logger == nil {
+		return
+	}
+	ev := audit.Event{
+		Kind:        audit.EventKind(kind),
+		ActorUserID: a.actorID,
+		TargetKind:  "db",
+		Outcome:     "manual",
+		Details:     details,
+		IP:          a.remoteAddr,
+		UserAgent:   a.userAgent,
+	}
+	if err := a.logger.Record(ctx, ev); err != nil {
+		slog.WarnContext(ctx, "admin.integrity_check.audit_record_failed",
+			"err", err, "kind", kind)
+	}
+}
+
+// Compile-time proof that apiAuditAdapter satisfies metadata.AuditRecorder.
+// Mirrors the boot adapter's proof in internal/app/boot_integrity.go —
+// catches shape drift on the interface at build time.
+var _ metadata.AuditRecorder = (*apiAuditAdapter)(nil)
+
+// computeRetryAfterSec returns the ceiling of (window - elapsed-since-lastRun)
+// in whole seconds. Guaranteed >= 1 while inside the rate-limit window;
+// extracted so tests can pin the arithmetic without driving the HTTP path.
+func computeRetryAfterSec(lastRunAt time.Time, window time.Duration) int {
+	remaining := window - time.Since(lastRunAt)
+	if remaining <= 0 {
+		return 0
+	}
+	secs := int(math.Ceil(remaining.Seconds()))
+	if secs < 1 {
+		secs = 1
+	}
+	return secs
+}
+
+// mustJSON serialises v to JSON bytes, returning nil on error. Used for the
+// audit Details passthrough where serialisation failure is non-fatal — the
+// audit table's details_json column accepts NULL/empty (OQ-9 best-effort).
+func mustJSON(v any) []byte {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return nil
+	}
+	return b
+}
+
+// handleDBHealthCheck is the POST handler for manual integrity-check
+// triggering. Super-admin gating is applied by mountAdminDBHealth's
+// authmw.RequireCan(auth.ActionTriggerGC); no in-handler auth checks.
+//
+// Flow:
+//   1. Acquire dbHealthJob.mu (blocking Lock — see <lock_semantics> in the
+//      plan context; critical section is sub-millisecond state transitions).
+//   2. If state == "running" → 409 integrity_check.already_running (with
+//      details.job_started_at).
+//   3. Else check rate-limit window (lastRunAt + 1h > now) → 429
+//      integrity_check.rate_limited (with details.retry_after_seconds and
+//      Retry-After HTTP header).
+//   4. Else acquire lease: state="running", startedAt=now.
+//   5. Emit admin.integrity_check.triggered audit event (actor captured
+//      from request context before the goroutine launches).
+//   6. Launch detached-context goroutine (10-min timeout — matches
+//      admin_trivy.go's pattern). The goroutine's defer+recover() releases
+//      the lease on panic (Pitfall 10.4). RunIntegrityCheckNow handles
+//      the .completed/.failed audit emit itself.
+//   7. Return 202 Accepted with {job_started_at: RFC3339}.
+//
+// Lock is held ONLY during state transitions — never across the
+// integrity_check PRAGMA itself.
+func (d Deps) handleDBHealthCheck(w http.ResponseWriter, r *http.Request) {
+	// --- Step 1-4: lease acquisition under dbHealthJob.mu ---
+	dbHealthJob.mu.Lock()
+
+	// Step 2: another check already running → 409.
+	if dbHealthJob.state == "running" {
+		startedAtRFC := dbHealthJob.startedAt.UTC().Format(time.RFC3339)
+		dbHealthJob.mu.Unlock()
+		httperr.Write(w, r, &httperr.Error{
+			Envelope: httperr.Envelope{
+				Code:    "integrity_check.already_running",
+				Message: "An integrity check is already running.",
+				Class:   httperr.ClassTransient,
+				Details: map[string]any{
+					"job_started_at": startedAtRFC,
+				},
+			},
+			Status: http.StatusConflict,
+		})
+		return
+	}
+
+	// Step 3: rate-limit window check. Only applies when a previous manual
+	// run actually completed (lastRunAt non-zero). Never-run lease → skip.
+	if !dbHealthJob.lastRunAt.IsZero() &&
+		time.Since(dbHealthJob.lastRunAt) < integrityRateLimitWindow {
+		retrySec := computeRetryAfterSec(dbHealthJob.lastRunAt, integrityRateLimitWindow)
+		dbHealthJob.mu.Unlock()
+		// Retry-After HTTP header — required by RFC 7231 §7.1.3 when
+		// serving 429. Set BEFORE httperr.Write (which calls WriteHeader).
+		w.Header().Set("Retry-After", strconv.Itoa(retrySec))
+		httperr.Write(w, r, &httperr.Error{
+			Envelope: httperr.Envelope{
+				Code:    "integrity_check.rate_limited",
+				Message: "Manual integrity check is rate-limited to once per hour.",
+				Class:   httperr.ClassTransient,
+				Details: map[string]any{
+					"retry_after_seconds": retrySec,
+				},
+			},
+			Status: http.StatusTooManyRequests,
+		})
+		return
+	}
+
+	// Step 4: acquire the lease. Copy startedAt into a local for the 202
+	// response BEFORE releasing the lock so the goroutine cannot race with
+	// us mutating it (the goroutine itself never touches startedAt — it
+	// only flips state back to "idle" — but snapshotting under lock is
+	// the safest discipline and costs nothing).
+	now := time.Now()
+	dbHealthJob.state = "running"
+	dbHealthJob.startedAt = now
+	startedAtRFC := now.UTC().Format(time.RFC3339)
+	dbHealthJob.mu.Unlock()
+
+	// --- Step 5: capture actor + emit .triggered audit event ---
+	// Actor is captured from r.Context() BEFORE the goroutine launches
+	// because the request context is cancelled as soon as handleDBHealthCheck
+	// returns; the goroutine uses a detached context for its work.
+	var userID *int64
+	if a, ok := auth.ActorFromContext(r.Context()); ok && a.ID != 0 {
+		uid := a.ID
+		userID = &uid
+	}
+
+	d.recordAudit(r, audit.Event{
+		Kind:        audit.EvtIntegrityCheckTriggered,
+		ActorUserID: userID,
+		TargetKind:  "db",
+		Outcome:     "triggered",
+		Details:     map[string]any{"source": "manual"},
+	})
+
+	// --- Step 6: launch the detached-context goroutine ---
+	// Build the audit adapter on the caller's side so the actor attribution
+	// travels with every .completed/.failed event emitted by
+	// RunIntegrityCheckNow. remoteAddr + userAgent captured for IP/UA audit
+	// columns (mirrors the synchronous recordAudit path).
+	adapter := &apiAuditAdapter{
+		logger:     d.Audit,
+		actorID:    userID,
+		remoteAddr: r.RemoteAddr,
+		userAgent:  r.Header.Get("User-Agent"),
+	}
+
+	go d.runIntegrityCheckManual(adapter)
+
+	// --- Step 7: 202 Accepted ---
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"job_started_at": startedAtRFC,
+	})
+}
+
+// runIntegrityCheckManual is the goroutine body launched by
+// handleDBHealthCheck. Isolated as a method so the defer+recover+unwind
+// logic is easy to audit and so the test suite can drive it without
+// spinning up an HTTP request.
+//
+// Lifecycle:
+//   1. defer recovers panics (Pitfall 10.4 — lease must be released even
+//      if RunIntegrityCheckNow panics mid-flight) and flips state back to
+//      "idle" with lastStatus="panicked" so subsequent POSTs don't 409.
+//   2. Call integrityCheckRunner (= metadata.RunIntegrityCheckNow) with a
+//      detached context (10-min cap, matching admin_trivy.go's runTrivyDBPull).
+//      RunIntegrityCheckNow handles the .completed/.failed audit emit itself.
+//   3. On normal return: flip state back to "idle", stamp lastRunAt=now
+//      (drives the rate-limit window for subsequent POSTs), lastStatus=result.
+//
+// The lease is only ever held under dbHealthJob.mu for sub-ms transitions;
+// the PRAGMA itself runs outside the lock.
+func (d Deps) runIntegrityCheckManual(adapter *apiAuditAdapter) {
+	bgCtx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+
+	// Panic-safety defer MUST run before any other work so that even a
+	// runner-constructor panic (e.g. nil deref accessing d.DB inside the
+	// runner) still releases the lease.
+	defer func() {
+		if rec := recover(); rec != nil {
+			slog.ErrorContext(bgCtx, "admin.integrity_check.manual.panic",
+				"panic", rec)
+			dbHealthJob.mu.Lock()
+			dbHealthJob.state = "idle"
+			dbHealthJob.lastRunAt = time.Now()
+			dbHealthJob.lastStatus = "panicked"
+			dbHealthJob.mu.Unlock()
+		}
+	}()
+
+	status, _ := integrityCheckRunner(bgCtx, d.DB, d.Settings, adapter, "manual")
+
+	// Normal-completion lease unwind. The panic defer does NOT double-run
+	// because recover() returns nil when no panic is in flight.
+	dbHealthJob.mu.Lock()
+	dbHealthJob.state = "idle"
+	dbHealthJob.lastRunAt = time.Now()
+	dbHealthJob.lastStatus = status
+	dbHealthJob.mu.Unlock()
 }

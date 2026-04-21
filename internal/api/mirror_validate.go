@@ -23,6 +23,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/url"
 	"unicode/utf8"
@@ -73,7 +74,11 @@ func validateMirrorUpstreamURL(raw string) bool {
 
 // debFilterShape mirrors internal/protocol/deb.SyncFilter. Keeps the api
 // package cycle-free. PascalCase JSON keys match Go's default encoding of
-// the source struct (no json tags).
+// the source struct (no json tags) — that is the canonical *stored* shape
+// in mirror_filter_json. The UnmarshalJSON below ALSO accepts snake_case
+// keys (D-3) so REST/CLI callers can use the same casing convention as
+// the rest of the OmniRepo API. Mixed-case payloads are not allowed —
+// pick one.
 type debFilterShape struct {
 	Names      []string `json:"Names,omitempty"`
 	Globs      []string `json:"Globs,omitempty"`
@@ -82,10 +87,93 @@ type debFilterShape struct {
 	Arches     []string `json:"Arches,omitempty"`
 }
 
-// rpmFilterShape mirrors internal/protocol/rpm.SyncFilter.
+// debFilterShapeBoth is the decode-side intermediate that recognizes BOTH
+// the legacy PascalCase keys and the new snake_case keys for D-3. The
+// non-empty side wins per field; if both sides are populated for the same
+// field UnmarshalJSON returns an error so we don't silently drop one.
+type debFilterShapeBoth struct {
+	NamesP      []string `json:"Names,omitempty"`
+	GlobsP      []string `json:"Globs,omitempty"`
+	SuitesP     []string `json:"Suites,omitempty"`
+	ComponentsP []string `json:"Components,omitempty"`
+	ArchesP     []string `json:"Arches,omitempty"`
+	NamesS      []string `json:"names,omitempty"`
+	GlobsS      []string `json:"globs,omitempty"`
+	SuitesS     []string `json:"suites,omitempty"`
+	ComponentsS []string `json:"components,omitempty"`
+	ArchesS     []string `json:"arches,omitempty"`
+}
+
+func (f *debFilterShape) UnmarshalJSON(data []byte) error {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	var b debFilterShapeBoth
+	if err := dec.Decode(&b); err != nil {
+		return err
+	}
+	var err error
+	if f.Names, err = pickEitherCase("Names", b.NamesP, b.NamesS); err != nil {
+		return err
+	}
+	if f.Globs, err = pickEitherCase("Globs", b.GlobsP, b.GlobsS); err != nil {
+		return err
+	}
+	if f.Suites, err = pickEitherCase("Suites", b.SuitesP, b.SuitesS); err != nil {
+		return err
+	}
+	if f.Components, err = pickEitherCase("Components", b.ComponentsP, b.ComponentsS); err != nil {
+		return err
+	}
+	if f.Arches, err = pickEitherCase("Arches", b.ArchesP, b.ArchesS); err != nil {
+		return err
+	}
+	return nil
+}
+
+// rpmFilterShape mirrors internal/protocol/rpm.SyncFilter. PyPI and Helm
+// share the same shape via type aliases below — defining UnmarshalJSON
+// here covers all three protocols.
 type rpmFilterShape struct {
 	Names []string `json:"Names,omitempty"`
 	Globs []string `json:"Globs,omitempty"`
+}
+
+type rpmFilterShapeBoth struct {
+	NamesP []string `json:"Names,omitempty"`
+	GlobsP []string `json:"Globs,omitempty"`
+	NamesS []string `json:"names,omitempty"`
+	GlobsS []string `json:"globs,omitempty"`
+}
+
+func (f *rpmFilterShape) UnmarshalJSON(data []byte) error {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	var b rpmFilterShapeBoth
+	if err := dec.Decode(&b); err != nil {
+		return err
+	}
+	var err error
+	if f.Names, err = pickEitherCase("Names", b.NamesP, b.NamesS); err != nil {
+		return err
+	}
+	if f.Globs, err = pickEitherCase("Globs", b.GlobsP, b.GlobsS); err != nil {
+		return err
+	}
+	return nil
+}
+
+// pickEitherCase chooses between PascalCase and snake_case values for the
+// same logical field. Returns an error when both sides are populated so
+// the caller surfaces mirror_filter_invalid rather than silently dropping
+// one of the inputs.
+func pickEitherCase(field string, pascal, snake []string) ([]string, error) {
+	if len(pascal) > 0 && len(snake) > 0 {
+		return nil, fmt.Errorf("filter: %s specified in both PascalCase and snake_case — pick one", field)
+	}
+	if len(snake) > 0 {
+		return snake, nil
+	}
+	return pascal, nil
 }
 
 // pypiFilterShape mirrors internal/protocol/pypi.SyncFilter.

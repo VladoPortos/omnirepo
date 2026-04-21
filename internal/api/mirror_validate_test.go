@@ -178,3 +178,62 @@ func TestValidateMirrorUpstreamURL(t *testing.T) {
 		}
 	}
 }
+
+// --- D-3: snake_case mirror filter keys ---
+
+func TestValidateMirrorFilter_AcceptsSnakeCase(t *testing.T) {
+	// Every other OmniRepo REST surface uses snake_case; the filter shape was
+	// the only PascalCase outlier (matched the Go struct's default JSON
+	// encoding). D-3 widens decoding to accept snake_case keys too while
+	// keeping PascalCase as the canonical *stored* form.
+	cases := []struct {
+		repoType string
+		raw      string
+	}{
+		{"deb", `{"names":["bash"],"globs":["lib*"],"suites":["jammy"],"components":["main"],"arches":["amd64"]}`},
+		{"rpm", `{"names":["systemd"],"globs":["lib*"]}`},
+		{"pypi", `{"names":["requests"]}`},
+		{"helm", `{"globs":["nginx-*"]}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.repoType, func(t *testing.T) {
+			ok, out := validateMirrorFilter(tc.repoType, json.RawMessage(tc.raw))
+			if !ok {
+				t.Fatalf("snake_case filter must validate, got rejection. raw=%s", tc.raw)
+			}
+			// Stored canonical form stays PascalCase (Go struct default).
+			s := string(out)
+			if !strings.Contains(s, `"Names"`) && !strings.Contains(s, `"Globs"`) &&
+				!strings.Contains(s, `"Suites"`) && !strings.Contains(s, `"Components"`) &&
+				!strings.Contains(s, `"Arches"`) {
+				t.Fatalf("canonical re-encode lost all PascalCase keys: %s", s)
+			}
+		})
+	}
+}
+
+func TestValidateMirrorFilter_AcceptsPascalCaseUnchanged(t *testing.T) {
+	// Back-compat: previously-stored PascalCase payloads continue to validate.
+	raw := json.RawMessage(`{"Names":["bash"],"Globs":["lib*"]}`)
+	ok, out := validateMirrorFilter("rpm", raw)
+	if !ok {
+		t.Fatalf("legacy PascalCase filter must still validate")
+	}
+	if !strings.Contains(string(out), `"Names":["bash"]`) {
+		t.Fatalf("PascalCase round-trip lost Names: %s", out)
+	}
+}
+
+func TestValidateMirrorFilter_RejectsMixedCasingForSameField(t *testing.T) {
+	// Sending both "Names" and "names" is ambiguous — refuse rather than
+	// silently picking one and dropping the other.
+	cases := []string{
+		`{"Names":["a"],"names":["b"]}`,
+		`{"Globs":["x"],"globs":["y"]}`,
+	}
+	for _, raw := range cases {
+		if ok, _ := validateMirrorFilter("rpm", json.RawMessage(raw)); ok {
+			t.Errorf("mixed-casing payload must be rejected: %s", raw)
+		}
+	}
+}

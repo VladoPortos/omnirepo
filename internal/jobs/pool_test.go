@@ -165,17 +165,20 @@ func TestPool_NoHandlerMarksFailed(t *testing.T) {
 	defer cancel()
 	go p.Run(ctx)
 
-	deadline := time.Now().Add(3 * time.Second)
+	// The row is initially {status='pending', attempts=0}. The worker
+	// leases it (status='running'), markFailed flips it back to
+	// 'pending' and increments attempts in a single UPDATE. Polling on
+	// status alone races the initial state — the test was reading the
+	// pre-lease snapshot and asserting attempts>=1, which intermittently
+	// failed. Wait until attempts have actually advanced (or we see the
+	// terminal 'failed' status after MaxAttempts retries) before
+	// asserting.
+	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		var status string
-		_ = db.Reader.QueryRow(`SELECT status FROM sync_jobs WHERE id=?`, id).Scan(&status)
-		if status == "pending" { // one retry scheduled, that's enough to prove markFailed ran
-			// Also verify attempts was incremented.
-			var att int64
-			_ = db.Reader.QueryRow(`SELECT attempts FROM sync_jobs WHERE id=?`, id).Scan(&att)
-			if att < 1 {
-				t.Fatalf("attempts=%d want >= 1", att)
-			}
+		var attempts int64
+		_ = db.Reader.QueryRow(`SELECT status, attempts FROM sync_jobs WHERE id=?`, id).Scan(&status, &attempts)
+		if attempts >= 1 && (status == "pending" || status == "failed") {
 			p.Shutdown(ctx, 500*time.Millisecond)
 			return
 		}

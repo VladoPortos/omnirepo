@@ -138,14 +138,19 @@ func (d Deps) handleGitRefs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Query from git_refs table (populated by post-ReceivePack hook). The
-	// table stores every ref including the symbolic HEAD pointer; the
-	// OpenAPI contract for this endpoint (GitRef schema) only defines
-	// branch/tag entries with a `sha` field, so we both filter out
-	// `symbolic` rows AND emit the target column under the `sha` name so
-	// the wire shape matches the spec (previously the handler emitted
-	// `target` and included HEAD, which broke the React git detail page
-	// with `TypeError: Cannot read properties of undefined (reading
-	// 'slice')`).
+	// table stores every ref including the symbolic HEAD pointer and full
+	// ref names ("refs/heads/main"); the OpenAPI contract for this
+	// endpoint (GitRef schema) only defines branch/tag entries with a
+	// `sha` field, and the `ref` path parameter on /tree, /blob, /commits
+	// is a single URL segment, so we:
+	//   1. Filter symbolic rows (HEAD) at SQL level — they are not in the
+	//      documented enum and leak a ref-path value ("refs/heads/main")
+	//      where the spec promises a SHA.
+	//   2. Strip the `refs/heads/` / `refs/tags/` prefix from the emitted
+	//      `name` so the client uses "main" / "v1.0" etc. as the path
+	//      parameter (previously the client passed "refs/heads/main" as a
+	//      multi-segment path which chi 404'd).
+	//   3. Rename `target` → `sha` so the wire shape matches the spec.
 	gitRefs := d.DB.Reader
 	rows, err := gitRefs.QueryContext(r.Context(), `
 		SELECT name, target, type FROM git_refs
@@ -170,10 +175,26 @@ func (d Deps) handleGitRefs(w http.ResponseWriter, r *http.Request) {
 			writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 			return
 		}
+		item.Name = shortRefName(item.Name, item.Type)
 		items = append(items, item)
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+// shortRefName strips the "refs/heads/" or "refs/tags/" prefix from a full
+// ref name so clients can pass it back as a single URL path segment (chi
+// doesn't route multi-segment parameters). Unknown prefixes are returned
+// untouched so custom ref namespaces still surface usefully.
+func shortRefName(full, kind string) string {
+	switch kind {
+	case "branch":
+		return strings.TrimPrefix(full, "refs/heads/")
+	case "tag":
+		return strings.TrimPrefix(full, "refs/tags/")
+	default:
+		return full
+	}
 }
 
 func (d Deps) handleGitTree(w http.ResponseWriter, r *http.Request) {

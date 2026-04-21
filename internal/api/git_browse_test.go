@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -221,7 +222,7 @@ func TestGitBrowse_RefsMatchOpenAPIContract(t *testing.T) {
 	}
 	writeRef("HEAD", "refs/heads/main", "symbolic")
 	writeRef("refs/heads/main", "708d53ca02af99f509db472ff519fc69bbd8bf3d", "branch")
-	writeRef("refs/tags/v1", "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", "tag")
+	writeRef("refs/tags/v1.0", "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", "tag")
 
 	resp, body := s.do(t, "GET", "/api/v1/projects/refproj/repos/git/refrepo/refs", cookie, nil)
 	if resp.StatusCode != http.StatusOK {
@@ -234,19 +235,41 @@ func TestGitBrowse_RefsMatchOpenAPIContract(t *testing.T) {
 	if len(items) != 2 {
 		t.Fatalf("expected 2 refs (HEAD filtered), got %d: %v", len(items), items)
 	}
+	// Map by name so assertions don't depend on iteration order.
+	byName := map[string]map[string]any{}
 	for _, it := range items {
 		m := it.(map[string]any)
+		byName[m["name"].(string)] = m
+	}
+	if _, ok := byName["main"]; !ok {
+		t.Fatalf("branch ref should be emitted as short name \"main\", got keys %v", keysOf(byName))
+	}
+	if _, ok := byName["v1.0"]; !ok {
+		t.Fatalf("tag ref should be emitted as short name \"v1.0\", got keys %v", keysOf(byName))
+	}
+	for name, m := range byName {
+		if strings.HasPrefix(name, "refs/") {
+			t.Fatalf("ref %q still carries the refs/heads or refs/tags prefix — downstream /tree/{ref} routes are single-segment", name)
+		}
 		if _, ok := m["sha"].(string); !ok {
-			t.Fatalf("ref missing `sha` string field (OpenAPI contract): %v", m)
+			t.Fatalf("ref %q missing `sha` string field (OpenAPI contract): %v", name, m)
 		}
 		if _, ok := m["target"]; ok {
-			t.Fatalf("ref still emits legacy `target` key (should be renamed to `sha`): %v", m)
+			t.Fatalf("ref %q still emits legacy `target` key (should be renamed to `sha`): %v", name, m)
 		}
 		kind, _ := m["type"].(string)
 		if kind != "branch" && kind != "tag" {
-			t.Fatalf("ref type=%q outside OpenAPI enum [branch, tag]", kind)
+			t.Fatalf("ref %q type=%q outside OpenAPI enum [branch, tag]", name, kind)
 		}
 	}
+}
+
+func keysOf(m map[string]map[string]any) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
 }
 
 func TestGitBrowse_NonMemberDenied(t *testing.T) {

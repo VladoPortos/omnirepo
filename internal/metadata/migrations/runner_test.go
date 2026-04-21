@@ -51,6 +51,67 @@ func TestApplyFreshDB(t *testing.T) {
 	}
 }
 
+// TestMigration026_LiveOnlyUnique verifies F-7: after migration 026, the
+// users / projects / s3_buckets tables enforce uniqueness only against
+// live rows (deleted_at IS NULL). Re-creating a login/name after the
+// previous holder is soft-deleted must succeed; a collision between two
+// LIVE rows must still fail.
+func TestMigration026_LiveOnlyUnique(t *testing.T) {
+	t.Parallel()
+	db := openFreshDB(t)
+	ctx := context.Background()
+	if _, err := migrations.Apply(ctx, db.Writer); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+
+	mustWrite := func(q string, args ...any) {
+		t.Helper()
+		if _, err := db.Writer.ExecContext(ctx, q, args...); err != nil {
+			t.Fatalf("write %q: %v", q, err)
+		}
+	}
+	mustWrite(`INSERT INTO users(login,email,password_hash) VALUES('alice','a@x','hash')`)
+	mustWrite(`UPDATE users SET deleted_at=CURRENT_TIMESTAMP WHERE login='alice'`)
+	// Must succeed after 026 — fails pre-026 with "UNIQUE constraint failed: users.login".
+	if _, err := db.Writer.ExecContext(ctx,
+		`INSERT INTO users(login,email,password_hash) VALUES('alice','a2@x','hash')`); err != nil {
+		t.Fatalf("re-create soft-deleted login: %v (F-7 regression)", err)
+	}
+
+	// A second LIVE alice must still fail — partial UNIQUE index enforces.
+	if _, err := db.Writer.ExecContext(ctx,
+		`INSERT INTO users(login,email,password_hash) VALUES('alice','a3@x','hash')`); err == nil {
+		t.Fatalf("two LIVE rows with the same login accepted — partial UNIQUE index missing?")
+	}
+
+	// Same drill for projects.
+	mustWrite(`INSERT INTO projects(name) VALUES('acme')`)
+	mustWrite(`UPDATE projects SET deleted_at=CURRENT_TIMESTAMP WHERE name='acme'`)
+	if _, err := db.Writer.ExecContext(ctx, `INSERT INTO projects(name) VALUES('acme')`); err != nil {
+		t.Fatalf("re-create soft-deleted project: %v", err)
+	}
+	if _, err := db.Writer.ExecContext(ctx, `INSERT INTO projects(name) VALUES('acme')`); err == nil {
+		t.Fatalf("two LIVE projects with the same name accepted")
+	}
+
+	// And s3_buckets. Needs a project row for the FK.
+	var pid int64
+	if err := db.Reader.QueryRowContext(ctx,
+		`SELECT id FROM projects WHERE name='acme' AND deleted_at IS NULL`).Scan(&pid); err != nil {
+		t.Fatalf("lookup live acme id: %v", err)
+	}
+	mustWrite(`INSERT INTO s3_buckets(name,project_id) VALUES('cache',?)`, pid)
+	mustWrite(`UPDATE s3_buckets SET deleted_at=CURRENT_TIMESTAMP WHERE name='cache'`)
+	if _, err := db.Writer.ExecContext(ctx,
+		`INSERT INTO s3_buckets(name,project_id) VALUES('cache',?)`, pid); err != nil {
+		t.Fatalf("re-create soft-deleted bucket: %v", err)
+	}
+	if _, err := db.Writer.ExecContext(ctx,
+		`INSERT INTO s3_buckets(name,project_id) VALUES('cache',?)`, pid); err == nil {
+		t.Fatalf("two LIVE buckets with the same name accepted")
+	}
+}
+
 func TestApplyIdempotent(t *testing.T) {
 	t.Parallel()
 	db := openFreshDB(t)

@@ -25,9 +25,13 @@ import (
 	"github.com/dxc-internal/omnirepo/internal/jobs"
 	"github.com/dxc-internal/omnirepo/internal/metadata"
 	"github.com/dxc-internal/omnirepo/internal/metadata/migrations"
+	"github.com/dxc-internal/omnirepo/internal/protocol/deb"
 	gitpkg "github.com/dxc-internal/omnirepo/internal/protocol/git"
+	"github.com/dxc-internal/omnirepo/internal/protocol/helm"
 	"github.com/dxc-internal/omnirepo/internal/protocol/oci"
+	"github.com/dxc-internal/omnirepo/internal/protocol/pypi"
 	"github.com/dxc-internal/omnirepo/internal/protocol/raw"
+	"github.com/dxc-internal/omnirepo/internal/protocol/rpm"
 	s3handler "github.com/dxc-internal/omnirepo/internal/protocol/s3"
 	s3backend "github.com/dxc-internal/omnirepo/internal/protocol/s3/backend"
 	s3keys "github.com/dxc-internal/omnirepo/internal/protocol/s3/keys"
@@ -400,8 +404,24 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 	// other protocol wirings below still want to share the same Locks
 	// instance.
 	sharedLocks := storage.NewLocks()
+	// Plan 02-09 / SCAN-07: block_on_severity gate. The signature is
+	// identical across protocols but Go's nominal function typing requires
+	// a per-protocol adapter. Cache + DB lookups are shared via
+	// severityCache (constructed earlier alongside the OCI gate).
+	rawGate := raw.NewSeverityGate(
+		metadata.NewReposRepo(db),
+		metadata.NewScansRepo(db),
+		severityCache,
+		auditLogger,
+	)
+	helmGate := helm.SeverityGateFn(rawGate)
+	pypiGate := pypi.SeverityGateFn(rawGate)
+	rpmGate := rpm.SeverityGateFn(rawGate)
+	debGate := deb.SeverityGateFn(rawGate)
+
 	helmRegistry, helmMirror := helmDeps{
 		cfg: cfg, db: db, auditLogger: auditLogger, locks: sharedLocks,
+		severity: helmGate,
 	}.wireHelm(router)
 	defer shutdownHelmRegistry(context.Background(), helmRegistry)
 	ociHelmMirrorHook := wireHelmMirror(ociCAS, helmMirror)
@@ -557,18 +577,21 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 	// other protocol registries do not need that coupling.
 	pypiRegistry := pypiDeps{
 		cfg: cfg, db: db, auditLogger: auditLogger, locks: sharedLocks,
+		severity: pypiGate,
 	}.wirePyPI(router)
 	defer shutdownPyPIRegistry(context.Background(), pypiRegistry)
 
 	rpmRegistry := rpmDeps{
 		cfg: cfg, db: db, auditLogger: auditLogger,
 		signingKeys: signingKeysRepo, locks: sharedLocks,
+		severity: rpmGate,
 	}.wireRPM(router)
 	defer shutdownRPMRegistry(context.Background(), rpmRegistry)
 
 	debRegistry := debDeps{
 		cfg: cfg, db: db, auditLogger: auditLogger,
 		signingKeys: signingKeysRepo, locks: sharedLocks,
+		severity: debGate,
 	}.wireDEB(router)
 	defer shutdownDEBRegistry(context.Background(), debRegistry)
 

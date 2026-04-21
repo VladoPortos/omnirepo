@@ -24,6 +24,7 @@ type rpmDeps struct {
 	db          *metadata.DB
 	auditLogger audit.Logger
 	signingKeys *metadata.SigningKeysRepo
+	severity    rpm.SeverityGateFn
 	locks       storage.Locks
 }
 
@@ -72,6 +73,7 @@ func (d rpmDeps) wireRPM(router chi.Router) *regen.Registry {
 		Path:           storage.NewPathStore(repoRoot),
 		Trash:          storage.NewTrash(filepath.Join(d.cfg.DataRoot, "trash")),
 		Audit:          d.auditLogger,
+		SeverityGate:   d.severity,
 		RepoRoot:       repoRoot,
 	})
 	h.Mount(router)

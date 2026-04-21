@@ -23,6 +23,7 @@ type debDeps struct {
 	db          *metadata.DB
 	auditLogger audit.Logger
 	signingKeys *metadata.SigningKeysRepo
+	severity    deb.SeverityGateFn
 	locks       storage.Locks
 }
 
@@ -74,6 +75,7 @@ func (d debDeps) wireDEB(router chi.Router) *regen.Registry {
 		Path:           storage.NewPathStore(repoRoot),
 		Trash:          storage.NewTrash(filepath.Join(d.cfg.DataRoot, "trash")),
 		Audit:          d.auditLogger,
+		SeverityGate:   d.severity,
 		RepoRoot:       repoRoot,
 	})
 	h.Mount(router)

@@ -289,6 +289,18 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 		return fmt.Errorf("app.Run: audit: %w", err)
 	}
 
+	// 5a. Phase 10 DBHEALTH-06 — one-shot boot-time integrity_check.
+	// Per CONTEXT D-15 this runs exactly once at boot, post-migrations,
+	// BEFORE the HTTP listeners come up. Failure is logged + cached; boot
+	// continues so the Dashboard card (CONTEXT D-03 destructive variant)
+	// can surface the failure to operators. The adapter wraps auditLogger
+	// so metadata/ stays free of the internal/audit import (cycle-break).
+	bootSettings := metadata.NewSettingsRepo(db)
+	bootAudit := newBootAuditAdapter(auditLogger)
+	if err := metadata.RunBootIntegrityCheck(ctx, db, bootSettings, bootAudit); err != nil {
+		slog.WarnContext(ctx, "app.boot.integrity_check.returned_error", "err", err)
+	}
+
 	// 5b. Upstream-creds AEAD master key (Phase 02-02 D-10). Auto-generated
 	// on first boot; loaded thereafter. The resulting AEAD is passed to the
 	// UpstreamCredsRepo so REST CRUD + pull-external (Phase 02-10) both

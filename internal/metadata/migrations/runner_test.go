@@ -110,6 +110,18 @@ func TestMigration026_LiveOnlyUnique(t *testing.T) {
 		`INSERT INTO s3_buckets(name,project_id) VALUES('cache',?)`, pid); err == nil {
 		t.Fatalf("two LIVE buckets with the same name accepted")
 	}
+
+	// And repos — migration 027 makes UNIQUE(project_id,type,name) live-only.
+	mustWrite(`INSERT INTO repos(project_id,type,name) VALUES(?,'docker','images')`, pid)
+	mustWrite(`UPDATE repos SET deleted_at=CURRENT_TIMESTAMP WHERE project_id=? AND type='docker' AND name='images'`, pid)
+	if _, err := db.Writer.ExecContext(ctx,
+		`INSERT INTO repos(project_id,type,name) VALUES(?,'docker','images')`, pid); err != nil {
+		t.Fatalf("re-create soft-deleted repo: %v", err)
+	}
+	if _, err := db.Writer.ExecContext(ctx,
+		`INSERT INTO repos(project_id,type,name) VALUES(?,'docker','images')`, pid); err == nil {
+		t.Fatalf("two LIVE repos with the same (project,type,name) accepted")
+	}
 }
 
 // TestRunner_DisablesForeignKeysForTableRebuild verifies the runner flips

@@ -100,6 +100,70 @@ func TestProjectsFull_GetDetail(t *testing.T) {
 	}
 }
 
+// TestProjectsFull_ActivityIncludesAPIKeyEvents verifies F-5: the project
+// overview Activity widget must include project.api-key.{create,revoke}
+// events even though those events target the api-key (not the project) in
+// audit_log. The handler reaches into details_json.project to route them
+// to the right project.
+func TestProjectsFull_ActivityIncludesAPIKeyEvents(t *testing.T) {
+	s := newTestServer(t)
+	rootID, pw := seedTestUser(t, s.db, "root", "r@x", true, false)
+	cookie, _, _ := s.login(t, "root", pw)
+
+	ctx := context.Background()
+	pid, _ := s.deps.Projects.Create(ctx, "keyproj", "")
+	_ = s.deps.Members.Add(ctx, pid, rootID)
+
+	// Another project's api-key event must NOT leak into keyproj's activity.
+	otherPID, _ := s.deps.Projects.Create(ctx, "otherproj", "")
+	_ = s.deps.Members.Add(ctx, otherPID, rootID)
+
+	mustInsert := func(kind, targetKind, targetID, projectSlug string) {
+		t.Helper()
+		if _, err := s.db.Writer.ExecContext(ctx,
+			`INSERT INTO audit_log(event_kind, target_kind, target_id, details_json)
+			 VALUES (?, ?, ?, ?)`,
+			kind, targetKind, targetID,
+			`{"project":"`+projectSlug+`","name":"ci-token","prefix":"omr_p_abc"}`,
+		); err != nil {
+			t.Fatalf("seed audit: %v", err)
+		}
+	}
+	// Matching: project.api-key.create targeting keyproj.
+	mustInsert("project.api-key.create", "project_api_key", "42", "keyproj")
+	mustInsert("project.api-key.revoke", "project_api_key", "42", "keyproj")
+	// Noise: otherproj's api-key event must stay filtered out.
+	mustInsert("project.api-key.create", "project_api_key", "99", "otherproj")
+
+	resp, body := s.do(t, "GET", "/api/v1/projects/keyproj/activity", cookie, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("code=%d body=%v", resp.StatusCode, body)
+	}
+	items := body["items"].([]any)
+	var createSeen, revokeSeen, noiseSeen bool
+	for _, it := range items {
+		m := it.(map[string]any)
+		switch m["action"] {
+		case "project.api-key.create":
+			createSeen = true
+			if m["target_id"] == "99" {
+				noiseSeen = true
+			}
+		case "project.api-key.revoke":
+			revokeSeen = true
+		}
+	}
+	if !createSeen {
+		t.Fatalf("expected keyproj project.api-key.create in activity, got items=%v", items)
+	}
+	if !revokeSeen {
+		t.Fatalf("expected keyproj project.api-key.revoke in activity, got items=%v", items)
+	}
+	if noiseSeen {
+		t.Fatalf("otherproj's api-key event leaked into keyproj activity")
+	}
+}
+
 func TestProjectsFull_NonMemberDenied(t *testing.T) {
 	s := newTestServer(t)
 	_, _ = seedTestUser(t, s.db, "root", "r@x", true, false)

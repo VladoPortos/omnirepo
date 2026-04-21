@@ -346,17 +346,27 @@ func (d Deps) handleProjectActivity(w http.ResponseWriter, r *http.Request) {
 	escapedName := strings.NewReplacer("%", "\\%", "_", "\\_").Replace(p.Name)
 
 	// Query audit_log for events scoped to this project.
-	// The details_json LIKE clause was removed — it was overly broad and
-	// could leak audit data from other projects.
+	//
+	// - target_kind='project' keyed on the slug directly.
+	// - target_kind in (repo, member) keyed with the slug as the first
+	//   path segment.
+	// - target_kind='project_api_key' stores the numeric api-key id as
+	//   target_id (that's the audit target — the key, not the project),
+	//   so we match on the project slug embedded in details_json. Without
+	//   this branch, the project-overview Activity widget silently dropped
+	//   every project.api-key.{create,revoke} event — operators could see
+	//   them on the global dashboard but not on the project they belonged
+	//   to (F-5). json_extract is exact-match, so no wildcard escaping.
 	rows, err := d.DB.Reader.QueryContext(r.Context(), `
 		SELECT id, event_kind, actor_user_id, target_kind, target_id,
 		       outcome, details_json, ip, user_agent, occurred_at
 		FROM audit_log
 		WHERE (target_kind='project' AND target_id=?)
 		   OR (target_kind IN ('repo','member') AND target_id LIKE ? ESCAPE '\')
+		   OR (target_kind='project_api_key' AND json_extract(details_json, '$.project')=?)
 		ORDER BY id DESC
 		LIMIT 50
-	`, p.Name, escapedName+"/%")
+	`, p.Name, escapedName+"/%", p.Name)
 	if err != nil {
 		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return

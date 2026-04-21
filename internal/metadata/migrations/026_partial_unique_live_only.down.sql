@@ -8,7 +8,8 @@
 -- INSERT SELECT below will violate UNIQUE. Operators need to clean up
 -- collisions manually before rolling back.
 
-PRAGMA defer_foreign_keys = ON;
+-- The runner flips foreign_keys OFF on the connection before BEGIN and
+-- back ON after COMMIT, so no PRAGMA is needed inline here.
 
 -- --- users ---------------------------------------------------------------
 DROP INDEX IF EXISTS idx_users_login;

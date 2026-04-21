@@ -112,6 +112,48 @@ func TestMigration026_LiveOnlyUnique(t *testing.T) {
 	}
 }
 
+// TestRunner_DisablesForeignKeysForTableRebuild verifies the runner flips
+// PRAGMA foreign_keys=OFF around each migration so a classic DROP → RENAME
+// table-rebuild commits without tripping the FK integrity check. Without
+// that flip (or with only defer_foreign_keys=ON), the rebuild errors out at
+// COMMIT with a generic "FOREIGN KEY constraint failed". And after COMMIT
+// the runner must leave foreign_keys=ON so regular writes still enforce FKs.
+func TestRunner_DisablesForeignKeysForTableRebuild(t *testing.T) {
+	t.Parallel()
+	db := openFreshDB(t)
+	ctx := context.Background()
+
+	setup := fstest.MapFS{
+		"001_seed.up.sql": {Data: []byte(`
+			CREATE TABLE parents(id INTEGER PRIMARY KEY, name TEXT NOT NULL);
+			CREATE TABLE kids(id INTEGER PRIMARY KEY, parent_id INTEGER NOT NULL REFERENCES parents(id) ON DELETE CASCADE);
+			INSERT INTO parents(id,name) VALUES(1,'a'),(2,'b');
+			INSERT INTO kids(id,parent_id) VALUES(10,1),(11,2);
+		`)},
+		"002_rebuild.up.sql": {Data: []byte(`
+			CREATE TABLE parents_new(id INTEGER PRIMARY KEY, name TEXT NOT NULL);
+			INSERT INTO parents_new SELECT id,name FROM parents;
+			DROP TABLE parents;
+			ALTER TABLE parents_new RENAME TO parents;
+		`)},
+	}
+	if _, err := migrations.ApplyFSForTest(ctx, db.Writer, setup); err != nil {
+		t.Fatalf("apply rebuild migrations: %v (runner must flip foreign_keys=OFF)", err)
+	}
+
+	// FK must be re-enabled after commit — an ON DELETE CASCADE should fire.
+	if _, err := db.Writer.ExecContext(ctx, `DELETE FROM parents WHERE id=1`); err != nil {
+		t.Fatalf("delete parent: %v", err)
+	}
+	var n int
+	if err := db.Reader.QueryRowContext(ctx, `SELECT COUNT(*) FROM kids WHERE parent_id=1`).Scan(&n); err != nil {
+		t.Fatalf("count kids: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("ON DELETE CASCADE didn't fire → foreign_keys wasn't re-enabled after migration (kids remaining: %d)", n)
+	}
+}
+
 func TestApplyIdempotent(t *testing.T) {
 	t.Parallel()
 	db := openFreshDB(t)

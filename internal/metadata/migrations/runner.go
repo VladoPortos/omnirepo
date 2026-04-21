@@ -160,8 +160,41 @@ func upStem(filename string) string {
 // (on writers opened with _txlock=immediate) and records it in
 // schema_migrations as the last statement before commit. Any error rolls the
 // whole thing back.
+//
+// We flip PRAGMA foreign_keys=OFF at the connection level *before* BEGIN and
+// restore it after COMMIT. This is the canonical SQLite recipe for migrations
+// that do table rebuilds (DROP + CREATE + RENAME): the intermediate state
+// between DROP old_table and RENAME new_table→old_table briefly leaves FKs
+// dangling, and neither `defer_foreign_keys=ON` nor the RENAME's FK-rewrite
+// behaviour catches every edge case (modernc + real SQLite both raise a
+// generic "FOREIGN KEY constraint failed" at COMMIT otherwise).
+//
+// Disabling FKs only affects enforcement while the migration runs — the
+// surrounding tx still rolls back on error, and `foreign_key_check` is
+// implicitly run by re-enabling FKs, catching any migration that leaves
+// genuinely bad data.
 func runOne(ctx context.Context, writer *sql.DB, stem, body string) (err error) {
-	tx, beginErr := writer.BeginTx(ctx, nil)
+	// Grab a dedicated connection for the whole migration so the PRAGMAs
+	// land on the same connection as the tx. Without this, the pool could
+	// hand us a different conn for ExecContext vs BeginTx.
+	conn, connErr := writer.Conn(ctx)
+	if connErr != nil {
+		return fmt.Errorf("acquire conn: %w", connErr)
+	}
+	defer func() { _ = conn.Close() }()
+
+	if _, err = conn.ExecContext(ctx, "PRAGMA foreign_keys=OFF"); err != nil {
+		return fmt.Errorf("disable foreign_keys: %w", err)
+	}
+	// Best-effort restore. Runs even on failure so the writer pool doesn't
+	// leak a FK-disabled conn back into circulation.
+	defer func() {
+		if _, rErr := conn.ExecContext(ctx, "PRAGMA foreign_keys=ON"); rErr != nil && err == nil {
+			err = fmt.Errorf("restore foreign_keys: %w", rErr)
+		}
+	}()
+
+	tx, beginErr := conn.BeginTx(ctx, nil)
 	if beginErr != nil {
 		return fmt.Errorf("begin: %w", beginErr)
 	}

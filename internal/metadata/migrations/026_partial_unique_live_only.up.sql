@@ -19,12 +19,13 @@
 -- row ids, DROP old, RENAME new. FK references (sessions → users,
 -- project_members → users/projects, api_keys → users/projects, repos →
 -- projects, audit_log → users, s3_objects → s3_buckets, …) all point at
--- numeric ids that we preserve verbatim, so defer_foreign_keys = ON is
--- enough — the commit-time check finds every FK resolving cleanly
--- because no id changes. The runner wraps this whole file in a single
--- BEGIN IMMEDIATE tx, so BEGIN/COMMIT are intentionally absent here.
-
-PRAGMA defer_foreign_keys = ON;
+-- numeric ids that we preserve verbatim. The runner sets
+-- `PRAGMA foreign_keys=OFF` on the connection before BEGIN and restores
+-- it after COMMIT, which is the canonical SQLite recipe for table
+-- rebuilds — `defer_foreign_keys=ON` is not sufficient here because the
+-- intermediate DROP→RENAME state trips the commit-time check even when
+-- every id resolves cleanly. Restoring `foreign_keys=ON` afterwards
+-- implicitly runs foreign_key_check, catching any bad data we left.
 
 -- --- users ---------------------------------------------------------------
 CREATE TABLE users_new (

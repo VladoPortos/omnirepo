@@ -130,6 +130,33 @@ func (r *S3KeysRepo) ListByProject(ctx context.Context, projectID int64) ([]S3Ac
 	return out, rows.Err()
 }
 
+// ListByCreatedByUser returns every non-revoked key that userID created,
+// across any project, ordered by created_at DESC (newest first — matches
+// the profile-page UX where the user wants to see the most recently
+// minted key at the top).
+func (r *S3KeysRepo) ListByCreatedByUser(ctx context.Context, userID int64) ([]S3AccessKey, error) {
+	rows, err := r.db.Reader.QueryContext(ctx, `
+		SELECT id, project_id, access_key_id, secret_enc, label, created_by_user_id,
+		       created_at, last_used_at, revoked_at
+		FROM s3_access_keys
+		WHERE created_by_user_id = ? AND revoked_at IS NULL
+		ORDER BY created_at DESC, id DESC
+	`, userID)
+	if err != nil {
+		return nil, fmt.Errorf("s3_access_keys: list by created_by_user: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []S3AccessKey
+	for rows.Next() {
+		k, err := scanS3AccessKey(rows)
+		if err != nil {
+			return nil, fmt.Errorf("s3_access_keys: scan: %w", err)
+		}
+		out = append(out, *k)
+	}
+	return out, rows.Err()
+}
+
 // TouchLastUsed bumps last_used_at = now() for the AKID. Best-effort: the
 // caller typically invokes this inside a short-lived goroutine so a hot
 // SigV4 verify path never blocks on a writer-pool contention.
@@ -147,6 +174,30 @@ func (r *S3KeysRepo) TouchLastUsed(ctx context.Context, akid string) error {
 		return fmt.Errorf("s3_access_keys: touch last_used: %w", err)
 	}
 	return nil
+}
+
+// RevokeIfOwnedBy stamps revoked_at = now() for the key id ONLY when
+// (a) the row exists, (b) it was created by ownerUserID, and (c) it is
+// not already revoked. Returns true when a row was actually updated so
+// callers can collapse "missing", "already revoked", and "owned by
+// somebody else" into a single 404 without a separate FindByID +
+// ownership check (TOCTOU-safe vs concurrent revokes / re-inserts).
+func (r *S3KeysRepo) RevokeIfOwnedBy(ctx context.Context, tx *sql.Tx, id, ownerUserID int64) (bool, error) {
+	res, err := tx.ExecContext(ctx, `
+		UPDATE s3_access_keys
+		   SET revoked_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+		 WHERE id = ?
+		   AND created_by_user_id = ?
+		   AND revoked_at IS NULL
+	`, id, ownerUserID)
+	if err != nil {
+		return false, fmt.Errorf("s3_access_keys: revoke-if-owned %d: %w", id, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("s3_access_keys: revoke-if-owned rows %d: %w", id, err)
+	}
+	return n > 0, nil
 }
 
 // Revoke stamps revoked_at = now() for the key id inside the caller's tx.

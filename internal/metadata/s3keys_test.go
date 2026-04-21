@@ -160,6 +160,98 @@ func TestS3KeysListByProject_ExcludesRevoked(t *testing.T) {
 	}
 }
 
+func TestS3KeysListByCreatedByUser_CrossProject_ExcludesRevoked(t *testing.T) {
+	t.Parallel()
+	db := sqlitetest.New(t)
+	ctx := context.Background()
+	// Two projects, one user as creator, one extra project with a different
+	// creator. The listing must return only keys created by the target
+	// user, across both of their projects, excluding revoked ones.
+	if _, err := db.Writer.ExecContext(ctx, `INSERT INTO projects(name) VALUES ('mix1'),('mix2'),('other')`); err != nil {
+		t.Fatalf("projects: %v", err)
+	}
+	if _, err := db.Writer.ExecContext(ctx, `INSERT INTO users(login,email,password_hash) VALUES ('me','me@e.c','x'),('them','them@e.c','x')`); err != nil {
+		t.Fatalf("users: %v", err)
+	}
+	var mix1, mix2, other, me, them int64
+	if err := db.Reader.QueryRowContext(ctx, `SELECT id FROM projects WHERE name='mix1'`).Scan(&mix1); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Reader.QueryRowContext(ctx, `SELECT id FROM projects WHERE name='mix2'`).Scan(&mix2); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Reader.QueryRowContext(ctx, `SELECT id FROM projects WHERE name='other'`).Scan(&other); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Reader.QueryRowContext(ctx, `SELECT id FROM users WHERE login='me'`).Scan(&me); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Reader.QueryRowContext(ctx, `SELECT id FROM users WHERE login='them'`).Scan(&them); err != nil {
+		t.Fatal(err)
+	}
+
+	r := metadata.NewS3KeysRepo(db)
+	var revokedID int64
+	if err := db.WriteTx(ctx, func(tx *sql.Tx) error {
+		if _, err := r.Insert(ctx, tx, &metadata.S3AccessKey{
+			ProjectID: mix1, AccessKeyID: "AKIA-ME-1", SecretEnc: []byte("x"),
+			Label: "m1", CreatedByUserID: me,
+		}); err != nil {
+			return err
+		}
+		if _, err := r.Insert(ctx, tx, &metadata.S3AccessKey{
+			ProjectID: mix2, AccessKeyID: "AKIA-ME-2", SecretEnc: []byte("x"),
+			Label: "m2", CreatedByUserID: me,
+		}); err != nil {
+			return err
+		}
+		id, err := r.Insert(ctx, tx, &metadata.S3AccessKey{
+			ProjectID: mix1, AccessKeyID: "AKIA-ME-REVOKED", SecretEnc: []byte("x"),
+			Label: "revoked", CreatedByUserID: me,
+		})
+		revokedID = id
+		if err != nil {
+			return err
+		}
+		_, err = r.Insert(ctx, tx, &metadata.S3AccessKey{
+			ProjectID: other, AccessKeyID: "AKIA-THEM-1", SecretEnc: []byte("x"),
+			Label: "theirs", CreatedByUserID: them,
+		})
+		return err
+	}); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+	if err := db.WriteTx(ctx, func(tx *sql.Tx) error {
+		return r.Revoke(ctx, tx, revokedID)
+	}); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+
+	mine, err := r.ListByCreatedByUser(ctx, me)
+	if err != nil {
+		t.Fatalf("ListByCreatedByUser(me): %v", err)
+	}
+	if len(mine) != 2 {
+		t.Fatalf("want 2 live keys, got %d: %+v", len(mine), mine)
+	}
+	for _, k := range mine {
+		if k.CreatedByUserID != me {
+			t.Fatalf("leaked key created by %d: %+v", k.CreatedByUserID, k)
+		}
+		if strings.Contains(k.AccessKeyID, "REVOKED") {
+			t.Fatalf("revoked key leaked: %+v", k)
+		}
+	}
+
+	theirs, err := r.ListByCreatedByUser(ctx, them)
+	if err != nil {
+		t.Fatalf("ListByCreatedByUser(them): %v", err)
+	}
+	if len(theirs) != 1 || theirs[0].AccessKeyID != "AKIA-THEM-1" {
+		t.Fatalf("want exactly AKIA-THEM-1, got %+v", theirs)
+	}
+}
+
 func TestS3KeysTouchLastUsed(t *testing.T) {
 	t.Parallel()
 	db := sqlitetest.New(t)

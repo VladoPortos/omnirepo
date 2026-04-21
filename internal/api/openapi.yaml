@@ -1206,6 +1206,75 @@ paths:
         default:
           $ref: '#/components/responses/ValidationError'
 
+  # =========================== PROJECT API KEYS ===========================
+  /projects/{name}/api-keys:
+    get:
+      operationId: listProjectAPIKeys
+      tags: [api-keys]
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: List of project-owned API keys (omr_p_*)
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/APIKey'
+        default:
+          $ref: '#/components/responses/ValidationError'
+    post:
+      operationId: createProjectAPIKey
+      tags: [api-keys]
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/APIKeyCreate'
+      responses:
+        "201":
+          description: Project API key created (secret shown once)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIKeyCreateResponse'
+        default:
+          $ref: '#/components/responses/ValidationError'
+
+  /projects/{name}/api-keys/{id}:
+    delete:
+      operationId: deleteProjectAPIKey
+      tags: [api-keys]
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        "204":
+          description: Project API key revoked
+        default:
+          $ref: '#/components/responses/ValidationError'
+
   # ============================== ME S3 KEYS ==============================
   /me/s3-keys:
     get:

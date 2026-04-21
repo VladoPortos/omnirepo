@@ -25,6 +25,7 @@ import {
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { TypeBadge } from '@/components/common/TypeBadge';
 import { CreateRepoDialog } from '@/components/CreateRepoDialog';
+import { ProjectAPIKeysCard } from '@/components/ProjectAPIKeysCard';
 import {
   useProject,
   useProjectActivity,
@@ -457,6 +458,9 @@ export function ProjectDetailPage() {
                 </p>
               </CardContent>
             </Card>
+
+            {/* Project-scoped API keys (omr_p_*) for CI pipelines — D-1 */}
+            <ProjectAPIKeysCard projectName={name} />
 
             {/* Activity feed */}
             <Card className="lg:col-span-2">

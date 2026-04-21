@@ -132,6 +132,13 @@ const (
 	EvtS3AccessKeyCreated EventKind = "s3.access-key.create"
 	EvtS3AccessKeyRevoked EventKind = "s3.access-key.revoke"
 
+	// Project-scoped API keys (D-1). Mints "omr_p_*" tokens that pipelines
+	// can use to publish under one project. "create" carries {project, id,
+	// name, prefix} — never the plaintext secret. "revoke" carries
+	// {project, id, name}.
+	EvtProjectAPIKeyCreated EventKind = "project.api-key.create"
+	EvtProjectAPIKeyRevoked EventKind = "project.api-key.revoke"
+
 	// S3 bucket provisioning (walkthrough 2026-04-17). Emitted by the
 	// REST endpoint that creates/deletes an s3_buckets row + on-disk dir.
 	// Details: {project, name}. Delete additionally carries

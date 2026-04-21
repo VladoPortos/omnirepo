@@ -296,6 +296,7 @@ func Mount(r chi.Router, d Deps) {
 			d.mountProfile(r)
 			d.mountAPIKeys(r)
 			d.mountMeS3Keys(r)
+			d.mountProjectAPIKeys(r)
 			d.mountProjectsFull(r)
 			d.mountReposList(r)
 			d.mountRepoContent(r)

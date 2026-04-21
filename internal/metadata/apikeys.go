@@ -187,6 +187,51 @@ func (r *APIKeysRepo) ListByUser(ctx context.Context, userID int64) ([]APIKey, e
 	return out, rows.Err()
 }
 
+// ListByProject returns all live (non-revoked) API keys owned by
+// projectID, ordered by created_at DESC. Used by the project-scoped
+// /api/v1/projects/{name}/api-keys endpoint (D-1).
+func (r *APIKeysRepo) ListByProject(ctx context.Context, projectID int64) ([]APIKey, error) {
+	rows, err := r.db.Reader.QueryContext(ctx, `
+		SELECT id, owner_kind, owner_user_id, owner_project_id, name, token_prefix, token_sha256,
+		       last_used_at, created_at, revoked_at
+		FROM api_keys
+		WHERE owner_kind='project' AND owner_project_id=? AND revoked_at IS NULL
+		ORDER BY created_at DESC
+	`, projectID)
+	if err != nil {
+		return nil, fmt.Errorf("api_keys: list by project %d: %w", projectID, err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []APIKey
+	for rows.Next() {
+		var k APIKey
+		var userID, projectID2 sql.NullInt64
+		var lastUsed, revoked sql.NullTime
+		if err := rows.Scan(&k.ID, &k.OwnerKind, &userID, &projectID2, &k.Name, &k.TokenPrefix, &k.TokenSHA256,
+			&lastUsed, &k.CreatedAt, &revoked); err != nil {
+			return nil, fmt.Errorf("api_keys: list scan: %w", err)
+		}
+		if userID.Valid {
+			v := userID.Int64
+			k.OwnerUserID = &v
+		}
+		if projectID2.Valid {
+			v := projectID2.Int64
+			k.OwnerProjectID = &v
+		}
+		if lastUsed.Valid {
+			t := lastUsed.Time
+			k.LastUsedAt = &t
+		}
+		if revoked.Valid {
+			t := revoked.Time
+			k.RevokedAt = &t
+		}
+		out = append(out, k)
+	}
+	return out, rows.Err()
+}
+
 // TouchLastUsed updates api_keys.last_used_at. Invoked on every successful
 // middleware auth (KEY-08).
 func (r *APIKeysRepo) TouchLastUsed(ctx context.Context, id int64, t time.Time) error {

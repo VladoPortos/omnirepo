@@ -943,6 +943,42 @@ export function useRevokeAPIKey() {
   });
 }
 
+// -- Project-owned API keys (omr_p_*, D-1) --
+
+export function useProjectAPIKeys(projectName: string) {
+  return useQuery({
+    queryKey: ['projects', projectName, 'api-keys'],
+    queryFn: () =>
+      api.get<APIKey[]>(`/projects/${encodeURIComponent(projectName)}/api-keys`),
+    staleTime: 30_000,
+  });
+}
+
+export function useCreateProjectAPIKey(projectName: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: APIKeyCreate) =>
+      api.post<APIKeyCreateResponse>(
+        `/projects/${encodeURIComponent(projectName)}/api-keys`,
+        data,
+      ),
+    onSuccess: () =>
+      qc.invalidateQueries({ queryKey: ['projects', projectName, 'api-keys'] }),
+  });
+}
+
+export function useRevokeProjectAPIKey(projectName: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) =>
+      api.del<void>(
+        `/projects/${encodeURIComponent(projectName)}/api-keys/${id}`,
+      ),
+    onSuccess: () =>
+      qc.invalidateQueries({ queryKey: ['projects', projectName, 'api-keys'] }),
+  });
+}
+
 // -- S3 Keys --
 
 export function useS3Keys() {

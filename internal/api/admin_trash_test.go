@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -61,6 +62,16 @@ func TestAdminTrash_SoftDeleteShowsInList(t *testing.T) {
 	items, ok := body["items"].([]any)
 	if !ok || len(items) == 0 {
 		t.Fatalf("expected trash entries, got %v", body)
+	}
+	// F-15: surface the pre-delete absolute path so the admin trash UI
+	// can display something more useful than the opaque holder dir.
+	entry := items[0].(map[string]any)
+	ol, _ := entry["original_location"].(string)
+	if ol == "" {
+		t.Fatalf("expected non-empty original_location, got %v", entry)
+	}
+	if !strings.Contains(ol, filepath.Join("repos", "proj", "docker", "r1")) {
+		t.Fatalf("original_location %q does not contain the original repo path", ol)
 	}
 }
 

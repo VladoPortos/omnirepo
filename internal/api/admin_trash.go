@@ -45,23 +45,28 @@ func (d Deps) handleListTrash(w http.ResponseWriter, r *http.Request) {
 
 	// Also include soft-deleted repos from DB.
 	type trashItem struct {
-		ID        string `json:"id"`
-		Kind      string `json:"type"`
-		Name      string `json:"name,omitempty"`
-		DeletedAt string `json:"deleted_at"`
-		Source    string `json:"source"` // "filesystem" or "database"
+		ID               string `json:"id"`
+		Kind             string `json:"type"`
+		Name             string `json:"name,omitempty"`
+		OriginalLocation string `json:"original_location,omitempty"`
+		DeletedAt        string `json:"deleted_at"`
+		Source           string `json:"source"` // "filesystem" or "database"
 	}
 
 	var items []trashItem
 
-	// Filesystem trash entries.
+	// Filesystem trash entries. F-15: Surface OriginalPath so the Trash UI
+	// can show where the item lived pre-delete (stored in the per-entry
+	// sidecar by storage.Move). Empty for legacy entries pre-dating the
+	// sidecar fix — those degrade gracefully to blank in the UI.
 	for _, e := range entries {
 		items = append(items, trashItem{
-			ID:        filepath.Base(e.Path),
-			Kind:      e.Kind,
-			Name:      filepath.Base(e.Path),
-			DeletedAt: e.MovedAt.UTC().Format(time.RFC3339),
-			Source:    "filesystem",
+			ID:               filepath.Base(e.Path),
+			Kind:             e.Kind,
+			Name:             filepath.Base(e.Path),
+			OriginalLocation: e.OriginalPath,
+			DeletedAt:        e.MovedAt.UTC().Format(time.RFC3339),
+			Source:           "filesystem",
 		})
 	}
 

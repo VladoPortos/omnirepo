@@ -6,6 +6,7 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -45,28 +46,38 @@ func (d Deps) handleListTrash(w http.ResponseWriter, r *http.Request) {
 
 	// Also include soft-deleted repos from DB.
 	type trashItem struct {
-		ID               string `json:"id"`
-		Kind             string `json:"type"`
-		Name             string `json:"name,omitempty"`
-		OriginalLocation string `json:"original_location,omitempty"`
-		DeletedAt        string `json:"deleted_at"`
-		Source           string `json:"source"` // "filesystem" or "database"
+		ID                 string `json:"id"`
+		Kind               string `json:"type"`
+		Name               string `json:"name,omitempty"`
+		OriginalLocation   string `json:"original_location,omitempty"`
+		DeletedBy          string `json:"deleted_by,omitempty"`
+		DeletedAt          string `json:"deleted_at"`
+		RetentionCountdown string `json:"retention_countdown,omitempty"`
+		Source             string `json:"source"` // "filesystem" or "database"
 	}
 
 	var items []trashItem
 
-	// Filesystem trash entries. F-15: Surface OriginalPath so the Trash UI
-	// can show where the item lived pre-delete (stored in the per-entry
-	// sidecar by storage.Move). Empty for legacy entries pre-dating the
-	// sidecar fix — those degrade gracefully to blank in the UI.
+	// Filesystem trash entries. F-15: Surface OriginalPath + DeletedByUser
+	// so the Trash UI can show where the item lived pre-delete and who
+	// triggered the soft-delete. Retention countdown is computed against
+	// the default 7-day GC sweep window (internal/jobs/gc.go:83) — admins
+	// that have overridden the window in config will see the display
+	// countdown lag reality by the difference. An "expired" entry shows
+	// negative countdown ("-2d") so users understand it's GC-pending.
+	const defaultTrashRetention = 7 * 24 * time.Hour
+	now := time.Now()
 	for _, e := range entries {
+		remaining := defaultTrashRetention - now.Sub(e.MovedAt)
 		items = append(items, trashItem{
-			ID:               filepath.Base(e.Path),
-			Kind:             e.Kind,
-			Name:             filepath.Base(e.Path),
-			OriginalLocation: e.OriginalPath,
-			DeletedAt:        e.MovedAt.UTC().Format(time.RFC3339),
-			Source:           "filesystem",
+			ID:                 filepath.Base(e.Path),
+			Kind:               e.Kind,
+			Name:               filepath.Base(e.Path),
+			OriginalLocation:   e.OriginalPath,
+			DeletedBy:          e.DeletedByUser,
+			DeletedAt:          e.MovedAt.UTC().Format(time.RFC3339),
+			RetentionCountdown: formatRetention(remaining),
+			Source:             "filesystem",
 		})
 	}
 
@@ -234,4 +245,27 @@ func (d Deps) handlePurgeTrash(w http.ResponseWriter, r *http.Request) {
 // unix timestamp, kind, and original ID.
 func trashEntryID(ts int64, kind string, origID int64) string {
 	return strconv.FormatInt(ts, 10) + "-" + kind + "-" + strconv.FormatInt(origID, 10)
+}
+
+// formatRetention renders a Duration as a coarse "Nd Nh" / "Nh Nm" label
+// for the admin Trash UI. Negative values render with a leading "-"
+// (entry is GC-eligible; sweep is best-effort so it can linger).
+// Intentionally coarse so the UI doesn't show a live-updating timer.
+func formatRetention(d time.Duration) string {
+	neg := ""
+	if d < 0 {
+		neg = "-"
+		d = -d
+	}
+	days := int(d / (24 * time.Hour))
+	hours := int(d/time.Hour) % 24
+	minutes := int(d/time.Minute) % 60
+	switch {
+	case days > 0:
+		return fmt.Sprintf("%s%dd %dh", neg, days, hours)
+	case hours > 0:
+		return fmt.Sprintf("%s%dh %dm", neg, hours, minutes)
+	default:
+		return fmt.Sprintf("%s%dm", neg, minutes)
+	}
 }

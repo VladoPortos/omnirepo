@@ -66,7 +66,7 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	} else {
-		if _, err := h.trash.Move(r.Context(), chartAbs, "helm-chart", res.repo.ID); err != nil {
+		if _, err := h.trash.Move(r.Context(), chartAbs, "helm-chart", res.repo.ID, auth.ActorLoginFromContext(r.Context())); err != nil {
 			slog.ErrorContext(r.Context(), "helm.delete.trash_failed",
 				slog.String("incident_id", chimw.GetReqID(r.Context())),
 				slog.String("filename", res.filename),
@@ -79,7 +79,7 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 	// Matching provenance file: best-effort move to trash.
 	provAbs := chartAbs + ".prov"
 	if _, err := os.Stat(provAbs); err == nil {
-		_, _ = h.trash.Move(r.Context(), provAbs, "helm-prov", res.repo.ID)
+		_, _ = h.trash.Move(r.Context(), provAbs, "helm-prov", res.repo.ID, auth.ActorLoginFromContext(r.Context()))
 	}
 
 	if err := h.db.WriteTx(r.Context(), func(tx *sql.Tx) error {

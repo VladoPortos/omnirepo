@@ -332,7 +332,7 @@ func (h *Handler) deletePackage(w http.ResponseWriter, r *http.Request) {
 		packageStorageKey(res.project.Name, res.repo.Name, filename),
 	))
 	if _, statErr := os.Stat(abs); statErr == nil {
-		_, _ = h.trash.Move(r.Context(), abs, "pypi-file", res.repo.ID)
+		_, _ = h.trash.Move(r.Context(), abs, "pypi-file", res.repo.ID, auth.ActorLoginFromContext(r.Context()))
 	}
 	if err := h.db.WriteTx(r.Context(), func(tx *sql.Tx) error {
 		if err := h.pypiFiles.Delete(r.Context(), tx, row.ID); err != nil {

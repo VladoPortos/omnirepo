@@ -63,8 +63,10 @@ func TestAdminTrash_SoftDeleteShowsInList(t *testing.T) {
 	if !ok || len(items) == 0 {
 		t.Fatalf("expected trash entries, got %v", body)
 	}
-	// F-15: surface the pre-delete absolute path so the admin trash UI
-	// can display something more useful than the opaque holder dir.
+	// F-15: the trash UI needs original_location + deleted_by +
+	// retention_countdown. The first two come from the sidecar written
+	// by storage.Trash.Move; retention_countdown is computed against the
+	// default 7-day GC window.
 	entry := items[0].(map[string]any)
 	ol, _ := entry["original_location"].(string)
 	if ol == "" {
@@ -72,6 +74,17 @@ func TestAdminTrash_SoftDeleteShowsInList(t *testing.T) {
 	}
 	if !strings.Contains(ol, filepath.Join("repos", "proj", "docker", "r1")) {
 		t.Fatalf("original_location %q does not contain the original repo path", ol)
+	}
+	// The super-admin who triggered the delete is "root" (seedTestUser
+	// above) — the sidecar captured it via auth.ActorLoginFromContext.
+	if db, _ := entry["deleted_by"].(string); db != "root" {
+		t.Fatalf("deleted_by = %q, want root", db)
+	}
+	// Fresh entries should show a near-7d countdown (allow a generous
+	// window so CI latency doesn't flake; mainly guarding the sign).
+	rc, _ := entry["retention_countdown"].(string)
+	if rc == "" || strings.HasPrefix(rc, "-") {
+		t.Fatalf("retention_countdown = %q, want positive 7d-ish string", rc)
 	}
 }
 

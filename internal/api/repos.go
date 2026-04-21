@@ -380,7 +380,7 @@ func (d Deps) handleWipeRepo(w http.ResponseWriter, r *http.Request) {
 	}
 	if safe && d.Trash != nil {
 		onDisk := filepath.Join(d.DataRoot, "repos", project.Name, rr.Type, rr.Name)
-		if tpath, terr := d.Trash.Move(r.Context(), onDisk, "repo", rr.ID); terr != nil {
+		if tpath, terr := d.Trash.Move(r.Context(), onDisk, "repo", rr.ID, auth.ActorLoginFromContext(r.Context())); terr != nil {
 			if !errors.Is(terr, context.Canceled) && !errors.Is(terr, os.ErrNotExist) {
 				slog.WarnContext(r.Context(), "wipe: trash move failed",
 					"repo_id", rr.ID, "err", terr)

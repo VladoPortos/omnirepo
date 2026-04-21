@@ -20,30 +20,39 @@ const trashMetaFile = "omnirepo-trash.json"
 
 // TrashEntry describes one soft-deleted tree under the trash root.
 type TrashEntry struct {
-	Path         string    // absolute path on disk (the holder dir)
-	MovedAt      time.Time // parsed from the directory name unix-ts prefix
-	Kind         string    // "repo", "project", "user", "s3-bucket", ...
-	OriginalID   int64     // numeric id from the caller
-	OriginalPath string    // original on-disk path (pre-move). Empty for
+	Path          string    // absolute path on disk (the holder dir)
+	MovedAt       time.Time // parsed from the directory name unix-ts prefix
+	Kind          string    // "repo", "project", "user", "s3-bucket", ...
+	OriginalID    int64     // numeric id from the caller
+	OriginalPath  string    // original on-disk path (pre-move). Empty for
 	// legacy entries written before audit finding #2 fix; callers MUST
 	// fall back for those.
+	DeletedByUser string // F-15: users.login of the actor who triggered the
+	// soft-delete. Empty for legacy entries and for GC-driven / system-
+	// initiated moves.
 }
 
 // trashMetadata is the on-disk shape of the sidecar written by Move and
 // read by List. Keep field names stable — existing trash entries on disk
 // are forwards-compatible only so long as this struct does not rename.
+// New fields are added with `omitempty` so old readers ignore them.
 type trashMetadata struct {
-	OriginalPath string `json:"original_path"`
-	Kind         string `json:"kind"`
-	OriginalID   int64  `json:"original_id"`
-	MovedAtUnix  int64  `json:"moved_at_unix"`
+	OriginalPath  string `json:"original_path"`
+	Kind          string `json:"kind"`
+	OriginalID    int64  `json:"original_id"`
+	MovedAtUnix   int64  `json:"moved_at_unix"`
+	DeletedByUser string `json:"deleted_by,omitempty"`
 }
 
 // Trash is the soft-delete primitive (D-31). Move renames a tree into
 // <root>/<unix-ts>-<kind>-<id>/<basename>. Restore renames it back. Hard
 // delete (7-day retention) is Phase 2 GC's concern.
+//
+// actor is the users.login of the caller triggering the soft-delete.
+// Pass "" for GC/system-initiated moves; the audit trail falls back to
+// an empty "deleted_by" which the UI renders as "—".
 type Trash interface {
-	Move(ctx context.Context, srcPath string, kind string, id int64) (trashPath string, err error)
+	Move(ctx context.Context, srcPath string, kind string, id int64, actor string) (trashPath string, err error)
 	Restore(ctx context.Context, trashPath string, dstPath string) error
 	List(ctx context.Context) ([]TrashEntry, error)
 }
@@ -58,7 +67,7 @@ func NewTrash(root string) Trash {
 	return &trashImpl{root: root}
 }
 
-func (t *trashImpl) Move(ctx context.Context, srcPath, kind string, id int64) (string, error) {
+func (t *trashImpl) Move(ctx context.Context, srcPath, kind string, id int64, actor string) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
@@ -81,10 +90,11 @@ func (t *trashImpl) Move(ctx context.Context, srcPath, kind string, id int64) (s
 	// preserves the legacy invariant for callers that might still
 	// rely on the old shape (no regressions on read).
 	meta := trashMetadata{
-		OriginalPath: srcPath,
-		Kind:         kind,
-		OriginalID:   id,
-		MovedAtUnix:  now.Unix(),
+		OriginalPath:  srcPath,
+		Kind:          kind,
+		OriginalID:    id,
+		MovedAtUnix:   now.Unix(),
+		DeletedByUser: actor,
 	}
 	if b, err := json.Marshal(meta); err == nil {
 		_ = os.WriteFile(filepath.Join(dstDir, trashMetaFile), b, 0o640)
@@ -138,6 +148,7 @@ func (t *trashImpl) List(ctx context.Context) ([]TrashEntry, error) {
 			var m trashMetadata
 			if json.Unmarshal(b, &m) == nil {
 				parsed.OriginalPath = m.OriginalPath
+				parsed.DeletedByUser = m.DeletedByUser
 				// Sidecar kind/id override the holder-name parse in case
 				// the holder name was constructed before the kind format
 				// stabilized.

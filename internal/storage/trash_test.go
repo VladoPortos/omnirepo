@@ -23,7 +23,7 @@ func TestTrashMoveRestore(t *testing.T) {
 	}
 
 	tr := storage.NewTrash(trashRoot)
-	trashPath, err := tr.Move(context.Background(), srcDir, "repo", 42)
+	trashPath, err := tr.Move(context.Background(), srcDir, "repo", 42, "alice")
 	if err != nil {
 		t.Fatalf("Move: %v", err)
 	}
@@ -55,6 +55,11 @@ func TestTrashMoveRestore(t *testing.T) {
 	// put the tree back at the exact pre-delete location.
 	if entries[0].OriginalPath != srcDir {
 		t.Fatalf("OriginalPath = %q, want %q", entries[0].OriginalPath, srcDir)
+	}
+	// F-15: Move must persist the actor login so the admin Trash UI can
+	// render who triggered the soft-delete.
+	if entries[0].DeletedByUser != "alice" {
+		t.Fatalf("DeletedByUser = %q, want alice", entries[0].DeletedByUser)
 	}
 
 	// Restore

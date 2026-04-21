@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"path/filepath"
 
+	"github.com/dxc-internal/omnirepo/internal/auth"
 	"github.com/dxc-internal/omnirepo/internal/metadata"
 	"github.com/dxc-internal/omnirepo/internal/storage"
 )
@@ -48,6 +49,10 @@ func (h *Handler) OnRepoDelete(ctx context.Context, repo *metadata.Repo, project
 	}
 
 	repoPath := filepath.Join(h.dataRoot, "repos", projectName, "git", repo.Name+".git")
-	_, err := trash.Move(ctx, repoPath, "git-repo", repo.ID)
+	// F-15: OnRepoDelete is called by the api layer inside its request
+	// context, so the actor login rides along via ctx. GC-initiated repo
+	// deletes (future) will omit this and the sidecar will store an empty
+	// "deleted_by" which the UI renders as "—".
+	_, err := trash.Move(ctx, repoPath, "git-repo", repo.ID, auth.ActorLoginFromContext(ctx))
 	return err
 }

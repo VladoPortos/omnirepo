@@ -829,7 +829,7 @@ func (d Deps) handleDeleteRepo(w http.ResponseWriter, r *http.Request) {
 			onDisk += ".git"
 			trashKind = "git-repo"
 		}
-		if _, err := d.Trash.Move(r.Context(), onDisk, trashKind, rr.ID); err != nil {
+		if _, err := d.Trash.Move(r.Context(), onDisk, trashKind, rr.ID, auth.ActorLoginFromContext(r.Context())); err != nil {
 			// Tree may not exist for a freshly-created empty repo; that's not a failure.
 			// Use errors.Is(os.ErrNotExist) instead of string-matching — rename
 			// error wrapping via fmt.Errorf(..., %w) preserves the sentinel.

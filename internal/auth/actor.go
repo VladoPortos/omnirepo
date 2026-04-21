@@ -93,3 +93,15 @@ func ActorFromContext(ctx context.Context) (Actor, bool) {
 	}
 	return a, true
 }
+
+// ActorLoginFromContext is a convenience helper for audit-adjacent call
+// sites that only need the login string (e.g. the trash sidecar's
+// "deleted_by" field). Returns "" when the context has no actor or when
+// the actor is a project-owned API key (no user login).
+func ActorLoginFromContext(ctx context.Context) string {
+	a, ok := ActorFromContext(ctx)
+	if !ok {
+		return ""
+	}
+	return a.Login
+}

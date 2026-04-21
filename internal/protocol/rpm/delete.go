@@ -41,7 +41,7 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 
 	abs := filepath.Join(h.repoRoot, filepath.FromSlash(storageKeyFor(res.project.Name, res.repo.Name, res.filename)))
 	if _, err := os.Stat(abs); err == nil {
-		if _, err := h.trash.Move(r.Context(), abs, "rpm-package", res.repo.ID); err != nil {
+		if _, err := h.trash.Move(r.Context(), abs, "rpm-package", res.repo.ID, auth.ActorLoginFromContext(r.Context())); err != nil {
 			slog.ErrorContext(r.Context(), "rpm.delete.trash_failed",
 				slog.String("incident_id", chimw.GetReqID(r.Context())),
 				slog.String("filename", res.filename),

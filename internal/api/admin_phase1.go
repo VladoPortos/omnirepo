@@ -282,6 +282,7 @@ func Mount(r chi.Router, d Deps) {
 			d.mountAdminTrash(r)
 			d.mountAdminSettings(r)
 			d.mountAdminTrivy(r)
+			d.mountAdminDBHealth(r) // Phase 10 DBHEALTH-01..07
 			d.mountAdminTLSHistory(r)
 			d.mountAdminUsersFull(r)
 

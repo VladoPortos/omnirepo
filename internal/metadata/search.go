@@ -88,8 +88,12 @@ func (db *DB) SearchAll(ctx context.Context, p SearchParams) ([]SearchResult, er
 		cveSeverityClause := ""
 		cveVals := []any{ftsQuery}
 		if p.Severity != "" {
+			// vulnerabilities.severity is stored uppercase ("HIGH", "MEDIUM",
+			// …) while the API surface (and UI chips) use lowercase. Normalize
+			// so `?severity=high` matches `v.severity='HIGH'` — otherwise the
+			// filter silently returns empty results.
 			cveSeverityClause = " AND v.severity = ?"
-			cveVals = append(cveVals, p.Severity)
+			cveVals = append(cveVals, strings.ToUpper(p.Severity))
 		}
 		cveVals = append(cveVals, perArmLimit)
 		addArm(arm{

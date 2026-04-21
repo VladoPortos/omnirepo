@@ -198,6 +198,74 @@ func TestSearchAll_CVESearch(t *testing.T) {
 	}
 }
 
+// TestSearchAll_SeverityFilterCaseInsensitive guards F-13: Trivy writes
+// vulnerability rows with uppercase severities ("HIGH", "MEDIUM", …) but
+// the API surface (and UI chips) send lowercase. Searching by severity
+// must normalize so `severity=high` matches `v.severity='HIGH'`.
+func TestSearchAll_SeverityFilterCaseInsensitive(t *testing.T) {
+	t.Parallel()
+	db := sqlitetest.New(t)
+	seedSearchData(t, db)
+
+	// Seed a scan + two vulnerabilities for the CVE indexed by seedSearchData.
+	// CVE-2026-0001 is indexed in cves_fts; attach one HIGH and one MEDIUM
+	// vuln row so the LEFT JOIN surfaces severity. Raw SQL avoids depending
+	// on the scans-enqueue FK chain (seedSearchData only populates FTS).
+	ctx := context.Background()
+	if _, err := db.Writer.ExecContext(ctx, `INSERT INTO projects(name) VALUES ('sevp')`); err != nil {
+		t.Fatalf("seed project: %v", err)
+	}
+	if _, err := db.Writer.ExecContext(ctx,
+		`INSERT INTO repos(project_id,type,name) VALUES (1,'rpm','sevr')`); err != nil {
+		t.Fatalf("seed repo: %v", err)
+	}
+	res, err := db.Writer.ExecContext(ctx,
+		`INSERT INTO scans(repo_id,artifact_kind,artifact_id,status) VALUES (1,'rpm','dummy','done')`)
+	if err != nil {
+		t.Fatalf("seed scan: %v", err)
+	}
+	scanID, err := res.LastInsertId()
+	if err != nil {
+		t.Fatalf("scan id: %v", err)
+	}
+	vulnsRepo := metadata.NewVulnerabilitiesRepo(db)
+	if err := db.WriteTx(ctx, func(tx *sql.Tx) error {
+		return vulnsRepo.InsertBatch(ctx, tx, scanID, []metadata.Vuln{
+			{CVEID: "CVE-2026-0001", Severity: "HIGH", PackageName: "openssl"},
+			{CVEID: "CVE-2026-0001", Severity: "MEDIUM", PackageName: "openssl"},
+		}, 0)
+	}); err != nil {
+		t.Fatalf("seed vulnerabilities: %v", err)
+	}
+
+	for _, tc := range []struct {
+		name string
+		sev  string
+	}{
+		{"lowercase", "high"},
+		{"uppercase", "HIGH"},
+		{"mixed", "HiGh"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			results, err := db.SearchAll(ctx, metadata.SearchParams{
+				Query:    "openssl",
+				Kind:     "cve",
+				Severity: tc.sev,
+				Limit:    50,
+			})
+			if err != nil {
+				t.Fatalf("SearchAll severity=%q: %v", tc.sev, err)
+			}
+			if len(results) != 1 {
+				t.Fatalf("severity=%q: want 1 result, got %d: %+v", tc.sev, len(results), results)
+			}
+			if results[0].Severity != "HIGH" {
+				t.Fatalf("severity=%q: want HIGH row, got %q", tc.sev, results[0].Severity)
+			}
+		})
+	}
+}
+
 func TestSearchAll_RPMSearch(t *testing.T) {
 	t.Parallel()
 	db := sqlitetest.New(t)

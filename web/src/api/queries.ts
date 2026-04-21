@@ -605,8 +605,15 @@ export interface ProjectMemberUser {
   is_super_admin: boolean;
 }
 
-export function useAdminUserList() {
+// useAdminUserList fetches /admin/users for the project-member picker.
+// Only super-admins can reach the endpoint (capability ActionCreateUser),
+// so the `enabled` flag guards the hook against issuing a 403-bound
+// request for every non-admin project member who lands on the page.
+// Callers that need a gated version pass { enabled: isSuperAdmin } —
+// non-admins get `data: undefined` with no network call.
+export function useAdminUserList({ enabled = true }: { enabled?: boolean } = {}) {
   return useQuery({
+    enabled,
     queryKey: ['admin', 'users', 'list'],
     // Codex review 2026-04-21: chase next_cursor so the project-member
     // picker isn't capped at the API's default page size. The server

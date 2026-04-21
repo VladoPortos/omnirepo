@@ -264,17 +264,25 @@ func (d Deps) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// High-severity findings: top 20 distinct CRITICAL/HIGH
-	// (CVE, package, severity, repo) groups with an occurrence count,
-	// so a CVE that hits every mirrored version of a popular package
-	// collapses to one row with "× N" (F-3) instead of dominating the
-	// widget with ~20 identical entries. scopeClause is empty for
-	// super-admin, so the strings.Replace below no-ops there.
+	// (CVE, package, repo) groups with an occurrence count so a CVE that
+	// hits every mirrored version of a popular package collapses to one
+	// row with "× N" (F-3). scopeClause is empty for super-admin, so the
+	// strings.Replace below no-ops there.
+	//
+	// Severity is NOT part of the group key — if different scans classify
+	// the same artifact at different severities, we collapse them and
+	// report the worst (CRITICAL > HIGH). Keeping severity in the group
+	// key would leave two rows for the same CVE+package+repo, re-
+	// introducing the duplication F-3 was meant to fix.
 	highSev := make([]vulnRow, 0)
 	{
 		hsArgs := make([]any, len(scopeArgs))
 		copy(hsArgs, scopeArgs)
 		hsSQL := `
-			SELECT v.cve_id, v.severity, v.package_name, p.name, r.name, r.type,
+			SELECT v.cve_id,
+			       CASE WHEN SUM(CASE WHEN v.severity='CRITICAL' THEN 1 ELSE 0 END) > 0
+			            THEN 'CRITICAL' ELSE 'HIGH' END AS severity,
+			       v.package_name, p.name, r.name, r.type,
 			       COUNT(v.id) AS occurrences
 			FROM vulnerabilities v
 			JOIN scans s ON s.id = v.scan_id
@@ -283,8 +291,8 @@ func (d Deps) handleDashboard(w http.ResponseWriter, r *http.Request) {
 			WHERE v.severity IN ('CRITICAL','HIGH')
 			  AND r.deleted_at IS NULL
 			  AND p.deleted_at IS NULL` + strings.Replace(scopeClause, "project_id", "r.project_id", 1) + `
-			GROUP BY v.cve_id, v.severity, v.package_name, r.id
-			ORDER BY CASE v.severity WHEN 'CRITICAL' THEN 0 ELSE 1 END,
+			GROUP BY v.cve_id, v.package_name, r.id
+			ORDER BY CASE severity WHEN 'CRITICAL' THEN 0 ELSE 1 END,
 			         occurrences DESC,
 			         MAX(v.id) DESC
 			LIMIT 20`
@@ -311,14 +319,19 @@ func (d Deps) handleDashboard(w http.ResponseWriter, r *http.Request) {
 			ORDER BY id DESC
 			LIMIT 20`
 	} else {
-		// Scope to audit events whose target_id references a repo in the member projects.
+		// Scope to audit events whose target_id references a repo in the
+		// member projects. Join projects + filter p.deleted_at IS NULL so a
+		// project-scoped API key attached to a soft-deleted project doesn't
+		// surface audit rows for that project's repos (lingering tail of the
+		// F-4 family).
 		activityArgs = make([]any, len(scopeArgs))
 		copy(activityArgs, scopeArgs)
 		activitySQL = `
 			SELECT a.id, a.event_kind, COALESCE(a.target_id, ''), a.occurred_at
 			FROM audit_log a
 			JOIN repos r ON CAST(a.target_id AS INTEGER) = r.id
-			WHERE r.deleted_at IS NULL` + strings.Replace(scopeClause, "project_id", "r.project_id", 1) + `
+			JOIN projects p ON p.id = r.project_id
+			WHERE r.deleted_at IS NULL AND p.deleted_at IS NULL` + strings.Replace(scopeClause, "project_id", "r.project_id", 1) + `
 			ORDER BY a.id DESC
 			LIMIT 20`
 	}

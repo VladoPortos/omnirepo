@@ -37,6 +37,7 @@ import {
   useAddProjectMember,
   useRemoveProjectMember,
   useAdminUserList,
+  useMe,
 } from '@/api/queries';
 import {
   Select,
@@ -91,7 +92,13 @@ export function ProjectDetailPage() {
   const [memberLogin, setMemberLogin] = useState('');
   const [memberError, setMemberError] = useState<ApiErrorEnvelope | null>(null);
   const [removeTarget, setRemoveTarget] = useState<{ login: string } | null>(null);
-  const { data: userListData } = useAdminUserList();
+  const { data: me } = useMe();
+  // /admin/users is super-admin-only — gating the picker fetch prevents
+  // non-admin project members from flooding the console with 403s on
+  // every page load + every Add Member click (Codex P2 on F-8). The
+  // picker is only useful for members who can actually add users anyway.
+  const canListUsers = !!me?.is_super_admin;
+  const { data: userListData } = useAdminUserList({ enabled: canListUsers });
   const addMember = useAddProjectMember(name);
   const removeMember = useRemoveProjectMember(name);
   const qc = useQueryClient();
@@ -99,13 +106,16 @@ export function ProjectDetailPage() {
   // accounts added since this page mounted (F-8: the underlying hook is
   // mounted at page-load and cached with a 30s staleTime, so without this
   // a user created in another tab or via API wouldn't appear until a full
-  // page reload).
+  // page reload). Skip the invalidate for non-admin viewers — otherwise
+  // we'd trigger the 403 we just gated against.
   const openAddMember = useCallback(() => {
     setMemberError(null);
     setMemberLogin('');
     setMemberOpen(true);
-    qc.invalidateQueries({ queryKey: ['admin', 'users', 'list'] });
-  }, [qc]);
+    if (canListUsers) {
+      qc.invalidateQueries({ queryKey: ['admin', 'users', 'list'] });
+    }
+  }, [qc, canListUsers]);
 
   // Group repos by type
   const reposByType = useMemo(() => {

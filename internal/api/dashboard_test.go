@@ -96,6 +96,55 @@ func TestDashboard_HighSeverityDedupes(t *testing.T) {
 	}
 }
 
+// TestDashboard_HighSeverityCollapsesAcrossSeverities verifies the P2
+// follow-up on F-3: if the same (cve, package, repo) tuple exists with
+// both CRITICAL and HIGH severities (e.g. because two scans classified
+// the same artifact differently), the widget must collapse them into ONE
+// row and report CRITICAL as the worst severity. Pre-fix, severity was
+// part of the GROUP BY key so the same CVE split into two rows — exactly
+// the duplication F-3 was meant to eliminate.
+func TestDashboard_HighSeverityCollapsesAcrossSeverities(t *testing.T) {
+	s := newTestServer(t)
+	_, pw := seedTestUser(t, s.db, "root", "r@x", true, false)
+	cookie, _, _ := s.login(t, "root", pw)
+
+	ctx := context.Background()
+	pid, _ := s.deps.Projects.Create(ctx, "sevproj", "")
+	repoID, _ := s.deps.Repos.Create(ctx, pid, "pypi", "wheels", "", nil, nil, nil)
+
+	res, err := s.db.Writer.ExecContext(ctx,
+		`INSERT INTO scans(repo_id, artifact_kind, artifact_id, status, started_at, finished_at)
+		 VALUES (?, 'pypi', 'requests-1.0.whl', 'done', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`, repoID)
+	if err != nil {
+		t.Fatalf("seed scan: %v", err)
+	}
+	scanID, _ := res.LastInsertId()
+	// Same CVE, same package, same repo — but different severities.
+	if _, err := s.db.Writer.ExecContext(ctx,
+		`INSERT INTO vulnerabilities(scan_id, cve_id, severity, package_name) VALUES
+		 (?, 'CVE-2026-0002', 'CRITICAL', 'requests'),
+		 (?, 'CVE-2026-0002', 'HIGH',     'requests'),
+		 (?, 'CVE-2026-0002', 'HIGH',     'requests')`, scanID, scanID, scanID); err != nil {
+		t.Fatalf("seed vulns: %v", err)
+	}
+
+	resp, body := s.do(t, "GET", "/api/v1/dashboard", cookie, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("code=%d", resp.StatusCode)
+	}
+	hs := body["high_severity"].([]any)
+	if len(hs) != 1 {
+		t.Fatalf("expected 1 collapsed row across severities, got %d: %v", len(hs), hs)
+	}
+	row := hs[0].(map[string]any)
+	if row["severity"] != "CRITICAL" {
+		t.Fatalf("collapsed row should carry worst severity CRITICAL, got %v", row["severity"])
+	}
+	if occ, _ := row["occurrences"].(float64); int(occ) != 3 {
+		t.Fatalf("collapsed occurrences should sum across severities, got %v", row["occurrences"])
+	}
+}
+
 // TestDashboard_SoftDeletedProjectDoesNotBleed verifies the Codex F-1/F-2/F-3
 // follow-up to F-4: a soft-deleted project's repos and their vulnerabilities
 // must not contribute to the dashboard aggregate tiles. Before the fix,

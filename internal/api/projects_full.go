@@ -363,7 +363,9 @@ func (d Deps) handleProjectActivity(w http.ResponseWriter, r *http.Request) {
 		FROM audit_log
 		WHERE (target_kind='project' AND target_id=?)
 		   OR (target_kind IN ('repo','member') AND target_id LIKE ? ESCAPE '\')
-		   OR (target_kind='project_api_key' AND json_extract(details_json, '$.project')=?)
+		   OR (target_kind='project_api_key'
+		       AND json_valid(details_json)
+		       AND json_extract(details_json, '$.project')=?)
 		ORDER BY id DESC
 		LIMIT 50
 	`, p.Name, escapedName+"/%", p.Name)

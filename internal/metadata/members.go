@@ -66,8 +66,16 @@ func (r *MembersRepo) IsMember(ctx context.Context, projectID, userID int64) (bo
 // ListProjectIDsForUser returns every project id userID is a member of. Empty
 // slice (not error) when the user has no memberships.
 func (r *MembersRepo) ListProjectIDsForUser(ctx context.Context, userID int64) ([]int64, error) {
+	// Exclude soft-deleted projects so visibility helpers (dashboard, search,
+	// projects list, admin user-detail rollup) never surface a project a user
+	// can no longer reach. Soft-delete is an UPDATE, so project_members rows
+	// survive until the project is hard-purged — without this filter we'd
+	// hand out IDs that error at every downstream join.
 	rows, err := r.db.Reader.QueryContext(ctx, `
-		SELECT project_id FROM project_members WHERE user_id=?
+		SELECT pm.project_id
+		FROM project_members pm
+		JOIN projects p ON p.id = pm.project_id
+		WHERE pm.user_id=? AND p.deleted_at IS NULL
 	`, userID)
 	if err != nil {
 		return nil, fmt.Errorf("members: list for user %d: %w", userID, err)

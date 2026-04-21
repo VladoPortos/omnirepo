@@ -168,12 +168,21 @@ func (d Deps) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Every dashboard aggregate that crosses into `repos`, `vulnerabilities`,
+	// or `s3_buckets` now joins `projects` and filters
+	// `p.deleted_at IS NULL` so a soft-deleted project stops contributing
+	// immediately — without this, the tile math silently includes ghost
+	// repos / ghost CVEs under projects that were "deleted" from the list
+	// view (F-1/F-2/F-3 from Codex review of F-4).
+
 	// Repo count.
 	var repoCount int64
 	repoArgs := make([]any, len(scopeArgs))
 	copy(repoArgs, scopeArgs)
 	logDashErr(d.DB.Reader.QueryRowContext(r.Context(),
-		`SELECT COUNT(*) FROM repos WHERE deleted_at IS NULL`+scopeClause, repoArgs...).Scan(&repoCount),
+		`SELECT COUNT(*) FROM repos r JOIN projects p ON p.id = r.project_id
+		 WHERE r.deleted_at IS NULL AND p.deleted_at IS NULL`+strings.Replace(scopeClause, "project_id", "r.project_id", 1),
+		repoArgs...).Scan(&repoCount),
 		"repo_count")
 
 	// User count (always global — not sensitive).
@@ -186,13 +195,16 @@ func (d Deps) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	copy(storageArgs, scopeArgs)
 	var storageUsed int64
 	logDashErr(d.DB.Reader.QueryRowContext(r.Context(),
-		`SELECT COALESCE(SUM(`+repoSizeExpr+`), 0) FROM repos r WHERE r.deleted_at IS NULL`+strings.Replace(scopeClause, "project_id", "r.project_id", 1),
+		`SELECT COALESCE(SUM(`+repoSizeExpr+`), 0)
+		 FROM repos r JOIN projects p ON p.id = r.project_id
+		 WHERE r.deleted_at IS NULL AND p.deleted_at IS NULL`+strings.Replace(scopeClause, "project_id", "r.project_id", 1),
 		storageArgs...).Scan(&storageUsed),
 		"storage_used")
 
 	// S3 buckets are project-scoped, not repo-scoped, so they don't fit
 	// into repoSizeExpr. Add the total of stored objects in every bucket
-	// owned by a visible project (F-5). Deleted buckets are skipped.
+	// owned by a visible, live project (F-5). Deleted buckets and buckets
+	// under soft-deleted projects are skipped.
 	s3Args := make([]any, len(scopeArgs))
 	copy(s3Args, scopeArgs)
 	var s3Used int64
@@ -201,37 +213,31 @@ func (d Deps) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		`SELECT COALESCE(SUM(o.size_bytes), 0)
 		 FROM s3_objects o
 		 JOIN s3_buckets b ON b.id = o.bucket_id
-		 WHERE b.deleted_at IS NULL`+s3Scope,
+		 JOIN projects p ON p.id = b.project_id
+		 WHERE b.deleted_at IS NULL AND p.deleted_at IS NULL`+s3Scope,
 		s3Args...).Scan(&s3Used),
 		"storage_used_s3")
 	storageUsed += s3Used
 
 	// Scan findings: count all severity levels.
 	var critical, high, medium, low int64
-	if scopeClause == "" {
-		logDashErr(d.DB.Reader.QueryRowContext(r.Context(), `
-			SELECT
-				COALESCE(SUM(CASE WHEN severity='CRITICAL' THEN 1 ELSE 0 END), 0),
-				COALESCE(SUM(CASE WHEN severity='HIGH' THEN 1 ELSE 0 END), 0),
-				COALESCE(SUM(CASE WHEN severity='MEDIUM' THEN 1 ELSE 0 END), 0),
-				COALESCE(SUM(CASE WHEN severity='LOW' THEN 1 ELSE 0 END), 0)
-			FROM vulnerabilities
-		`).Scan(&critical, &high, &medium, &low), "scan_findings_global")
-	} else {
-		vulnArgs := make([]any, len(scopeArgs))
-		copy(vulnArgs, scopeArgs)
-		logDashErr(d.DB.Reader.QueryRowContext(r.Context(), `
-			SELECT
-				COALESCE(SUM(CASE WHEN v.severity='CRITICAL' THEN 1 ELSE 0 END), 0),
-				COALESCE(SUM(CASE WHEN v.severity='HIGH' THEN 1 ELSE 0 END), 0),
-				COALESCE(SUM(CASE WHEN v.severity='MEDIUM' THEN 1 ELSE 0 END), 0),
-				COALESCE(SUM(CASE WHEN v.severity='LOW' THEN 1 ELSE 0 END), 0)
-			FROM vulnerabilities v
-			JOIN scans s ON s.id = v.scan_id
-			JOIN repos r ON r.id = s.repo_id
-			WHERE r.deleted_at IS NULL`+strings.Replace(scopeClause, "project_id", "r.project_id", 1),
-			vulnArgs...).Scan(&critical, &high, &medium, &low), "scan_findings_scoped")
-	}
+	vulnArgs := make([]any, len(scopeArgs))
+	copy(vulnArgs, scopeArgs)
+	// Same join shape for both branches so the global case also filters
+	// soft-deleted projects/repos. The scopeClause is empty for super-admin,
+	// so strings.Replace is a no-op there.
+	logDashErr(d.DB.Reader.QueryRowContext(r.Context(), `
+		SELECT
+			COALESCE(SUM(CASE WHEN v.severity='CRITICAL' THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN v.severity='HIGH' THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN v.severity='MEDIUM' THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN v.severity='LOW' THEN 1 ELSE 0 END), 0)
+		FROM vulnerabilities v
+		JOIN scans s ON s.id = v.scan_id
+		JOIN repos r ON r.id = s.repo_id
+		JOIN projects p ON p.id = r.project_id
+		WHERE r.deleted_at IS NULL AND p.deleted_at IS NULL`+strings.Replace(scopeClause, "project_id", "r.project_id", 1),
+		vulnArgs...).Scan(&critical, &high, &medium, &low), "scan_findings")
 
 	// Project count. Exclude soft-deleted projects so the dashboard tile
 	// matches /api/v1/projects list semantics (F-4).
@@ -252,33 +258,24 @@ func (d Deps) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// High-severity findings: top 20 CRITICAL/HIGH vulnerabilities with repo context.
+	// Single SQL shape for both global and scoped — scopeClause is empty for
+	// super-admin, so the strings.Replace below no-ops there. The
+	// p.deleted_at IS NULL join is what's new vs the pre-F-2 version.
 	highSev := make([]vulnRow, 0)
 	{
-		var hsSQL string
-		var hsArgs []any
-		if scopeClause == "" {
-			hsSQL = `
-				SELECT v.cve_id, v.severity, v.package_name, p.name, r.name, r.type
-				FROM vulnerabilities v
-				JOIN scans s ON s.id = v.scan_id
-				JOIN repos r ON r.id = s.repo_id
-				JOIN projects p ON p.id = r.project_id
-				WHERE v.severity IN ('CRITICAL','HIGH') AND r.deleted_at IS NULL
-				ORDER BY CASE v.severity WHEN 'CRITICAL' THEN 0 ELSE 1 END, v.id DESC
-				LIMIT 20`
-		} else {
-			hsArgs = make([]any, len(scopeArgs))
-			copy(hsArgs, scopeArgs)
-			hsSQL = `
-				SELECT v.cve_id, v.severity, v.package_name, p.name, r.name, r.type
-				FROM vulnerabilities v
-				JOIN scans s ON s.id = v.scan_id
-				JOIN repos r ON r.id = s.repo_id
-				JOIN projects p ON p.id = r.project_id
-				WHERE v.severity IN ('CRITICAL','HIGH') AND r.deleted_at IS NULL` + strings.Replace(scopeClause, "project_id", "r.project_id", 1) + `
-				ORDER BY CASE v.severity WHEN 'CRITICAL' THEN 0 ELSE 1 END, v.id DESC
-				LIMIT 20`
-		}
+		hsArgs := make([]any, len(scopeArgs))
+		copy(hsArgs, scopeArgs)
+		hsSQL := `
+			SELECT v.cve_id, v.severity, v.package_name, p.name, r.name, r.type
+			FROM vulnerabilities v
+			JOIN scans s ON s.id = v.scan_id
+			JOIN repos r ON r.id = s.repo_id
+			JOIN projects p ON p.id = r.project_id
+			WHERE v.severity IN ('CRITICAL','HIGH')
+			  AND r.deleted_at IS NULL
+			  AND p.deleted_at IS NULL` + strings.Replace(scopeClause, "project_id", "r.project_id", 1) + `
+			ORDER BY CASE v.severity WHEN 'CRITICAL' THEN 0 ELSE 1 END, v.id DESC
+			LIMIT 20`
 		if hsRowsQ, err := d.DB.Reader.QueryContext(r.Context(), hsSQL, hsArgs...); err == nil {
 			defer func() { _ = hsRowsQ.Close() }()
 			for hsRowsQ.Next() {
@@ -395,11 +392,15 @@ func (d Deps) handleStorageDetail(w http.ResponseWriter, r *http.Request) {
 
 	// Used bytes — live computed (F-5). Also adds S3 bucket contents which
 	// are project-scoped, not repo-scoped, and therefore outside repoSizeExpr.
+	// p.deleted_at IS NULL filters repos/buckets whose project has been
+	// soft-deleted (Codex F-1/F-3), matching the behaviour at /api/v1/dashboard.
 	usedArgs := make([]any, len(scopeArgs))
 	copy(usedArgs, scopeArgs)
 	var usedBytes int64
 	_ = d.DB.Reader.QueryRowContext(r.Context(),
-		`SELECT COALESCE(SUM(`+repoSizeExpr+`), 0) FROM repos r WHERE r.deleted_at IS NULL`+scopeClause, usedArgs...).Scan(&usedBytes)
+		`SELECT COALESCE(SUM(`+repoSizeExpr+`), 0)
+		 FROM repos r JOIN projects p ON p.id = r.project_id
+		 WHERE r.deleted_at IS NULL AND p.deleted_at IS NULL`+scopeClause, usedArgs...).Scan(&usedBytes)
 
 	s3Args := make([]any, len(scopeArgs))
 	copy(s3Args, scopeArgs)
@@ -408,7 +409,8 @@ func (d Deps) handleStorageDetail(w http.ResponseWriter, r *http.Request) {
 		`SELECT COALESCE(SUM(o.size_bytes), 0)
 		 FROM s3_objects o
 		 JOIN s3_buckets b ON b.id = o.bucket_id
-		 WHERE b.deleted_at IS NULL`+strings.Replace(scopeClause, "r.project_id", "b.project_id", 1),
+		 JOIN projects p ON p.id = b.project_id
+		 WHERE b.deleted_at IS NULL AND p.deleted_at IS NULL`+strings.Replace(scopeClause, "r.project_id", "b.project_id", 1),
 		s3Args...).Scan(&s3Used)
 	usedBytes += s3Used
 
@@ -429,13 +431,15 @@ func (d Deps) handleStorageDetail(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Per-repo breakdown sorted by size DESC (live-computed, F-5).
+	// Filter soft-deleted projects too — otherwise a hidden project's repos
+	// keep appearing in the breakdown list (Codex F-1).
 	repoArgs := make([]any, len(scopeArgs))
 	copy(repoArgs, scopeArgs)
 	rows, err := d.DB.Reader.QueryContext(r.Context(), `
 		SELECT p.name, r.name, r.type, `+repoSizeExpr+` AS bytes
 		FROM repos r
 		JOIN projects p ON p.id = r.project_id
-		WHERE r.deleted_at IS NULL`+scopeClause+`
+		WHERE r.deleted_at IS NULL AND p.deleted_at IS NULL`+scopeClause+`
 		ORDER BY bytes DESC
 	`, repoArgs...)
 	repos := make([]storageRepoRow, 0)
@@ -462,7 +466,7 @@ func (d Deps) handleStorageDetail(w http.ResponseWriter, r *http.Request) {
 		FROM s3_buckets b
 		JOIN projects p ON p.id = b.project_id
 		LEFT JOIN s3_objects o ON o.bucket_id = b.id
-		WHERE b.deleted_at IS NULL`+strings.Replace(scopeClause, "r.project_id", "b.project_id", 1)+`
+		WHERE b.deleted_at IS NULL AND p.deleted_at IS NULL`+strings.Replace(scopeClause, "r.project_id", "b.project_id", 1)+`
 		GROUP BY b.id
 		ORDER BY bytes DESC
 	`, bktArgs...)

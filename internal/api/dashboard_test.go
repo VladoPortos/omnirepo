@@ -46,6 +46,46 @@ func TestDashboard_ReturnsStats(t *testing.T) {
 	}
 }
 
+// TestDashboard_SoftDeletedProjectDoesNotBleed verifies the Codex F-1/F-2/F-3
+// follow-up to F-4: a soft-deleted project's repos and their vulnerabilities
+// must not contribute to the dashboard aggregate tiles. Before the fix,
+// repo_count kept counting live repos under a soft-deleted project and the
+// global vulnerabilities query didn't filter them at all.
+func TestDashboard_SoftDeletedProjectDoesNotBleed(t *testing.T) {
+	s := newTestServer(t)
+	_, pw := seedTestUser(t, s.db, "root", "r@x", true, false)
+	cookie, _, code := s.login(t, "root", pw)
+	if code != 200 {
+		t.Fatalf("login code=%d", code)
+	}
+	ctx := context.Background()
+
+	// Two projects, each with one repo. Soft-delete the second project
+	// (but not its repo — this reproduces the exact pattern smoke DBs hit
+	// after a normal project delete, since repos stay around for recovery).
+	_, _ = s.deps.Projects.Create(ctx, "live", "")
+	livePID, _ := s.deps.Projects.FindByName(ctx, "live")
+	_, _ = s.deps.Repos.Create(ctx, livePID.ID, "docker", "live-repo", "", nil, nil, nil)
+
+	_, _ = s.deps.Projects.Create(ctx, "ghost", "")
+	ghostPID, _ := s.deps.Projects.FindByName(ctx, "ghost")
+	_, _ = s.deps.Repos.Create(ctx, ghostPID.ID, "docker", "ghost-repo", "", nil, nil, nil)
+	if err := s.deps.Projects.SoftDelete(ctx, ghostPID.ID); err != nil {
+		t.Fatalf("soft delete ghost: %v", err)
+	}
+
+	resp, body := s.do(t, "GET", "/api/v1/dashboard", cookie, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("code=%d body=%v", resp.StatusCode, body)
+	}
+	if got := int(body["project_count"].(float64)); got != 1 {
+		t.Fatalf("project_count=%d, want 1 (ghost is soft-deleted)", got)
+	}
+	if got := int(body["repo_count"].(float64)); got != 1 {
+		t.Fatalf("repo_count=%d, want 1 (ghost-repo must not leak through its soft-deleted project)", got)
+	}
+}
+
 // TestDashboard_ProjectCountExcludesSoftDeleted verifies F-4: the dashboard's
 // "Projects" tile shouldn't count rows with deleted_at IS NOT NULL, so it
 // matches the behaviour of GET /api/v1/projects.

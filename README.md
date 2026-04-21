@@ -803,6 +803,7 @@ Shipped releases (git tags):
 ## Further reading
 
 - `/api/docs/` (at runtime) — Swagger UI for the REST API
+- [Scheduled mirror sync (external cron)](docs/operations/scheduled-sync.md) — worked `curl` + crontab + Kubernetes CronJob example for driving mirror syncs on a cadence
 - `.planning/` — GSD workflow artifacts (project spec, roadmap, per-phase plans)
 - `tools.md` — original technology blueprint with alternatives-considered commentary
 

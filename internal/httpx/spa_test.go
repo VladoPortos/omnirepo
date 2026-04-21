@@ -11,11 +11,15 @@ import (
 )
 
 // testDistFS is a minimal in-memory FS matching the expected dist/ layout.
+// Includes a swagger/ subdirectory with its own index.html so the
+// embedded-subapp serving guard is exercised by TestSPAHandler_SubdirIndex.
 func testDistFS() fstest.MapFS {
 	return fstest.MapFS{
-		"dist/index.html":            {Data: []byte("<html>SPA</html>")},
-		"dist/assets/main-abc123.js": {Data: []byte("console.log('app')")},
+		"dist/index.html":              {Data: []byte("<html>SPA</html>")},
+		"dist/assets/main-abc123.js":   {Data: []byte("console.log('app')")},
 		"dist/assets/style-def456.css": {Data: []byte("body{}")},
+		"dist/swagger/index.html":      {Data: []byte("<html>SWAGGER</html>")},
+		"dist/swagger/swagger-ui.css":  {Data: []byte("/* swagger css */")},
 	}
 }
 
@@ -77,6 +81,45 @@ func TestSPAHandler_DeepPathFallback(t *testing.T) {
 	body := w.Body.String()
 	if !strings.Contains(body, "SPA") {
 		t.Fatalf("expected fallback to index.html for deep path, got %q", body)
+	}
+}
+
+// TestSPAHandler_SubdirIndex serves an embedded subapp's index.html when
+// the user requests the directory (trailing slash). Walkthrough 2026-04-21:
+// /swagger/ used to fall through to the React SPA shell because
+// http.FileServer's directory-redirect (/swagger/index.html → ./) bounced
+// us into the SPA fallback. Guards against the regression.
+func TestSPAHandler_SubdirIndex(t *testing.T) {
+	handler := httpx.SPAHandler(testDistFS())
+	req := httptest.NewRequest("GET", "/swagger/", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("code=%d", w.Code)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "SWAGGER") {
+		t.Fatalf("expected swagger/index.html, got %q", body)
+	}
+	if strings.Contains(body, "SPA") {
+		t.Fatalf("got SPA shell instead of swagger/index.html: %q", body)
+	}
+}
+
+// TestSPAHandler_SubdirAsset serves files under an embedded subapp's
+// directory directly, not via the SPA fallback.
+func TestSPAHandler_SubdirAsset(t *testing.T) {
+	handler := httpx.SPAHandler(testDistFS())
+	req := httptest.NewRequest("GET", "/swagger/swagger-ui.css", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("code=%d", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "swagger css") {
+		t.Fatalf("expected swagger asset, got %q", w.Body.String())
 	}
 }
 

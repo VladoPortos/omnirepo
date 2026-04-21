@@ -7,9 +7,17 @@ import (
 	"github.com/dxc-internal/omnirepo/internal/metadata"
 )
 
+// maintenanceToggleRoute is the one write endpoint that must bypass the
+// maintenance gate — otherwise enabling maintenance mode permanently bricks
+// the instance (the toggle itself is a POST). Admin auth is still enforced
+// downstream by authmw.RequireCan(ActionTriggerGC) on the handler.
+const maintenanceToggleRoute = "/api/v1/admin/maintenance"
+
 // MaintenanceMode returns middleware that blocks write-method requests when the
 // settings table has maintenance_mode="true". GET, HEAD, OPTIONS always pass
-// through (OPS-05: reads allowed during maintenance).
+// through (OPS-05: reads allowed during maintenance). The maintenance-toggle
+// POST endpoint itself is also allowed through so operators can disable
+// maintenance from the UI.
 //
 // When settings is nil (test mode, Phase 1 backward compat) the middleware
 // passes through unconditionally.
@@ -19,6 +27,12 @@ func MaintenanceMode(settings *metadata.SettingsRepo) func(next http.Handler) ht
 			// Reads always allowed.
 			switch r.Method {
 			case http.MethodGet, http.MethodHead, http.MethodOptions:
+				next.ServeHTTP(w, r)
+				return
+			}
+			// Self-unbrick: always allow the maintenance-toggle endpoint so
+			// the operator can disable maintenance once it's enabled.
+			if r.URL.Path == maintenanceToggleRoute {
 				next.ServeHTTP(w, r)
 				return
 			}

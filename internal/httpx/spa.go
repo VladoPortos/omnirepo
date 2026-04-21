@@ -71,8 +71,21 @@ func SPAHandler(distFS fs.FS) http.HandlerFunc {
 			path = "index.html"
 		}
 
+		// Directory request (e.g. /swagger/) — try to serve <dir>/index.html
+		// directly. Without this branch http.FileServer's directory-redirect
+		// to "./" lands in the SPA fallback below for embedded subapps that
+		// ship their own index.html (Swagger UI). We don't want to override
+		// that with the React app's shell.
+		statPath := strings.TrimSuffix(path, "/")
+		if path != "" && strings.HasSuffix(r.URL.Path, "/") {
+			if _, err := fs.Stat(sub, statPath+"/index.html"); err == nil {
+				fileServer.ServeHTTP(w, r)
+				return
+			}
+		}
+
 		// Try serving the exact file first.
-		if _, err := fs.Stat(sub, path); err == nil {
+		if _, err := fs.Stat(sub, statPath); err == nil {
 			fileServer.ServeHTTP(w, r)
 			return
 		}

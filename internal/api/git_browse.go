@@ -137,10 +137,20 @@ func (d Deps) handleGitRefs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Query from git_refs table (populated by post-ReceivePack hook).
+	// Query from git_refs table (populated by post-ReceivePack hook). The
+	// table stores every ref including the symbolic HEAD pointer; the
+	// OpenAPI contract for this endpoint (GitRef schema) only defines
+	// branch/tag entries with a `sha` field, so we both filter out
+	// `symbolic` rows AND emit the target column under the `sha` name so
+	// the wire shape matches the spec (previously the handler emitted
+	// `target` and included HEAD, which broke the React git detail page
+	// with `TypeError: Cannot read properties of undefined (reading
+	// 'slice')`).
 	gitRefs := d.DB.Reader
 	rows, err := gitRefs.QueryContext(r.Context(), `
-		SELECT name, target, type FROM git_refs WHERE repo_id=? ORDER BY name
+		SELECT name, target, type FROM git_refs
+		WHERE repo_id=? AND type IN ('branch','tag')
+		ORDER BY name
 	`, rr.ID)
 	if err != nil {
 		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
@@ -149,14 +159,14 @@ func (d Deps) handleGitRefs(w http.ResponseWriter, r *http.Request) {
 	defer func() { _ = rows.Close() }()
 
 	type refItem struct {
-		Name   string `json:"name"`
-		Target string `json:"target"`
-		Type   string `json:"type"`
+		Name string `json:"name"`
+		Type string `json:"type"`
+		SHA  string `json:"sha"`
 	}
 	items := make([]refItem, 0)
 	for rows.Next() {
 		var item refItem
-		if err := rows.Scan(&item.Name, &item.Target, &item.Type); err != nil {
+		if err := rows.Scan(&item.Name, &item.SHA, &item.Type); err != nil {
 			writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 			return
 		}

@@ -190,6 +190,65 @@ func TestGitBrowse_CommitsEndpoint(t *testing.T) {
 	}
 }
 
+// TestGitBrowse_RefsMatchOpenAPIContract verifies the /refs endpoint
+// emits {name, type, sha} per the OpenAPI GitRef schema and excludes
+// symbolic refs (HEAD), which the schema enum does not cover. Before
+// this fix the handler emitted `target` instead of `sha` and included
+// HEAD as type=symbolic, which crashed the React git detail page
+// with TypeError: Cannot read properties of undefined (reading 'slice').
+func TestGitBrowse_RefsMatchOpenAPIContract(t *testing.T) {
+	s := newTestServer(t)
+	rootID, pw := seedTestUser(t, s.db, "root", "r@x", true, false)
+	cookie, _, code := s.login(t, "root", pw)
+	if code != 200 {
+		t.Fatalf("login code=%d", code)
+	}
+
+	ctx := context.Background()
+	pid, _ := s.deps.Projects.Create(ctx, "refproj", "")
+	_ = s.deps.Members.Add(ctx, pid, rootID)
+	repoID, _ := s.deps.Repos.Create(ctx, pid, "git", "refrepo", "", nil, nil, nil)
+
+	// Post-ReceivePack normally populates git_refs; seed it directly so we
+	// isolate the SQL → JSON contract and don't depend on the push path.
+	writeRef := func(name, target, kind string) {
+		t.Helper()
+		if _, err := s.db.Writer.ExecContext(ctx,
+			`INSERT INTO git_refs(repo_id,name,target,type) VALUES(?,?,?,?)`,
+			repoID, name, target, kind); err != nil {
+			t.Fatalf("seed git_refs: %v", err)
+		}
+	}
+	writeRef("HEAD", "refs/heads/main", "symbolic")
+	writeRef("refs/heads/main", "708d53ca02af99f509db472ff519fc69bbd8bf3d", "branch")
+	writeRef("refs/tags/v1", "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", "tag")
+
+	resp, body := s.do(t, "GET", "/api/v1/projects/refproj/repos/git/refrepo/refs", cookie, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("code=%d body=%v", resp.StatusCode, body)
+	}
+	items, ok := body["items"].([]any)
+	if !ok {
+		t.Fatalf("expected items array, got %v", body)
+	}
+	if len(items) != 2 {
+		t.Fatalf("expected 2 refs (HEAD filtered), got %d: %v", len(items), items)
+	}
+	for _, it := range items {
+		m := it.(map[string]any)
+		if _, ok := m["sha"].(string); !ok {
+			t.Fatalf("ref missing `sha` string field (OpenAPI contract): %v", m)
+		}
+		if _, ok := m["target"]; ok {
+			t.Fatalf("ref still emits legacy `target` key (should be renamed to `sha`): %v", m)
+		}
+		kind, _ := m["type"].(string)
+		if kind != "branch" && kind != "tag" {
+			t.Fatalf("ref type=%q outside OpenAPI enum [branch, tag]", kind)
+		}
+	}
+}
+
 func TestGitBrowse_NonMemberDenied(t *testing.T) {
 	s := newTestServer(t)
 	_, _ = seedTestUser(t, s.db, "root", "r@x", true, false)

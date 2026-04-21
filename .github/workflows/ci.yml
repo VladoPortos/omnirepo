@@ -27,6 +27,14 @@ jobs:
         run: |
           curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b "$(go env GOPATH)/bin" v2.11.4
 
+      - name: Install shellcheck
+        # Phase 10 CRONDOCS-04 / D-25: `make test` → `make lint-docs`
+        # shellchecks the documented cron snippet in
+        # docs/operations/scheduled-sync.md. Without shellcheck on the
+        # runner the Makefile's skip-guard silently no-ops (intentional
+        # for local dev); CI MUST install it so the gate fires.
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+
       - name: Lint
         run: make lint
 

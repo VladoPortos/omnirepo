@@ -680,6 +680,124 @@ func TestBlobMount_FallbackWhenBlobMissing(t *testing.T) {
 	}
 }
 
+// TestBlobMount_FallbackWhenSourceProjectMissing covers the spec §4.2.1
+// contract that an unsatisfiable mount must fall through to a normal
+// upload session start (202). Docker CLI emits `from=library/alpine`
+// when pushing a retagged docker.io/alpine; without fall-through the
+// whole push errors out on 404 NAME_UNKNOWN before any blob upload
+// starts.
+func TestBlobMount_FallbackWhenSourceProjectMissing(t *testing.T) {
+	f := newBlobFixture(t)
+	missing := "sha256:" + strings.Repeat("d", 64)
+	url := f.srv.URL + "/v2/proj/docker/app/blobs/uploads/?mount=" +
+		missing + "&from=library/alpine"
+	req, _ := http.NewRequest("POST", url, nil)
+	resp, err := http.DefaultClient.Do(f.authed(req))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status=%d, want 202 (fallback when from-project missing); body=%s",
+			resp.StatusCode, body)
+	}
+	if resp.Header.Get("Range") != "0-0" {
+		t.Fatalf("missing Range header on fallback")
+	}
+	if resp.Header.Get("Docker-Upload-Uuid") == "" {
+		t.Fatalf("missing Docker-Upload-Uuid on fallback")
+	}
+}
+
+// TestBlobMount_FallbackWhenSourceRepoMissing covers the same fall-through
+// contract for the case where the from-project exists locally but the
+// named repo within it doesn't.
+func TestBlobMount_FallbackWhenSourceRepoMissing(t *testing.T) {
+	f := newBlobFixture(t)
+	missing := "sha256:" + strings.Repeat("e", 64)
+	// Source uses f.projectID's project but a repo that doesn't exist.
+	url := f.srv.URL + "/v2/proj/docker/app/blobs/uploads/?mount=" +
+		missing + "&from=proj/docker/nosuch"
+	req, _ := http.NewRequest("POST", url, nil)
+	resp, err := http.DefaultClient.Do(f.authed(req))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status=%d, want 202 (fallback when from-repo missing); body=%s",
+			resp.StatusCode, body)
+	}
+}
+
+// TestBlobMount_ForbiddenSourceRead_StillFallsBack covers Codex review
+// 2026-04-21: when the from-source repo EXISTS but the actor lacks read
+// access on it, the mount path must NOT return 201 Created (which would
+// allow cross-repo data leakage). The current implementation enforces
+// the source-read auth check; if it ever flipped to a successful mount
+// the actor would have copied bytes they aren't allowed to see. We
+// expect 403 DENIED on the source-read check, matching pre-fix behavior.
+func TestBlobMount_ForbiddenSourceRead_StillFallsBack(t *testing.T) {
+	f := newBlobFixture(t)
+	body := []byte("guarded-blob")
+	digest := f.pushMonolithic(body)
+
+	// Make the project private (default), so non-member can't read.
+	// Seed a stranger user who is not a member of the project.
+	pwHash, _ := auth.HashPassword("stranger-pw")
+	_, err := f.users.Create(context.Background(), "noread", "n@e.com", pwHash, false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tokReq, _ := http.NewRequest("GET", f.srv.URL+"/v2/token", nil)
+	tokReq.Header.Set("Authorization", "Basic "+basicEncode("noread:stranger-pw"))
+	tokResp, _ := http.DefaultClient.Do(tokReq)
+	var payload struct {
+		Token string `json:"token"`
+	}
+	_ = json.NewDecoder(tokResp.Body).Decode(&payload)
+	tokResp.Body.Close()
+	if payload.Token == "" {
+		t.Fatal("no token for stranger")
+	}
+
+	// Seed a SECOND project the stranger does belong to so the dest-write
+	// auth check passes — that way we are testing the source-read gate
+	// specifically, not the dest-write gate.
+	otherPID, err := f.projects.Create(context.Background(), "stranger-proj", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.repos.Create(context.Background(), otherPID,
+		"docker", "app", "", nil, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	// Find stranger's user id and join them to stranger-proj.
+	su, err := f.users.FindByLogin(context.Background(), "noread")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.members.Add(context.Background(), otherPID, su.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	url := f.srv.URL + "/v2/stranger-proj/docker/app/blobs/uploads/?mount=" +
+		digest + "&from=" + f.repoPath
+	mountReq, _ := http.NewRequest("POST", url, nil)
+	mountReq.Header.Set("Authorization", "Bearer "+payload.Token)
+	resp, err := http.DefaultClient.Do(mountReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status=%d, want 403 DENIED on source-read; body=%s", resp.StatusCode, b)
+	}
+}
+
 // TestBlobUpload_ForbiddenActor asserts a non-member user is rejected with
 // 403 DENIED on POST /v2/...blobs/uploads/.
 func TestBlobUpload_ForbiddenActor(t *testing.T) {

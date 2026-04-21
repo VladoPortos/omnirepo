@@ -53,17 +53,23 @@ func (h *Handler) blobMount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Resolve source repo row.
+	// Resolve source repo row. Per OCI Distribution Spec v1.1 §4.2.1,
+	// when the source of a cross-repo mount cannot be satisfied the
+	// server SHOULD fall through to a standard upload-session start
+	// rather than surfacing a 404 — docker push first tries to mount
+	// from the original upstream path (e.g. "library/alpine" for a
+	// retagged docker.io/alpine) and relies on this fall-through to
+	// continue when the source project/repo isn't mirrored locally.
+	// Returning 404 here bricks every first-time push of an image
+	// retagged from docker.io, so we silently fall through instead.
 	p, err := h.projects.FindByName(r.Context(), fromProject)
 	if err != nil || p == nil {
-		writeOCIErr(w, http.StatusNotFound, ErrCodeNameUnknown,
-			fmt.Errorf("from project not found: %w", err))
+		h.blobUploadPost(w, r)
 		return
 	}
 	src, err := h.repos.FindByTriple(r.Context(), p.ID, fromType, fromRepoName)
 	if err != nil || src == nil {
-		writeOCIErr(w, http.StatusNotFound, ErrCodeNameUnknown,
-			fmt.Errorf("from repo not found: %w", err))
+		h.blobUploadPost(w, r)
 		return
 	}
 

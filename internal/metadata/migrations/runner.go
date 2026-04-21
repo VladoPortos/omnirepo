@@ -162,17 +162,20 @@ func upStem(filename string) string {
 // whole thing back.
 //
 // We flip PRAGMA foreign_keys=OFF at the connection level *before* BEGIN and
-// restore it after COMMIT. This is the canonical SQLite recipe for migrations
-// that do table rebuilds (DROP + CREATE + RENAME): the intermediate state
-// between DROP old_table and RENAME new_table→old_table briefly leaves FKs
-// dangling, and neither `defer_foreign_keys=ON` nor the RENAME's FK-rewrite
-// behaviour catches every edge case (modernc + real SQLite both raise a
-// generic "FOREIGN KEY constraint failed" at COMMIT otherwise).
+// restore it after COMMIT. This is the canonical SQLite recipe for
+// migrations that do table rebuilds (DROP + CREATE + RENAME): the
+// intermediate state between DROP old_table and RENAME new_table→old_table
+// briefly leaves FKs dangling, and neither `defer_foreign_keys=ON` nor the
+// RENAME's FK-rewrite behaviour catches every edge case (modernc + real
+// SQLite both raise a generic "FOREIGN KEY constraint failed" at COMMIT
+// otherwise).
 //
-// Disabling FKs only affects enforcement while the migration runs — the
-// surrounding tx still rolls back on error, and `foreign_key_check` is
-// implicitly run by re-enabling FKs, catching any migration that leaves
-// genuinely bad data.
+// Re-enabling FK enforcement at the connection level does NOT retroactively
+// validate rows inserted while FKs were disabled — it only governs future
+// writes. To catch the "migration INSERTed an orphan while FK was OFF"
+// class of mistake, we run PRAGMA foreign_key_check inside the tx right
+// before Commit (so a failure rolls back the body AND prevents recording
+// the migration as applied).
 func runOne(ctx context.Context, writer *sql.DB, stem, body string) (err error) {
 	// Grab a dedicated connection for the whole migration so the PRAGMAs
 	// land on the same connection as the tx. Without this, the pool could
@@ -186,8 +189,9 @@ func runOne(ctx context.Context, writer *sql.DB, stem, body string) (err error) 
 	if _, err = conn.ExecContext(ctx, "PRAGMA foreign_keys=OFF"); err != nil {
 		return fmt.Errorf("disable foreign_keys: %w", err)
 	}
-	// Best-effort restore. Runs even on failure so the writer pool doesn't
-	// leak a FK-disabled conn back into circulation.
+	// Best-effort restore. Runs even on panic so the writer pool doesn't
+	// leak a FK-disabled conn back into circulation. If restore fails and
+	// we otherwise had no error, surface the restore error.
 	defer func() {
 		if _, rErr := conn.ExecContext(ctx, "PRAGMA foreign_keys=ON"); rErr != nil && err == nil {
 			err = fmt.Errorf("restore foreign_keys: %w", rErr)
@@ -198,11 +202,17 @@ func runOne(ctx context.Context, writer *sql.DB, stem, body string) (err error) 
 	if beginErr != nil {
 		return fmt.Errorf("begin: %w", beginErr)
 	}
+	// Rollback on any return path where Commit wasn't reached — including
+	// panic. Using a local flag instead of reading the named `err` means a
+	// panic (which leaves err nil) still triggers rollback, closing the tx
+	// cleanly before the panic propagates.
+	committed := false
 	defer func() {
-		if err != nil {
-			if rbErr := tx.Rollback(); rbErr != nil && rbErr != sql.ErrTxDone {
-				err = fmt.Errorf("%w (rollback: %v)", err, rbErr)
-			}
+		if committed {
+			return
+		}
+		if rbErr := tx.Rollback(); rbErr != nil && rbErr != sql.ErrTxDone && err == nil {
+			err = fmt.Errorf("rollback: %w", rbErr)
 		}
 	}()
 	// Execute the whole file as one batch — modernc.org/sqlite supports
@@ -210,11 +220,50 @@ func runOne(ctx context.Context, writer *sql.DB, stem, body string) (err error) 
 	if _, err = tx.ExecContext(ctx, body); err != nil {
 		return err
 	}
+	// Pre-commit data-integrity audit. foreign_keys=OFF during the body
+	// means any rows the migration INSERTed with a bad FK would commit
+	// silently. PRAGMA foreign_key_check yields one row per violating
+	// row; a non-empty result set means the migration broke integrity
+	// and the whole tx must roll back — running this INSIDE the tx
+	// guarantees we never record the migration as applied on failure.
+	if err = assertNoFKViolations(ctx, tx); err != nil {
+		return err
+	}
 	if _, err = tx.ExecContext(ctx, "INSERT INTO schema_migrations(name) VALUES (?)", stem); err != nil {
 		return err
 	}
 	if err = tx.Commit(); err != nil {
 		return fmt.Errorf("commit: %w", err)
+	}
+	committed = true
+	return nil
+}
+
+// assertNoFKViolations runs PRAGMA foreign_key_check against the current
+// transaction and returns a descriptive error if any rows come back. Called
+// from runOne before Commit so a migration that leaves orphans never lands
+// a schema_migrations row.
+func assertNoFKViolations(ctx context.Context, tx *sql.Tx) error {
+	rows, err := tx.QueryContext(ctx, "PRAGMA foreign_key_check")
+	if err != nil {
+		return fmt.Errorf("foreign_key_check: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var violations []string
+	for rows.Next() {
+		var table, parent string
+		var rowid, fkid sql.NullInt64
+		if scanErr := rows.Scan(&table, &rowid, &parent, &fkid); scanErr != nil {
+			return fmt.Errorf("foreign_key_check scan: %w", scanErr)
+		}
+		violations = append(violations, fmt.Sprintf("%s(rowid=%v) → %s(fkid=%v)", table, rowid.Int64, parent, fkid.Int64))
+	}
+	if rErr := rows.Err(); rErr != nil {
+		return fmt.Errorf("foreign_key_check iterate: %w", rErr)
+	}
+	if len(violations) > 0 {
+		return fmt.Errorf("foreign_key_check failed: %d violation(s): %s",
+			len(violations), strings.Join(violations, "; "))
 	}
 	return nil
 }

@@ -154,6 +154,48 @@ func TestRunner_DisablesForeignKeysForTableRebuild(t *testing.T) {
 	}
 }
 
+// TestRunner_ForeignKeyCheckCatchesBadInserts verifies the runner runs
+// PRAGMA foreign_key_check before Commit and rolls back the migration if
+// rows with missing parents slipped through while FKs were disabled.
+// Without this check, a migration that INSERTed a child with no parent
+// would commit silently and the next write would hit a confusing CASCADE
+// error far from the root cause.
+func TestRunner_ForeignKeyCheckCatchesBadInserts(t *testing.T) {
+	t.Parallel()
+	db := openFreshDB(t)
+	ctx := context.Background()
+
+	fsys := fstest.MapFS{
+		"001_seed.up.sql": {Data: []byte(`
+			CREATE TABLE parents(id INTEGER PRIMARY KEY);
+			CREATE TABLE kids(id INTEGER PRIMARY KEY, parent_id INTEGER NOT NULL REFERENCES parents(id));
+		`)},
+		// Insert a kid whose parent_id has no matching row. FKs are OFF
+		// during the body, so INSERT would ordinarily commit — the runner's
+		// pre-commit foreign_key_check must catch it and fail the tx.
+		"002_bad.up.sql": {Data: []byte(`
+			INSERT INTO kids(id,parent_id) VALUES(1, 999);
+		`)},
+	}
+	_, err := migrations.ApplyFSForTest(ctx, db.Writer, fsys)
+	if err == nil {
+		t.Fatalf("expected foreign_key_check to surface the orphaned child, got nil")
+	}
+	if !strings.Contains(err.Error(), "foreign_key_check failed") {
+		t.Fatalf("error should mention foreign_key_check, got: %v", err)
+	}
+	// 002_bad must NOT be recorded — schema_migrations row is INSERTed
+	// after the FK check passes, so a rolled-back tx leaves no trace and
+	// a re-run of Apply would retry the migration.
+	var n int
+	if err := db.Reader.QueryRow(`SELECT COUNT(*) FROM schema_migrations WHERE name='002_bad'`).Scan(&n); err != nil {
+		t.Fatalf("query schema_migrations: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("002_bad recorded in schema_migrations despite FK failure — rollback didn't fire")
+	}
+}
+
 func TestApplyIdempotent(t *testing.T) {
 	t.Parallel()
 	db := openFreshDB(t)

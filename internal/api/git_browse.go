@@ -40,17 +40,51 @@ const maxBlobSize = 5 * 1024 * 1024 // 5 MB
 // maxBlameSize is the maximum file size for blame (T-05-04-02).
 const maxBlameSize = 1 * 1024 * 1024 // 1 MB
 
-// mountGitBrowse installs the git browse endpoints.
+// mountGitBrowse installs the git browse endpoints. F-16: routes that
+// previously captured `{ref}` as a single chi path segment now use a
+// catch-all so branch/tag names containing `/` (e.g. `feature/x`,
+// `release/v1.2`) route correctly. The handler calls splitRefAndPath
+// to try progressively longer ref prefixes against the real repo refs.
 func (d Deps) mountGitBrowse(r chi.Router) {
 	r.Get("/projects/{name}/repos/git/{repo}/refs", d.handleGitRefs)
-	r.Get("/projects/{name}/repos/git/{repo}/tree/{ref}/*", d.handleGitTree)
-	r.Get("/projects/{name}/repos/git/{repo}/tree/{ref}", d.handleGitTree)
-	r.Get("/projects/{name}/repos/git/{repo}/blob/{ref}/*", d.handleGitBlob)
-	r.Get("/projects/{name}/repos/git/{repo}/blob/{ref}", d.handleGitBlob)
-	r.Get("/projects/{name}/repos/git/{repo}/commits/{ref}", d.handleGitCommits)
+	r.Get("/projects/{name}/repos/git/{repo}/tree/*", d.handleGitTree)
+	r.Get("/projects/{name}/repos/git/{repo}/blob/*", d.handleGitBlob)
+	r.Get("/projects/{name}/repos/git/{repo}/commits/*", d.handleGitCommits)
 	r.Get("/projects/{name}/repos/git/{repo}/commit/{sha}", d.handleGitCommit)
-	r.Get("/projects/{name}/repos/git/{repo}/blame/{ref}/*", d.handleGitBlame)
+	r.Get("/projects/{name}/repos/git/{repo}/blame/*", d.handleGitBlame)
 	r.Get("/projects/{name}/repos/git/{repo}/compare/{spec}", d.handleGitCompare)
+}
+
+// splitRefAndPath pulls a (ref, path) pair out of the chi "*" catch-all
+// segment for handlers that take both a ref and an optional tree path.
+// Branch/tag names may contain `/` (e.g. `feature/x`, `release/v1.2`), so
+// a simple first-segment split is wrong. We iterate from the longest
+// possible ref (the whole catch-all) down to the first segment and
+// return the first split whose ref resolves in the repo. If none
+// resolves we fall back to the shortest (first segment) split — the
+// caller then returns a 404 with "ref not found" for better DX than
+// returning a misleading path error.
+func splitRefAndPath(repo *gogitpkg.Repository, catchAll string) (ref, path string) {
+	catchAll = strings.Trim(catchAll, "/")
+	if catchAll == "" {
+		return "", ""
+	}
+	segments := strings.Split(catchAll, "/")
+	for i := len(segments); i >= 1; i-- {
+		candidate := strings.Join(segments[:i], "/")
+		if _, err := resolveRef(repo, candidate); err == nil {
+			rest := strings.Join(segments[i:], "/")
+			return candidate, rest
+		}
+	}
+	return segments[0], strings.Join(segments[1:], "/")
+}
+
+// refOnlyFromCatchAll returns the whole catch-all segment as the ref
+// name (no path component). Used by handlers like /commits where the
+// URL suffix is the ref itself.
+func refOnlyFromCatchAll(catchAll string) string {
+	return strings.Trim(catchAll, "/")
 }
 
 // resolveGitRepo validates project membership and returns the opened go-git repo.
@@ -203,8 +237,7 @@ func (d Deps) handleGitTree(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ref := chi.URLParam(r, "ref")
-	pathParam := chi.URLParam(r, "*")
+	ref, pathParam := splitRefAndPath(repo, chi.URLParam(r, "*"))
 
 	hash, err := resolveRef(repo, ref)
 	if err != nil {
@@ -269,8 +302,7 @@ func (d Deps) handleGitBlob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ref := chi.URLParam(r, "ref")
-	pathParam := chi.URLParam(r, "*")
+	ref, pathParam := splitRefAndPath(repo, chi.URLParam(r, "*"))
 	if pathParam == "" {
 		writeJSONError(w, r, http.StatusBadRequest, ErrValidationFailed, "path required")
 		return
@@ -348,7 +380,7 @@ func (d Deps) handleGitCommits(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ref := chi.URLParam(r, "ref")
+	ref := refOnlyFromCatchAll(chi.URLParam(r, "*"))
 	hash, err := resolveRef(repo, ref)
 	if err != nil {
 		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "ref not found")
@@ -468,8 +500,7 @@ func (d Deps) handleGitBlame(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ref := chi.URLParam(r, "ref")
-	pathParam := chi.URLParam(r, "*")
+	ref, pathParam := splitRefAndPath(repo, chi.URLParam(r, "*"))
 	if pathParam == "" {
 		writeJSONError(w, r, http.StatusBadRequest, ErrValidationFailed, "path required")
 		return

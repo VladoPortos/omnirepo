@@ -272,6 +272,58 @@ func keysOf(m map[string]map[string]any) []string {
 	return out
 }
 
+// TestGitBrowse_RefWithSlash covers F-16: branch and tag names that
+// contain `/` (e.g. `feature/x`, `release/v1.2`) must route correctly
+// through /tree/*, /blob/*, /commits/*, /blame/*. Pre-fix, chi treated
+// `{ref}` as a single path segment so `/tree/feature/x` resolved ref
+// to "feature" and 404'd.
+func TestGitBrowse_RefWithSlash(t *testing.T) {
+	s := newTestServer(t)
+	rootID, pw := seedTestUser(t, s.db, "root", "r@x", true, false)
+	cookie, _, _ := s.login(t, "root", pw)
+
+	ctx := context.Background()
+	pid, _ := s.deps.Projects.Create(ctx, "slashed", "")
+	_ = s.deps.Members.Add(ctx, pid, rootID)
+	_, _ = s.deps.Repos.Create(ctx, pid, "git", "myrepo", "", nil, nil, nil)
+
+	repoPath := filepath.Join(s.dataRoot, "repos", "slashed", "git", "myrepo.git")
+	commitHash := createBareRepoWithCommit(t, repoPath)
+
+	// Add refs/heads/feature/x + refs/tags/release/v1.2 pointing at the
+	// same commit. Reuse the bare repo's own Storer so we don't construct
+	// a parallel filesystem backend.
+	repo, err := gogitpkg.PlainOpen(repoPath)
+	if err != nil {
+		t.Fatalf("open bare repo: %v", err)
+	}
+	if err := repo.Storer.SetReference(plumbing.NewHashReference("refs/heads/feature/x", commitHash)); err != nil {
+		t.Fatalf("set feature/x ref: %v", err)
+	}
+	if err := repo.Storer.SetReference(plumbing.NewHashReference("refs/tags/release/v1.2", commitHash)); err != nil {
+		t.Fatalf("set release/v1.2 ref: %v", err)
+	}
+
+	for _, tc := range []struct {
+		name string
+		url  string
+	}{
+		{"tree feature/x", "/api/v1/projects/slashed/repos/git/myrepo/tree/feature/x"},
+		{"tree feature/x with path", "/api/v1/projects/slashed/repos/git/myrepo/tree/feature/x/"},
+		{"blob feature/x", "/api/v1/projects/slashed/repos/git/myrepo/blob/feature/x/README.md"},
+		{"commits feature/x", "/api/v1/projects/slashed/repos/git/myrepo/commits/feature/x"},
+		{"tree release/v1.2", "/api/v1/projects/slashed/repos/git/myrepo/tree/release/v1.2"},
+		{"commits release/v1.2", "/api/v1/projects/slashed/repos/git/myrepo/commits/release/v1.2"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resp, body := s.do(t, "GET", tc.url, cookie, nil)
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("%s: code=%d body=%v", tc.url, resp.StatusCode, body)
+			}
+		})
+	}
+}
+
 func TestGitBrowse_NonMemberDenied(t *testing.T) {
 	s := newTestServer(t)
 	_, _ = seedTestUser(t, s.db, "root", "r@x", true, false)

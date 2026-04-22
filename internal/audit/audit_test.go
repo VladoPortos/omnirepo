@@ -212,6 +212,12 @@ func TestEveryStateChangingActionEmitsEvent(t *testing.T) {
 		audit.EvtOCIBlobUploaded,
 		audit.EvtOCIBlobMounted,
 		audit.EvtOCIBlobDeleted,
+		// Phase 11 — mirror infrastructure widening (plan 11-02). Emitted
+		// by helm sync_handler (plan 11-03) and git sync_handler (plan 11-06);
+		// enumerated here so the kinds compile + round-trip through the
+		// audit sink exactly like their predecessors.
+		audit.EvtOciTagRebound,
+		audit.EvtMirrorSyncLFSDetected,
 	}
 	for _, k := range kinds {
 		if err := l.Record(ctx, audit.Event{Kind: k, Outcome: "ok"}); err != nil {

@@ -2,8 +2,11 @@ package api
 
 import (
 	"encoding/json"
+	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/dxc-internal/omnirepo/internal/httperr"
 )
 
 func TestValidateMirrorFilter_EmptyIsLegal(t *testing.T) {
@@ -313,5 +316,63 @@ func TestValidateMirrorFilter_RejectsMixedCasingForSameField(t *testing.T) {
 		if ok, _ := validateMirrorFilter("rpm", json.RawMessage(raw)); ok {
 			t.Errorf("mixed-casing payload must be rejected: %s", raw)
 		}
+	}
+}
+
+// TestRefuseDockerHubWithoutCred covers the 11-02 Docker Hub gate (D-04,
+// OCIHELM-05). registry-1.docker.io OCI upstreams MUST carry a basic
+// credential or the validator returns a 422 httperr.Error with envelope
+// code `mirror.docker_hub_requires_credential`. Non-Docker-Hub OCI hosts
+// and HTTP upstreams are unaffected.
+//
+// INV-11-02-01: the envelope code is STABLE across plans — tests assert
+// the literal string.
+func TestRefuseDockerHubWithoutCred(t *testing.T) {
+	cases := []struct {
+		name     string
+		url      string
+		credKind string
+		wantCode string // "" = expect nil return (gate not triggered)
+	}{
+		{"docker_hub_no_cred_oci_scheme", "oci://registry-1.docker.io/bitnamicharts/nginx", "", "mirror.docker_hub_requires_credential"},
+		{"docker_hub_with_basic_unblocks", "oci://registry-1.docker.io/bitnamicharts/nginx", "basic", ""},
+		{"case_insensitive_host", "oci://Registry-1.Docker.IO/foo", "", "mirror.docker_hub_requires_credential"},
+		{"ghcr_no_cred_allowed", "oci://ghcr.io/foo/bar", "", ""},
+		{"quay_no_cred_allowed", "oci://quay.io/team/chart", "", ""},
+		{"http_upstream_no_cred_allowed", "https://charts.example.com/", "", ""},
+		{"http_docker_hub_host_not_gated", "https://registry-1.docker.io/foo", "", ""},
+		{"empty_url_not_gated", "", "", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := refuseDockerHubWithoutCred(tc.url, tc.credKind)
+			if tc.wantCode == "" {
+				if got != nil {
+					t.Fatalf("refuseDockerHubWithoutCred(%q,%q): want nil, got envelope %+v (status=%d)", tc.url, tc.credKind, got.Envelope, got.Status)
+				}
+				return
+			}
+			if got == nil {
+				t.Fatalf("refuseDockerHubWithoutCred(%q,%q): want envelope %q, got nil", tc.url, tc.credKind, tc.wantCode)
+			}
+			if got.Envelope.Code != tc.wantCode {
+				t.Fatalf("envelope.code: got %q want %q", got.Envelope.Code, tc.wantCode)
+			}
+			if got.Status != http.StatusUnprocessableEntity {
+				t.Fatalf("status: got %d want 422", got.Status)
+			}
+			if got.Envelope.Class != httperr.ClassValidation {
+				t.Fatalf("class: got %q want %q", got.Envelope.Class, httperr.ClassValidation)
+			}
+			// Message (D-04 verbatim copy) must mention the 100/6h rate
+			// limit to distinguish it from generic "missing credential"
+			// copy — the exact phrase is the operator's only cue.
+			if !strings.Contains(got.Envelope.Message, "100 requests") {
+				t.Errorf("message missing rate-limit phrase: %q", got.Envelope.Message)
+			}
+			if !strings.Contains(got.Envelope.Message, "basic credential") {
+				t.Errorf("message missing remediation phrase: %q", got.Envelope.Message)
+			}
+		})
 	}
 }

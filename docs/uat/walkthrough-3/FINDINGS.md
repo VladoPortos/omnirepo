@@ -21,6 +21,8 @@ Status: 🟨 Open · ✅ Closed · 🟥 Rejected (disputed)
 | F-03.4 | R | apikeys.go + project_apikeys.go + migration 028 | Duplicate live key names accepted; race-safe partial unique index added | `31fb799` + `be474f8` | ✅ Clean | ✅ Passed | ✅ Closed |
 | F-03.5 | **B** | OptionalSessionOrAPIKey | Invalid Basic/Bearer API-key credentials silently 200-null instead of 401 | `517c23f` + `be474f8` | ✅ Clean | ✅ Passed | ✅ Closed |
 | F-03.6 | R | DeleteAccountSection + handleDeleteMe | Post-delete UI stuck on /profile (logout 401'd); orphan session + api_key rows never cleaned | `5f27d48` + `be474f8` | ✅ Clean | ✅ Passed | ✅ Closed |
+| F-04.1 | R | ProjectsPage Create dialog | Stale name + stale error banner on reopen after Esc-close | _pending_ | ⬜ Pending | ✅ Passed | ✅ Closed |
+| F-04.2 | **B** | internal/audit + admin_audit + migration 029 | `audit_log.occurred_at` stored as Go `%v` string → from/to filters return 0, keyset pagination returns page-1 rows again | _pending_ | ⬜ Pending | ✅ Passed | ✅ Closed |
 
 ---
 
@@ -164,4 +166,33 @@ Status: 🟨 Open · ✅ Closed · 🟥 Rejected (disputed)
 - **Root cause:** Spec drift — handlers shipped without corresponding spec entries.
 - **Fix:** commit `3d06d11` — added schemas + paths; types regenerated; hand-written Go types now alias the generated names; email field kept plain `string` so handler's non-empty check stays authoritative.
 - **Retest:** ✅ Both paths present; full Go tests green.
+- **Status:** ✅ Closed
+
+### F-04.1 Create-project dialog retains stale name + error banner on Esc-reopen
+- **Severity:** R / real-bug
+- **Area:** `web/src/pages/ProjectsPage.tsx`
+- **Symptom:** Typed an invalid name (e.g. `ACME`), submitted → 422 surfaced the error banner. Pressed Esc, then reopened the dialog — previous name AND stale error banner were still shown. Submitting after success correctly cleared the form, but dismiss-paths (Escape, overlay click) didn't.
+- **Root cause:** `setName('')` / `setDescription('')` lived only in the `handleCreate` success branch. `onOpenChange={setDialogOpen}` short-circuited to just the boolean setter, so React local state survived across close/reopen.
+- **Fix:** Wrap `onOpenChange` — when `open=false`, also reset `name`, `description`, and `errorEnvelope`.
+- **Retest:** ✅ Submitted `BAD_NAME` → banner visible. Esc → reopen → fields empty, no banner.
+- **Codex verify:** ⬜ Pending
+- **Status:** ✅ Closed
+
+### F-04.2 Audit timestamps stored in unparseable Go-`%v` format — filters + pagination broken
+- **Severity:** **B** / blocker (audit review endpoint effectively unusable past page 1 or for any time-range query)
+- **Area:** `internal/audit/audit.go` (write); `internal/api/admin_audit.go` (filter + cursor); `internal/metadata/migrations/029_audit_occurred_at_rfc3339.*` (data migration)
+- **Symptom:**
+  1. `GET /api/v1/admin/audit?from=2026-04-22T10:00:00Z` returned 0 items even though every row was from 2026-04-22 after 10:00.
+  2. Keyset pagination returned the same first-page rows on page 2 (the `occurred_at < cursor OR (... = ... AND id < ...)` predicate never excluded anything).
+- **Root cause:** `audit.Record` bound `e.OccurredAt` (a `time.Time`) directly to `ExecContext`. `modernc.org/sqlite`'s default conversion uses Go's `time.Time.String()` — `"2026-04-22 12:43:05.123456789 +0000 UTC"`. That format (a) is not parseable by SQLite's `datetime()` / `strftime()`, and (b) sorts lexicographically AFTER RFC3339 strings when the date is equal (space `0x20` < `T` `0x54` at index 10). The admin endpoint formatted its `from` / `to` / cursor as RFC3339, so every same-day comparison lost.
+- **Fix:**
+  - `internal/audit/audit.go` now writes `e.OccurredAt.UTC().Format(time.RFC3339Nano)` — ISO-8601, parseable by SQLite, sort-stable.
+  - `internal/api/admin_audit.go` formats `from` / `to` and the cursor `SortValue` as `time.RFC3339Nano` so the bound value and the stored value share one format.
+  - `migrations/029_audit_occurred_at_rfc3339.up.sql` rewrites existing rows: `substr(s, 1, 10) || 'T' || substr(s, 12, length(s)-21) || 'Z'`, matched by `WHERE occurred_at LIKE '%+0000 UTC'` (leaves already-ISO rows untouched).
+- **Retest:**
+  - `from=2026-04-22T10:00:00Z` → 131 items (was 0). `from=2099-01-01T00:00:00Z` → 0 items.
+  - Pagination: page 1 ids `[138,137,136]`, page 2 ids `[135,133,132]` — strictly monotonic, no overlap.
+  - Fresh write lands as `2026-04-22T12:55:44.489206228Z` in DB.
+  - `go test ./internal/audit/... ./internal/api/... ./internal/metadata/...` all green.
+- **Codex verify:** ⬜ Pending
 - **Status:** ✅ Closed

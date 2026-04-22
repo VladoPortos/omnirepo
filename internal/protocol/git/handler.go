@@ -1,8 +1,10 @@
 package git
 
 import (
+	"errors"
 	"log/slog"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -167,6 +169,28 @@ func (h *Handler) dispatchToBackend(w http.ResponseWriter, r *http.Request) {
 			"Push is not allowed on mirror repositories.",
 		))
 		return
+	}
+
+	// Plan 11-07 Codex finding 1 — mirror not-yet-synced 503 envelope.
+	// OnRepoCreate (plan 11-06) intentionally skips InitBare for mirror repos
+	// because gogit.PlainCloneContext on the first /sync requires an empty
+	// target dir. Until the first sync runs, <repoPath>/HEAD does not exist
+	// — a clone attempt against an unsynced mirror used to fall through to
+	// the backend and emit a cryptic go-git error (or a half-initialised
+	// HTML 500 from gitkit). We catch that case here and return a clean
+	// 503 + httperr envelope so operators / scripted clients see actionable
+	// JSON instead of backend internals. Non-mirror repos always have
+	// InitBare run by OnRepoCreate, so a missing dir for them is a genuine
+	// internal/ops issue — let it propagate as before.
+	if repo.IsMirror {
+		if _, statErr := os.Stat(filepath.Join(repoPath, "HEAD")); errors.Is(statErr, os.ErrNotExist) {
+			httperr.Write(w, r, httperr.Transient(
+				"mirror.not_yet_synced",
+				"Mirror repository has not been synced yet. Trigger a sync to populate.",
+				0,
+			))
+			return
+		}
 	}
 
 	h.backend.Handler(repoPath).ServeHTTP(w, r)

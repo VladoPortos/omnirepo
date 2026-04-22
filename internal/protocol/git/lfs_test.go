@@ -23,7 +23,7 @@ import (
 // LFS batch API with 501 and envelope code "lfs.not_supported".
 func TestLFSBatch_MirrorRepo_Returns501(t *testing.T) {
 	t.Parallel()
-	ts, rec := newMirrorGateHarness(t)
+	ts, rec, _ := newMirrorGateHarness(t)
 
 	url := ts.URL + "/testproj/git/mirror-repo.git/info/lfs/objects/batch"
 	body := strings.NewReader(`{"operation":"download","objects":[]}`)
@@ -54,7 +54,7 @@ func TestLFSBatch_MirrorRepo_Returns501(t *testing.T) {
 // a silent-success LFS passthrough.
 func TestLFSBatch_DevRepo_AlsoReturns501(t *testing.T) {
 	t.Parallel()
-	ts, rec := newMirrorGateHarness(t)
+	ts, rec, _ := newMirrorGateHarness(t)
 
 	url := ts.URL + "/testproj/git/plain-repo.git/info/lfs/objects/batch"
 	body := strings.NewReader(`{"operation":"download","objects":[]}`)
@@ -84,7 +84,7 @@ func TestLFSBatch_DevRepo_AlsoReturns501(t *testing.T) {
 // not just POST.
 func TestLFSBatch_GET_Also501(t *testing.T) {
 	t.Parallel()
-	ts, _ := newMirrorGateHarness(t)
+	ts, _, _ := newMirrorGateHarness(t)
 
 	url := ts.URL + "/testproj/git/mirror-repo.git/info/lfs/objects/batch"
 	resp, err := http.Get(url)
@@ -106,7 +106,7 @@ func TestLFSBatch_GET_Also501(t *testing.T) {
 // LFS route as a `/info/*` prefix that swallows all info/* traffic.
 func TestLFSBatch_IsSpecificRoute_NotCatchAll(t *testing.T) {
 	t.Parallel()
-	ts, rec := newMirrorGateHarness(t)
+	ts, rec, _ := newMirrorGateHarness(t)
 
 	// info/refs for a plain repo is a valid read-side capability query.
 	url := ts.URL + "/testproj/git/plain-repo.git/info/refs?service=git-upload-pack"

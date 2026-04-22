@@ -156,7 +156,12 @@ func TestRouteMatrix_BothURLShapes(t *testing.T) {
 //
 // Mirror repo: "mirror-repo" with is_mirror=1 + upstream_url seeded.
 // Plain repo:  "plain-repo" with is_mirror=0 (default).
-func newMirrorGateHarness(t *testing.T) (*httptest.Server, *recordingBackend) {
+//
+// The third return is dataRoot — tests that need to simulate the post-sync
+// state (mirror has been populated on disk) call simulateMirrorSynced(t,
+// dataRoot, "testproj", "mirror-repo") to InitBare the bare-repo dir under
+// the canonical layout (<dataRoot>/repos/<proj>/git/<repo>.git/).
+func newMirrorGateHarness(t *testing.T) (*httptest.Server, *recordingBackend, string) {
 	t.Helper()
 	db := sqlitetest.New(t)
 
@@ -211,7 +216,21 @@ func newMirrorGateHarness(t *testing.T) (*httptest.Server, *recordingBackend) {
 	mux := handler.TestRouter(t)
 	ts := httptest.NewServer(mux)
 	t.Cleanup(ts.Close)
-	return ts, rec
+	return ts, rec, dataRoot
+}
+
+// simulateMirrorSynced creates the bare-repo skeleton on disk under the
+// canonical mirror-repo layout. Used by tests that need to assert
+// post-first-sync behavior — without this, the dispatchToBackend
+// "mirror.not_yet_synced" 503 guard short-circuits before the backend is
+// invoked. Mirrors the production behavior where PlainCloneContext (or a
+// later CLI fallback) creates the .git skeleton on first sync.
+func simulateMirrorSynced(t *testing.T, dataRoot, projectName, repoName string) {
+	t.Helper()
+	bareDir := filepath.Join(dataRoot, "repos", projectName, "git", repoName+".git")
+	if err := gitpkg.InitBare(bareDir, "main"); err != nil {
+		t.Fatalf("simulateMirrorSynced: InitBare %s: %v", bareDir, err)
+	}
 }
 
 // assertMirrorEnvelope decodes the response body and asserts the envelope
@@ -237,7 +256,7 @@ func assertMirrorEnvelope(t *testing.T, body []byte, wantCode string) {
 // the backend is invoked.
 func TestReceivePack_MirrorRejected(t *testing.T) {
 	t.Parallel()
-	ts, rec := newMirrorGateHarness(t)
+	ts, rec, _ := newMirrorGateHarness(t)
 
 	url := ts.URL + "/testproj/git/mirror-repo.git/git-receive-pack"
 	req, err := http.NewRequest(http.MethodPost, url, strings.NewReader(""))
@@ -266,7 +285,7 @@ func TestReceivePack_MirrorRejected(t *testing.T) {
 // fire a false positive on the write path for regular repos.
 func TestReceivePack_NonMirrorAllowed(t *testing.T) {
 	t.Parallel()
-	ts, rec := newMirrorGateHarness(t)
+	ts, rec, _ := newMirrorGateHarness(t)
 
 	url := ts.URL + "/testproj/git/plain-repo.git/git-receive-pack"
 	req, err := http.NewRequest(http.MethodPost, url, strings.NewReader(""))
@@ -289,11 +308,15 @@ func TestReceivePack_NonMirrorAllowed(t *testing.T) {
 }
 
 // TestUploadPack_MirrorAllowed asserts that POST /git-upload-pack
-// (fetch/clone) against a mirror repo is NOT gated — clone-from-mirror
-// must continue to work (mirrors are read-only but still readable).
+// (fetch/clone) against a synced mirror repo is NOT gated —
+// clone-from-mirror must continue to work (mirrors are read-only but still
+// readable). simulateMirrorSynced creates the bare-repo dir on disk to
+// pass the mirror.not_yet_synced 503 guard added in plan 11-07 Codex
+// finding 1.
 func TestUploadPack_MirrorAllowed(t *testing.T) {
 	t.Parallel()
-	ts, rec := newMirrorGateHarness(t)
+	ts, rec, dataRoot := newMirrorGateHarness(t)
+	simulateMirrorSynced(t, dataRoot, "testproj", "mirror-repo")
 
 	url := ts.URL + "/testproj/git/mirror-repo.git/git-upload-pack"
 	req, err := http.NewRequest(http.MethodPost, url, strings.NewReader(""))
@@ -316,11 +339,13 @@ func TestUploadPack_MirrorAllowed(t *testing.T) {
 }
 
 // TestInfoRefs_UploadPack_MirrorAllowed asserts that
-// GET /info/refs?service=git-upload-pack against a mirror repo passes
-// through — capability negotiation for clone must work.
+// GET /info/refs?service=git-upload-pack against a synced mirror repo
+// passes through — capability negotiation for clone must work.
+// simulateMirrorSynced bypasses the mirror.not_yet_synced 503 guard.
 func TestInfoRefs_UploadPack_MirrorAllowed(t *testing.T) {
 	t.Parallel()
-	ts, rec := newMirrorGateHarness(t)
+	ts, rec, dataRoot := newMirrorGateHarness(t)
+	simulateMirrorSynced(t, dataRoot, "testproj", "mirror-repo")
 
 	url := ts.URL + "/testproj/git/mirror-repo.git/info/refs?service=git-upload-pack"
 	resp, err := http.Get(url)
@@ -343,7 +368,7 @@ func TestInfoRefs_UploadPack_MirrorAllowed(t *testing.T) {
 // Prevents ref-list leak before the actual POST 403.
 func TestInfoRefs_ReceivePack_MirrorRejected(t *testing.T) {
 	t.Parallel()
-	ts, rec := newMirrorGateHarness(t)
+	ts, rec, _ := newMirrorGateHarness(t)
 
 	url := ts.URL + "/testproj/git/mirror-repo.git/info/refs?service=git-receive-pack"
 	resp, err := http.Get(url)
@@ -360,6 +385,91 @@ func TestInfoRefs_ReceivePack_MirrorRejected(t *testing.T) {
 	}
 	body := readAll(t, resp)
 	assertMirrorEnvelope(t, body, "mirror.push_rejected")
+}
+
+// --- Plan 11-07 Codex finding 1: mirror-not-yet-synced 503 envelope ---
+
+// TestMirrorRepo_BeforeFirstSync_Returns503 — codex finding 1. After plan
+// 11-06 OnRepoCreate skips InitBare for mirrors, the bare-repo dir does not
+// exist on disk until the first /sync completes. A clone attempt
+// (GET /info/refs?service=git-upload-pack) BEFORE the first sync used to
+// fall through to h.backend.Handler(repoPath) and emit the raw go-git
+// backend error (cryptic plain-text or worse). The dispatchToBackend now
+// guards mirror-repo dispatches with a stat check on <repoPath>/HEAD; when
+// the bare layout is absent we return 503 with code "mirror.not_yet_synced"
+// + the canonical envelope shape so operators get a useful message and
+// curl/CLI users see actionable JSON instead of go-git internals.
+func TestMirrorRepo_BeforeFirstSync_Returns503(t *testing.T) {
+	t.Parallel()
+	ts, rec, _ := newMirrorGateHarness(t)
+
+	url := ts.URL + "/testproj/git/mirror-repo.git/info/refs?service=git-upload-pack"
+	resp, err := http.Get(url)
+	if err != nil {
+		t.Fatalf("GET info/refs (mirror, pre-sync): %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503; backend lastPath=%q", resp.StatusCode, rec.lastPath)
+	}
+	if rec.lastPath != "" {
+		t.Fatalf("backend MUST NOT be invoked for unsynced mirror dispatch; got lastPath=%q", rec.lastPath)
+	}
+	body := readAll(t, resp)
+	assertMirrorEnvelope(t, body, "mirror.not_yet_synced")
+}
+
+// TestMirrorRepo_AfterFirstSync_PassesThrough — companion guard: once the
+// bare layout exists on disk (simulated via simulateMirrorSynced, mirroring
+// what gogit.PlainCloneContext does on the real first-sync path), the
+// dispatch falls through to the backend as before. Pins that the new 503
+// guard does not regress the post-sync clone path.
+func TestMirrorRepo_AfterFirstSync_PassesThrough(t *testing.T) {
+	t.Parallel()
+	ts, rec, dataRoot := newMirrorGateHarness(t)
+	simulateMirrorSynced(t, dataRoot, "testproj", "mirror-repo")
+
+	url := ts.URL + "/testproj/git/mirror-repo.git/info/refs?service=git-upload-pack"
+	resp, err := http.Get(url)
+	if err != nil {
+		t.Fatalf("GET info/refs (mirror, post-sync): %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusServiceUnavailable {
+		t.Fatalf("post-sync mirror clone returned 503 — guard is firing a false positive")
+	}
+	if rec.lastPath == "" {
+		t.Fatalf("backend NOT invoked for post-sync mirror clone; expected passthrough")
+	}
+}
+
+// TestNonMirror_MissingDir_NotGated — non-mirror repos must NOT be subject
+// to the mirror.not_yet_synced guard even when their on-disk dir is absent.
+// Non-mirror repos always have InitBare run by OnRepoCreate, so a missing
+// dir is genuinely an internal/operator issue — let the backend's native
+// error propagate rather than masquerading as a transient mirror state.
+func TestNonMirror_MissingDir_NotGated(t *testing.T) {
+	t.Parallel()
+	ts, rec, _ := newMirrorGateHarness(t)
+	// Plain repo dir is intentionally NOT created — recordingBackend's
+	// stub Handler returns 200 unconditionally, so we just assert dispatch
+	// reached it (i.e. the new mirror guard did not eat the request).
+
+	url := ts.URL + "/testproj/git/plain-repo.git/info/refs?service=git-upload-pack"
+	resp, err := http.Get(url)
+	if err != nil {
+		t.Fatalf("GET info/refs (plain, missing dir): %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusServiceUnavailable {
+		t.Fatalf("non-mirror missing-dir returned 503 mirror.not_yet_synced — guard is over-broad")
+	}
+	if rec.lastPath == "" {
+		t.Fatalf("non-mirror dispatch did not reach backend; got status=%d", resp.StatusCode)
+	}
 }
 
 // readAll is a tiny helper to keep test bodies tidy.

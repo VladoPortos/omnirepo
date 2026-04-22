@@ -290,8 +290,19 @@ export function RpmRepoPage({ repo }: RpmRepoPageProps) {
           canUpload ? (
             <EmptyState
               icon={Terminal}
-              title="No artifacts yet"
-              description="Upload your first artifact using the snippet below."
+              title={
+                repo.is_mirror ? 'Mirror not yet synced' : 'No artifacts yet'
+              }
+              // F-06.4 (wt3 batch 06): on a mirror repo the snippet is
+              // pull-only (dnf config) — "Upload your first artifact
+              // using the snippet below" misled operators into thinking
+              // uploads were allowed. Retarget the description based on
+              // is_mirror: sync-hint for mirrors, upload-hint for locals.
+              description={
+                repo.is_mirror
+                  ? 'Click Sync now to pull from upstream, then use the snippet below to install from this mirror.'
+                  : 'Upload your first artifact using the snippet below.'
+              }
             >
               <SnippetList
                 repoType="rpm"
@@ -305,7 +316,11 @@ export function RpmRepoPage({ repo }: RpmRepoPageProps) {
             <EmptyState
               icon={Terminal}
               title="No artifacts yet"
-              description="Ask a maintainer to upload an artifact."
+              description={
+                repo.is_mirror
+                  ? 'Ask a maintainer to sync this mirror from upstream.'
+                  : 'Ask a maintainer to upload an artifact.'
+              }
             />
           )
         ) : (

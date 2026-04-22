@@ -343,8 +343,19 @@ export function AptRepoPage({ repo }: AptRepoPageProps) {
           canUpload ? (
             <EmptyState
               icon={Terminal}
-              title="No artifacts yet"
-              description="Upload your first artifact using the snippet below."
+              title={
+                repo.is_mirror ? 'Mirror not yet synced' : 'No artifacts yet'
+              }
+              // F-06.4 (wt3 batch 06): mirror empty state used to claim
+              // "Upload your first artifact using the snippet below" even
+              // though uploads to mirrors return 403 repo_is_mirror. The
+              // signing-key + apt-source snippets are read-only; retarget
+              // the description so the two halves agree.
+              description={
+                repo.is_mirror
+                  ? 'Click Sync now to pull from upstream, then use the snippet below to install from this mirror.'
+                  : 'Upload your first artifact using the snippet below.'
+              }
             >
               <SnippetList
                 repoType="deb"
@@ -358,7 +369,11 @@ export function AptRepoPage({ repo }: AptRepoPageProps) {
             <EmptyState
               icon={Terminal}
               title="No artifacts yet"
-              description="Ask a maintainer to upload an artifact."
+              description={
+                repo.is_mirror
+                  ? 'Ask a maintainer to sync this mirror from upstream.'
+                  : 'Ask a maintainer to upload an artifact.'
+              }
             />
           )
         ) : (

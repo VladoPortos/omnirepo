@@ -180,7 +180,13 @@ export function CreateRepoDialog({
     if (showMirrorSection && mirrorCfg.is_mirror) {
       body.is_mirror = true;
       body.mirror_upstream_url = mirrorCfg.mirror_upstream_url.trim();
-      body.mirror_filter = mirrorCfg.mirror_filter;
+      // Git mirrors are all-refs, no filter support (GITMIRROR-01). Omit
+      // mirror_filter entirely so the backend's SyncFilter-shape validator
+      // treats it as "sync everything" rather than rejecting the unsupported
+      // empty-object payload as a shape mismatch.
+      if (repoType !== 'git') {
+        body.mirror_filter = mirrorCfg.mirror_filter;
+      }
       body.mirror_cred_id = mirrorCfg.mirror_cred_id;
       body.scan_on_sync = mirrorCfg.scan_on_sync;
     }

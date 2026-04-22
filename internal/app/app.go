@@ -570,17 +570,33 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 		// (ReplaceAll here, or any future addition) fails. Clean the
 		// freshly-initialised dir up on any error return so the filesystem
 		// doesn't hold an orphan that has no repos row.
+		//
+		// Plan 11-06 Pitfall D / F-11.3: for mirror repos skip both
+		// InitBare and the HEAD-ref seed — the sync handler's first
+		// PlainCloneContext refuses a non-empty target dir, and empty-bare
+		// state lets the sync populate both on first success. The commit
+		// 7920876 implementation lived on *git.Handler.OnRepoCreate but
+		// was never wired into the composed hook, leaving this inline
+		// block as the live path.
 		if repoType == "git" {
-			repoPath := filepath.Join(cfg.DataRoot, "repos", projectName, "git", repoName+".git")
-			if err := gitpkg.InitBare(repoPath, "main"); err != nil {
-				return nil, err
+			var isMirror sql.NullInt64
+			if err := tx.QueryRowContext(ctx,
+				`SELECT is_mirror FROM repos WHERE id = ?`, repoID,
+			).Scan(&isMirror); err != nil && err != sql.ErrNoRows {
+				return nil, fmt.Errorf("repo-create hook: read is_mirror for repo %d: %w", repoID, err)
 			}
-			seed := []metadata.GitRef{
-				{Name: "HEAD", Target: "refs/heads/main", Type: metadata.GitRefSymbolic},
-			}
-			if err := gitRefsRepo.ReplaceAll(ctx, tx, repoID, seed); err != nil {
-				_ = os.RemoveAll(repoPath)
-				return nil, err
+			if !isMirror.Valid || isMirror.Int64 == 0 {
+				repoPath := filepath.Join(cfg.DataRoot, "repos", projectName, "git", repoName+".git")
+				if err := gitpkg.InitBare(repoPath, "main"); err != nil {
+					return nil, err
+				}
+				seed := []metadata.GitRef{
+					{Name: "HEAD", Target: "refs/heads/main", Type: metadata.GitRefSymbolic},
+				}
+				if err := gitRefsRepo.ReplaceAll(ctx, tx, repoID, seed); err != nil {
+					_ = os.RemoveAll(repoPath)
+					return nil, err
+				}
 			}
 		}
 		if fp == "" {

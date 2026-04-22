@@ -324,6 +324,16 @@ func validateMirrorFilter(repoType string, filter json.RawMessage) (bool, json.R
 			return false, nil
 		}
 		return reencodeFilter(f)
+	case "git":
+		// Git mirrors are all-refs, no per-ref filter API (GITMIRROR-01).
+		// Accept only the empty-object placeholder `{}` (or null/empty
+		// raw — already handled above) and normalize to nil so the repo
+		// row stores nothing. Any other payload is rejected.
+		var f struct{}
+		if dec.Decode(&f) != nil {
+			return false, nil
+		}
+		return true, nil
 	default:
 		return false, nil
 	}

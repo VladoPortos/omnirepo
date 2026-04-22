@@ -115,6 +115,23 @@ func (d Deps) handleCreateProjectAPIKey(w http.ResponseWriter, r *http.Request) 
 		writeJSONError(w, r, http.StatusUnprocessableEntity, ErrValidationFailed, "name required")
 		return
 	}
+	if len(name) > maxAPIKeyNameLen {
+		writeJSONError(w, r, http.StatusUnprocessableEntity, ErrValidationFailed, "name too long")
+		return
+	}
+	// Same duplicate-name guard as the user-scoped twin (F-03.4 wt3): names
+	// are the primary way pipelines are identified in the UI table.
+	existing, err := d.APIKeys.ListByProject(r.Context(), projectID)
+	if err != nil {
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
+		return
+	}
+	for _, k := range existing {
+		if k.Name == name {
+			writeJSONError(w, r, http.StatusConflict, ErrValidationFailed, "name already in use")
+			return
+		}
+	}
 
 	key, err := auth.GenerateAPIKey(auth.APIKeyKindProject)
 	if err != nil {

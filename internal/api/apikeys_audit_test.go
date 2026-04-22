@@ -61,6 +61,93 @@ func TestUserAPIKey_CreateEmitsAudit(t *testing.T) {
 	}
 }
 
+// F-03.3 (wt3): names > 128 chars must be rejected so the profile table
+// layout and audit NDJSON stay predictable.
+func TestUserAPIKey_RejectsOverlongName(t *testing.T) {
+	s := newTestServer(t)
+	_, pw := seedTestUser(t, s.db, "alice", "alice@x", false, false)
+	cookie, _, _ := s.login(t, "alice", pw)
+
+	longName := strings.Repeat("x", 129)
+	resp, body := s.do(t, "POST", "/api/v1/me/api-keys", cookie, map[string]any{
+		"name": longName,
+	})
+	if resp.StatusCode != 422 {
+		t.Fatalf("want 422 for overlong name, got %d body=%+v", resp.StatusCode, body)
+	}
+	if body["code"] != "validation.failed" {
+		t.Fatalf("want validation.failed code, got %v", body["code"])
+	}
+}
+
+// F-03.4 (wt3): duplicate names against the live keyset must be rejected
+// so the UI table can identify a key by name. Revoked names are reusable.
+func TestUserAPIKey_RejectsDuplicateLiveName(t *testing.T) {
+	s := newTestServer(t)
+	_, pw := seedTestUser(t, s.db, "alice", "alice@x", false, false)
+	cookie, _, _ := s.login(t, "alice", pw)
+
+	if r, _ := s.do(t, "POST", "/api/v1/me/api-keys", cookie, map[string]any{
+		"name": "dup",
+	}); r.StatusCode != 201 {
+		t.Fatalf("first create code=%d", r.StatusCode)
+	}
+	resp, body := s.do(t, "POST", "/api/v1/me/api-keys", cookie, map[string]any{
+		"name": "dup",
+	})
+	if resp.StatusCode != 409 {
+		t.Fatalf("want 409 on duplicate name, got %d body=%+v", resp.StatusCode, body)
+	}
+
+	// Revoking the first one frees the name.
+	resp, body = s.do(t, "GET", "/api/v1/me/api-keys", cookie, nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("list code=%d body=%+v", resp.StatusCode, body)
+	}
+	var items []map[string]any
+	if arr, ok := body["items"].([]any); ok { // defensive — s.do wraps non-object responses
+		for _, v := range arr {
+			if m, ok := v.(map[string]any); ok {
+				items = append(items, m)
+			}
+		}
+	}
+	if len(items) == 0 {
+		// Fallback: the list endpoint actually returns a bare array.
+		// s.do wraps bare arrays under "items" in the test helper only for admin
+		// responses — hit it with a raw client to be robust.
+		arr := listAPIKeys(t, s, cookie)
+		for _, m := range arr {
+			items = append(items, m)
+		}
+	}
+	if len(items) == 0 {
+		t.Fatalf("expected at least one key in list")
+	}
+	firstID := idStr(items[0]["id"])
+	if r, _ := s.do(t, "DELETE", "/api/v1/me/api-keys/"+firstID, cookie, nil); r.StatusCode != 204 {
+		t.Fatalf("revoke code=%d", r.StatusCode)
+	}
+	if r, _ := s.do(t, "POST", "/api/v1/me/api-keys", cookie, map[string]any{
+		"name": "dup",
+	}); r.StatusCode != 201 {
+		t.Fatalf("want 201 after revoking duplicate, got %d", r.StatusCode)
+	}
+}
+
+func listAPIKeys(t *testing.T, s *testServer, cookie string) []map[string]any {
+	t.Helper()
+	resp, buf := s.doBytes(t, "GET", "/api/v1/me/api-keys", cookie, nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("list code=%d body=%s", resp.StatusCode, buf)
+	}
+	var raw []map[string]any
+	if err := json.Unmarshal(buf, &raw); err != nil {
+		t.Fatalf("list unmarshal: %v; body=%s", err, buf)
+	}
+	return raw
+}
+
 func TestUserAPIKey_RevokeEmitsAudit(t *testing.T) {
 	s := newTestServer(t)
 	_, pw := seedTestUser(t, s.db, "alice", "alice@x", false, false)

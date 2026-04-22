@@ -18,6 +18,12 @@ import (
 	"github.com/dxc-internal/omnirepo/internal/auth"
 )
 
+// maxAPIKeyNameLen caps the user-visible label stored in api_keys.name.
+// Long names break the profile/admin tables, waste index space, and invite
+// obvious abuse vectors (padding attacks against NDJSON audit sinks, etc.).
+// 128 is roomy for sensible labels — "my-team-ci-prod-2026", etc.
+const maxAPIKeyNameLen = 128
+
 // mountAPIKeys installs the /me/api-keys CRUD endpoints.
 func (d Deps) mountAPIKeys(r chi.Router) {
 	r.Route("/me/api-keys", func(r chi.Router) {
@@ -89,9 +95,27 @@ func (d Deps) handleCreateAPIKey(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, r, http.StatusBadRequest, ErrValidationFailed, "invalid JSON")
 		return
 	}
-	if strings.TrimSpace(req.Name) == "" {
+	name := strings.TrimSpace(req.Name)
+	if name == "" {
 		writeJSONError(w, r, http.StatusUnprocessableEntity, ErrValidationFailed, "name required")
 		return
+	}
+	if len(name) > maxAPIKeyNameLen {
+		writeJSONError(w, r, http.StatusUnprocessableEntity, ErrValidationFailed, "name too long")
+		return
+	}
+	// Reject duplicate names against the live (non-revoked) keyset so the
+	// profile table can identify a key by name. Revoked names are reusable.
+	existing, err := d.APIKeys.ListByUser(r.Context(), actor.ID)
+	if err != nil {
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
+		return
+	}
+	for _, k := range existing {
+		if k.Name == name {
+			writeJSONError(w, r, http.StatusConflict, ErrValidationFailed, "name already in use")
+			return
+		}
 	}
 
 	key, err := auth.GenerateAPIKey(auth.APIKeyKindUser)
@@ -100,7 +124,7 @@ func (d Deps) handleCreateAPIKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	id, err := d.APIKeys.CreateUserKey(r.Context(), actor.ID, req.Name, key.Prefix, key.SHA256)
+	id, err := d.APIKeys.CreateUserKey(r.Context(), actor.ID, name, key.Prefix, key.SHA256)
 	if err != nil {
 		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
@@ -114,14 +138,14 @@ func (d Deps) handleCreateAPIKey(w http.ResponseWriter, r *http.Request) {
 		TargetID:    strconv.FormatInt(id, 10),
 		Details: map[string]any{
 			"id":     id,
-			"name":   req.Name,
+			"name":   name,
 			"prefix": key.Prefix,
 		},
 	})
 
 	writeJSON(w, http.StatusCreated, apiKeyCreateResponse{
 		ID:        id,
-		Name:      req.Name,
+		Name:      name,
 		Prefix:    key.Prefix,
 		Secret:    key.Plaintext,
 		CreatedAt: d.clock(),

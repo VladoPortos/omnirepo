@@ -12,6 +12,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/dxc-internal/omnirepo/internal/audit"
 	"github.com/dxc-internal/omnirepo/internal/auth"
 	authmw "github.com/dxc-internal/omnirepo/internal/auth/middleware"
 )
@@ -60,23 +61,21 @@ func (d Deps) handleListAudit(w http.ResponseWriter, r *http.Request) {
 		clauses = append(clauses, `a.outcome=?`)
 		args = append(args, v)
 	}
-	// Time-range filters + keyset pagination below all rely on lexicographic
-	// comparison against audit_log.occurred_at. The write path stores
-	// occurred_at as RFC3339Nano (post-F-04.2; legacy rows normalized by
-	// migration 029), so bind filter values in the same format here. The
-	// previous code wrote RFC3339 (seconds only) — when the stored value had
-	// nanoseconds ("...T05Z" vs "...T05.123Z"), same-second comparisons could
-	// miss on the `<=` / `=` branches.
+	// Filter + cursor bind values share one canonical format with the write
+	// path (audit.DBTimestampLayout — fixed-width ISO-8601 + 9-digit ns).
+	// Fixed width is required because SQLite's text compare is lexicographic
+	// and time.RFC3339Nano (the obvious choice) strips trailing zeros,
+	// breaking order across mixed-width rows. F-04.2 / Codex pass.
 	if v := q.Get("from"); v != "" {
 		if t, err := time.Parse(time.RFC3339, v); err == nil {
 			clauses = append(clauses, `a.occurred_at >= ?`)
-			args = append(args, t.UTC().Format(time.RFC3339Nano))
+			args = append(args, t.UTC().Format(audit.DBTimestampLayout))
 		}
 	}
 	if v := q.Get("to"); v != "" {
 		if t, err := time.Parse(time.RFC3339, v); err == nil {
 			clauses = append(clauses, `a.occurred_at <= ?`)
-			args = append(args, t.UTC().Format(time.RFC3339Nano))
+			args = append(args, t.UTC().Format(audit.DBTimestampLayout))
 		}
 	}
 
@@ -133,11 +132,12 @@ func (d Deps) handleListAudit(w http.ResponseWriter, r *http.Request) {
 		}
 		items = append(items, item{
 			ID:         row.ID,
-			// Emit RFC3339Nano so the next_cursor round-trip stays lex-aligned
-			// with the stored occurred_at format. Scan(&row.OccurredAt)
-			// accepts either the legacy Go-%v string or RFC3339Nano — both
-			// parse to the same time.Time.
-			Timestamp:  row.OccurredAt.UTC().Format(time.RFC3339Nano),
+			// Emit fixed-width ISO-8601 (audit.DBTimestampLayout) so the
+			// next_cursor round-trip stays lex-aligned with stored
+			// occurred_at. Scan(&row.OccurredAt) accepts any of the three
+			// shapes that can show up in the DB (legacy Go-%v,
+			// migration-029 RFC3339Nano, or current fixed-width).
+			Timestamp:  row.OccurredAt.UTC().Format(audit.DBTimestampLayout),
 			Actor:      row.ActorLogin,
 			IP:         row.IP,
 			UserAgent:  row.UserAgent,

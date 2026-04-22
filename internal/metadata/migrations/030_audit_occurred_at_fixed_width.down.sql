@@ -1,0 +1,7 @@
+-- 030_audit_occurred_at_fixed_width.down.sql (F-04.2 Codex-pass follow-up)
+--
+-- No-op: the up migration strictly tightens variable-width RFC3339Nano rows
+-- into fixed-width ISO-8601. Unpadding back introduces the lex-order bug
+-- that motivated migration 030 in the first place.
+
+SELECT 1;

@@ -28,6 +28,20 @@ type Event struct {
 	Details       map[string]any `json:"details,omitempty"`
 }
 
+// DBTimestampLayout is the canonical on-disk representation for any
+// time-valued column where the application writes via bound parameters
+// (as opposed to SQLite's CURRENT_TIMESTAMP default). Fixed-width,
+// UTC, with 9-digit nanoseconds — chosen so that:
+//   - SQLite's datetime() / strftime() parse it natively.
+//   - Lexicographic ordering (as used by ORDER BY, keyset cursors, and
+//     range filters) matches chronological ordering byte-for-byte.
+//   - Scan(*time.Time) round-trips via modernc.org/sqlite's parser.
+//
+// See F-04.2: time.RFC3339Nano strips trailing zeros → variable width
+// → "Z" (0x5A) > "." (0x2E) for a zero-ns row vs a sub-second row in
+// the same second, breaking lex order. Fixed width avoids that.
+const DBTimestampLayout = "2006-01-02T15:04:05.000000000Z07:00"
+
 // Logger writes audit events to both the audit_log DB table and the NDJSON
 // mirror file. The DB write is strict (errors bubble); the NDJSON write is
 // best-effort (logs slog.Warn on failure). See OQ-9.
@@ -65,20 +79,21 @@ func (l *logger) Record(ctx context.Context, e Event) error {
 	}
 	// Strict DB insert.
 	if err := l.db.WriteTx(ctx, func(tx *sql.Tx) error {
-		// Format occurred_at explicitly as RFC3339Nano. modernc.org/sqlite stores
-		// a raw time.Time via its .String() method ("2026-04-22 12:43:05.123 +0000
-		// UTC"), which SQLite's date/time functions can't parse and which breaks
-		// lexicographic comparison against RFC3339 bound values used by the
-		// admin audit endpoint (from/to filters and keyset pagination both
-		// compare against RFC3339Nano strings). RFC3339Nano is ISO-8601-ordered,
-		// parsed natively by SQLite, and round-trips through Scan(*time.Time).
+		// Format occurred_at as fixed-width ISO-8601 UTC with 9-digit
+		// nanoseconds so lex order == chronological order. modernc.org/sqlite's
+		// default time.Time path stores Go's .String() format which SQLite
+		// can't parse; time.RFC3339Nano is SQLite-parseable but strips
+		// trailing zeros (variable width), so "...:05Z" lex-sorts AFTER
+		// "...:05.1Z" (Z=0x5A > .=0x2E). Fixed-width avoids both traps.
+		// Admin audit filter + keyset pagination bind in the SAME format
+		// (see internal/api/admin_audit.go).
 		_, exErr := tx.ExecContext(ctx, `
 			INSERT INTO audit_log(
 				occurred_at, actor_user_id, actor_api_key_id, ip, user_agent,
 				event_kind, target_kind, target_id, outcome, details_json
 			) VALUES (?,?,?,?,?,?,?,?,?,?)
 		`,
-			e.OccurredAt.UTC().Format(time.RFC3339Nano),
+			e.OccurredAt.UTC().Format(DBTimestampLayout),
 			nullableInt64(e.ActorUserID),
 			nullableInt64(e.ActorAPIKeyID),
 			e.IP,

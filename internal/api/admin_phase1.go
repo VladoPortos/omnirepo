@@ -434,6 +434,18 @@ func (d Deps) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 	}
 	ok, _ := auth.VerifyPassword(u.PasswordHash, req.Current)
 	if !ok {
+		// Audit the failure so an admin can correlate with login-failure
+		// spikes. Attempting a self-service change with the wrong current
+		// password is the same threat surface as login brute-force, and
+		// should be equally observable (F-02.2).
+		uid := a.ID
+		d.recordAudit(r, audit.Event{
+			Kind:        audit.EvtAuthPasswordChanged,
+			ActorUserID: &uid,
+			TargetKind:  "user",
+			TargetID:    u.Login,
+			Outcome:     "wrong_password",
+		})
 		writeJSONError(w, r, http.StatusUnauthorized, ErrUnauthenticated, "wrong current password")
 		return
 	}
@@ -456,7 +468,13 @@ func (d Deps) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 		_ = d.Sessions.DeleteAllForUser(r.Context(), a.ID)
 	}
 	uid := a.ID
-	d.recordAudit(r, audit.Event{Kind: audit.EvtAuthPasswordChanged, ActorUserID: &uid, TargetKind: "user", TargetID: u.Login})
+	d.recordAudit(r, audit.Event{
+		Kind:        audit.EvtAuthPasswordChanged,
+		ActorUserID: &uid,
+		TargetKind:  "user",
+		TargetID:    u.Login,
+		Outcome:     "ok",
+	})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 

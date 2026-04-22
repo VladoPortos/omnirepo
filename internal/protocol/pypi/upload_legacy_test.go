@@ -2,9 +2,13 @@ package pypi_test
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -109,6 +113,20 @@ func TestUpload_DuplicateFilenameReturns409(t *testing.T) {
 	}
 	if !after.UploadedAt.Equal(beforeUploadedAt) {
 		t.Fatalf("uploaded_at mutated on rejected dup: before=%s after=%s", beforeUploadedAt, after.UploadedAt)
+	}
+
+	// F-07.1 Codex follow-up: prior fix Put'd the new blob before the
+	// tx check fired + then Delete'd it on rollback — wiping the winner's
+	// on-disk bytes. Assert the blob for the original upload is still
+	// present and its sha256 matches the DB row's digest.
+	blobPath := filepath.Join(f.repoRoot, "proj1", "pypi", "plain-dup", "packages", "mypkg-1.0-py3-none-any.whl")
+	got, err := os.ReadFile(blobPath)
+	if err != nil {
+		t.Fatalf("blob unlinked after 409 dup: %v", err)
+	}
+	sum := sha256.Sum256(got)
+	if want := "sha256:" + hex.EncodeToString(sum[:]); want != after.Digest {
+		t.Fatalf("blob sha256 %s != row digest %s (blob mutated on dup)", want, after.Digest)
 	}
 }
 

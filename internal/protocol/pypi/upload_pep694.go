@@ -449,6 +449,24 @@ func (h *Handler) handleCommit(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "storage error", http.StatusInternalServerError)
 			return
 		}
+		// F-07.1 (wt3) Codex follow-up: pre-check existence BEFORE Put so
+		// a dup attempt doesn't overwrite the winner's blob + get its file
+		// unlinked on rollback. Rationale identical to upload_legacy.go.
+		if existing, ferr := h.pypiFiles.FindByFilename(r.Context(), res.repo.ID, f.Parsed.Filename); ferr == nil && existing != nil {
+			h.auditEvent(r, audit.EvtPyPIUpload, f.Parsed.Filename, "rejected", map[string]any{
+				"project":    res.project.Name,
+				"repo":       res.repo.Name,
+				"reason":     "file_exists",
+				"session_id": sess.ID,
+				"flow":       "pep694",
+			})
+			httperr.Write(w, r, httperr.Validation(
+				"pypi.file_exists",
+				"That filename already exists in this repo — delete it first if you need to replace it.",
+				httperr.WithStatus(http.StatusConflict),
+			))
+			return
+		}
 		storageKey := packageStorageKey(res.project.Name, res.repo.Name, f.Parsed.Filename)
 		if _, err := h.pathStore.Put(r.Context(), storageKey, bytes.NewReader(body)); err != nil {
 			slog.ErrorContext(r.Context(), "pypi.pep694.storage_failed",
@@ -460,21 +478,21 @@ func (h *Handler) handleCommit(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := h.commitPyPIRow(r, res, f.Parsed); err != nil {
-			// HI-02: roll back the on-disk artifact for the current file so
-			// we don't leak orphans. Previously-committed files in this loop
-			// are already durable and intentionally left alone.
-			_ = h.pathStore.Delete(r.Context(), storageKey)
-			// F-07.1 (wt3): existing filename → 409 rather than silently
-			// overwriting the released artifact. We keep the session alive
-			// (don't Delete) so the client can choose to either retry the
-			// publish against different filenames or walk away.
+			// F-07.1 (wt3) Codex follow-up: skip blob Delete on the
+			// inner dup-race path — see upload_legacy.go for rationale
+			// (winner's bytes live at the same storage key).
 			if errors.Is(err, errPyPIFileExists) {
+				slog.WarnContext(r.Context(), "pypi.pep694.dup_race_kept_winner_blob",
+					slog.String("incident_id", chimw.GetReqID(r.Context())),
+					slog.String("filename", f.Parsed.Filename),
+				)
 				h.auditEvent(r, audit.EvtPyPIUpload, f.Parsed.Filename, "rejected", map[string]any{
 					"project":    res.project.Name,
 					"repo":       res.repo.Name,
 					"reason":     "file_exists",
 					"session_id": sess.ID,
 					"flow":       "pep694",
+					"race":       true,
 				})
 				httperr.Write(w, r, httperr.Validation(
 					"pypi.file_exists",
@@ -483,6 +501,10 @@ func (h *Handler) handleCommit(w http.ResponseWriter, r *http.Request) {
 				))
 				return
 			}
+			// HI-02: roll back the on-disk artifact for the current file so
+			// we don't leak orphans. Previously-committed files in this loop
+			// are already durable and intentionally left alone.
+			_ = h.pathStore.Delete(r.Context(), storageKey)
 			slog.ErrorContext(r.Context(), "pypi.pep694.commit_failed",
 				slog.String("incident_id", chimw.GetReqID(r.Context())),
 				slog.String("filename", f.Parsed.Filename),

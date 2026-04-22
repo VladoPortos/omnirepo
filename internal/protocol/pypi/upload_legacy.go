@@ -219,6 +219,29 @@ func (h *Handler) handleLegacyUpload(w http.ResponseWriter, r *http.Request) {
 	parsed.Digest = digest
 	parsed.SizeBytes = size
 
+	// F-07.1 (wt3) Codex follow-up: pre-check existence BEFORE PathStore.Put
+	// because pathstore.Put is not content-addressed — it overwrites any
+	// prior blob at the same storage key, and the rollback path's Delete
+	// would then unlink the **winning** upload's on-disk file. Doing the
+	// lookup up front keeps the common dup-case data-safe. The writer-tx
+	// FindByFilenameTx inside commitPyPIRow still defends against the
+	// narrow race where a concurrent upload commits between this read
+	// and our Insert — in that race, we deliberately do NOT delete the
+	// blob on rollback because the bytes now belong to the winner.
+	if existing, ferr := h.pypiFiles.FindByFilename(r.Context(), res.repo.ID, filename); ferr == nil && existing != nil {
+		h.auditEvent(r, audit.EvtPyPIUpload, filename, "rejected", map[string]any{
+			"project": res.project.Name,
+			"repo":    res.repo.Name,
+			"reason":  "file_exists",
+		})
+		httperr.Write(w, r, httperr.Validation(
+			"pypi.file_exists",
+			"That filename already exists in this repo — delete it first if you need to replace it.",
+			httperr.WithStatus(http.StatusConflict),
+		))
+		return
+	}
+
 	// Promote tmp file into PathStore.
 	tmpBytes, err := os.ReadFile(tmpPath)
 	if err != nil {
@@ -242,15 +265,22 @@ func (h *Handler) handleLegacyUpload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.commitPyPIRow(r, res, parsed); err != nil {
-		// HI-02: roll back the on-disk artifact when metadata tx fails.
-		_ = h.pathStore.Delete(r.Context(), storageKey)
-		// F-07.1 (wt3): existing filename → 409 rather than silently
-		// overwriting the released artifact.
+		// F-07.1 (wt3) Codex follow-up: only delete the blob we just Put
+		// when the commit failed AND we did not race into an existing row.
+		// The inner Tx-check fires only on the narrow race where another
+		// upload committed between our pre-check and our Insert — those
+		// bytes now belong to the winner, so deleting would destroy their
+		// data. Plain commit failures (DB error, etc.) still rollback.
 		if errors.Is(err, errPyPIFileExists) {
+			slog.WarnContext(r.Context(), "pypi.legacy.dup_race_kept_winner_blob",
+				slog.String("incident_id", chimw.GetReqID(r.Context())),
+				slog.String("filename", filename),
+			)
 			h.auditEvent(r, audit.EvtPyPIUpload, filename, "rejected", map[string]any{
 				"project": res.project.Name,
 				"repo":    res.repo.Name,
 				"reason":  "file_exists",
+				"race":    true,
 			})
 			httperr.Write(w, r, httperr.Validation(
 				"pypi.file_exists",
@@ -259,6 +289,8 @@ func (h *Handler) handleLegacyUpload(w http.ResponseWriter, r *http.Request) {
 			))
 			return
 		}
+		// HI-02: roll back the on-disk artifact when metadata tx fails.
+		_ = h.pathStore.Delete(r.Context(), storageKey)
 		slog.ErrorContext(r.Context(), "pypi.legacy.commit_failed",
 			slog.String("incident_id", chimw.GetReqID(r.Context())),
 			slog.String("filename", filename),

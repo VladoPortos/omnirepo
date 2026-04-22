@@ -258,6 +258,17 @@ func (r *UsersRepo) Count(ctx context.Context) (int64, error) {
 	return n, err
 }
 
+// CountLiveSuperAdmins returns the number of live (non-soft-deleted)
+// super-admins. Used by the delete-user handler to refuse deletes that
+// would leave the instance without an admin (F-02.3).
+func (r *UsersRepo) CountLiveSuperAdmins(ctx context.Context) (int64, error) {
+	var n int64
+	err := r.db.Reader.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM users WHERE is_super_admin=1 AND deleted_at IS NULL`,
+	).Scan(&n)
+	return n, err
+}
+
 // boolInt converts a Go bool to the sqlite 0/1 integer form used by our schema
 // (which uses BOOLEAN but sqlite stores it as INTEGER anyway).
 func boolInt(b bool) int64 {

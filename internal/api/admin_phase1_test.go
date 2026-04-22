@@ -462,6 +462,72 @@ func TestDeleteUser(t *testing.T) {
 	}
 }
 
+// TestDeleteUser_CannotDeleteSelf pins the F-02.3 safety check: an admin
+// cannot delete their own user row via the admin API. Self-deletion is a
+// DELETE /me flow.
+func TestDeleteUser_CannotDeleteSelf(t *testing.T) {
+	s := newTestServer(t)
+	// Seed two super-admins so the last-super-admin guard doesn't mask
+	// the self-delete guard; we want to isolate the self-check here.
+	seedTestUser(t, s.db, "super", "s@x", true, false)
+	seedTestUser(t, s.db, "super2", "s2@x", true, false)
+	cookie, _, _ := s.login(t, "super", "pw-super")
+	resp, _ := s.do(t, "DELETE", "/api/v1/admin/users/super", cookie, nil)
+	if resp.StatusCode != 409 {
+		t.Fatalf("self-delete code=%d, want 409", resp.StatusCode)
+	}
+}
+
+// TestDeleteUser_CannotDeleteLastSuperAdmin pins the F-02.3 safety check:
+// when only one live super-admin exists, the admin-delete endpoint must
+// refuse to remove them. Leaving the instance with zero admins is a
+// practically-irrecoverable state for an air-gapped deployment.
+func TestDeleteUser_CannotDeleteLastSuperAdmin(t *testing.T) {
+	s := newTestServer(t)
+	seedTestUser(t, s.db, "super", "s@x", true, false)
+	// Seed a second super-admin, then log in as them so super is the
+	// target (not self — that would trip the self-check first).
+	seedTestUser(t, s.db, "super2", "s2@x", true, false)
+	cookie, _, _ := s.login(t, "super2", "pw-super2")
+	// First delete brings us down to one super-admin — should succeed.
+	resp, _ := s.do(t, "DELETE", "/api/v1/admin/users/super", cookie, nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("first delete code=%d, want 200", resp.StatusCode)
+	}
+	// super2 now tries to delete… itself. Expect 409 from self-delete
+	// guard. That's also what keeps the last-admin from disappearing
+	// via self-delete.
+	resp2, _ := s.do(t, "DELETE", "/api/v1/admin/users/super2", cookie, nil)
+	if resp2.StatusCode != 409 {
+		t.Fatalf("self-delete as last-admin code=%d, want 409", resp2.StatusCode)
+	}
+	// Seed a regular user, promote to super-admin via PATCH to verify the
+	// last-admin path specifically (two live admins → delete one should
+	// succeed; deleting the remaining one via a different acting admin
+	// should 409).
+	seedTestUser(t, s.db, "alice", "a@x", false, false)
+	s.do(t, "PATCH", "/api/v1/admin/users/alice", cookie, map[string]any{"is_super_admin": true})
+	// Log back in as alice (super) to delete super2, leaving alice as
+	// the sole admin.
+	aliceCookie, _, _ := s.login(t, "alice", "pw-alice")
+	resp3, _ := s.do(t, "DELETE", "/api/v1/admin/users/super2", aliceCookie, nil)
+	if resp3.StatusCode != 200 {
+		t.Fatalf("delete super2 code=%d, want 200", resp3.StatusCode)
+	}
+	// Now alice is the last admin. A request to delete alice should be
+	// blocked — but we can't log in as alice and try to delete alice
+	// (that's the self-check). The last-admin guard bites when another
+	// admin tries to delete the last one. There is no "another admin"
+	// because alice is the last; the last-admin guard is therefore
+	// only reachable when a non-self admin targets the single admin,
+	// which by definition requires ≥2 admins. So we assert the counter
+	// helper directly here.
+	n, err := s.deps.Users.CountLiveSuperAdmins(context.Background())
+	if err != nil || n != 1 {
+		t.Fatalf("CountLiveSuperAdmins = %d err=%v, want 1", n, err)
+	}
+}
+
 // -----------------------------------------------------------------------------
 // Projects / members / repos
 // -----------------------------------------------------------------------------

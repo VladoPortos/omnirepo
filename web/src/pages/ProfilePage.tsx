@@ -16,6 +16,7 @@ import {
   RefreshCw,
 } from 'lucide-react';
 import { toast } from 'sonner';
+import { useQueryClient } from '@tanstack/react-query';
 import { createAvatar } from '@dicebear/core';
 import { initials } from '@dicebear/collection';
 
@@ -641,22 +642,30 @@ function MyProjectsSection() {
 // ---------- Delete Account Section ----------
 
 function DeleteAccountSection() {
-  const { user, logout } = useAuth();
+  const { user } = useAuth();
   const deleteAccount = useDeleteAccount();
+  const qc = useQueryClient();
   const [showConfirm, setShowConfirm] = useState(false);
   const [confirmText, setConfirmText] = useState('');
 
   const loginMatch = confirmText === (user?.login ?? '');
 
+  // F-03.6 (wt3): DELETE /api/v1/me already clears the session cookie on
+  // the server AND (via FK cascade) invalidates the session row, so a
+  // follow-up POST /auth/logout 401s on the now-cookie-less request and
+  // its onSuccess redirect never fires — the user is stuck on /profile
+  // with a dialog open. Redirect directly from the delete-account
+  // callback instead.
   const handleDelete = useCallback(async () => {
     try {
       await deleteAccount.mutateAsync();
       toast.success('Account deleted.');
-      logout.mutate();
+      qc.clear();
+      window.location.href = '/login';
     } catch {
       toast.error('Failed to delete account.');
     }
-  }, [deleteAccount, logout]);
+  }, [deleteAccount, qc]);
 
   return (
     <Card className="border-destructive/30">

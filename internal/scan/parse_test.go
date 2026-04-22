@@ -171,6 +171,55 @@ func TestParseTrivyMisconfigurationsCountInSummary(t *testing.T) {
 	}
 }
 
+// F-08.2 Codex-01: an active Trivy misconfig with no Status field must
+// still be counted (empty Status means "finding is active", not "skip").
+// And if both ID and AVDID are absent, the synthesized CVEID must be
+// non-empty so the row is distinguishable in the vulnerabilities table.
+func TestParseTrivyMisconfigEmptyStatusCountsAndSynthesizesID(t *testing.T) {
+	doc := `{
+      "SchemaVersion": 2,
+      "Results": [
+        {"Target":"vulny/templates/pod.yaml","Class":"config","Type":"helm",
+         "Misconfigurations":[
+           {"ID":"KSV-0001","Title":"with status","Severity":"HIGH","Status":"FAIL"},
+           {"ID":"KSV-0002","Title":"no status field","Severity":"HIGH"},
+           {"Title":"no id at all","Severity":"MEDIUM"}
+         ]}
+      ]
+    }`
+	res, err := scan.ParseTrivyJSON([]byte(doc))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if res.Summary["high"] != 2 {
+		t.Errorf("Summary[high] = %d, want 2 (FAIL + empty-Status both counted)", res.Summary["high"])
+	}
+	if res.Summary["medium"] != 1 {
+		t.Errorf("Summary[medium] = %d, want 1", res.Summary["medium"])
+	}
+	if len(res.Vulnerabilities) != 3 {
+		t.Fatalf("Vulnerabilities len = %d, want 3", len(res.Vulnerabilities))
+	}
+	// The third finding has neither ID nor AVDID — must synthesize.
+	var synth *scan.Vuln
+	for i := range res.Vulnerabilities {
+		v := &res.Vulnerabilities[i]
+		if v.Title == "no id at all" {
+			synth = v
+			break
+		}
+	}
+	if synth == nil {
+		t.Fatal("synthetic-id row missing from Vulnerabilities")
+	}
+	if synth.CVEID == "" {
+		t.Errorf("synth CVEID is empty — must fall back to MISCONF-<target>-<idx>")
+	}
+	if !strings.HasPrefix(synth.CVEID, "MISCONF-vulny/templates/pod.yaml-") {
+		t.Errorf("synth CVEID = %q, want prefix MISCONF-<target>-", synth.CVEID)
+	}
+}
+
 // F-08.2 follow-up: vulnerabilities and misconfigurations cohabit in the
 // same Results list — make sure both are counted and the totals are
 // additive (not overwritten).

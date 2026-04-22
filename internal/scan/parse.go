@@ -111,7 +111,11 @@ func ParseTrivyJSON(b []byte) (Result, error) {
 		// surface findings in Misconfigurations, not Vulnerabilities. Without
 		// this loop every Helm chart scan summarized as all-zeros and the
 		// repos.block_on_severity gate was effectively defeated.
-		for _, m := range block.Misconfigurations {
+		//
+		// An active Trivy finding may have Status="FAIL" or omit the field
+		// entirely (observed on some v0.69 outputs); PASS/EXCEPTION etc. are
+		// already-resolved and must not inflate the gate.
+		for i, m := range block.Misconfigurations {
 			if m.Status != "" && m.Status != "FAIL" {
 				continue
 			}
@@ -120,9 +124,17 @@ func ParseTrivyJSON(b []byte) (Result, error) {
 				sev = "unknown"
 			}
 			summary[sev]++
+			// Codex-01: Trivy always emits ID today, but guard against a
+			// future schema where both ID and AVDID are absent — an empty
+			// cve_id would insert silently (NOT NULL allows "") and then
+			// never index into FTS. Synthesize a stable placeholder so
+			// duplicate MISCONF rows dedup on (block.Target, index).
 			id := m.ID
 			if id == "" {
 				id = m.AVDID
+			}
+			if id == "" {
+				id = fmt.Sprintf("MISCONF-%s-%d", block.Target, i)
 			}
 			desc := m.Description
 			if m.Resolution != "" {

@@ -25,10 +25,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"net/url"
 	"strings"
 	"unicode/utf8"
 
+	"github.com/dxc-internal/omnirepo/internal/httperr"
 	"github.com/dxc-internal/omnirepo/internal/metadata"
 	"golang.org/x/text/unicode/norm"
 )
@@ -440,4 +442,56 @@ func mirrorCredOwnership(ctx context.Context, upstreamCreds *metadata.UpstreamCr
 		return false, true
 	}
 	return true, true
+}
+
+// dockerHubOCIHost is the single OCI-flavoured Docker Hub host name. The
+// Docker Hub gate applies only to oci:// upstreams targeting this host —
+// http(s) upstreams to the same host are a different product (the Docker
+// Hub web UI, not a Helm chart source) and are handled by generic URL
+// validation, not by this gate.
+const dockerHubOCIHost = "registry-1.docker.io"
+
+// refuseDockerHubWithoutCred returns a 422 httperr.Error with envelope
+// code `mirror.docker_hub_requires_credential` when upstreamURL targets
+// Docker Hub (registry-1.docker.io) via oci:// AND no credential is
+// attached (credKind==""). Returns nil for any other combination so the
+// caller can chain it with the rest of the validator suite (D-04,
+// OCIHELM-05).
+//
+// Message copy is verbatim per D-04 — the 100/6h rate-limit phrase is the
+// single operator-facing cue that distinguishes this gate from the generic
+// "missing credential" UX. Host comparison is case-insensitive because
+// the v1.2 UI does not lowercase-normalize upstream URLs before storing
+// (T-11-02-01 mitigation).
+//
+// Plans 11-03 integrate this validator at the POST /repos/helm and
+// PATCH /repos/helm endpoints — this plan only lands the function +
+// tests so downstream work compiles against a known shape.
+func refuseDockerHubWithoutCred(upstreamURL, credKind string) *httperr.Error {
+	lower := strings.ToLower(upstreamURL)
+	// Gate applies to oci:// upstreams only. https://registry-1.docker.io/*
+	// is the web UI, not a chart source; other schemes fall out of scope.
+	if !strings.HasPrefix(lower, "oci://") {
+		return nil
+	}
+	rest := lower[len("oci://"):]
+	host := rest
+	if idx := strings.Index(rest, "/"); idx >= 0 {
+		host = rest[:idx]
+	}
+	if host != dockerHubOCIHost {
+		return nil
+	}
+	if credKind != "" {
+		// Any non-empty cred kind unblocks. D-06 locks the expected kind
+		// to "basic" for v1.4; this validator only enforces "something
+		// is attached" so the caller's cred-kind filter owns the
+		// kind-specific semantics.
+		return nil
+	}
+	return httperr.Validation(
+		"mirror.docker_hub_requires_credential",
+		"Docker Hub enforces a 100 requests / 6h anonymous rate limit per source IP. Attach a basic credential (username + PAT) to sync reliably.",
+		httperr.WithStatus(http.StatusUnprocessableEntity),
+	)
 }

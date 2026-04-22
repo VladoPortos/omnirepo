@@ -157,4 +157,24 @@ const (
 	EvtIntegrityCheckTriggered EventKind = "admin.integrity_check.triggered"
 	EvtIntegrityCheckCompleted EventKind = "admin.integrity_check.completed"
 	EvtIntegrityCheckFailed    EventKind = "admin.integrity_check.failed"
+
+	// Phase 11 — Mirror infrastructure widening (OCIHELM-04, GITMIRROR-08).
+	//
+	// EvtOciTagRebound: emitted by internal/protocol/helm/sync_handler.go
+	// on (repo_id, name, version) collision where the new manifest digest
+	// differs from the stored one. details_json per D-05:
+	//   {name, version, old_digest, new_digest, upstream_url, repo_id,
+	//    replaced_at}
+	// The prior chart's on-disk path is soft-deleted via Trash.Move with
+	// retention_label "oci_tag_rebound" (distinct from the generic
+	// mirror-replaced label; enables operator-grep for CVE-driven
+	// republication timelines). Production emission lands in plan 11-03.
+	//
+	// EvtMirrorSyncLFSDetected: emitted by internal/protocol/git/
+	// sync_handler.go when a post-fetch tree walk finds .gitattributes
+	// containing "filter=lfs" (D-08). Audit-only — no UI badge in v1.4.
+	// details_json: {repo_id, project, sample_paths}. Production
+	// emission lands in plan 11-06.
+	EvtOciTagRebound         EventKind = "mirror.oci.tag_rebound"
+	EvtMirrorSyncLFSDetected EventKind = "mirror.sync.lfs_detected"
 )

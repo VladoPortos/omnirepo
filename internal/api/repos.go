@@ -71,11 +71,17 @@ type repoPatchRequest struct {
 	IsMirror          *bool            `json:"is_mirror,omitempty"`
 	MirrorUpstreamURL *string          `json:"mirror_upstream_url,omitempty"`
 	MirrorFilter      *json.RawMessage `json:"mirror_filter,omitempty"`
-	// MirrorCredIDRaw uses json.RawMessage so the handler can distinguish
-	// "field absent" (nil) from "set to null" (4-byte `null`) from
-	// "set to int" — mirroring UpdateFields.MirrorCredIDSet semantics.
-	MirrorCredIDRaw *json.RawMessage `json:"mirror_cred_id,omitempty"`
-	ScanOnSync      *bool            `json:"scan_on_sync,omitempty"`
+	// MirrorCredIDRaw uses non-pointer json.RawMessage so the handler can
+	// distinguish "field absent" (len=0) from "set to null" (4-byte
+	// `null`) from "set to int" — mirroring UpdateFields.MirrorCredIDSet
+	// semantics. A pointer to json.RawMessage would NOT work for the
+	// null case because encoding/json nils a *json.RawMessage when the
+	// JSON value is null, collapsing "absent" and "null" into the same
+	// state (Go pointer semantics). Fixed in plan 11-03 Task 3 so the
+	// Docker Hub cred-gate can distinguish "patch leaves cred alone"
+	// from "patch clears cred".
+	MirrorCredIDRaw json.RawMessage `json:"mirror_cred_id,omitempty"`
+	ScanOnSync      *bool           `json:"scan_on_sync,omitempty"`
 }
 
 // repoResponse mirrors the Repo row projected for the REST API. We do not
@@ -230,8 +236,8 @@ func (d Deps) handlePatchRepo(w http.ResponseWriter, r *http.Request) {
 	// MirrorCredID editing: distinguish absent / null / int.
 	var patchCredID *int64
 	var patchCredIDSet bool
-	if body.MirrorCredIDRaw != nil {
-		raw := bytes.TrimSpace(*body.MirrorCredIDRaw)
+	if len(body.MirrorCredIDRaw) > 0 {
+		raw := bytes.TrimSpace(body.MirrorCredIDRaw)
 		if len(raw) == 0 || string(raw) == "null" {
 			patchCredIDSet = true // clear to NULL
 		} else {
@@ -250,6 +256,31 @@ func (d Deps) handlePatchRepo(w http.ResponseWriter, r *http.Request) {
 			}
 			patchCredID = &v
 			patchCredIDSet = true
+		}
+	}
+
+	// Phase 11 Plan 03 Task 3 (OCIHELM-05 / D-04): Docker Hub cred gate on
+	// PATCH. The invariant is post-patch: after this PATCH commits, the
+	// mirror MUST NOT be (Docker Hub oci://, no cred). The effective
+	// upstream URL is immutable (see earlier rejection branch), so we
+	// compute the effective cred_id as patch value if set, else the
+	// existing row's value, then resolve its kind. The gate always runs
+	// when conditions apply; UpstreamCreds is only required to resolve
+	// the cred's kind (nil cred-id alone is enough to trip the gate).
+	if before.Type == "helm" && before.IsMirror {
+		effectiveCredID := before.MirrorCredID
+		if patchCredIDSet {
+			effectiveCredID = patchCredID
+		}
+		credKind := ""
+		if effectiveCredID != nil && *effectiveCredID > 0 && d.UpstreamCreds != nil {
+			if cm, cerr := d.UpstreamCreds.Get(r.Context(), before.ProjectID, *effectiveCredID); cerr == nil && cm != nil {
+				credKind = string(cm.Kind)
+			}
+		}
+		if env := refuseDockerHubWithoutCred(before.MirrorUpstreamURL, credKind); env != nil {
+			writeEnvelope(w, r, env)
+			return
 		}
 	}
 

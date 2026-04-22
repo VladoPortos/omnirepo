@@ -726,6 +726,27 @@ func (d Deps) handleCreateRepo(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+		// Phase 11 Plan 03 Task 3 (OCIHELM-05 / D-04): Docker Hub cred gate.
+		// Only applies to helm mirrors where the upstream scheme is oci://
+		// targeting registry-1.docker.io — refuseDockerHubWithoutCred
+		// short-circuits to nil for every other combination. The gate fires
+		// on the (URL, credKind) tuple, so we never skip it just because
+		// UpstreamCreds wiring is absent — a missing cred_id is exactly the
+		// case we MUST refuse. UpstreamCreds is only consulted to resolve a
+		// cred's kind when cred_id IS supplied; the validator treats any
+		// non-empty kind as "something attached" per plan 11-02 D-06.
+		if req.Type == "helm" {
+			credKind := ""
+			if req.MirrorCredID != nil && *req.MirrorCredID > 0 && d.UpstreamCreds != nil {
+				if cm, cerr := d.UpstreamCreds.Get(r.Context(), p.ID, *req.MirrorCredID); cerr == nil && cm != nil {
+					credKind = string(cm.Kind)
+				}
+			}
+			if env := refuseDockerHubWithoutCred(req.MirrorUpstreamURL, credKind); env != nil {
+				writeEnvelope(w, r, env)
+				return
+			}
+		}
 	}
 
 	// Compose repo INSERT + optional hook + optional mirror-config UPDATE

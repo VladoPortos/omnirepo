@@ -15,6 +15,7 @@ package api_test
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -130,12 +131,19 @@ func TestPatchRepo_HelmMirror_RemoveDockerHubCred_Returns422(t *testing.T) {
 	}
 
 	// PATCH to null the cred — MUST be refused with 422.
-	resp, body := s.do(t, "PATCH", "/api/v1/projects/p-patch/repos/helm/bitnami", cookie, map[string]any{
-		"mirror_cred_id": nil,
-	})
+	// Use doRaw because encoding/json turns `"mirror_cred_id": null` into a
+	// nil *json.RawMessage on the handler side (Go pointer semantics),
+	// making the handler's "null → clear" branch unreachable through the
+	// normal map[string]any{"mirror_cred_id": nil} JSON serialization path.
+	// A raw body with the explicit null bytes bypasses the surrounding
+	// testServer.do helper's Marshal step.
+	resp, raw := s.doRaw(t, "PATCH", "/api/v1/projects/p-patch/repos/helm/bitnami", cookie,
+		strings.NewReader(`{"mirror_cred_id": null}`))
 	if resp.StatusCode != 422 {
-		t.Fatalf("status = %d, want 422; body=%+v", resp.StatusCode, body)
+		t.Fatalf("status = %d, want 422; body=%s", resp.StatusCode, string(raw))
 	}
+	body := map[string]any{}
+	_ = json.Unmarshal(raw, &body)
 	code, _ := body["code"].(string)
 	if code != "mirror.docker_hub_requires_credential" {
 		t.Fatalf("code = %q, want mirror.docker_hub_requires_credential; body=%+v", code, body)

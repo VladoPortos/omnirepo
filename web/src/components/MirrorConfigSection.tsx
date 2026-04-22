@@ -7,9 +7,10 @@
  * scan toggle affordances and emits a single MirrorConfigValue.
  *
  * Behavioural contract:
- *   - Only appears for protocol ∈ {deb, rpm, pypi, helm}. The caller is
- *     responsible for the protocol-gate; this component trusts the
- *     `protocol` prop.
+ *   - Only appears for protocol ∈ {deb, rpm, pypi, helm, git}. The caller
+ *     is responsible for the protocol-gate; this component trusts the
+ *     `protocol` prop. Phase 11 / D-13 widened the set to include 'git'
+ *     (HTTPS+PAT mirror, all-refs, no filter widget — see D-07).
  *   - `hideCheckbox` skips the "is_mirror" opt-in checkbox and forces
  *     the content region open. Used by RepoSettingsTab where the card
  *     only renders for repos that are already mirrors.
@@ -40,7 +41,7 @@ import type {
   RpmFilter,
 } from '@/api/types';
 
-export type MirrorProtocol = 'deb' | 'rpm' | 'pypi' | 'helm';
+export type MirrorProtocol = 'deb' | 'rpm' | 'pypi' | 'helm' | 'git';
 
 export interface MirrorConfigSectionProps {
   protocol: MirrorProtocol;
@@ -62,11 +63,18 @@ export interface MirrorConfigSectionProps {
 // backend's upstream_creds table uses. The UI's 'deb' repo-type token
 // maps to cred kind 'apt' — single canonical value since Phase 9 /
 // POLISH-02 retired the 'deb' cred-kind alias.
+//
+// Phase 11 / D-06: Helm mirrors with oci:// upstreams authenticate via
+// Helm SDK's ClientOptBasicAuth — kind='basic' is accepted alongside the
+// HTTP-only 'helm' kind. Backend re-validates per plan 11-03.
+// Phase 11 / D-13: Git mirrors authenticate over HTTPS+PAT — kind='basic'
+// only; SSH key auth deferred to v1.5.
 const protocolCredKinds: Record<MirrorProtocol, string[]> = {
   deb: ['apt'],
   rpm: ['rpm'],
   pypi: ['pypi'],
-  helm: ['helm'],
+  helm: ['helm', 'basic'],
+  git: ['basic'],
 };
 
 function renderFilterWidget(
@@ -108,6 +116,11 @@ function renderFilterWidget(
           disabled={disabled}
         />
       );
+    case 'git':
+      // Phase 11 / D-07: git mirror is all-refs in v1.4 (PlainCloneContext
+      // with Mirror:true + FetchContext with Tags:AllTags). No filter UI;
+      // glob include/exclude deferred to v1.5.
+      return null;
   }
 }
 
@@ -176,18 +189,37 @@ export function MirrorConfigSection({
                 repo to point at a different upstream.
               </p>
             )}
+            {protocol === 'git' && (
+              // Phase 11 / D-14: passive LFS-warning helper text. The
+              // mirror stores pointer files only — clients cloning via
+              // OmniRepo will not resolve LFS objects. Operators self-
+              // select; no fetch-before-create round-trip.
+              <p
+                className="text-xs text-muted-foreground"
+                data-testid="git-mirror-lfs-warning"
+              >
+                Git LFS objects are not mirrored. The mirror stores pointer
+                files only; clients cloning via OmniRepo must disable LFS
+                (GIT_LFS_SKIP_SMUDGE=1) or source LFS objects separately.
+              </p>
+            )}
           </div>
           )}
 
-          <div className="space-y-2">
-            <Label>Filters</Label>
-            {renderFilterWidget(
-              protocol,
-              value.mirror_filter,
-              (next) => onChange({ ...value, mirror_filter: next }),
-              disabled,
-            )}
-          </div>
+          {protocol !== 'git' && (
+            // Phase 11 / D-07: git mirror has no filter widget in v1.4 —
+            // hide the Filters label entirely so the mirror panel does
+            // not show an empty heading.
+            <div className="space-y-2">
+              <Label>Filters</Label>
+              {renderFilterWidget(
+                protocol,
+                value.mirror_filter,
+                (next) => onChange({ ...value, mirror_filter: next }),
+                disabled,
+              )}
+            </div>
+          )}
 
           <div className="space-y-1.5">
             <Label htmlFor="mirror-cred">Credential (optional)</Label>
@@ -266,5 +298,8 @@ function protocolPlaceholder(protocol: MirrorProtocol): string {
       return 'https://pypi.org/simple/';
     case 'helm':
       return 'https://charts.bitnami.com/bitnami';
+    case 'git':
+      // Phase 11 / D-13: Git mirror upstream over HTTPS+PAT.
+      return 'https://github.com/owner/repo.git';
   }
 }

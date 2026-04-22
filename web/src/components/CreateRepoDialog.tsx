@@ -84,15 +84,18 @@ const REPO_TYPES: { value: RepoType; label: string }[] = [
   { value: 'raw', label: 'RAW' },
 ];
 
-// Protocols that support the mirror flag (D-01 + D-02). Docker uses a
-// different clone model (per-click modal, see CloneImageDialog); Raw +
-// Git don't have an upstream-index protocol to follow.
+// Protocols that support the mirror flag (D-01 + D-02 + Phase 11 / D-13).
+// Docker uses a different clone model (per-click modal, see
+// CloneImageDialog); Raw has no upstream-index protocol to follow.
+// Phase 11 / D-13 widens the set to include 'git' (HTTPS+PAT mirror via
+// go-git/v6 PlainCloneContext + FetchContext, all-refs, see
+// internal/protocol/git/sync_handler.go).
 // eslint-disable-next-line prettier/prettier
-const MIRROR_PROTOCOLS: ReadonlyArray<RepoType> = ['deb','rpm','pypi','helm'];
+const MIRROR_PROTOCOLS: ReadonlyArray<RepoType> = ['deb','rpm','pypi','helm','git'];
 
 function isMirrorProtocol(
   t: RepoType,
-): t is 'deb' | 'rpm' | 'pypi' | 'helm' {
+): t is 'deb' | 'rpm' | 'pypi' | 'helm' | 'git' {
   return (MIRROR_PROTOCOLS as ReadonlyArray<string>).includes(t);
 }
 
@@ -245,7 +248,7 @@ export function CreateRepoDialog({
 
             {showMirrorSection && (
               <MirrorConfigSection
-                protocol={repoType as 'deb' | 'rpm' | 'pypi' | 'helm'}
+                protocol={repoType as 'deb' | 'rpm' | 'pypi' | 'helm' | 'git'}
                 projectName={projectName}
                 value={mirrorCfg}
                 onChange={setMirrorCfg}

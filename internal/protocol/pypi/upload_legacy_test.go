@@ -55,6 +55,63 @@ func TestUpload_NonMirrorRepoStillWorks(t *testing.T) {
 	}
 }
 
+// TestUpload_DuplicateFilenameReturns409 — wt3 §7.7 / F-07.1.
+// Twine re-uploading an existing filename must 409 with
+// code=pypi.file_exists; the stored row digest/size must NOT change
+// (released artifacts are immutable per PyPI semantics). Sync-path
+// callers enter via PyPIFilesRepo.Insert (upsert) and remain idempotent.
+func TestUpload_DuplicateFilenameReturns409(t *testing.T) {
+	f := newHandlerFixture(t)
+	_, repoID := f.seedRepo("proj1", "plain-dup", true, false)
+
+	wheel := makeWheelBytes(t, "mypkg", "1.0")
+	resp := twineUpload(t, f.srv.URL, "proj1", "plain-dup", "mypkg-1.0-py3-none-any.whl", wheel, "bdist_wheel", f.basicAuth())
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		t.Fatalf("first upload status = %d, want 200/201", resp.StatusCode)
+	}
+
+	before, err := f.pypiRepo.FindByFilename(context.Background(), repoID, "mypkg-1.0-py3-none-any.whl")
+	if err != nil {
+		t.Fatalf("find before: %v", err)
+	}
+	if before == nil {
+		t.Fatalf("row not inserted on first upload")
+	}
+	beforeDigest := before.Digest
+	beforeSize := before.SizeBytes
+	beforeUploadedAt := before.UploadedAt
+
+	// Second upload of the same filename (same bytes, as twine would resend).
+	resp2 := twineUpload(t, f.srv.URL, "proj1", "plain-dup", "mypkg-1.0-py3-none-any.whl", wheel, "bdist_wheel", f.basicAuth())
+	defer func() { _ = resp2.Body.Close() }()
+	if resp2.StatusCode != http.StatusConflict {
+		body, _ := io.ReadAll(resp2.Body)
+		t.Fatalf("dup upload status = %d, want 409; body=%s", resp2.StatusCode, body)
+	}
+	body, _ := io.ReadAll(resp2.Body)
+	if !strings.Contains(string(body), "pypi.file_exists") {
+		t.Fatalf("body missing pypi.file_exists: %s", body)
+	}
+
+	after, err := f.pypiRepo.FindByFilename(context.Background(), repoID, "mypkg-1.0-py3-none-any.whl")
+	if err != nil {
+		t.Fatalf("find after: %v", err)
+	}
+	if after == nil {
+		t.Fatalf("row disappeared after rejected dup upload")
+	}
+	if after.Digest != beforeDigest {
+		t.Fatalf("digest mutated on rejected dup: before=%s after=%s", beforeDigest, after.Digest)
+	}
+	if after.SizeBytes != beforeSize {
+		t.Fatalf("size mutated on rejected dup: before=%d after=%d", beforeSize, after.SizeBytes)
+	}
+	if !after.UploadedAt.Equal(beforeUploadedAt) {
+		t.Fatalf("uploaded_at mutated on rejected dup: before=%s after=%s", beforeUploadedAt, after.UploadedAt)
+	}
+}
+
 // TestDeletePackage_MirrorRepoReturns403 — plan 08-06 Codex rescue Q3a.
 // DELETE /pypi/<repo>/packages/<filename> is a mutating operation and
 // must be rejected on mirror-flagged repos by MirrorGuardFixed. Before

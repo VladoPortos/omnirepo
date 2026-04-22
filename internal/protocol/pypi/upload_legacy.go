@@ -19,8 +19,18 @@ import (
 
 	"github.com/dxc-internal/omnirepo/internal/audit"
 	"github.com/dxc-internal/omnirepo/internal/auth"
+	"github.com/dxc-internal/omnirepo/internal/httperr"
 	"github.com/dxc-internal/omnirepo/internal/metadata"
 )
+
+// errPyPIFileExists signals that a legacy/PEP 694 upload targets a filename
+// that already has a pypi_files row in this repo. PyPI semantics (and
+// walkthrough-3 §7.7) require the mutation to fail with 409 rather than
+// silently overwriting a released artifact (F-07.1). The sentinel is
+// returned from commitPyPIRow and matched at the call sites to emit a
+// protocol-native envelope. The sync path uses PyPIFilesRepo.Insert
+// directly (not commitPyPIRow) so idempotent re-mirror remains unaffected.
+var errPyPIFileExists = errors.New("pypi: file already exists in repo")
 
 // handleLegacyUpload services POST /<project>/pypi/<repo>/legacy/.
 //
@@ -234,6 +244,21 @@ func (h *Handler) handleLegacyUpload(w http.ResponseWriter, r *http.Request) {
 	if err := h.commitPyPIRow(r, res, parsed); err != nil {
 		// HI-02: roll back the on-disk artifact when metadata tx fails.
 		_ = h.pathStore.Delete(r.Context(), storageKey)
+		// F-07.1 (wt3): existing filename → 409 rather than silently
+		// overwriting the released artifact.
+		if errors.Is(err, errPyPIFileExists) {
+			h.auditEvent(r, audit.EvtPyPIUpload, filename, "rejected", map[string]any{
+				"project": res.project.Name,
+				"repo":    res.repo.Name,
+				"reason":  "file_exists",
+			})
+			httperr.Write(w, r, httperr.Validation(
+				"pypi.file_exists",
+				"That filename already exists in this repo — delete it first if you need to replace it.",
+				httperr.WithStatus(http.StatusConflict),
+			))
+			return
+		}
 		slog.ErrorContext(r.Context(), "pypi.legacy.commit_failed",
 			slog.String("incident_id", chimw.GetReqID(r.Context())),
 			slog.String("filename", filename),
@@ -264,12 +289,28 @@ func (h *Handler) handleLegacyUpload(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, `{"status":"ok","filename":%q}`, filename)
 }
 
-// commitPyPIRow performs the standard writer tx: upsert pypi_files,
-// refresh pypi_fts (delete + insert keyed on
-// repo_id+name+version+arch_or_runtime), flip metadata_state to dirty,
-// optionally enqueue a scan.
+// commitPyPIRow performs the standard writer tx: refuse duplicate filenames
+// (F-07.1: PyPI semantics make released artifacts immutable — returns
+// errPyPIFileExists so the caller emits 409), insert pypi_files, refresh
+// pypi_fts (delete + insert keyed on repo_id+name+version+arch_or_runtime),
+// flip metadata_state to dirty, optionally enqueue a scan.
+//
+// The duplicate check runs inside the WriteTx so a concurrent upload can't
+// race around it (SQLite write serialisation plus the row-lookup-by-unique
+// index means two competing uploads with the same filename both observe
+// the same pre-state and the loser's Insert still trips the ON CONFLICT
+// upsert, but we only reach Insert when the row was truly absent).
+//
+// Mirror sync path writes via PyPIFilesRepo.Insert directly (upsert-by-
+// (repo_id, filename)) and never enters commitPyPIRow, so re-syncs remain
+// idempotent.
 func (h *Handler) commitPyPIRow(r *http.Request, res resolved, p *File) error {
 	return h.db.WriteTx(r.Context(), func(tx *sql.Tx) error {
+		if existing, err := h.pypiFiles.FindByFilenameTx(r.Context(), tx, res.repo.ID, p.Filename); err != nil {
+			return err
+		} else if existing != nil {
+			return errPyPIFileExists
+		}
 		if _, err := h.pypiFiles.Insert(r.Context(), tx, &metadata.PyPIFile{
 			RepoID:            res.repo.ID,
 			ProjectNormalized: p.ProjectNormalized,

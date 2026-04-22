@@ -90,6 +90,31 @@ func (r *PyPIFilesRepo) FindByFilename(ctx context.Context, repoID int64, filena
 	return r.scanOne(ctx, `repo_id=? AND filename=?`, repoID, filename)
 }
 
+// FindByFilenameTx is the in-transaction variant: reads through tx so it
+// sees uncommitted writes made earlier in the same WriteTx. Returns
+// (nil, nil) when no row exists so callers can check for duplicates
+// without unwrapping ErrNotFound.
+//
+// Used by protocol/pypi.commitPyPIRow to enforce the PyPI immutability
+// contract on twine-legacy + PEP 694 uploads (F-07.1, wt3 §7.7) without
+// disturbing the mirror-sync idempotent-upsert path (which calls Insert
+// directly).
+func (r *PyPIFilesRepo) FindByFilenameTx(ctx context.Context, tx *sql.Tx, repoID int64, filename string) (*PyPIFile, error) {
+	row := tx.QueryRowContext(ctx, `
+		SELECT id, repo_id, project_normalized, version, filename, kind,
+		       requires_python, size_bytes, digest, core_metadata_json, uploaded_at
+		FROM pypi_files WHERE repo_id=? AND filename=?
+	`, repoID, filename)
+	p, err := scanPyPIFile(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("pypi_files: find-by-filename-tx: %w", err)
+	}
+	return p, nil
+}
+
 // FindByDigest returns the row matching digest inside repoID.
 func (r *PyPIFilesRepo) FindByDigest(ctx context.Context, repoID int64, digest string) (*PyPIFile, error) {
 	return r.scanOne(ctx, `repo_id=? AND digest=?`, repoID, digest)

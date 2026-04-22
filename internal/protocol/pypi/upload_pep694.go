@@ -22,6 +22,7 @@ import (
 
 	"github.com/dxc-internal/omnirepo/internal/audit"
 	"github.com/dxc-internal/omnirepo/internal/auth"
+	"github.com/dxc-internal/omnirepo/internal/httperr"
 )
 
 // stagedFile holds the on-disk path + content hash of a single file
@@ -463,6 +464,25 @@ func (h *Handler) handleCommit(w http.ResponseWriter, r *http.Request) {
 			// we don't leak orphans. Previously-committed files in this loop
 			// are already durable and intentionally left alone.
 			_ = h.pathStore.Delete(r.Context(), storageKey)
+			// F-07.1 (wt3): existing filename → 409 rather than silently
+			// overwriting the released artifact. We keep the session alive
+			// (don't Delete) so the client can choose to either retry the
+			// publish against different filenames or walk away.
+			if errors.Is(err, errPyPIFileExists) {
+				h.auditEvent(r, audit.EvtPyPIUpload, f.Parsed.Filename, "rejected", map[string]any{
+					"project":    res.project.Name,
+					"repo":       res.repo.Name,
+					"reason":     "file_exists",
+					"session_id": sess.ID,
+					"flow":       "pep694",
+				})
+				httperr.Write(w, r, httperr.Validation(
+					"pypi.file_exists",
+					"That filename already exists in this repo — delete it first if you need to replace it.",
+					httperr.WithStatus(http.StatusConflict),
+				))
+				return
+			}
 			slog.ErrorContext(r.Context(), "pypi.pep694.commit_failed",
 				slog.String("incident_id", chimw.GetReqID(r.Context())),
 				slog.String("filename", f.Parsed.Filename),

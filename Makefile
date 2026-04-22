@@ -3,7 +3,7 @@ DATA_ROOT ?= /var/lib/omnirepo
 BENCH_DURATION ?= 30s
 BENCH_WORKERS ?= 16
 
-.PHONY: dev build test test-airgap test-perf test-live-oci bench-sqlite bench-git-fixture bench-git \
+.PHONY: dev build test test-airgap test-perf test-live-oci test-live-git bench-sqlite bench-git-fixture bench-git \
 	vendor lint seed lint-protocol-redaction \
 	check-contrast lint-typography lint-spacing-carveout lint-axe-devdep \
 	lint-docs \
@@ -52,6 +52,28 @@ test-live-oci:
 	fi; \
 	$(GO) test -mod=vendor -tags=live_oci -timeout=300s -v \
 		-run TestLiveOCIBitnamiSync ./internal/protocol/helm/...
+
+# test-live-git (GITMIRROR-09): live E2E mirror of a real public GitHub
+# HTTPS repo via the Phase-11 git.SyncHandler. Default upstream is
+# https://github.com/pallets/click.git (~4 MB, pure Python, LFS-free,
+# stable since 2014); operators can override with LIVE_GIT_UPSTREAM
+# (useful when GitHub is unreachable in air-gapped pre-release runs —
+# point at an internal GitLab or Gitea HTTPS mirror).
+#
+# Gated behind the `live_git` Go build tag so default `make test`
+# never touches the network. NO env-guard at the Makefile level —
+# the test itself pre-flights the upstream with a 5-second HEAD probe
+# and t.Skip's cleanly when unreachable, so CI without outbound
+# connectivity stays green either way.
+#
+# NOT a prerequisite of `test` — live endpoints belong behind an
+# opt-in target. Mirrors the Phase 10 test-perf and Phase 11
+# test-live-oci pattern. See internal/protocol/git/sync_live_test.go
+# for the test body and the scope-guard rationale (single E2E
+# scenario; hermetic tests in plan 11-06 cover correctness).
+test-live-git:
+	$(GO) test -mod=vendor -tags=live_git -timeout=300s -v \
+		-run TestLiveGitHubMirrorSync ./internal/protocol/git/...
 
 bench-sqlite:
 	$(GO) run -mod=vendor ./cmd/bench/sqlite --duration=$(BENCH_DURATION) --workers=$(BENCH_WORKERS)

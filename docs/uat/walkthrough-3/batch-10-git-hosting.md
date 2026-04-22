@@ -1,6 +1,6 @@
 # Batch 10 — Git hosting (non-mirror)
 
-**Status:** ⬜ Not started
+**Status:** ✅ Passed clean (after fixes)
 **Prereqs:** Batch 04 ✅
 **State produced for later batches:**
 - `acme/git/tools` with at least one branch and a few commits
@@ -108,14 +108,58 @@
 
 ## Findings
 
-_(F-10.N)_
+### F-10.0 — Doc typo in batch-10 test text (docs-only, acknowledged)
+- **Symptom:** Test 10.1 reads "CreateRepoDialog for Git in non-mirror mode shows NO mirror checkbox, NO mirror config (per 4170f65 widened form)". Contradicts the commit it cites — 4170f65 deliberately widened the dialog so Git is in MIRROR_PROTOCOLS.
+- **Actual invariant:** Mirror checkbox IS rendered for Git; mirror-specific fields (URL/creds/filters) only appear when ticked.
+- **Resolution:** Doc-only note, no code change.
+
+### F-10.1 — http.request slog always logged `actor_id=""` (real-issue)
+- **Symptom:** Every `http.request` log line carried `actor_id=""` even on fully authenticated calls, making the structured log useless for audit tracing.
+- **Root cause:** `internal/httpx/middleware_logger.go:27` hardcoded `slog.String("actor_id", "")` with a stale "Phase 2 auth middleware fills it in" comment from Phase 1. No auth middleware ever filled it.
+- **Fix:** `246a262` + context plumbing. Introduced `auth.LoginBox` (mutable per-request holder) + `httpx.LoginBoxSeeder` (injection callback to break the auth → httpx cycle). `StructuredLogger` seeds a box on ctx; `auth.WithActor` auto-populates it; logger reads it after `next.ServeHTTP`.
+- **Retest:** ✅ server.log now shows `"actor_id":"alice"` / `"superadmin"` / `""` for anonymous.
+- **Codex verdict:** noise (Q1) — no lifetime/race bug found in production paths.
+
+### F-10.2 — Git item_count badge counted symbolic HEAD (real-issue)
+- **Symptom:** UI header showed "2 refs" for a repo with 1 branch; "4 refs" with 2 branches + 1 tag. `/refs` endpoint already filtered symbolic rows, creating a visible inconsistency.
+- **Root cause:** `internal/api/projects_full.go:72` counted all rows in `git_refs`, which includes the internal symbolic HEAD row populated by WalkAndReplace.
+- **Fix:** `246a262` + Codex follow-up `a11a736` — changed SQL expression to `type IN ('branch','tag')` (future-proofed per Codex suggestion over initial `type <> 'symbolic'`).
+- **Retest:** ✅ UI header shows "3 refs" (feature-x, main, v1.0).
+
+### F-10.5 — git_browse.go handlers violated OpenAPI + TS contract (blocker)
+- **Symptom:** Files table always rendered Size="--", clicking a file did nothing, Commits tab crashed with `Cannot read properties of undefined (reading 'split')`. The entire Git browse UI was effectively broken.
+- **Root cause:** Six handlers in `internal/api/git_browse.go` emitted wire shapes that did not match the schemas declared in `openapi.yaml` (which the TS client was typed against). Example: `{name, type:'file'|'dir', size}` vs. `{name, path, type:'blob'|'tree'|'commit', size, sha}`. Schema drift across handleGitTree, handleGitBlob, handleGitCommits, handleGitCommit, handleGitBlame, handleGitCompare.
+- **Fix:** `246a262` — rewrote each handler to match canonical shape. Added `diffTrees`/`changePatch`/`blobAsAddPatch`/`lineCount`/`parentSHAs` helpers. Commit detail + compare now render as `GitDiff` (stats + per-file unified patches). Accept both `..` and `...` in compare spec. Codex follow-up `a11a736` — reject 4-dot spec + refs that start/end with `.`.
+- **Retest:** ✅
+  - Files table now shows "14 B" / "6 B" instead of "--"
+  - Clicking README opens blob view with rendered content + line numbers (1, 2)
+  - Commits tab: zero console errors, commits with author/date/SHA render
+  - Commit detail: side-by-side diff with `+1 / -0` stats
+- **Codex verdict:** noise (Q4) on main path; minor (4-dot spec) applied in `a11a736`.
+
+### F-10.7 — public_read=true did not enable anonymous git clone (real-issue + info-leak)
+- **Symptom:** Clone without credentials against a public_read=true git repo returned 401 instead of streaming the pack.
+- **Root cause A — middleware:** `internal/protocol/git/middleware.go:138-141` rejected requests lacking an Actor in ctx with a flat 401 before `auth.Can` could see them. Target didn't carry `PublicRead`.
+- **Root cause B — policy:** `internal/auth/policy.go:209` only allowed `ActionRepoRead` in the anonymous short-circuit; `ActionGitRepoRead` used by git Smart-HTTP was not covered.
+- **Fix:** `246a262` — new `AnonymousGitRead` middleware attaches `Actor{Kind:ActorKindAnonymous}` when repo.PublicRead + read action + no Authorization header; chain reordered (`ResolveRepoFromURL → AnonymousGitRead → skipIfActor(BasicOrAPIKey) → resolveMembership → RequireGitPermission`). Policy widened to accept `ActionGitRepoRead` + target.PublicRead.
+- **Codex follow-up (real-issue, info leak):** ResolveRepoFromURL returning 404 for missing repos while private repos returned 401 let anonymous callers enumerate repo names via status-code sniffing. Fixed in `a11a736` — new `writeMissingOrChallenge` returns 401 + Basic challenge to anonymous callers (same as private-repo response), preserving the real 404 only for authenticated callers.
+- **Retest:** ✅
+  - Anonymous on public_read=true repo → 200, clone succeeds
+  - Anonymous on private repo → 401 + WWW-Authenticate: Basic
+  - Anonymous on missing repo → 401 + WWW-Authenticate: Basic (indistinguishable from private — no enumeration oracle)
+  - Authenticated user on missing repo → 404 (entitled to know)
+  - Authenticated clone still works on both public and private repos
+- **Codex verdict:** real-issue (info leak) flagged + fixed; noise (Q2, Q3) on write-path leakage and middleware ordering.
 
 ## Sign-off
 
-- [ ] All cases passed
-- [ ] Final state:
-  - [ ] `acme/git/tools` exists with main + feature-x + v1.0
-  - [ ] Dual-mount verified
-  - [ ] LFS gate verified
-- [ ] All F-10.* closed
-- [ ] README.md batch 10 status flipped to ✅
+- [x] All cases passed
+- [x] Final state:
+  - [x] `acme/git/tools` exists with main + feature-x + v1.0 (restored from trash after 10.17)
+  - [x] Dual-mount verified (canonical `/acme/git/tools.git` + legacy `/git/acme/tools.git`)
+  - [x] LFS gate verified (501 `lfs.not_supported` + structured envelope)
+  - [x] public_read anonymous clone gated via repo.public_read flag
+  - [x] actor_id populated in http.request logs
+- [x] All F-10.* closed (F-10.0 docs-only; F-10.1/.2/.5/.7 fixed in `246a262` + `a11a736`)
+- [x] README.md batch 10 status flipped to ✅
+- [x] Codex verify pass complete — 1 real-issue + 2 minor fixes applied

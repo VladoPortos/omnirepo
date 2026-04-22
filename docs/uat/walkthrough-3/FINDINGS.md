@@ -12,9 +12,9 @@ Status: 🟨 Open · ✅ Closed · 🟥 Rejected (disputed)
 | F-01.3 | R | AuthGuard + LoginPage | Deep-link lost across login redirect | `12ac7e1` | ✅ Clean | ✅ Passed | ✅ Closed |
 | F-01.4 | m | openapi.yaml | `/setup/status` + `/setup/superadmin` undocumented | `3d06d11` | ✅ Clean | ✅ Passed | ✅ Closed |
 | F-01.5 | R | auth pages | Cards render squished — motion.div flex-item has no width | `fa179e9` | ⬜ Pending | ✅ Passed | ✅ Closed |
-| F-02.1 | R | main.tsx | Toaster never mounted — all `toast.*` silent across the app | `bdca441` | ⬜ Pending | ✅ Passed | ✅ Closed |
-| F-02.2 | m | handleChangePassword | Wrong-current-password on self-service change not audited | `ddc6d81` | ⬜ Pending | ✅ Passed | ✅ Closed |
-| F-02.3 | **B** | handleDeleteUser | Self-delete + last-super-admin delete both succeed → instance soft-brick | `7c8daea` | ⬜ Pending | ✅ Passed | ✅ Closed |
+| F-02.1 | R | main.tsx | Toaster never mounted — all `toast.*` silent across the app | `bdca441` | ✅ Clean | ✅ Passed | ✅ Closed |
+| F-02.2 | m | handleChangePassword | Wrong-current-password on self-service change not audited | `ddc6d81` | ✅ Clean | ✅ Passed | ✅ Closed |
+| F-02.3 | **B** | handleDeleteUser | Self-delete + last-super-admin delete both succeed → instance soft-brick | `7c8daea` + `88caa0c` | ✅ Clean | ✅ Passed | ✅ Closed |
 
 ---
 

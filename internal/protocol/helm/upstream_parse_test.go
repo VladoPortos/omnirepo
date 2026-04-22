@@ -117,6 +117,81 @@ func TestHelmParseUpstreamFilter(t *testing.T) {
 	}
 }
 
+// TestUpstreamEntrySourceClassification verifies that ParseUpstream tags
+// each UpstreamEntry with the correct EntrySourceKind based on its Path
+// prefix (plan 11-02 → fetchAndCommit dispatch in plan 11-03). The fixture
+// index.yaml above yields only https:// URLs, so every entry must be
+// EntrySourceHTTP. The second sub-test synthesizes an oci:// entry by
+// serving a tweaked index.yaml and asserts EntrySourceOCI.
+func TestUpstreamEntrySourceClassification(t *testing.T) {
+	t.Run("https_entries_tagged_http", func(t *testing.T) {
+		srv := newHelmUpstream(t, false)
+		defer srv.Close()
+
+		var entries []helm.UpstreamEntry
+		_, err := helm.ParseUpstream(context.Background(), srv.Client(), srv.URL,
+			helm.AuthCreds{}, helm.SyncFilter{},
+			func(e helm.UpstreamEntry) error {
+				entries = append(entries, e)
+				return nil
+			})
+		if err != nil {
+			t.Fatalf("ParseUpstream: %v", err)
+		}
+		if len(entries) == 0 {
+			t.Fatal("expected ≥1 entry")
+		}
+		for _, e := range entries {
+			if e.Source != helm.EntrySourceHTTP {
+				t.Errorf("entry %q: got Source=%v, want EntrySourceHTTP", e.Path, e.Source)
+			}
+		}
+	})
+
+	t.Run("oci_entries_tagged_oci", func(t *testing.T) {
+		// Synthesize an index.yaml whose URLs point at oci://... — ParseUpstream
+		// must still tag these even though the sync handler (plan 11-03) will
+		// later route them through ociclient, not HTTP.
+		ociIndex := `apiVersion: v1
+entries:
+  redis:
+    - apiVersion: v2
+      name: redis
+      version: 7.0.0
+      digest: cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      urls:
+        - oci://registry-1.docker.io/bitnamicharts/redis:7.0.0
+generated: "2026-04-22T00:00:00Z"
+`
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/index.yaml" {
+				http.NotFound(w, r)
+				return
+			}
+			w.Header().Set("Content-Type", "application/x-yaml")
+			_, _ = w.Write([]byte(ociIndex))
+		}))
+		defer srv.Close()
+
+		var entries []helm.UpstreamEntry
+		_, err := helm.ParseUpstream(context.Background(), srv.Client(), srv.URL,
+			helm.AuthCreds{}, helm.SyncFilter{},
+			func(e helm.UpstreamEntry) error {
+				entries = append(entries, e)
+				return nil
+			})
+		if err != nil {
+			t.Fatalf("ParseUpstream: %v", err)
+		}
+		if len(entries) != 1 {
+			t.Fatalf("expected 1 entry, got %d", len(entries))
+		}
+		if got := entries[0].Source; got != helm.EntrySourceOCI {
+			t.Errorf("oci entry: got Source=%v, want EntrySourceOCI", got)
+		}
+	})
+}
+
 func TestHelmParseUpstreamContextCancel(t *testing.T) {
 	hold := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { <-hold }))

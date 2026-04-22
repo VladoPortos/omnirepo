@@ -159,6 +159,10 @@ func TestValidateMirrorUpstreamURL(t *testing.T) {
 	// Spot-check we didn't regress the URL validator alongside the filter
 	// rework. This is a regression-harness only — the primary URL tests live
 	// wherever CreateRepo's happy path is exercised.
+	//
+	// Plan 11-02 widened the signature to (raw, repoType) so the oci://
+	// scheme is accepted only for helm mirrors. "deb" is used here to keep
+	// these non-helm cases asserting the pre-11-02 behavior unchanged.
 	cases := []struct {
 		in string
 		ok bool
@@ -173,9 +177,83 @@ func TestValidateMirrorUpstreamURL(t *testing.T) {
 		{"https:///no-host", false},
 	}
 	for _, tc := range cases {
-		if got := validateMirrorUpstreamURL(tc.in); got != tc.ok {
-			t.Errorf("validateMirrorUpstreamURL(%q) = %v, want %v", tc.in, got, tc.ok)
+		if got := validateMirrorUpstreamURL(tc.in, "deb"); got != tc.ok {
+			t.Errorf("validateMirrorUpstreamURL(%q, \"deb\") = %v, want %v", tc.in, got, tc.ok)
 		}
+	}
+}
+
+// TestClassifyHelmUpstream covers the 11-02 classifier that tags a helm
+// mirror upstream URL as http vs oci (or unsupported). Only http/https/oci
+// schemes are accepted; bare-host strings without a scheme are rejected in
+// this phase (Helm SDK accepts them, but our validator path requires an
+// explicit scheme for UX clarity + threat-model simplicity).
+func TestClassifyHelmUpstream(t *testing.T) {
+	cases := []struct {
+		raw     string
+		want    HelmSourceKind
+		wantErr bool
+	}{
+		{"http://ex.com/charts", HelmSourceHTTP, false},
+		{"https://ex.com/charts", HelmSourceHTTP, false},
+		{"HTTPS://EX.COM/charts", HelmSourceHTTP, false}, // scheme is case-insensitive
+		{"oci://registry-1.docker.io/bitnamicharts/nginx", HelmSourceOCI, false},
+		{"OCI://reg.io/chart", HelmSourceOCI, false},
+		{"oci://", HelmSourceUnknown, true},     // missing host+path
+		{"oci://host", HelmSourceUnknown, true}, // missing /path
+		{"ftp://x", HelmSourceUnknown, true},
+		{"", HelmSourceUnknown, true},
+		{"file:///etc/passwd", HelmSourceUnknown, true},
+		{"javascript:alert(1)", HelmSourceUnknown, true},
+		{"not a url", HelmSourceUnknown, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.raw, func(t *testing.T) {
+			got, err := classifyHelmUpstream(tc.raw)
+			if tc.wantErr && err == nil {
+				t.Fatalf("classifyHelmUpstream(%q): want error, got nil (kind=%v)", tc.raw, got)
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("classifyHelmUpstream(%q): unexpected err: %v", tc.raw, err)
+			}
+			if got != tc.want {
+				t.Fatalf("classifyHelmUpstream(%q) kind: got %v want %v", tc.raw, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestValidateMirrorUpstreamURL_HelmAcceptsOCI verifies the 11-02 widening:
+// helm mirrors accept oci:// in addition to http(s); other repo types
+// continue to reject oci://. Invariant INV-11-02-02: file://, javascript:,
+// ftp:// are rejected for all repo types.
+func TestValidateMirrorUpstreamURL_HelmAcceptsOCI(t *testing.T) {
+	if !validateMirrorUpstreamURL("oci://reg.io/charts/nginx", "helm") {
+		t.Fatal("helm should accept oci://reg.io/charts/nginx")
+	}
+	if validateMirrorUpstreamURL("oci://reg.io/charts/nginx", "rpm") {
+		t.Fatal("rpm must NOT accept oci://reg.io/charts/nginx")
+	}
+	if validateMirrorUpstreamURL("oci://reg.io/charts/nginx", "deb") {
+		t.Fatal("deb must NOT accept oci://reg.io/charts/nginx")
+	}
+	if validateMirrorUpstreamURL("oci://reg.io/charts/nginx", "pypi") {
+		t.Fatal("pypi must NOT accept oci://reg.io/charts/nginx")
+	}
+	if !validateMirrorUpstreamURL("https://ex.com/charts", "helm") {
+		t.Fatal("https should still be accepted for helm")
+	}
+	// Invariant: bad schemes rejected regardless of repo type.
+	for _, bad := range []string{"file:///etc/passwd", "javascript:alert(1)", "ftp://x"} {
+		for _, rt := range []string{"helm", "deb", "rpm", "pypi"} {
+			if validateMirrorUpstreamURL(bad, rt) {
+				t.Errorf("validateMirrorUpstreamURL(%q, %q) must be false", bad, rt)
+			}
+		}
+	}
+	// Malformed oci:// (missing path) rejected even for helm.
+	if validateMirrorUpstreamURL("oci://host", "helm") {
+		t.Fatal("oci://host with no path must be rejected")
 	}
 }
 

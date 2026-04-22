@@ -67,15 +67,7 @@ func (h *Handler) cosignBadge(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Authorize via the same policy engine.
-	if actor.Kind == auth.ActorKindUser && h.members != nil && actor.ID != 0 {
-		ids, err := h.members.ListProjectIDsForUser(ctx, actor.ID)
-		if err == nil {
-			ctx = auth.WithProjectMembership(ctx, ids)
-		}
-	}
-	if actor.Kind == auth.ActorKindAPIKey && actor.ProjectScope != nil {
-		ctx = auth.WithProjectMembership(ctx, []int64{*actor.ProjectScope})
-	}
+	ctx = auth.ResolveMembership(ctx, actor, h.members)
 	target := auth.Target{
 		Kind:       "repo",
 		ProjectID:  rr.ProjectID,

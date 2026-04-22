@@ -320,16 +320,7 @@ func (h *Handler) actorCanRead(r *http.Request, repo *metadata.Repo) bool {
 	if !ok {
 		return false
 	}
-	ctx := r.Context()
-	if a.Kind == auth.ActorKindUser && h.members != nil && a.ID != 0 {
-		ids, err := h.members.ListProjectIDsForUser(ctx, a.ID)
-		if err == nil {
-			ctx = auth.WithProjectMembership(ctx, ids)
-		}
-	}
-	if a.Kind == auth.ActorKindAPIKey && a.ProjectScope != nil {
-		ctx = auth.WithProjectMembership(ctx, []int64{*a.ProjectScope})
-	}
+	ctx := auth.ResolveMembership(r.Context(), a, h.members)
 	allowed, _ := auth.Can(ctx, a, auth.ActionRepoRead, auth.Target{
 		Kind:       "repo",
 		ProjectID:  repo.ProjectID,

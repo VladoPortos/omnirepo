@@ -314,15 +314,8 @@ func Mount(r chi.Router, d Deps) {
 func (d Deps) membershipResolver() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			actor, ok := auth.ActorFromContext(r.Context())
-			if ok && actor.Kind == auth.ActorKindUser && actor.ID != 0 {
-				ids, err := d.Members.ListProjectIDsForUser(r.Context(), actor.ID)
-				if err == nil {
-					r = r.WithContext(auth.WithProjectMembership(r.Context(), ids))
-				}
-			} else if actor.Kind == auth.ActorKindAPIKey && actor.ProjectScope != nil {
-				// Project-owned API key — membership is a singleton of that project.
-				r = r.WithContext(auth.WithProjectMembership(r.Context(), []int64{*actor.ProjectScope}))
+			if actor, ok := auth.ActorFromContext(r.Context()); ok {
+				r = r.WithContext(auth.ResolveMembership(r.Context(), actor, d.Members))
 			}
 			next.ServeHTTP(w, r)
 		})

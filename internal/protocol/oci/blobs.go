@@ -150,18 +150,7 @@ func (h *Handler) resolveRepo(w http.ResponseWriter, r *http.Request, requireDoc
 // intent reuses the existing ActionUpdateRepo constant to avoid a new
 // action just for /v2 blob pushes).
 func (h *Handler) canOnRepo(ctx context.Context, actor auth.Actor, action auth.Action, rr *metadata.Repo) (bool, string) {
-	// Populate membership for user actors so auth.Can's per-action table
-	// can consult it.
-	if actor.Kind == auth.ActorKindUser && h.members != nil && actor.ID != 0 {
-		ids, err := h.members.ListProjectIDsForUser(ctx, actor.ID)
-		if err == nil {
-			ctx = auth.WithProjectMembership(ctx, ids)
-		}
-	}
-	// Project-scoped API keys: membership is their scope.
-	if actor.Kind == auth.ActorKindAPIKey && actor.ProjectScope != nil {
-		ctx = auth.WithProjectMembership(ctx, []int64{*actor.ProjectScope})
-	}
+	ctx = auth.ResolveMembership(ctx, actor, h.members)
 	target := auth.Target{
 		Kind:       "repo",
 		ProjectID:  rr.ProjectID,

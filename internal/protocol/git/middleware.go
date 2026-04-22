@@ -68,14 +68,8 @@ func projectFromContext(ctx context.Context) string {
 func resolveMembership(members *metadata.MembersRepo) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			actor, ok := auth.ActorFromContext(r.Context())
-			if ok && actor.Kind == auth.ActorKindUser && actor.ID != 0 {
-				ids, err := members.ListProjectIDsForUser(r.Context(), actor.ID)
-				if err == nil {
-					r = r.WithContext(auth.WithProjectMembership(r.Context(), ids))
-				}
-			} else if ok && actor.Kind == auth.ActorKindAPIKey && actor.ProjectScope != nil {
-				r = r.WithContext(auth.WithProjectMembership(r.Context(), []int64{*actor.ProjectScope}))
+			if actor, ok := auth.ActorFromContext(r.Context()); ok {
+				r = r.WithContext(auth.ResolveMembership(r.Context(), actor, members))
 			}
 			next.ServeHTTP(w, r)
 		})

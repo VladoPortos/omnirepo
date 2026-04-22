@@ -72,7 +72,7 @@ const repoItemCountExpr = `(
         WHEN 'pypi'   THEN (SELECT COUNT(*) FROM pypi_files WHERE repo_id = r.id)
         WHEN 'helm'   THEN (SELECT COUNT(*) FROM helm_charts WHERE repo_id = r.id)
         WHEN 'raw'    THEN (SELECT COUNT(*) FROM raw_files WHERE repo_id = r.id)
-        WHEN 'git'    THEN (SELECT COUNT(*) FROM git_refs WHERE repo_id = r.id AND type <> 'symbolic')
+        WHEN 'git'    THEN (SELECT COUNT(*) FROM git_refs WHERE repo_id = r.id AND type IN ('branch','tag'))
         ELSE 0
     END
 )`

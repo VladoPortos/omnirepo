@@ -81,12 +81,28 @@ func TestResolveRepoFromURL_UnknownProject(t *testing.T) {
 		sub.Handle("/*", inner)
 	})
 
+	// Codex F-10.7 follow-up: anonymous callers get 401 + Basic challenge
+	// for both missing and private repos so status-code sniffing can't
+	// enumerate repo names.
 	req := httptest.NewRequest("GET", "/git/unknown/other.git/info/refs", nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
-	if w.Code != http.StatusNotFound {
-		t.Fatalf("status=%d want 404", w.Code)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("anonymous on unknown repo: status=%d want 401", w.Code)
+	}
+	if auth := w.Header().Get("WWW-Authenticate"); !strings.Contains(auth, "Basic") {
+		t.Fatalf("expected Basic challenge, got WWW-Authenticate=%q", auth)
+	}
+
+	// Authenticated callers DO get a real 404 so they can distinguish
+	// "repo doesn't exist" from "no permission" once they've logged in.
+	req2 := httptest.NewRequest("GET", "/git/unknown/other.git/info/refs", nil)
+	req2.SetBasicAuth("alice", "whatever")
+	w2 := httptest.NewRecorder()
+	r.ServeHTTP(w2, req2)
+	if w2.Code != http.StatusNotFound {
+		t.Fatalf("authenticated on unknown repo: status=%d want 404", w2.Code)
 	}
 }
 

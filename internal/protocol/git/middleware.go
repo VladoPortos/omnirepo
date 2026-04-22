@@ -95,19 +95,19 @@ func ResolveRepoFromURL(projects *metadata.ProjectsRepo, repos *metadata.ReposRe
 			// Strip .git suffix if present (URL is /{repo}.git/...).
 			repoName := strings.TrimSuffix(repoParam, ".git")
 			if projectName == "" || repoName == "" {
-				http.NotFound(w, r)
+				writeMissingOrChallenge(w, r)
 				return
 			}
 
 			proj, err := projects.FindByName(r.Context(), projectName)
 			if err != nil {
-				http.NotFound(w, r)
+				writeMissingOrChallenge(w, r)
 				return
 			}
 
 			repo, err := repos.FindByTriple(r.Context(), proj.ID, "git", repoName)
 			if err != nil {
-				http.NotFound(w, r)
+				writeMissingOrChallenge(w, r)
 				return
 			}
 
@@ -116,6 +116,20 @@ func ResolveRepoFromURL(projects *metadata.ProjectsRepo, repos *metadata.ReposRe
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
+}
+
+// writeMissingOrChallenge keeps missing and private repos indistinguishable
+// from anonymous callers (Codex F-10.7 follow-up). Authenticated callers
+// are entitled to a real 404; unauthenticated ones get the same Basic
+// challenge they would receive on a private-but-existing repo, so an
+// attacker cannot enumerate repo names by status-code sniffing.
+func writeMissingOrChallenge(w http.ResponseWriter, r *http.Request) {
+	if r.Header.Get("Authorization") == "" {
+		w.Header().Set("WWW-Authenticate", `Basic realm="omnirepo"`)
+		http.Error(w, "unauthenticated", http.StatusUnauthorized)
+		return
+	}
+	http.NotFound(w, r)
 }
 
 // ---- Step 3: RequireGitPermission ----

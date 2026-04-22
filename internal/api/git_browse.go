@@ -730,15 +730,23 @@ func (d Deps) handleGitCompare(w http.ResponseWriter, r *http.Request) {
 	// Accept both "base...head" (GitHub three-dot spelling) and the
 	// legacy two-dot spelling. chi treats "..." and ".." the same in a
 	// single URL segment, so we detect whichever form the client used.
+	// Codex F-10.5 follow-up: reject dot-runs of 4+ (e.g. "main....feature")
+	// at the edge so they don't silently parse as a valid spec with a
+	// bogus head like ".feature" and return a confusing 404.
 	spec := chi.URLParam(r, "spec")
 	var parts []string
 	switch {
+	case strings.Contains(spec, "...."):
+		// Too many dots in a row — not a valid spec.
 	case strings.Contains(spec, "..."):
 		parts = strings.SplitN(spec, "...", 2)
 	case strings.Contains(spec, ".."):
 		parts = strings.SplitN(spec, "..", 2)
 	}
-	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+	if len(parts) != 2 ||
+		parts[0] == "" || parts[1] == "" ||
+		strings.HasPrefix(parts[0], ".") || strings.HasPrefix(parts[1], ".") ||
+		strings.HasSuffix(parts[0], ".") || strings.HasSuffix(parts[1], ".") {
 		writeJSONError(w, r, http.StatusBadRequest, ErrValidationFailed, "spec must be base...head")
 		return
 	}

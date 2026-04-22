@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/dxc-internal/omnirepo/internal/scan"
@@ -121,5 +122,78 @@ func TestParseTrivyUnknownSeverityRoutesToUnknownBucket(t *testing.T) {
 	}
 	if len(res.Vulnerabilities) != 2 {
 		t.Errorf("Vulnerabilities len = %d, want 2 (neither silently dropped)", len(res.Vulnerabilities))
+	}
+}
+
+// F-08.2: Trivy misconfiguration findings (Helm/IaC scans) must be
+// counted in the severity summary — otherwise the repos.block_on_severity
+// gate silently passes every Helm chart, no matter how many HIGH/CRITICAL
+// misconfigs it has.
+func TestParseTrivyMisconfigurationsCountInSummary(t *testing.T) {
+	doc := `{
+      "SchemaVersion": 2,
+      "ArtifactName": "helm-chart",
+      "Results": [
+        {"Target":"vulny/templates/pod.yaml","Class":"config","Type":"helm",
+         "Misconfigurations":[
+           {"ID":"KSV-0017","Title":"Privileged container","Description":"container privileged=true","Severity":"HIGH","Resolution":"unset privileged","Status":"FAIL"},
+           {"ID":"KSV-0012","Title":"Run as root","Description":"user 0","Severity":"HIGH","Status":"FAIL"},
+           {"ID":"KSV-0001","Title":"Can elevate","Description":"escalation","Severity":"MEDIUM","Status":"FAIL"},
+           {"ID":"KSV-0099","Title":"resolved already","Severity":"HIGH","Status":"PASS"}
+         ]}
+      ]
+    }`
+	res, err := scan.ParseTrivyJSON([]byte(doc))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if res.Summary["high"] != 2 {
+		t.Errorf("Summary[high] = %d, want 2 (FAIL status only — PASS must not count)", res.Summary["high"])
+	}
+	if res.Summary["medium"] != 1 {
+		t.Errorf("Summary[medium] = %d, want 1", res.Summary["medium"])
+	}
+	if len(res.Vulnerabilities) != 3 {
+		t.Errorf("Vulnerabilities len = %d, want 3 (3 FAILs folded in)", len(res.Vulnerabilities))
+	}
+	// Sanity: misconfig IDs land in CVEID and Resolution in Description.
+	var sawPriv bool
+	for _, v := range res.Vulnerabilities {
+		if v.CVEID == "KSV-0017" {
+			sawPriv = true
+			if !strings.Contains(v.Description, "Resolution: unset privileged") {
+				t.Errorf("KSV-0017 Description missing resolution: %q", v.Description)
+			}
+		}
+	}
+	if !sawPriv {
+		t.Error("KSV-0017 missing from Vulnerabilities slice")
+	}
+}
+
+// F-08.2 follow-up: vulnerabilities and misconfigurations cohabit in the
+// same Results list — make sure both are counted and the totals are
+// additive (not overwritten).
+func TestParseTrivyVulnsPlusMisconfigsAdditive(t *testing.T) {
+	doc := `{
+      "SchemaVersion": 2,
+      "Results": [
+        {"Target":"os-pkgs","Class":"os-pkgs","Vulnerabilities":[
+          {"VulnerabilityID":"CVE-2024-0001","PkgName":"openssl","Severity":"CRITICAL","Title":"t","Description":"d"}
+        ]},
+        {"Target":"helm/pod.yaml","Class":"config","Type":"helm","Misconfigurations":[
+          {"ID":"KSV-0017","Title":"priv","Severity":"HIGH","Status":"FAIL"}
+        ]}
+      ]
+    }`
+	res, err := scan.ParseTrivyJSON([]byte(doc))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if res.Summary["critical"] != 1 || res.Summary["high"] != 1 {
+		t.Errorf("Summary = %+v, want critical=1 high=1", res.Summary)
+	}
+	if len(res.Vulnerabilities) != 2 {
+		t.Errorf("Vulnerabilities len = %d, want 2", len(res.Vulnerabilities))
 	}
 }

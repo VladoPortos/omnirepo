@@ -35,10 +35,11 @@ type trivyReportOS struct {
 }
 
 type trivyReportBlock struct {
-	Target          string              `json:"Target"`
-	Class           string              `json:"Class"`
-	Type            string              `json:"Type"`
-	Vulnerabilities []trivyReportVuln   `json:"Vulnerabilities"`
+	Target            string                `json:"Target"`
+	Class             string                `json:"Class"`
+	Type              string                `json:"Type"`
+	Vulnerabilities   []trivyReportVuln     `json:"Vulnerabilities"`
+	Misconfigurations []trivyReportMisconf  `json:"Misconfigurations"`
 }
 
 type trivyReportVuln struct {
@@ -49,6 +50,20 @@ type trivyReportVuln struct {
 	Severity         string `json:"Severity"`
 	Title            string `json:"Title"`
 	Description      string `json:"Description"`
+}
+
+// trivyReportMisconf is one Kubernetes / IaC misconfiguration finding.
+// Relevant primarily to Helm chart scans, but also surfaces for Dockerfile
+// and Terraform when those are present in the scan root (F-08.2).
+type trivyReportMisconf struct {
+	ID          string `json:"ID"`
+	AVDID       string `json:"AVDID"`
+	Title       string `json:"Title"`
+	Description string `json:"Description"`
+	Severity    string `json:"Severity"`
+	Resolution  string `json:"Resolution"`
+	PrimaryURL  string `json:"PrimaryURL"`
+	Status      string `json:"Status"`
 }
 
 // ParseTrivyJSON decodes a Trivy JSON document into a Result. It is
@@ -90,6 +105,38 @@ func ParseTrivyJSON(b []byte) (Result, error) {
 				Severity:         v.Severity,
 				Title:            v.Title,
 				Description:      v.Description,
+			})
+		}
+		// F-08.2: Helm chart scans (and any other misconfig-heavy protocol)
+		// surface findings in Misconfigurations, not Vulnerabilities. Without
+		// this loop every Helm chart scan summarized as all-zeros and the
+		// repos.block_on_severity gate was effectively defeated.
+		for _, m := range block.Misconfigurations {
+			if m.Status != "" && m.Status != "FAIL" {
+				continue
+			}
+			sev := strings.ToLower(m.Severity)
+			if _, ok := summary[sev]; !ok {
+				sev = "unknown"
+			}
+			summary[sev]++
+			id := m.ID
+			if id == "" {
+				id = m.AVDID
+			}
+			desc := m.Description
+			if m.Resolution != "" {
+				if desc != "" {
+					desc += " "
+				}
+				desc += "Resolution: " + m.Resolution
+			}
+			vulns = append(vulns, Vuln{
+				CVEID:       id,
+				Package:     block.Target,
+				Severity:    m.Severity,
+				Title:       m.Title,
+				Description: desc,
 			})
 		}
 	}

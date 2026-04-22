@@ -65,13 +65,20 @@ func (l *logger) Record(ctx context.Context, e Event) error {
 	}
 	// Strict DB insert.
 	if err := l.db.WriteTx(ctx, func(tx *sql.Tx) error {
+		// Format occurred_at explicitly as RFC3339Nano. modernc.org/sqlite stores
+		// a raw time.Time via its .String() method ("2026-04-22 12:43:05.123 +0000
+		// UTC"), which SQLite's date/time functions can't parse and which breaks
+		// lexicographic comparison against RFC3339 bound values used by the
+		// admin audit endpoint (from/to filters and keyset pagination both
+		// compare against RFC3339Nano strings). RFC3339Nano is ISO-8601-ordered,
+		// parsed natively by SQLite, and round-trips through Scan(*time.Time).
 		_, exErr := tx.ExecContext(ctx, `
 			INSERT INTO audit_log(
 				occurred_at, actor_user_id, actor_api_key_id, ip, user_agent,
 				event_kind, target_kind, target_id, outcome, details_json
 			) VALUES (?,?,?,?,?,?,?,?,?,?)
 		`,
-			e.OccurredAt,
+			e.OccurredAt.UTC().Format(time.RFC3339Nano),
 			nullableInt64(e.ActorUserID),
 			nullableInt64(e.ActorAPIKeyID),
 			e.IP,

@@ -60,16 +60,23 @@ func (d Deps) handleListAudit(w http.ResponseWriter, r *http.Request) {
 		clauses = append(clauses, `a.outcome=?`)
 		args = append(args, v)
 	}
+	// Time-range filters + keyset pagination below all rely on lexicographic
+	// comparison against audit_log.occurred_at. The write path stores
+	// occurred_at as RFC3339Nano (post-F-04.2; legacy rows normalized by
+	// migration 029), so bind filter values in the same format here. The
+	// previous code wrote RFC3339 (seconds only) — when the stored value had
+	// nanoseconds ("...T05Z" vs "...T05.123Z"), same-second comparisons could
+	// miss on the `<=` / `=` branches.
 	if v := q.Get("from"); v != "" {
 		if t, err := time.Parse(time.RFC3339, v); err == nil {
 			clauses = append(clauses, `a.occurred_at >= ?`)
-			args = append(args, t.UTC().Format(time.RFC3339))
+			args = append(args, t.UTC().Format(time.RFC3339Nano))
 		}
 	}
 	if v := q.Get("to"); v != "" {
 		if t, err := time.Parse(time.RFC3339, v); err == nil {
 			clauses = append(clauses, `a.occurred_at <= ?`)
-			args = append(args, t.UTC().Format(time.RFC3339))
+			args = append(args, t.UTC().Format(time.RFC3339Nano))
 		}
 	}
 
@@ -126,7 +133,11 @@ func (d Deps) handleListAudit(w http.ResponseWriter, r *http.Request) {
 		}
 		items = append(items, item{
 			ID:         row.ID,
-			Timestamp:  row.OccurredAt.Format(time.RFC3339),
+			// Emit RFC3339Nano so the next_cursor round-trip stays lex-aligned
+			// with the stored occurred_at format. Scan(&row.OccurredAt)
+			// accepts either the legacy Go-%v string or RFC3339Nano — both
+			// parse to the same time.Time.
+			Timestamp:  row.OccurredAt.UTC().Format(time.RFC3339Nano),
 			Actor:      row.ActorLogin,
 			IP:         row.IP,
 			UserAgent:  row.UserAgent,

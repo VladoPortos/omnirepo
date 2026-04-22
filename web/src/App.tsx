@@ -183,9 +183,13 @@ function SetupGuard({ children }: { children: ReactNode }) {
   return <>{children}</>;
 }
 
-// Auth guard: redirects unauthenticated users to /login
+// Auth guard: redirects unauthenticated users to /login.
+// Passes the intercepted location via React Router state so LoginPage
+// can restore the deep-link after a successful sign-in (F-01.3). State
+// is in-memory only — no URL-param open-redirect surface.
 function AuthGuard({ children }: { children: ReactNode }) {
   const { isAuthenticated, isLoading } = useAuth();
+  const location = useLocation();
 
   if (isLoading) {
     return (
@@ -199,7 +203,7 @@ function AuthGuard({ children }: { children: ReactNode }) {
   }
 
   if (!isAuthenticated) {
-    return <Navigate to="/login" replace />;
+    return <Navigate to="/login" replace state={{ from: location }} />;
   }
 
   return <>{children}</>;

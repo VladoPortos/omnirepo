@@ -18,7 +18,20 @@ import { ErrorEnvelopeRenderer } from '@/components/common/ErrorEnvelope';
 export function LoginPage() {
   const navigate = useNavigate();
   const location = useLocation();
-  const setupDone = (location.state as { setupDone?: boolean } | null)?.setupDone ?? false;
+  const locationState = location.state as
+    | { setupDone?: boolean; from?: { pathname?: string; search?: string; hash?: string } }
+    | null;
+  const setupDone = locationState?.setupDone ?? false;
+  // Restore the pre-login deep-link (F-01.3). Only honor paths that start
+  // with "/" and don't start with "//" (which would be protocol-relative
+  // and navigate off-origin). React Router state survives the login
+  // round-trip in memory without exposing a URL-param open-redirect
+  // surface.
+  const fromPath = (() => {
+    const p = locationState?.from?.pathname ?? '';
+    if (!p.startsWith('/') || p.startsWith('//')) return '/';
+    return p + (locationState?.from?.search ?? '') + (locationState?.from?.hash ?? '');
+  })();
   const { login } = useAuth();
   const [loginValue, setLoginValue] = useState('');
   const [password, setPassword] = useState('');
@@ -36,7 +49,7 @@ export function LoginPage() {
       if (result.must_change_password) {
         navigate('/change-password');
       } else {
-        navigate('/');
+        navigate(fromPath, { replace: true });
       }
     } catch (err) {
       if (err instanceof ApiError && (err.status === 401 || err.status === 403)) {

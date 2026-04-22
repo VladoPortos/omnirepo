@@ -21,9 +21,11 @@ import (
 //   - Envelope.IncidentID is set to middleware.GetReqID(ctx) if non-empty;
 //     unit tests without chi middleware get an empty incident_id which
 //     serializes as an omitted field (omitempty).
-//   - An slog.Error record with keys incident_id, code, class, cause is
-//     emitted on r.Context(). The cause is logged only here — it is
-//     never serialized into the response body (ERR-03).
+//   - An slog record with keys incident_id, status, code, class, cause is
+//     emitted on r.Context(). Level is ERROR for 5xx or
+//     operator_action_required, WARN for 4xx client errors, so client
+//     bugs do not flood ERROR-level alerting. The cause is logged only
+//     here — it is never serialized into the response body (ERR-03).
 //   - e.Cause and e.Status are never marshalled; only e.Envelope is.
 //   - Calling Write(w, r, nil) emits a generic 500 envelope rather than
 //     panicking, for defensive routing in recover middleware.
@@ -47,18 +49,28 @@ func Write(w http.ResponseWriter, r *http.Request, e *Error) {
 		e.Envelope.IncidentID = reqID
 	}
 
-	// Log the internal cause (never serialized to client).
-	slog.ErrorContext(r.Context(), "api.error",
-		slog.String("incident_id", reqID),
-		slog.String("code", e.Envelope.Code),
-		slog.String("class", string(e.Envelope.Class)),
-		slog.Any("cause", e.Cause),
-	)
-
 	status := e.Status
 	if status == 0 {
 		status = defaultStatusForClass(e.Envelope.Class)
 	}
+
+	// Log the internal cause (never serialized to client). Routed by
+	// response status class so 4xx client errors don't pollute ERROR-level
+	// alerting: 5xx (server/operator bug) stays at ERROR; 4xx (client bug)
+	// drops to WARN but remains fully structured and searchable by
+	// incident_id / code / class. The OperatorRequired class is always
+	// ERROR since an operator must act regardless of HTTP status.
+	logLevel := slog.LevelError
+	if status < 500 && e.Envelope.Class != ClassOperatorRequired {
+		logLevel = slog.LevelWarn
+	}
+	slog.Log(r.Context(), logLevel, "api.error",
+		slog.String("incident_id", reqID),
+		slog.Int("status", status),
+		slog.String("code", e.Envelope.Code),
+		slog.String("class", string(e.Envelope.Class)),
+		slog.Any("cause", e.Cause),
+	)
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(e.Envelope)

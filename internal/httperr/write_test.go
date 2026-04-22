@@ -1,11 +1,14 @@
 package httperr_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -198,5 +201,79 @@ func TestWrite_NoRequestIDMiddleware_IncidentIDEmpty(t *testing.T) {
 	m := decodeBody(t, rec.Body)
 	if _, ok := m["incident_id"]; ok {
 		t.Errorf("incident_id should be omitted when no request ID on context: %v", m)
+	}
+}
+
+// TestWrite_LogLevelByStatus pins the level-routing rule so client-error
+// 4xx responses don't flood ERROR-level alerting (UAT gate: walkthrough-3
+// F-01.1). 5xx or operator_action_required always ERROR; 4xx validation /
+// permission / transient always WARN.
+func TestWrite_LogLevelByStatus(t *testing.T) {
+	cases := []struct {
+		name      string
+		err       *httperr.Error
+		wantLevel slog.Level
+	}{
+		{
+			name:      "400 validation → WARN",
+			err:       httperr.Validation("user.name_required", "Name is required"),
+			wantLevel: slog.LevelWarn,
+		},
+		{
+			name:      "403 permission → WARN",
+			err:       httperr.Permission("auth.forbidden", "You do not have permission."),
+			wantLevel: slog.LevelWarn,
+		},
+		{
+			name:      "422 explicit → WARN",
+			err:       httperr.Validation("validation.failed", "bad input", httperr.WithStatus(422)),
+			wantLevel: slog.LevelWarn,
+		},
+		{
+			name:      "503 transient → ERROR (5xx)",
+			err:       httperr.Transient("svc.unavailable", "retry", 0),
+			wantLevel: slog.LevelError,
+		},
+		{
+			name:      "500 internal → ERROR",
+			err:       httperr.Internal("api.internal", errors.New("boom")),
+			wantLevel: slog.LevelError,
+		},
+		{
+			name:      "operator_required → ERROR regardless of status",
+			err:       httperr.OperatorRequired("trivy.db_missing", "run trivy init", "/admin/trivy", "Open Trivy admin"),
+			wantLevel: slog.LevelError,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			// Capture at DEBUG so both WARN and ERROR records land in buf.
+			h := slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})
+			prev := slog.Default()
+			slog.SetDefault(slog.New(h))
+			t.Cleanup(func() { slog.SetDefault(prev) })
+
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest("GET", "/t", nil)
+			httperr.Write(rec, req, c.err)
+
+			out := buf.String()
+			if !strings.Contains(out, "msg=api.error") {
+				t.Fatalf("no api.error log line emitted: %q", out)
+			}
+			var wantKey string
+			switch c.wantLevel {
+			case slog.LevelError:
+				wantKey = "level=ERROR"
+			case slog.LevelWarn:
+				wantKey = "level=WARN"
+			default:
+				t.Fatalf("unexpected wantLevel: %v", c.wantLevel)
+			}
+			if !strings.Contains(out, wantKey) {
+				t.Errorf("expected %q in log, got: %q", wantKey, out)
+			}
+		})
 	}
 }

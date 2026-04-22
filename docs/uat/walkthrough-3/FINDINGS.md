@@ -7,10 +7,10 @@ Status: 🟨 Open · ✅ Closed · 🟥 Rejected (disputed)
 
 | ID | Sev | Area | Title | Fix commit | Codex | Retest | Status |
 |----|-----|------|-------|-----------|-------|--------|--------|
-| F-01.1 | R | httperr.Write | All 4xx logged at slog ERROR — floods alerting + trips backend-log gate | `0f2dfd1` | ⬜ Pending | ✅ Passed | ✅ Closed |
+| F-01.1 | R | httperr.Write | All 4xx logged at slog ERROR — floods alerting + trips backend-log gate | `0f2dfd1` | ✅ Clean | ✅ Passed | ✅ Closed |
 | F-01.2 | n | browser console | Browser-native "Failed to load resource" logs on every 4xx fetch | _(no fix — cure worse than disease)_ | — | ✅ Accepted | ✅ Closed |
-| F-01.3 | R | AuthGuard + LoginPage | Deep-link lost across login redirect | `12ac7e1` | ⬜ Pending | ✅ Passed | ✅ Closed |
-| F-01.4 | m | openapi.yaml | `/setup/status` + `/setup/superadmin` undocumented | `3d06d11` | ⬜ Pending | ✅ Passed | ✅ Closed |
+| F-01.3 | R | AuthGuard + LoginPage | Deep-link lost across login redirect | `12ac7e1` | ✅ Clean | ✅ Passed | ✅ Closed |
+| F-01.4 | m | openapi.yaml | `/setup/status` + `/setup/superadmin` undocumented | `3d06d11` | ✅ Clean | ✅ Passed | ✅ Closed |
 
 ---
 
@@ -26,7 +26,7 @@ Status: 🟨 Open · ✅ Closed · 🟥 Rejected (disputed)
   3. `grep ERROR $OMNIREPO_DATA_ROOT/server.log` → one hit for a perfectly normal validation response.
 - **Root cause:** `internal/httperr/write.go:51` unconditional `slog.ErrorContext(...)` ignoring class/status.
 - **Fix:** commit `0f2dfd1` — level routes by status: 5xx or `operator_action_required` → ERROR, 4xx → WARN. Added `status` field in structured log. `TestWrite_LogLevelByStatus` pins the rule.
-- **Codex verify:** ⬜ Pending (batched)
+- **Codex verify:** ✅ Clean (batched)
 - **Retest:** ✅ Re-triggered 422; log now `WARN ... status=422 class=validation`; grep-ERROR returns 0 hits.
 - **Status:** ✅ Closed
 
@@ -44,7 +44,7 @@ Status: 🟨 Open · ✅ Closed · 🟥 Rejected (disputed)
 - **Symptom:** Visiting e.g. `/projects/acme/docker/demo` while logged out → /login → after sign-in lands on `/`, not the original path.
 - **Root cause:** AuthGuard's `<Navigate to="/login" replace />` didn't pass `state={{ from: location }}`; LoginPage hardcoded `navigate('/')` on success.
 - **Fix:** commit `12ac7e1` — AuthGuard attaches `state.from`; LoginPage navigates to `state.from.pathname` (+ search + hash) on success. Path must start with `/` and not `//` (open-redirect guard); otherwise falls back to `/`.
-- **Codex verify:** ⬜ Pending (batched)
+- **Codex verify:** ✅ Clean (batched)
 - **Retest:** ✅ Retried repro — lands on `/projects/acme/docker/demo` (NotFound page, correct for now).
 - **Status:** ✅ Closed
 

@@ -1,6 +1,6 @@
 # Batch 01 — Install, bootstrap, auth
 
-**Status:** 🟨 In progress (2026-04-22)
+**Status:** ✅ Passed clean (2026-04-22)
 **Prereqs:** None. This batch is the cold start.
 **State produced for later batches:**
 - Fresh data root at `$OMNIREPO_DATA_ROOT`
@@ -126,7 +126,7 @@
 - **Console/network:** n/a (server-side only).
 - **Root cause:** `internal/httperr/write.go:51` — unconditional `slog.ErrorContext(...)` regardless of class/status. No routing by severity.
 - **Fix:** commit `0f2dfd1` — route level by response status: 5xx or `operator_action_required` → ERROR; 4xx → WARN. Added `status` field to the structured log. Added `TestWrite_LogLevelByStatus` regression pinning the rule across every class and both sides of the 5xx boundary.
-- **Codex verify:** ⬜ Pending (batched at end of batch 01)
+- **Codex verify:** ✅ Clean (rescue agent, no issues flagged)
 - **Retest:** ✅ Passed — re-triggered 422; log line is `WARN api.error ... status=422 class=validation`; grep-ERROR gate returns 0 hits for the rest of the batch window.
 - **Status:** ✅ Closed (awaiting Codex batch review)
 
@@ -150,7 +150,7 @@
 - **Network:** `GET /projects/acme/docker/demo` (SPA boot) → redirected; `POST /auth/login → 200`; then `navigate('/')` fired by LoginPage.
 - **Root cause:** `App.tsx` AuthGuard used `<Navigate to="/login" replace />` without attaching `state={{ from: location }}`; `LoginPage.tsx` hardcoded `navigate('/')` on success.
 - **Fix:** commit `12ac7e1` — AuthGuard now passes `state={{ from: location }}`; LoginPage reads `locationState.from.{pathname,search,hash}` and uses it as the post-login target. Open-redirect defence: path must start with `/` and not `//`; anything else falls back to `/`. State lives only in React Router in-memory store, no URL-param surface.
-- **Codex verify:** ⬜ Pending (batched)
+- **Codex verify:** ✅ Clean (rescue agent, no issues flagged)
 - **Retest:** ✅ Retried the repro — after sign-in lands on `/projects/acme/docker/demo` (shows "Page Not Found" correctly because acme doesn't exist yet; routing itself works).
 - **Status:** ✅ Closed (awaiting Codex)
 
@@ -161,15 +161,15 @@
 - **Repro:** `grep 'setup/superadmin' /api/v1/openapi.yaml` → 0 hits (before fix).
 - **Root cause:** Spec drift — handlers at `internal/api/setup.go` shipped without corresponding entries in openapi.yaml.
 - **Fix:** commit `3d06d11` — added schemas `SetupStatusResponse`, `SetupSuperAdminBody`, `SetupSuperAdminReply`; added paths `/setup/status` (GET, unauth) and `/setup/superadmin` (POST, unauth with 409 documented); types regenerated via go:generate. Hand-written Go types in setup.go now alias the generated names to keep every existing call site compiling. Email field kept as plain string so the handler's own non-empty-check remains authoritative (RFC-email validation would have shadowed it with a 400).
-- **Codex verify:** ⬜ Pending
+- **Codex verify:** ✅ Clean (rescue agent, no issues flagged)
 - **Retest:** ✅ `grep 'setup/superadmin\|setup/status\|/auth/login\|/auth/change-password' /api/v1/openapi.yaml` now returns 4 matches; full Go + API tests green (`go test ./internal/api/... ./internal/httperr/...`).
 - **Status:** ✅ Closed
 
 ## Sign-off
 
 - [x] All 20 cases passed
-- [x] All F-01.* findings ✅ Closed, retested (Codex review pending — runs at end of batch 01)
+- [x] All F-01.* findings ✅ Closed, retested, Codex-verified (rescue agent returned clean across F-01.1, F-01.3, F-01.4)
 - [x] Backend server.log has zero ERROR/panic lines for the batch window after F-01.1 fix
 - [x] Console has zero errors/warnings across every page visited (modulo the documented F-01.2 browser-native noise and 3 VERBOSE DOM autofill hints on /profile)
 - [x] State for later batches confirmed: `superadmin` + `alice` users exist in `/tmp/omnirepo-wt3` data root, alice password `Alice!Passw0rd123`, both can log in
-- [ ] README.md batch 01 status flipped to ✅ (pending Codex pass)
+- [x] README.md batch 01 status flipped to ✅

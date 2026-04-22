@@ -1,6 +1,6 @@
 # Batch 05 — Docker / OCI
 
-**Status:** 🟨 In progress (2 fixes landed, 4 tracked-open)
+**Status:** ✅ Closed (3 fixes landed, 3 tracked-open, 1 withdrawn after Codex pass)
 **Prereqs:** Batch 04 ✅ (acme project exists with alice admin + bob member + dockerhub creds)
 **State produced for later batches:**
 - `acme/docker/demo` repo with pushed `hello-world:latest` and `hello-world:v1`
@@ -130,11 +130,11 @@
 
 | ID | Sev | Area | Summary | Status |
 |----|-----|------|---------|--------|
-| F-05.1 | **B** blocker | auth/membership across 9 handlers | User-owned API keys could not auth any project-scoped OCI/RPM/DEB/PyPI/Helm/RAW/Git/admin action — token 403 `not_a_project_member`. Root cause: membership-resolver branches only covered `ActorKindUser` + project-scoped keys; user-owned keys fell through. Fixed by extracting `auth.ResolveMembership` and using it in all 9 sites. | ✅ Fixed — commit `d8d11d0` |
+| F-05.1 | **B** blocker | auth/membership across 10 sites (9 middleware + 1 REST helper) | User-owned API keys could not auth any project-scoped OCI/RPM/DEB/PyPI/Helm/RAW/Git/admin action — token 403 `not_a_project_member`. Root cause: membership-resolver branches only covered `ActorKindUser` + project-scoped keys; user-owned keys fell through. Fix pass 1 extracted `auth.ResolveMembership` and used it in 9 sites. Codex pass 2 caught a tenth copy in `api/scans.go Deps.actorIsProjectMember` that also rejected `Kind != User` — patched to match protocol-handler pattern. | ✅ Fixed — commits `d8d11d0` + `f0f6131` |
 | F-05.2 | R | `blobGet` error envelope | 404 BLOB_UNKNOWN `detail` echoed `os.PathError.Error()`, leaking absolute CAS path. Generic internal-error leaked it too. Sanitised + slog-path for diagnostics. Regression test `TestBlobGet_UnknownDigest_DoesNotLeakFSPath`. | ✅ Fixed — commit `b942943` |
 | F-05.3 | R (latent) | Multi-arch scan aggregation | Tags pointing at an OCI image index show "Not scanned" in UI forever — scan worker correctly skips the index and scans child manifests, but UI queries `scans.artifact_id = tag.digest` and the index digest has no row. All common Docker Hub images (hello-world, alpine, nginx, …) are multi-arch. Single-arch push shows Clean as expected. No aggregation from children to index. Verified single-arch works. | 🟨 Tracked-open — needs aggregation pass |
 | F-05.4 | R | `DockerRepoPage.tsx:308-313` | Delete-tag icon button has **no `onClick` handler** — clicking does nothing. OCI DELETE `/v2/.../manifests/<ref>` backend works (verified via crane delete). Frontend-only wiring gap. | 🟨 Tracked-open — UI wiring |
-| F-05.5 | R | `CloneImageDialog` | Pull-External dialog hangs at "Preparing…" when upstream returns 401/404. Backend writes `sync_jobs.last_error = "UNAUTHORIZED: authentication required …"` but the dialog never polls/surfaces the error. User left staring at infinite spinner until they Close-and-continue-in-background. | 🟨 Tracked-open — UI polling + error surfacing |
+| ~~F-05.5~~ | ~~R~~ | ~~`CloneImageDialog`~~ | **Withdrawn after Codex pass.** `useJobProgress` does poll and `CloneImageDialog.tsx:285` renders `ErrorEnvelopeRenderer` once `progress.status === 'failed'`. My 20 s probe didn't wait for retry backoff to exhaust — the UI does eventually surface the failure. Moved to observations. | 🟥 Rejected |
 | F-05.6 | R | `DockerRepoPage.tsx:473` | Promote/Retag button toasts literally "Promote requested (API not yet connected)." despite backend route `POST /api/v1/projects/{name}/repos/docker/{repo}/promote` being fully implemented. Same pattern as F-05.4 — UI stub, no mutation call. | 🟨 Tracked-open — UI wiring |
 
 ### Observations (not filed as findings)

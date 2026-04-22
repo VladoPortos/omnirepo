@@ -14,6 +14,7 @@ import (
 
 	"github.com/dxc-internal/omnirepo/internal/api"
 	"github.com/dxc-internal/omnirepo/internal/audit"
+	"github.com/dxc-internal/omnirepo/internal/auth"
 	"github.com/dxc-internal/omnirepo/internal/httpx"
 	"github.com/dxc-internal/omnirepo/internal/metadata"
 	"github.com/dxc-internal/omnirepo/internal/metadata/sqlitetest"
@@ -418,6 +419,47 @@ func TestScansREST_GetSBOMStreamsFile(t *testing.T) {
 	}
 	if ct := resp.Header.Get("Content-Type"); ct != "application/json" {
 		t.Fatalf("Content-Type=%q want application/json", ct)
+	}
+}
+
+// TestScansREST_Rescan_UserOwnedAPIKey_Accepted is the F-05.1 regression for
+// the tenth site Codex caught after the initial fix: Deps.actorIsProjectMember
+// used to early-return on `actor.Kind != ActorKindUser`, denying user-owned
+// API keys on every scan/content/artifact endpoint even when the owning user
+// was a project member. The fix drops that Kind guard so Actor.ID (already
+// the owning user's id per the Actor.ID doc) flows into the project_members
+// lookup.
+//
+// Wire: seed alice + a user-owned API key, add her to the project, POST
+// rescan with HTTP Basic (alice / raw token). A session-cookie path is
+// already covered by TestScansREST_Rescan_EnqueuesNewRow — this one pins the
+// API-key path that was broken.
+func TestScansREST_Rescan_UserOwnedAPIKey_Accepted(t *testing.T) {
+	s := newScanRESTServer(t)
+	uid, _ := seedTestUser(t, s.db, "alice", "a@x", false, false)
+	proj, repo, _, _ := seedScanProject(t, s, uid, "docker")
+
+	k, err := auth.GenerateAPIKey(auth.APIKeyKindUser)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	if _, err := metadata.NewAPIKeysRepo(s.db).CreateUserKey(
+		context.Background(), uid, "alice-dev", k.Prefix, k.SHA256,
+	); err != nil {
+		t.Fatalf("create key: %v", err)
+	}
+
+	req, _ := http.NewRequest("POST",
+		s.ts.URL+"/api/v1/projects/"+proj+"/repos/docker/"+repo+"/artifacts/sha256:abc/rescan",
+		nil)
+	req.SetBasicAuth("alice", k.Plaintext)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("do: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != 202 {
+		t.Fatalf("user-owned API key rescan got status=%d, want 202 (F-05.1 regression)", resp.StatusCode)
 	}
 }
 

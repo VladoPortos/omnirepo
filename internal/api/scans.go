@@ -247,16 +247,21 @@ func (d Deps) resolveArtifactRepo(w http.ResponseWriter, r *http.Request) (*meta
 }
 
 // actorIsProjectMember verifies actor is a project member. Super-admin
-// bypasses; project-scoped API keys check ProjectScope; user actors hit
-// project_members.
+// bypasses; project-scoped API keys check ProjectScope; user actors and
+// user-owned API keys both hit project_members via Actor.ID (which is the
+// owning user id for user-owned keys per the Actor.ID doc comment —
+// closing the F-05.1 gap Codex flagged here).
 func (d Deps) actorIsProjectMember(ctx context.Context, actor auth.Actor, projectID int64) bool {
+	if actor.Kind == auth.ActorKindAnonymous {
+		return false
+	}
 	if actor.IsSuperAdmin {
 		return true
 	}
 	if actor.Kind == auth.ActorKindAPIKey && actor.ProjectScope != nil {
 		return *actor.ProjectScope == projectID
 	}
-	if actor.Kind != auth.ActorKindUser || actor.ID == 0 || d.DB == nil {
+	if actor.ID == 0 || d.DB == nil {
 		return false
 	}
 	var n int

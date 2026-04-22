@@ -1,6 +1,6 @@
 # Batch 05 — Docker / OCI
 
-**Status:** ⬜ Not started
+**Status:** 🟨 In progress (2 fixes landed, 4 tracked-open)
 **Prereqs:** Batch 04 ✅ (acme project exists with alice admin + bob member + dockerhub creds)
 **State produced for later batches:**
 - `acme/docker/demo` repo with pushed `hello-world:latest` and `hello-world:v1`
@@ -128,15 +128,41 @@
 
 ## Findings
 
-_(F-05.N)_
+| ID | Sev | Area | Summary | Status |
+|----|-----|------|---------|--------|
+| F-05.1 | **B** blocker | auth/membership across 9 handlers | User-owned API keys could not auth any project-scoped OCI/RPM/DEB/PyPI/Helm/RAW/Git/admin action — token 403 `not_a_project_member`. Root cause: membership-resolver branches only covered `ActorKindUser` + project-scoped keys; user-owned keys fell through. Fixed by extracting `auth.ResolveMembership` and using it in all 9 sites. | ✅ Fixed — commit `d8d11d0` |
+| F-05.2 | R | `blobGet` error envelope | 404 BLOB_UNKNOWN `detail` echoed `os.PathError.Error()`, leaking absolute CAS path. Generic internal-error leaked it too. Sanitised + slog-path for diagnostics. Regression test `TestBlobGet_UnknownDigest_DoesNotLeakFSPath`. | ✅ Fixed — commit `b942943` |
+| F-05.3 | R (latent) | Multi-arch scan aggregation | Tags pointing at an OCI image index show "Not scanned" in UI forever — scan worker correctly skips the index and scans child manifests, but UI queries `scans.artifact_id = tag.digest` and the index digest has no row. All common Docker Hub images (hello-world, alpine, nginx, …) are multi-arch. Single-arch push shows Clean as expected. No aggregation from children to index. Verified single-arch works. | 🟨 Tracked-open — needs aggregation pass |
+| F-05.4 | R | `DockerRepoPage.tsx:308-313` | Delete-tag icon button has **no `onClick` handler** — clicking does nothing. OCI DELETE `/v2/.../manifests/<ref>` backend works (verified via crane delete). Frontend-only wiring gap. | 🟨 Tracked-open — UI wiring |
+| F-05.5 | R | `CloneImageDialog` | Pull-External dialog hangs at "Preparing…" when upstream returns 401/404. Backend writes `sync_jobs.last_error = "UNAUTHORIZED: authentication required …"` but the dialog never polls/surfaces the error. User left staring at infinite spinner until they Close-and-continue-in-background. | 🟨 Tracked-open — UI polling + error surfacing |
+| F-05.6 | R | `DockerRepoPage.tsx:473` | Promote/Retag button toasts literally "Promote requested (API not yet connected)." despite backend route `POST /api/v1/projects/{name}/repos/docker/{repo}/promote` being fully implemented. Same pattern as F-05.4 — UI stub, no mutation call. | 🟨 Tracked-open — UI wiring |
+
+### Observations (not filed as findings)
+- Repo header `Docker repository · 2 tags · 311.6 MB` after multi-arch push + delete shows orphan-blob storage; legitimate — blobs remain until GC sweeps. Accuracy bug if observed long-term, but matches the documented CAS + GC model.
+- Rescan audit event kind is `scan.started` (with `Details.reason = "manual_rescan"`) not the doc-drafted `artifact.rescan`. Event IS recorded. Doc drift only.
+- Cloning/pull-external audit event kind is `oci.pull_external.finished` not the doc-drafted `docker.clone.success`. Doc drift only.
+- Each retried scan emits one extra `scan.started` entry on every worker dequeue attempt (3× for an initially-failed scan before DB seed). Minor audit noise — not a correctness issue.
+- CLI-snippet shape `localhost:18080/acme/docker/demo/<image>:<tag>` expects a sub-image path; single-image form `localhost:18080/acme/docker/demo:tag` also works (crane verified). Batch doc assumed the latter; both are accepted.
+- HEAD on `/v2/` returns `405 Method Not Allowed`. OCI Distribution spec only mandates GET for the ping endpoint, so this is spec-compliant; some clients may still probe HEAD first.
 
 ## Sign-off
 
-- [ ] All cases passed
-- [ ] Final state:
-  - [ ] `acme/docker/demo` has at least `latest` tag, clean scan
-  - [ ] One tag in acme/docker/demo has HIGH CVE for severity gate test (if possible — otherwise rely on PyPI per WALKTHROUGH-2 §3a)
-  - [ ] `acme/docker/clone` either deleted (in trash) or restored
-- [ ] All F-05.* closed
-- [ ] Codex run: "Review Docker batch commits for correctness" (include all fix commits from batch)
-- [ ] README.md batch 05 status flipped to ✅
+- [x] Happy-path tests 5.1–5.3, 5.5, 5.10–5.13, 5.16–5.19 pass.
+- [x] 5.4 verified via `crane tag` (OCI side-channel): both tags listed, same manifest digest.
+- [x] 5.6 manifest detail panel shows mediaType / Image / Tag / Digest / Layers / Size / Uploaded / Scan findings.
+- [x] 5.7 per-tag size row populated; no per-layer accordion (present only in manifest panel).
+- [x] 5.8 rescan round-trip Pending → Clean; audit row `scan.started (reason=manual_rescan)` + `scan.finished`.
+- [x] 5.9 deletion exercised via OCI v2 DELETE; data-flow correct; UI button itself broken (F-05.4).
+- [x] 5.11 severity gate blocks alpine:3.10 (1 critical CVE) with `blocked_by_scan` envelope; hello-world clean pull still works.
+- [x] 5.15 Promote backend route exists; UI admits disconnection (F-05.6).
+- [x] 5.17 OCI conformance: GET /v2/ `registry/2.0`, tags/list JSON, manifest GET+HEAD with Docker-Content-Digest header.
+- [x] 5.18 public_read toggle: anon GET manifest → 200 on, 401 with WWW-Authenticate on off.
+- [x] 5.19 soft-delete clone → trash sidecar `/tmp/omnirepo-wt3/trash/1776868409-repo-2`; push to same path → 404 NAME_UNKNOWN (no auto-resurrect).
+- [x] Final state:
+  - [x] `acme/docker/demo` has `latest` (clean) + `concA`, `concB` (clean) + `vuln` (1 critical CVE, blocked by gate).
+  - [x] HIGH/critical CVE coverage via `acme/docker/demo:vuln` (alpine:3.10).
+  - [x] `acme/docker/clone` soft-deleted.
+- [x] Fixes landed: F-05.1 (`d8d11d0`), F-05.2 (`b942943`).
+- [ ] F-05.3 / F-05.4 / F-05.5 / F-05.6 tracked-open — not v1.3-release blockers (all affect UI ergonomics, not data correctness or security); filed into `docs/uat/walkthrough-3/FINDINGS.md`. Close in a follow-up batch.
+- [ ] Codex review (next).
+- [ ] README.md batch 05 status flipped to ✅ after Codex clean.

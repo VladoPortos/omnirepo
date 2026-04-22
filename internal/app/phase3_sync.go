@@ -20,6 +20,7 @@ import (
 	"github.com/dxc-internal/omnirepo/internal/jobs"
 	"github.com/dxc-internal/omnirepo/internal/metadata"
 	"github.com/dxc-internal/omnirepo/internal/protocol/deb"
+	gitprotocol "github.com/dxc-internal/omnirepo/internal/protocol/git"
 	"github.com/dxc-internal/omnirepo/internal/protocol/helm"
 	"github.com/dxc-internal/omnirepo/internal/protocol/helm/ociclient"
 	"github.com/dxc-internal/omnirepo/internal/protocol/pypi"
@@ -102,6 +103,24 @@ func (d syncDeps) wireSync() *api.SyncRESTAdapter {
 		// "oci_tag_rebound" before inserting the replacement row.
 		Trash: storage.NewTrash(filepath.Join(d.cfg.DataRoot, "trash")),
 	})
+	// Plan 11-06: git mirror sync handler. Uses the same shared httpClient
+	// (TLS/CA/proxy/timeout configured at startup per Pitfall E — go-git's
+	// client.WithCABundle/WithInsecureSkipTLS/WithProxyURL are no-ops once
+	// WithHTTPClient is set, so live config has to live on the http.Client
+	// instance itself). Refs rewrite uses ReplaceAllTx under a single
+	// writer tx (GITMIRROR-06).
+	gitSync := gitprotocol.NewSyncHandler(gitprotocol.SyncDeps{
+		DB:         d.db,
+		Repos:      reposRepo,
+		Projects:   projectsRepo,
+		Refs:       metadata.NewGitRefsRepo(d.db),
+		Creds:      d.creds,
+		Audit:      d.auditLogger,
+		HTTPClient: httpClient,
+		DataRoot:   d.cfg.DataRoot,
+		Cfg:        d.cfg.Sync,
+		SyncJobs:   syncJobsRepo,
+	})
 
 	d.syncHandlers[rpm.SyncJobKind] = func(c context.Context, j *jobs.JobView) error {
 		return rpmSync.Handle(c, j.Payload, j.ProjectID, j.RepoID, j.ID)
@@ -114,6 +133,9 @@ func (d syncDeps) wireSync() *api.SyncRESTAdapter {
 	}
 	d.syncHandlers[helm.SyncJobKind] = func(c context.Context, j *jobs.JobView) error {
 		return helmSync.Handle(c, j.Payload, j.ProjectID, j.RepoID, j.ID)
+	}
+	d.syncHandlers[gitprotocol.SyncJobKind] = func(c context.Context, j *jobs.JobView) error {
+		return gitSync.Handle(c, j.Payload, j.ProjectID, j.RepoID, j.ID)
 	}
 
 	return api.NewSyncRESTAdapter(httpx.SyncRESTDeps{

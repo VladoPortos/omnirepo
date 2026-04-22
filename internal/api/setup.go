@@ -28,23 +28,17 @@ import (
 	"github.com/dxc-internal/omnirepo/internal/auth"
 )
 
-// SetupStatusResponse is the payload of GET /api/v1/setup/status.
-type SetupStatusResponse struct {
-	NeedsSetup bool `json:"needs_setup"`
-}
+// SetupStatusResponse, SetupSuperAdminBody, and SetupSuperAdminReply
+// are generated from openapi.yaml (types_gen.go). The two request/response
+// aliases below preserve the hand-written call-site names within this
+// file so existing handler code keeps compiling unchanged.
 
-// SetupSuperAdminRequest is the payload of POST /api/v1/setup/superadmin.
-type SetupSuperAdminRequest struct {
-	Login    string `json:"login"`
-	Email    string `json:"email"`
-	Password string `json:"password"`
-}
-
-// SetupSuperAdminResponse is the success payload of POST /api/v1/setup/superadmin.
-type SetupSuperAdminResponse struct {
-	Login        string `json:"login"`
-	IsSuperAdmin bool   `json:"is_super_admin"`
-}
+// SetupSuperAdminRequest is an alias for the generated request body.
+// SetupSuperAdminResponse is an alias for the generated success reply.
+type (
+	SetupSuperAdminRequest  = SetupSuperAdminBody
+	SetupSuperAdminResponse = SetupSuperAdminReply
+)
 
 // ErrSetupAlreadyDone is returned when the endpoint is called after at least
 // one user already exists in the database.

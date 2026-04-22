@@ -789,6 +789,25 @@ type SettingsMap map[string]string
 // SettingsPatch defines model for SettingsPatch.
 type SettingsPatch map[string]string
 
+// SetupStatusResponse defines model for SetupStatusResponse.
+type SetupStatusResponse struct {
+	// NeedsSetup true while the users table has zero live rows. Flips to false permanently after the first successful POST /setup/superadmin.
+	NeedsSetup bool `json:"needs_setup"`
+}
+
+// SetupSuperAdminBody defines model for SetupSuperAdminBody.
+type SetupSuperAdminBody struct {
+	Email    string `json:"email"`
+	Login    string `json:"login"`
+	Password string `json:"password"`
+}
+
+// SetupSuperAdminReply defines model for SetupSuperAdminReply.
+type SetupSuperAdminReply struct {
+	IsSuperAdmin bool   `json:"is_super_admin"`
+	Login        string `json:"login"`
+}
+
 // StatusOK defines model for StatusOK.
 type StatusOK struct {
 	Status *string `json:"status,omitempty"`
@@ -1102,6 +1121,9 @@ type CreateMyS3KeyJSONRequestBody = S3KeyCreate
 // CreateProjectJSONRequestBody defines body for CreateProject for application/json ContentType.
 type CreateProjectJSONRequestBody = ProjectCreate
 
+// CreateProjectAPIKeyJSONRequestBody defines body for CreateProjectAPIKey for application/json ContentType.
+type CreateProjectAPIKeyJSONRequestBody = APIKeyCreate
+
 // CreateRepoJSONRequestBody defines body for CreateRepo for application/json ContentType.
 type CreateRepoJSONRequestBody = RepoCreate
 
@@ -1125,6 +1147,9 @@ type CreateUpstreamCredJSONRequestBody = UpstreamCredCreate
 
 // CreateS3AccessKeyJSONRequestBody defines body for CreateS3AccessKey for application/json ContentType.
 type CreateS3AccessKeyJSONRequestBody = S3KeyCreate
+
+// SetupSuperAdminJSONRequestBody defines body for SetupSuperAdmin for application/json ContentType.
+type SetupSuperAdminJSONRequestBody = SetupSuperAdminBody
 
 // Getter for additional properties for ApiErrorEnvelope_Details. Returns the specified
 // element and whether it was found

@@ -122,6 +122,41 @@ components:
         new:
           type: string
 
+    # -- Setup (first-run bootstrap) --
+    SetupStatusResponse:
+      type: object
+      required: [needs_setup]
+      properties:
+        needs_setup:
+          type: boolean
+          description: >
+            true while the users table has zero live rows. Flips to false
+            permanently after the first successful POST /setup/superadmin.
+    SetupSuperAdminBody:
+      type: object
+      required: [login, email, password]
+      properties:
+        login:
+          type: string
+        email:
+          # Plain string — the handler validates non-empty via its own
+          # check, not format: email. Using format: email here would
+          # make oapi-codegen generate openapi_types.Email, which runs
+          # RFC-5322 validation at JSON-decode time and returns a 400
+          # on any malformed input, shadowing the handler's 422.
+          type: string
+        password:
+          type: string
+          minLength: 8
+    SetupSuperAdminReply:
+      type: object
+      required: [login, is_super_admin]
+      properties:
+        login:
+          type: string
+        is_super_admin:
+          type: boolean
+
     # -- User --
     User:
       type: object
@@ -1052,6 +1087,55 @@ components:
         type: string
 
 paths:
+  # ============================== SETUP (first-run bootstrap) ==============================
+  /setup/status:
+    get:
+      operationId: getSetupStatus
+      security: []
+      tags: [setup]
+      summary: Report whether first-run setup is required
+      responses:
+        "200":
+          description: Setup status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SetupStatusResponse'
+        default:
+          $ref: '#/components/responses/ValidationError'
+  /setup/superadmin:
+    post:
+      operationId: setupSuperAdmin
+      security: []
+      tags: [setup]
+      summary: Create the first super-admin on an empty install
+      description: >
+        Succeeds only while the users table is empty. Returns 409 once any
+        live user exists — the endpoint is naturally one-shot. The response
+        does not carry a session cookie; the operator must sign in via
+        /auth/login afterward.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetupSuperAdminBody'
+      responses:
+        "200":
+          description: Super-admin created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SetupSuperAdminReply'
+        "409":
+          description: Setup already completed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorEnvelope'
+        default:
+          $ref: '#/components/responses/ValidationError'
+
   # ============================== AUTH ==============================
   /auth/login:
     post:

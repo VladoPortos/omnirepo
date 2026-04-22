@@ -206,25 +206,53 @@ func authenticateSession(ctx context.Context, d Deps, token string) (auth.Actor,
 	}, true
 }
 
-// OptionalSessionOrAPIKey is like SessionOrAPIKey but does NOT reject
-// unauthenticated requests. If valid credentials are present, the actor
-// is placed on context. If not, the request proceeds with no actor.
-// Used for endpoints like GET /me that should return 200 null instead of 401.
+// OptionalSessionOrAPIKey is like SessionOrAPIKey except that requests
+// carrying no credentials, or a stale session cookie, are allowed
+// through (no actor on context). Used for endpoints like GET /me that
+// the SPA polls before login to decide "logged in?" without generating
+// 401s in devtools.
+//
+// F-03.5 (wt3): when explicit API-key credentials (Basic Auth or
+// Bearer) are provided but invalid, this MUST 401 — previously it
+// silently dropped the auth and let the request through as anonymous,
+// which gave protocol CLIs no feedback distinguishing "wrong key" from
+// "server OK" (they just saw 200 null) and masked brute-force probes
+// from audit / rate-limiters that key off 401 count. The strict
+// SessionOrAPIKey twin already 401s on invalid creds — the divergence
+// here was accidental.
+//
+// Stale session cookies remain a silent pass-through: a cookie from a
+// tab where the user logged out is common and expected, and the SPA
+// relies on 200-null to decide "show the login page" without a red
+// 401 in devtools.
 func OptionalSessionOrAPIKey(d Deps) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if actor, handled, ok := tryBasicAPIKey(r, d); handled {
-				if ok {
-					r = r.WithContext(auth.WithActor(r.Context(), actor))
+				if !ok {
+					writeJSON401(w, r)
+					return
 				}
-				next.ServeHTTP(w, r)
+				next.ServeHTTP(w, r.WithContext(auth.WithActor(r.Context(), actor)))
+				return
+			}
+			// If the caller supplied a Basic header whose password did NOT
+			// look like an API key, tryBasicAPIKey returns handled=false to
+			// preserve the /api/v1 contract that only api-key-shaped Basic
+			// is accepted. But from an auth-optional endpoint's POV, the
+			// caller DID explicitly attempt auth — return 401 instead of
+			// silently demoting them to anonymous (F-03.5 wt3).
+			if _, _, ok := r.BasicAuth(); ok {
+				writeJSON401(w, r)
 				return
 			}
 			if bearer := stripBearer(r.Header.Get("Authorization")); bearer != "" {
-				if actor, ok := authenticateAPIKey(r.Context(), d, bearer); ok {
-					r = r.WithContext(auth.WithActor(r.Context(), actor))
+				actor, ok := authenticateAPIKey(r.Context(), d, bearer)
+				if !ok {
+					writeJSON401(w, r)
+					return
 				}
-				next.ServeHTTP(w, r)
+				next.ServeHTTP(w, r.WithContext(auth.WithActor(r.Context(), actor)))
 				return
 			}
 			if c, err := r.Cookie(auth.SessionCookieName); err == nil && c.Value != "" {

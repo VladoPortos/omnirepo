@@ -16,7 +16,7 @@
  *
  *   2. UI rendering: stub POST /sync on the same mirror repo to return
  *      the 403 envelope and assert the page surfaces the operator-facing
- *      message ("uploads to mirror repos are disabled") via
+ *      message ("writes to mirror repos are disabled") via
  *      ErrorEnvelopeRenderer so a real backend 403 reaches the user.
  *
  * Why the real APT route and not /api/v1/: the APT upload surface is
@@ -140,7 +140,7 @@ test.describe('Mirror upload rejection (Phase 8 / plan 08-06)', () => {
           contentType: 'application/json',
           body: JSON.stringify({
             code: 'repo.repo_is_mirror',
-            message: 'uploads to mirror repos are disabled',
+            message: 'writes to mirror repos are disabled (uploads + deletes)',
             class: 'permission',
           }),
         }),
@@ -156,7 +156,7 @@ test.describe('Mirror upload rejection (Phase 8 / plan 08-06)', () => {
 
     // ErrorEnvelopeRenderer surfaces the operator-facing message.
     await expect(
-      page.getByText(/uploads to mirror repos are disabled/i),
+      page.getByText(/writes to mirror repos are disabled/i),
     ).toBeVisible();
     // data-envelope-class hook pins the permission class → confirms the
     // envelope went through ErrorEnvelopeRenderer rather than a plain

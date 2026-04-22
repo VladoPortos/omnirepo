@@ -256,6 +256,13 @@ func (h *SyncHandler) Handle(ctx context.Context, payload string, projectID, rep
 	wg.Wait()
 
 	if len(downloadErrors) > 0 {
+		// F-09.8 (Codex batch-09 cross-cutting): per-file commits flipped
+		// metadata_state=dirty; without a failure-path Kick the
+		// Packages/Release files stay behind the DB until the next
+		// successful sync. Regen is idempotent — always safe.
+		if h.deps.Coalescer != nil {
+			h.deps.Coalescer.Get(repoID).Kick()
+		}
 		return h.fail(ctx, repoID, pl, startedAt, httpx.SanitizeUpstreamErr(downloadErrors[0]))
 	}
 

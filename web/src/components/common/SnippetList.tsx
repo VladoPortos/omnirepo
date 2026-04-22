@@ -73,7 +73,24 @@ export function SnippetList({
   className,
   hidePush = false,
 }: SnippetListProps) {
-  const allSnippets = getSnippets(repoType, projectName, repoName, hostname);
+  // F-06.2 (wt3 batch 06): match the scheme the UI itself was served over
+  // (HTTP on a plain :18080 dev port, HTTPS on :18443, etc.) so the
+  // copy-paste snippets are usable out of the box. window.location is
+  // only read once at render — consistent with how `hostname` is sourced
+  // at each page mount.
+  const scheme =
+    typeof window !== 'undefined' &&
+    window.location &&
+    window.location.protocol === 'http:'
+      ? 'http'
+      : 'https';
+  const allSnippets = getSnippets(
+    repoType,
+    projectName,
+    repoName,
+    hostname,
+    scheme,
+  );
   const snippets = hidePush
     ? allSnippets.filter((s) => !PUSH_LABELS.has(s.label))
     : allSnippets;

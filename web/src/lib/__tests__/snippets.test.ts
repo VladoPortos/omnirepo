@@ -36,13 +36,22 @@ describe('getSnippets', () => {
     );
   });
 
-  it('rpm: 1 entry — dnf config (S-09 unchanged)', () => {
+  it('rpm: 1 entry — dnf config (repo_gpgcheck=1, gpgcheck=0 per F-06.7)', () => {
     const s = getSnippets('rpm', P, 'stable', HOST);
     expect(s).toHaveLength(1);
     expect(s[0].label).toBe('dnf config');
-    expect(s[0].cmd).toContain('gpgcheck=1');
+    // F-06.7: OmniRepo signs repomd.xml but not individual packages, so
+    // default dnf `gpgcheck=1` rejects every non-OmniRepo-signed .rpm
+    // with "wrong key(s)?". `repo_gpgcheck=1` + `gpgcheck=0` is the
+    // correct pass-through-mirror shape.
+    expect(s[0].cmd).toContain('repo_gpgcheck=1');
+    expect(s[0].cmd).toContain('gpgcheck=0');
+    expect(s[0].cmd).not.toMatch(/^gpgcheck=1$/m);
     expect(s[0].cmd).toContain(
       `baseurl=https://${HOST}/${P}/rpm/stable/`,
+    );
+    expect(s[0].cmd).toContain(
+      `gpgkey=https://${HOST}/${P}/rpm/stable/public-key.asc`,
     );
   });
 
@@ -161,5 +170,73 @@ describe('getSnippets', () => {
     // @ts-expect-error intentional unknown type to exercise the default branch
     const s = getSnippets('unknown', P, 'r', HOST);
     expect(s).toEqual([]);
+  });
+
+  // F-06.2 (wt3 batch 06): scheme parameter propagates through every URL
+  // block so operators served the UI over plain HTTP get snippets that
+  // point at http://, not an unreachable https://.
+  describe('F-06.2 — scheme parameter honoured across every RepoType', () => {
+    it('rpm baseurl + gpgkey use http when scheme=http', () => {
+      const s = getSnippets('rpm', P, 'stable', HOST, 'http');
+      expect(s[0].cmd).toContain(`baseurl=http://${HOST}/${P}/rpm/stable/`);
+      expect(s[0].cmd).toContain(
+        `gpgkey=http://${HOST}/${P}/rpm/stable/public-key.asc`,
+      );
+      expect(s[0].cmd).not.toContain('https://');
+    });
+
+    it('deb modern-key + legacy-key + apt source all respect scheme=http', () => {
+      const s = getSnippets('deb', P, 'stable', HOST, 'http');
+      for (const entry of s) {
+        expect(entry.cmd).not.toContain('https://');
+      }
+      expect(s[0].cmd).toContain(`http://${HOST}/${P}/deb/stable/`);
+      expect(s[2].cmd).toContain(`http://${HOST}/${P}/deb/stable/ stable main`);
+    });
+
+    it('pypi index-url + .pypirc + twine all respect scheme=http', () => {
+      const s = getSnippets('pypi', P, 'stable', HOST, 'http');
+      for (const entry of s) {
+        expect(entry.cmd).not.toContain('https://');
+      }
+      expect(s[0].cmd).toContain(
+        `--index-url http://${HOST}/${P}/pypi/stable/simple/`,
+      );
+      expect(s[1].cmd).toContain(
+        `repository = http://${HOST}/${P}/pypi/stable/legacy/`,
+      );
+    });
+
+    it('helm traditional URL respects scheme=http (OCI helm URLs stay scheme-less)', () => {
+      const s = getSnippets('helm', P, 'charts', HOST, 'http');
+      expect(s[0].cmd).toContain(`http://${HOST}/${P}/helm/charts/`);
+      // OCI entries intentionally do not carry scheme — they use oci://.
+      expect(s[2].cmd).toContain(`oci://${HOST}/${P}/helm/charts`);
+    });
+
+    it('git clone URL respects scheme=http', () => {
+      const s = getSnippets('git', P, 'repo', HOST, 'http');
+      expect(s[0].cmd).toBe(`git clone http://${HOST}/${P}/git/repo.git`);
+    });
+
+    it('raw upload+download respect scheme=http', () => {
+      const s = getSnippets('raw', P, 'blobs', HOST, 'http');
+      for (const entry of s) {
+        expect(entry.cmd).not.toContain('https://');
+        expect(entry.cmd).toContain(`http://${HOST}/${P}/raw/blobs/`);
+      }
+    });
+
+    it('s3 endpoint respects scheme=http', () => {
+      const s = getSnippets('s3', P, 'bucket', HOST, 'http');
+      expect(s[1].cmd).toContain(`--endpoint-url http://${HOST}/s3`);
+      expect(s[1].cmd).not.toContain('https://');
+    });
+
+    it('default scheme stays https (back-compat: no argument == old behaviour)', () => {
+      const s = getSnippets('rpm', P, 'stable', HOST);
+      expect(s[0].cmd).toContain('https://');
+      expect(s[0].cmd).not.toMatch(/http:\/\/(?!.*https)/);
+    });
   });
 });

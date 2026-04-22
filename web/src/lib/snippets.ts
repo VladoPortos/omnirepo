@@ -56,7 +56,16 @@ export function getSnippets(
   project: string,
   repo: string,
   host: string,
+  // F-06.2 (wt3 batch 06): `scheme` picks http vs https to match the
+  // scheme the UI itself was served over. Pre-fix we hard-coded
+  // `https://` everywhere — copy-paste-and-run from the empty-state
+  // panel failed out of the box when the operator hit OmniRepo over
+  // plain HTTP (e.g. the test port :18080, or a reverse proxy that
+  // terminates TLS upstream). Default stays 'https' so every call site
+  // that has not been migrated yet renders the same snippets as before.
+  scheme: 'http' | 'https' = 'https',
 ): Snippet[] {
+  const proto = scheme; // keep parameter name ergonomic; alias for reuse below.
   switch (type) {
     case 'docker':
       // F-T11: OCI router expects 4 segments —
@@ -76,47 +85,57 @@ export function getSnippets(
         },
       ];
     case 'rpm':
+      // F-06.7 (wt3 batch 06): snippet was `gpgcheck=1` — but OmniRepo
+      // signs repomd.xml, not individual packages (packages pass through
+      // with upstream signatures when mirrored, or are unsigned when
+      // uploaded directly). Default dnf with `gpgcheck=1` verifies
+      // EACH package signature against the imported repo key and fails
+      // ("Import of key(s) didn't help, wrong key(s)?") for everything
+      // but self-signed-by-OmniRepo packages. `repo_gpgcheck=1` +
+      // `gpgcheck=0` verifies the repomd signature (which OmniRepo DOES
+      // sign) and trusts the packages — the correct shape for a
+      // pass-through mirror.
       return [
         {
           label: 'dnf config',
-          cmd: `[omnirepo-${repo}]\nname=OmniRepo ${repo}\nbaseurl=https://${host}/${project}/rpm/${repo}/\ngpgcheck=1\ngpgkey=https://${host}/${project}/rpm/${repo}/public-key.asc`,
+          cmd: `[omnirepo-${repo}]\nname=OmniRepo ${repo}\nbaseurl=${proto}://${host}/${project}/rpm/${repo}/\nrepo_gpgcheck=1\ngpgcheck=0\ngpgkey=${proto}://${host}/${project}/rpm/${repo}/public-key.asc`,
         },
       ];
     case 'deb':
       return [
         {
           label: 'Signed-by (Debian 12+ / Ubuntu 22.04+)',
-          cmd: `sudo curl -fsSL https://${host}/${project}/deb/${repo}/public-key.asc -o /etc/apt/keyrings/omnirepo-${repo}.asc\nsudo chmod 0644 /etc/apt/keyrings/omnirepo-${repo}.asc`,
+          cmd: `sudo curl -fsSL ${proto}://${host}/${project}/deb/${repo}/public-key.asc -o /etc/apt/keyrings/omnirepo-${repo}.asc\nsudo chmod 0644 /etc/apt/keyrings/omnirepo-${repo}.asc`,
         },
         {
           label: 'Legacy signing key (older hosts)',
-          cmd: `sudo curl -fsSL https://${host}/${project}/deb/${repo}/public-key.asc -o /etc/apt/trusted.gpg.d/omnirepo-${repo}.asc`,
+          cmd: `sudo curl -fsSL ${proto}://${host}/${project}/deb/${repo}/public-key.asc -o /etc/apt/trusted.gpg.d/omnirepo-${repo}.asc`,
         },
         {
           label: 'apt source',
-          cmd: `# Modern (signed-by):\ndeb [signed-by=/etc/apt/keyrings/omnirepo-${repo}.asc] https://${host}/${project}/deb/${repo}/ stable main\n# Legacy:\ndeb https://${host}/${project}/deb/${repo}/ stable main`,
+          cmd: `# Modern (signed-by):\ndeb [signed-by=/etc/apt/keyrings/omnirepo-${repo}.asc] ${proto}://${host}/${project}/deb/${repo}/ stable main\n# Legacy:\ndeb ${proto}://${host}/${project}/deb/${repo}/ stable main`,
         },
       ];
     case 'pypi':
       return [
         {
           label: 'pip install',
-          cmd: `pip install --index-url https://${host}/${project}/pypi/${repo}/simple/ <package>`,
+          cmd: `pip install --index-url ${proto}://${host}/${project}/pypi/${repo}/simple/ <package>`,
         },
         {
           label: '.pypirc',
-          cmd: `[omnirepo]\nrepository = https://${host}/${project}/pypi/${repo}/legacy/\nusername = <user>\npassword = <api-key>`,
+          cmd: `[omnirepo]\nrepository = ${proto}://${host}/${project}/pypi/${repo}/legacy/\nusername = <user>\npassword = <api-key>`,
         },
         {
           label: 'twine upload',
-          cmd: `twine upload --repository-url https://${host}/${project}/pypi/${repo}/legacy/ dist/*`,
+          cmd: `twine upload --repository-url ${proto}://${host}/${project}/pypi/${repo}/legacy/ dist/*`,
         },
       ];
     case 'helm':
       return [
         {
           label: 'helm repo add (traditional)',
-          cmd: `helm repo add ${repo} https://${host}/${project}/helm/${repo}/`,
+          cmd: `helm repo add ${repo} ${proto}://${host}/${project}/helm/${repo}/`,
         },
         {
           label: 'helm pull (traditional)',
@@ -141,7 +160,7 @@ export function getSnippets(
       return [
         {
           label: 'Clone',
-          cmd: `git clone https://${host}/${project}/git/${repo}.git`,
+          cmd: `git clone ${proto}://${host}/${project}/git/${repo}.git`,
         },
         {
           label: 'Authenticate',
@@ -152,11 +171,11 @@ export function getSnippets(
       return [
         {
           label: 'Upload',
-          cmd: `# Use your OmniRepo user + API key; create one at /profile → API Keys\ncurl -u <user>:<api-key> -X PUT -T <file> https://${host}/${project}/raw/${repo}/<path>`,
+          cmd: `# Use your OmniRepo user + API key; create one at /profile → API Keys\ncurl -u <user>:<api-key> -X PUT -T <file> ${proto}://${host}/${project}/raw/${repo}/<path>`,
         },
         {
           label: 'Download',
-          cmd: `# Use your OmniRepo user + API key; create one at /profile → API Keys\ncurl -u <user>:<api-key> -O https://${host}/${project}/raw/${repo}/<path>`,
+          cmd: `# Use your OmniRepo user + API key; create one at /profile → API Keys\ncurl -u <user>:<api-key> -O ${proto}://${host}/${project}/raw/${repo}/<path>`,
         },
       ];
     case 's3':
@@ -167,7 +186,7 @@ export function getSnippets(
         },
         {
           label: 'aws s3 cp',
-          cmd: `# Access key & secret: create one at /profile → S3 Keys\naws --endpoint-url https://${host}/s3 --region <region> s3 cp <file> s3://${repo}/<key>`,
+          cmd: `# Access key & secret: create one at /profile → S3 Keys\naws --endpoint-url ${proto}://${host}/s3 --region <region> s3 cp <file> s3://${repo}/<key>`,
         },
       ];
     default:

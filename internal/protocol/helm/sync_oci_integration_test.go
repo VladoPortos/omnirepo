@@ -14,6 +14,8 @@ package helm_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -647,5 +649,322 @@ func TestRegenIndexServesHTTPURLs_OCISourced(t *testing.T) {
 func indexDirectory(t *testing.T, chartsDir, baseURL string) (*helmrepo.IndexFile, error) {
 	t.Helper()
 	return helmrepo.IndexDirectory(chartsDir, baseURL)
+}
+
+// --- Plan 11-03 Codex finding 2: commit-first ordering on tag-rebound ---
+
+// togglePathStore wraps a real storage.PathStore but returns a canned error
+// from Put when the failPut flag is set. Lets tests simulate a post-pull
+// commit failure (disk full, fsync error, writer pool contention) so we
+// can assert the rebound path does NOT fire its audit + trash side-effects
+// before the DB write succeeds.
+type togglePathStore struct {
+	inner   storage.PathStore
+	failPut bool
+	putErr  error
+}
+
+func (t *togglePathStore) Put(ctx context.Context, key string, r io.Reader) (int64, error) {
+	if t.failPut {
+		return 0, t.putErr
+	}
+	return t.inner.Put(ctx, key, r)
+}
+func (t *togglePathStore) Get(ctx context.Context, key string) (io.ReadCloser, error) {
+	return t.inner.Get(ctx, key)
+}
+func (t *togglePathStore) Delete(ctx context.Context, key string) error {
+	return t.inner.Delete(ctx, key)
+}
+func (t *togglePathStore) Exists(ctx context.Context, key string) (bool, error) {
+	return t.inner.Exists(ctx, key)
+}
+
+// recordingTrash wraps storage.Trash and records every Move call so tests
+// can assert whether the rebound trash hop fired before/after the
+// commit. The on-disk side effect still happens (delegates to inner).
+type recordingTrash struct {
+	inner    storage.Trash
+	mu       sync.Mutex
+	moveKind []string
+}
+
+func (r *recordingTrash) Move(ctx context.Context, srcPath, kind string, id int64, actor string) (string, error) {
+	r.mu.Lock()
+	r.moveKind = append(r.moveKind, kind)
+	r.mu.Unlock()
+	return r.inner.Move(ctx, srcPath, kind, id, actor)
+}
+func (r *recordingTrash) Restore(ctx context.Context, trashPath, dstPath string) error {
+	return r.inner.Restore(ctx, trashPath, dstPath)
+}
+func (r *recordingTrash) List(ctx context.Context) ([]storage.TrashEntry, error) {
+	return r.inner.List(ctx)
+}
+
+// rebound details_json shape constants used by the assertion helpers.
+const reboundKey = "oci_tag_rebound"
+
+// TestOCISync_TagRebound_CommitFirst — Codex finding 2: when an OCI tag
+// is rebound to a new digest, the rebound side-effects (Trash.Move +
+// EvtOciTagRebound audit) MUST fire AFTER the helm_charts upsert commits,
+// not before. If the upsert fails (disk full, sql error), the prior file
+// must remain on disk un-trashed and no rebound audit must be emitted —
+// otherwise the audit log claims a replacement that never landed and the
+// trash holder orphans the only good copy of the prior chart.
+//
+// Setup: complete the first sync normally to land the OLD row + file.
+// Swap in a togglePathStore configured to fail Put on the next sync, swap
+// in a recordingTrash to observe Move calls, flip the FakeClient to a
+// different digest, and run the second sync. Assertions:
+//
+//   - Second sync returns an error (Put failure surfaces).
+//   - helm_charts row count is still 1, with the OLD digest (commit did
+//     not partially apply).
+//   - recordingTrash.moveKind is empty (no rebound holder created).
+//   - audit.EvtOciTagRebound count is 0.
+//   - On-disk old chart file still exists (was not pre-emptively moved).
+func TestOCISync_TagRebound_CommitFirst(t *testing.T) {
+	chartOld := buildOCIChartTGZ(t, "nginx", "9.9.9")
+	oldDigest := sha256OfBytes(chartOld)
+	chartNew := makeChartTGZ(t, "nginx", "9.9.9", "9.9.9", "nginx tag-rebound test", nil)
+	newDigest := sha256OfBytes(chartNew)
+	if oldDigest == newDigest {
+		t.Fatalf("fixture invalid: old and new digests collide")
+	}
+
+	ociRef := "registry-1.docker.io/bitnamicharts/nginx:9.9.9"
+	index := makeOCIIndex([]ociIndexEntry{
+		{Name: "nginx", Version: "9.9.9", URL: "oci://" + ociRef},
+	})
+
+	// Build a fixture but capture the inner Path / Trash so we can
+	// substitute toggling wrappers.
+	db := sqlitetest.New(t)
+	reposRepo := metadata.NewReposRepo(db)
+	projectsRepo := metadata.NewProjectsRepo(db)
+	helmCharts := metadata.NewHelmChartsRepo(db)
+	scans := metadata.NewScansRepo(db)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/index.yaml", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/x-yaml")
+		_, _ = w.Write([]byte(index))
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	ctx := context.Background()
+	pid, err := projectsRepo.Create(ctx, "pcommit", "rebound commit-first")
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	rid, err := reposRepo.Create(ctx, pid, "helm", "rcommit", "", nil, nil, nil)
+	if err != nil {
+		t.Fatalf("create repo: %v", err)
+	}
+
+	dataRoot := t.TempDir()
+	repoRoot := filepath.Join(dataRoot, "repos")
+	trashRoot := filepath.Join(dataRoot, "trash")
+	if err := os.MkdirAll(trashRoot, 0o750); err != nil {
+		t.Fatalf("mkdir trash: %v", err)
+	}
+	innerPath := storage.NewPathStore(repoRoot)
+	togglePath := &togglePathStore{inner: innerPath}
+	innerTrash := storage.NewTrash(trashRoot)
+	recTrash := &recordingTrash{inner: innerTrash}
+
+	fakeOCI := ociclient.NewFake()
+	rec := &recordingAudit{}
+
+	h := helm.NewSyncHandler(helm.SyncDeps{
+		DB:         db,
+		Path:       togglePath,
+		HelmCharts: helmCharts,
+		Repos:      reposRepo,
+		Projects:   projectsRepo,
+		Scans:      scans,
+		Audit:      rec,
+		Coalescer:  nil,
+		HTTPClient: srv.Client(),
+		RepoRoot:   repoRoot,
+		Cfg:        config.SyncConfig{MaxParallelDownloadsPerJob: 1},
+		SyncJobs:   metadata.NewSyncJobsRepo(db),
+		OCIClient:  fakeOCI,
+		Trash:      recTrash,
+	})
+
+	// First sync — seed OLD chart normally.
+	fakeOCI.Results[ociRef] = &ociclient.PullResult{
+		Data:   chartOld,
+		Digest: oldDigest,
+		Size:   int64(len(chartOld)),
+		Meta:   ociclient.ChartMeta{Name: "nginx", Version: "9.9.9"},
+	}
+	jobID := seedHelmSyncJobRow(t, db, rid)
+	pb, _ := json.Marshal(map[string]string{"upstream_url": srv.URL})
+	if err := h.Handle(ctx, string(pb), 0, rid, jobID); err != nil {
+		t.Fatalf("first sync: %v", err)
+	}
+	rows, _ := helmCharts.ListByRepo(ctx, rid)
+	if len(rows) != 1 || rows[0].Digest != oldDigest {
+		t.Fatalf("after first sync: rows=%+v want 1 row digest=%s", rows, oldDigest)
+	}
+	oldFilename := rows[0].Filename
+	oldFilePath := filepath.Join(repoRoot, "pcommit", "helm", "rcommit", "charts", oldFilename)
+	if _, err := os.Stat(oldFilePath); err != nil {
+		t.Fatalf("old chart file missing on disk after first sync: %v", err)
+	}
+
+	// Drop prior audit + trash records so the second-sync assertions are
+	// scoped to the rebound path only.
+	rec.mu.Lock()
+	rec.events = nil
+	rec.mu.Unlock()
+	recTrash.mu.Lock()
+	recTrash.moveKind = nil
+	recTrash.mu.Unlock()
+
+	// Arm togglePath to fail on the next Put — simulates disk full /
+	// fsync error during the post-rebound commit.
+	togglePath.failPut = true
+	togglePath.putErr = errors.New("simulated put failure")
+
+	// Flip FakeClient to NEW digest for the same tag — triggers rebound.
+	fakeOCI.Results[ociRef] = &ociclient.PullResult{
+		Data:   chartNew,
+		Digest: newDigest,
+		Size:   int64(len(chartNew)),
+		Meta:   ociclient.ChartMeta{Name: "nginx", Version: "9.9.9"},
+	}
+
+	jobID2 := seedHelmSyncJobRow(t, db, rid)
+	err2 := h.Handle(ctx, string(pb), 0, rid, jobID2)
+	if err2 == nil {
+		t.Fatalf("second sync (with failing Put): want error, got nil")
+	}
+
+	// (a) DB row still has OLD digest — commit did not partially apply.
+	rowsAfter, lerr := helmCharts.ListByRepo(ctx, rid)
+	if lerr != nil {
+		t.Fatalf("list charts after failed sync: %v", lerr)
+	}
+	if len(rowsAfter) != 1 {
+		t.Fatalf("helm_charts rows after failed rebound = %d; want 1 (commit-first must not double-insert)", len(rowsAfter))
+	}
+	if rowsAfter[0].Digest != oldDigest {
+		t.Errorf("row digest after failed rebound = %q; want %q (OLD digest must be preserved)", rowsAfter[0].Digest, oldDigest)
+	}
+
+	// (b) AUDIT must NOT contain EvtOciTagRebound — the load-bearing
+	// Codex-finding invariant: audit log never claims a replacement that
+	// did not commit. The commit-first reordering places audit emission
+	// AFTER the DB write, so a failed upsert means no audit ever fires.
+	if got := len(rec.find(audit.EvtOciTagRebound)); got != 0 {
+		t.Errorf("EvtOciTagRebound events after failed rebound = %d; want 0 (audit must not lie)", got)
+	}
+
+	// (c) The OLD on-disk chart file must be RECOVERABLE. For the
+	// filename-collision case (OCI Helm's normal case — filename is
+	// derived from name+version), Trash.Move runs BEFORE Put so the old
+	// bytes are preserved across Put's rename-overwrite; the failed
+	// commit triggers a compensating Trash.Restore that brings the file
+	// back to its canonical path. Operator invariant: after any failed
+	// rebound, the helm_charts row + the file on disk are both at the
+	// OLD digest and there is no orphan trash holder claiming a
+	// rebinding that did not land.
+	if _, err := os.Stat(oldFilePath); err != nil {
+		t.Errorf("old chart file missing after failed rebound: %v (compensating Trash.Restore did not run)", err)
+	}
+
+	// (d) No "oci_tag_rebound" trash holder remains after the compensating
+	// restore — Trash.Move moved the holder out, then Trash.Restore
+	// moved it back. The directory lifecycle should be net-zero from the
+	// filesystem's perspective.
+	trashWalkRoot := filepath.Join(dataRoot, "trash")
+	var orphanHolder string
+	_ = filepath.Walk(trashWalkRoot, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info == nil {
+			return nil
+		}
+		if info.IsDir() && strings.Contains(info.Name(), "-"+reboundKey+"-") {
+			// Is the holder empty (file was restored) or populated (orphan)?
+			ents, _ := os.ReadDir(path)
+			if len(ents) > 0 {
+				orphanHolder = path
+			}
+		}
+		return nil
+	})
+	if orphanHolder != "" {
+		t.Errorf("orphan trash holder left after failed rebound + restore: %s (Trash.Restore did not complete)", orphanHolder)
+	}
+}
+
+// TestOCISync_TagRebound_SuccessfulCommitFiresSideEffects — companion
+// guard: when the rebound commit DOES succeed, both side-effects MUST
+// still fire. Pins that the commit-first reordering does not regress the
+// happy path that TestOCISync_TagRebound already covers — kept narrow so
+// future changes can't drop the post-commit emission silently.
+func TestOCISync_TagRebound_SuccessfulCommitFiresSideEffects(t *testing.T) {
+	chartOld := buildOCIChartTGZ(t, "nginx", "8.8.8")
+	oldDigest := sha256OfBytes(chartOld)
+	chartNew := makeChartTGZ(t, "nginx", "8.8.8", "8.8.8", "nginx happy rebound", nil)
+	newDigest := sha256OfBytes(chartNew)
+
+	ociRef := "registry-1.docker.io/bitnamicharts/nginx:8.8.8"
+	index := makeOCIIndex([]ociIndexEntry{
+		{Name: "nginx", Version: "8.8.8", URL: "oci://" + ociRef},
+	})
+
+	f := newOCIHelmFixture(t, index, nil)
+	f.fakeOCI.Results[ociRef] = &ociclient.PullResult{
+		Data:   chartOld,
+		Digest: oldDigest,
+		Size:   int64(len(chartOld)),
+		Meta:   ociclient.ChartMeta{Name: "nginx", Version: "8.8.8"},
+	}
+	if err := f.runSync(t); err != nil {
+		t.Fatalf("first sync: %v", err)
+	}
+	f.auditRecorder.mu.Lock()
+	f.auditRecorder.events = nil
+	f.auditRecorder.mu.Unlock()
+
+	f.fakeOCI.Results[ociRef] = &ociclient.PullResult{
+		Data:   chartNew,
+		Digest: newDigest,
+		Size:   int64(len(chartNew)),
+		Meta:   ociclient.ChartMeta{Name: "nginx", Version: "8.8.8"},
+	}
+	if err := f.runSync(t); err != nil {
+		t.Fatalf("second sync: %v", err)
+	}
+
+	// Side-effects MUST fire on success.
+	if got := len(f.auditRecorder.find(audit.EvtOciTagRebound)); got != 1 {
+		t.Errorf("EvtOciTagRebound count after successful rebound = %d; want 1", got)
+	}
+	trashRoot := filepath.Join(filepath.Dir(f.repoRoot), "trash")
+	sawRebound := false
+	_ = filepath.Walk(trashRoot, func(_ string, info os.FileInfo, err error) error {
+		if err != nil || info == nil {
+			return nil
+		}
+		if info.IsDir() && strings.Contains(info.Name(), "-"+reboundKey+"-") {
+			sawRebound = true
+		}
+		return nil
+	})
+	if !sawRebound {
+		t.Errorf("expected trash holder containing %q after successful rebound; found none", reboundKey)
+	}
+
+	// DB reflects the NEW digest.
+	rows, _ := f.helmCharts.ListByRepo(context.Background(), f.repoID)
+	if len(rows) != 1 || rows[0].Digest != newDigest {
+		t.Errorf("after successful rebound rows=%+v; want 1 row digest=%s", rows, newDigest)
+	}
 }
 

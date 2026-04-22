@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -484,51 +485,81 @@ func (h *SyncHandler) fetchAndCommitOCI(ctx context.Context, projectName string,
 		return 0, nil
 	}
 
-	// 4. Tag-rebound handling.
-	if existing != nil && existing.Digest != chartDigest {
-		actor := auth.ActorLoginFromContext(ctx)
-		// 4a. Soft-delete the prior chart tgz on disk via Trash.Move with
-		// the oci_tag_rebound retention label (D-02).
-		if h.deps.Trash != nil && existing.Filename != "" {
-			oldPath := filepath.Join(h.deps.RepoRoot, projectName, "helm", repo.Name, "charts", existing.Filename)
-			if _, terr := h.deps.Trash.Move(ctx, oldPath, "oci_tag_rebound", existing.ID, actor); terr != nil {
-				// Non-fatal if the file is already gone (GC, test
-				// fixture, prior failed sync). Any other error surfaces
-				// so operators see the failure.
-				if !errors.Is(terr, os.ErrNotExist) {
-					return 0, fmt.Errorf("helm_sync: trash.Move on rebound: %w", terr)
-				}
-			}
-		}
-		// 4b. Emit EvtOciTagRebound with the D-05 details_json shape.
-		if h.deps.Audit != nil {
-			_ = h.deps.Audit.Record(ctx, audit.Event{
-				Kind:       audit.EvtOciTagRebound,
-				TargetKind: "repo",
-				TargetID:   strconv.FormatInt(repo.ID, 10),
-				Details: map[string]any{
-					"name":         chartName,
-					"version":      chartVersion,
-					"old_digest":   existing.Digest,
-					"new_digest":   chartDigest,
-					"upstream_url": ent.Path,
-					"repo_id":      repo.ID,
-					"replaced_at":  time.Now().UTC().Format(time.RFC3339),
-				},
-			})
-		}
+	// 4. Detect tag-rebound. State is captured here so the post-commit
+	// audit emission below uses the OLD digest even after the upsert has
+	// landed the NEW digest. Plan 11-03 Codex finding 2: the prior order
+	// (audit + trash BEFORE commit) was a state-drift hazard — a failed
+	// upsert would leave the audit log claiming a replacement that never
+	// happened, while the DB still carried the prior digest.
+	//
+	// The new ordering keeps Trash.Move BEFORE Path.Put because Put
+	// atomically rename-overwrites the canonical chart path (see
+	// storage.WriteAndRename) — once Put runs, the old bytes are gone, so
+	// we must move them to the trash holder first to preserve them.
+	// However the AUDIT emission is deferred until AFTER commit succeeds:
+	// audit is the operator's source of truth and must never claim a
+	// replacement that did not commit. If commit fails after Trash.Move +
+	// Put already ran, we compensate by Restoring the old file from trash
+	// back to the canonical path and removing the partial new file.
+	rebound := existing != nil && existing.Digest != chartDigest
+	var (
+		reboundOldDigest   string
+		reboundOldFilename string
+		reboundOldID       int64
+	)
+	if rebound {
+		reboundOldDigest = existing.Digest
+		reboundOldFilename = existing.Filename
+		reboundOldID = existing.ID
 	}
 
 	// 5. Commit-tail — mirrors the HTTP path.
 	filename := fmt.Sprintf("%s-%s.tgz", chartName, chartVersion)
 	storageKey := strings.Join([]string{projectName, "helm", repo.Name, "charts", filename}, "/")
+
+	// 5a. Pre-Put: if rebound + filename collision, move the old file to
+	// trash first so Put does not silently clobber it. We capture the
+	// trash holder path so a failed commit can compensate via Restore.
+	var trashHolder string
+	if rebound && h.deps.Trash != nil && reboundOldFilename != "" && reboundOldFilename == filename {
+		actor := auth.ActorLoginFromContext(ctx)
+		oldPath := filepath.Join(h.deps.RepoRoot, projectName, "helm", repo.Name, "charts", reboundOldFilename)
+		holder, terr := h.deps.Trash.Move(ctx, oldPath, "oci_tag_rebound", reboundOldID, actor)
+		if terr != nil && !errors.Is(terr, os.ErrNotExist) {
+			return 0, fmt.Errorf("helm_sync: trash.Move on rebound: %w", terr)
+		}
+		trashHolder = holder
+	}
+
 	if _, err := h.deps.Path.Put(ctx, storageKey, openBytesReader(res.Data)); err != nil {
+		// Compensating restore — Trash.Move moved the old file to a
+		// holder dir; bring it back so the canonical path is whole again.
+		if trashHolder != "" {
+			restorePath := filepath.Join(h.deps.RepoRoot, projectName, "helm", repo.Name, "charts", reboundOldFilename)
+			if rerr := h.deps.Trash.Restore(ctx, trashHolder, restorePath); rerr != nil {
+				slog.WarnContext(ctx, "helm_sync: trash.Restore failed after Put error (orphaned trash holder)",
+					slog.Int64("repo_id", repo.ID),
+					slog.String("trash_holder", trashHolder),
+					slog.Any("err", rerr),
+				)
+			}
+		}
 		return 0, fmt.Errorf("helm_sync: store %s: %w", filename, err)
 	}
 	abs := filepath.Join(h.deps.RepoRoot, filepath.FromSlash(storageKey))
 	chart, perr := Parse(abs)
 	if perr != nil {
 		_ = os.Remove(abs)
+		if trashHolder != "" {
+			restorePath := filepath.Join(h.deps.RepoRoot, projectName, "helm", repo.Name, "charts", reboundOldFilename)
+			if rerr := h.deps.Trash.Restore(ctx, trashHolder, restorePath); rerr != nil {
+				slog.WarnContext(ctx, "helm_sync: trash.Restore failed after Parse error",
+					slog.Int64("repo_id", repo.ID),
+					slog.String("trash_holder", trashHolder),
+					slog.Any("err", rerr),
+				)
+			}
+		}
 		return 0, fmt.Errorf("helm_sync: parse %s: %w", filename, perr)
 	}
 	size := int64(len(res.Data))
@@ -561,7 +592,63 @@ func (h *SyncHandler) fetchAndCommitOCI(ctx context.Context, projectName string,
 		return h.deps.Repos.SetMetadataState(ctx, tx, repo.ID, metadata.MetadataStateDirty)
 	}); err != nil {
 		_ = os.Remove(abs)
+		// Compensating restore on commit failure — the audit must NOT
+		// fire and the on-disk state must roll back to the prior good
+		// chart so the next sync attempt sees the consistent old state.
+		if trashHolder != "" {
+			restorePath := filepath.Join(h.deps.RepoRoot, projectName, "helm", repo.Name, "charts", reboundOldFilename)
+			if rerr := h.deps.Trash.Restore(ctx, trashHolder, restorePath); rerr != nil {
+				slog.WarnContext(ctx, "helm_sync: trash.Restore failed after commit error (orphaned trash holder)",
+					slog.Int64("repo_id", repo.ID),
+					slog.String("trash_holder", trashHolder),
+					slog.Any("err", rerr),
+				)
+			}
+		}
 		return 0, fmt.Errorf("helm_sync: commit %s: %w", filename, err)
+	}
+
+	// 6. Post-commit side-effects — best-effort.
+	//
+	// 6a. If rebound + filename DIFFERS, the old file is still on disk at
+	// its prior path (Put landed at a new key). Move it to trash now that
+	// the DB is consistent. This is the rare case in OCI Helm because
+	// filename is derived from name+version (which are pinned); kept here
+	// for robustness against future filename derivation changes.
+	if rebound && h.deps.Trash != nil && reboundOldFilename != "" && reboundOldFilename != filename {
+		actor := auth.ActorLoginFromContext(ctx)
+		oldPath := filepath.Join(h.deps.RepoRoot, projectName, "helm", repo.Name, "charts", reboundOldFilename)
+		if _, terr := h.deps.Trash.Move(ctx, oldPath, "oci_tag_rebound", reboundOldID, actor); terr != nil {
+			if !errors.Is(terr, os.ErrNotExist) {
+				slog.WarnContext(ctx, "helm_sync: trash.Move on rebound (post-commit, non-fatal)",
+					slog.Int64("repo_id", repo.ID),
+					slog.String("name", chartName),
+					slog.String("version", chartVersion),
+					slog.String("old_filename", reboundOldFilename),
+					slog.Any("err", terr),
+				)
+			}
+		}
+	}
+
+	// 6b. Emit EvtOciTagRebound with the D-05 details_json shape AFTER
+	// commit. Audit must never claim a replacement that did not commit;
+	// the deferred emission is the load-bearing guarantee of this fix.
+	if rebound && h.deps.Audit != nil {
+		_ = h.deps.Audit.Record(ctx, audit.Event{
+			Kind:       audit.EvtOciTagRebound,
+			TargetKind: "repo",
+			TargetID:   strconv.FormatInt(repo.ID, 10),
+			Details: map[string]any{
+				"name":         chartName,
+				"version":      chartVersion,
+				"old_digest":   reboundOldDigest,
+				"new_digest":   chartDigest,
+				"upstream_url": ent.Path,
+				"repo_id":      repo.ID,
+				"replaced_at":  time.Now().UTC().Format(time.RFC3339),
+			},
+		})
 	}
 	return size, nil
 }

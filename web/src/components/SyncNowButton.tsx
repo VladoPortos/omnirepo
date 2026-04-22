@@ -138,6 +138,14 @@ export function SyncNowButton({
     setPillVisible(false);
     setPillSnapshot(null);
     setMutationError(null);
+    // F-06.6 Codex follow-up: drop the current jobId before kicking off
+    // a new sync. If the previous job ended with a retry-backoff or
+    // terminal-failed envelope, that envelope stays rendered on a stale
+    // jobId until the mutation resolves — visually stacking against any
+    // mutationError from the new attempt. Setting jobId=null disables
+    // useJobProgress (returns idleJobProgress), so the error vanishes
+    // until the new job_id lands in onSuccess.
+    setJobId(null);
     mutation.mutate(undefined, {
       onSuccess: (resp) => {
         setJobId(resp.job_id);

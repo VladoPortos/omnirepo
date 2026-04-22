@@ -22,7 +22,7 @@ unless the batch explicitly asks for it.
 |---|------|------|--------|
 | 01 | [batch-01-install-bootstrap.md](batch-01-install-bootstrap.md) | Install, first-run setup, login, logout, session | ✅ |
 | 02 | [batch-02-user-mgmt.md](batch-02-user-mgmt.md) | User CRUD, password changes, admin force-reset | ✅ |
-| 03 | [batch-03-profile-keys.md](batch-03-profile-keys.md) | Profile, self-service, API keys, S3 keys, delete account | ⬜ |
+| 03 | [batch-03-profile-keys.md](batch-03-profile-keys.md) | Profile, self-service, API keys, S3 keys, delete account | ✅ |
 | 04 | [batch-04-projects-members.md](batch-04-projects-members.md) | Projects, members, access control, upstream creds | ⬜ |
 | 05 | [batch-05-docker-oci.md](batch-05-docker-oci.md) | Docker/OCI: push, browse, scan, pull-external, severity gate | ⬜ |
 | 06 | [batch-06-rpm-apt.md](batch-06-rpm-apt.md) | RPM & APT: upload, mirror, sync, metadata regen, delete | ⬜ |

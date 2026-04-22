@@ -1,6 +1,6 @@
 # Batch 03 — Profile, API keys, S3 keys, self-service
 
-**Status:** ⬜ Not started
+**Status:** ✅ Passed clean (2026-04-22)
 **Prereqs:** Batch 02 ✅ (superadmin + alice + bob exist)
 **State produced for later batches:**
 - `alice` has one user-owned API key (saved in session for protocol tests)
@@ -43,7 +43,8 @@
 
 **Save the full key text** into this file (redact last N chars if you prefer):
 ```
-alice user key: omni_<prefix>_<...>
+alice user key: omr_u_PP7UxqzLjWKAHt7jDePabloKWOZd   (id=6, name=alice-dev)
+bob   user key: omr_u_k20hvNOJH2HnBmVWEHoB7qvZAIdK   (id=7, name=bob-dev — created before bob's self-delete retest; re-create after Batch 04 if Batch 03 bob key is needed upstream)
 ```
 
 ### 3.5 API key validation
@@ -103,11 +104,22 @@ alice user key: omni_<prefix>_<...>
 
 ## Findings
 
-_(add F-03.N entries here)_
+See [FINDINGS.md](FINDINGS.md) for full detail on each. Short-form here:
+
+| ID | Sev | Area | One-line | Commit(s) |
+|----|-----|------|----------|-----------|
+| F-03.1 | R | handleMe | `GET /me` dropped `avatar_seed` → UI avatar reverted on reload | `4aff6df` |
+| F-03.2 | R | apikeys handlers | User API key create/revoke emitted no audit events | `3d68953` |
+| F-03.3 | R | api-key validation | Unlimited name length (300+ bytes accepted) | `31fb799` + `be474f8` |
+| F-03.4 | R | api-key validation + schema | Duplicate live names accepted; race-safe partial unique index added | `31fb799` + `be474f8` |
+| F-03.5 | **B** | OptionalSessionOrAPIKey | Invalid Basic/Bearer creds → 200 null instead of 401 (credential probes invisible) | `517c23f` + `be474f8` |
+| F-03.6 | R | DeleteAccountSection + handleDeleteMe | Post-delete UI stuck on /profile; orphan sessions + api_keys not cleaned | `5f27d48` + `be474f8` |
+
+**Codex verdict:** ✅ Clean after pass — all three real-issue recommendations (empty-Bearer tightening, DB-level partial unique index, server-side cleanup on DELETE /me) adopted in `be474f8`. One noise-class observation on audit naming asymmetry (`user.api-key.*` vs `project.api-key.*` with matching `target_kind` variants) — consistent by design, operator runbook note only.
 
 ## Sign-off
 
-- [ ] All cases passed (case 3.10/3.11 can be deferred until after Batch 04)
-- [ ] All F-03.* closed
-- [ ] API keys for alice + bob recorded in this file for later batches
-- [ ] README.md batch 03 status flipped to ✅
+- [x] All cases passed (case 3.10/3.11 deferred until after Batch 04 — no project exists yet)
+- [x] All F-03.* closed
+- [x] API keys for alice + bob recorded in this file for later batches
+- [x] README.md batch 03 status flipped to ✅

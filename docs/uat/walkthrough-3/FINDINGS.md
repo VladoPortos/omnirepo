@@ -15,6 +15,12 @@ Status: 🟨 Open · ✅ Closed · 🟥 Rejected (disputed)
 | F-02.1 | R | main.tsx | Toaster never mounted — all `toast.*` silent across the app | `bdca441` | ✅ Clean | ✅ Passed | ✅ Closed |
 | F-02.2 | m | handleChangePassword | Wrong-current-password on self-service change not audited | `ddc6d81` | ✅ Clean | ✅ Passed | ✅ Closed |
 | F-02.3 | **B** | handleDeleteUser | Self-delete + last-super-admin delete both succeed → instance soft-brick | `7c8daea` + `88caa0c` | ✅ Clean | ✅ Passed | ✅ Closed |
+| F-03.1 | R | handleMe | `GET /api/v1/me` dropped `avatar_seed`; UI reverted to login-string fallback on every reload | `4aff6df` | ✅ Clean | ✅ Passed | ✅ Closed |
+| F-03.2 | R | apikeys.go | User API-key create + revoke emitted no audit events | `3d68953` | ✅ Clean | ✅ Passed | ✅ Closed |
+| F-03.3 | R | apikeys.go + project_apikeys.go | Unlimited API-key name length accepted (300+ bytes) | `31fb799` + `be474f8` | ✅ Clean | ✅ Passed | ✅ Closed |
+| F-03.4 | R | apikeys.go + project_apikeys.go + migration 028 | Duplicate live key names accepted; race-safe partial unique index added | `31fb799` + `be474f8` | ✅ Clean | ✅ Passed | ✅ Closed |
+| F-03.5 | **B** | OptionalSessionOrAPIKey | Invalid Basic/Bearer API-key credentials silently 200-null instead of 401 | `517c23f` + `be474f8` | ✅ Clean | ✅ Passed | ✅ Closed |
+| F-03.6 | R | DeleteAccountSection + handleDeleteMe | Post-delete UI stuck on /profile (logout 401'd); orphan session + api_key rows never cleaned | `5f27d48` + `be474f8` | ✅ Clean | ✅ Passed | ✅ Closed |
 
 ---
 
@@ -83,6 +89,72 @@ Status: 🟨 Open · ✅ Closed · 🟥 Rejected (disputed)
 - **Root cause:** `motion.div` wraps the `Card` inside a `flex items-center justify-center` parent. With no width class on the motion.div and no intrinsic-min from the content, the flex item shrinks below `max-w-md` and the Card's `w-full` then resolves against the collapsed parent.
 - **Fix:** Add `className="w-full max-w-md"` to every `motion.div` wrapper. Pinned four call sites. Card width measured at 448px after fix.
 - **Retest:** ✅ Screenshots show the card at proper width on /setup (setup-complete) and /login.
+- **Status:** ✅ Closed
+
+### F-03.1 `GET /api/v1/me` drops `avatar_seed` from the response
+- **Severity:** R / real-bug
+- **Area:** `internal/api/admin_phase1.go:501` `handleMe`
+- **Symptom:** DB row stores the user's regenerated avatar seed, but `/me` JSON omits the field. Profile page's `me.avatar_seed || me.login` fallback silently reverts to the login-string avatar on every page load — user's customisation invisible until the next `PATCH /me` (which re-sends the seed and re-renders locally).
+- **Root cause:** `handleMe` manually built `MeResponse{}` without populating `AvatarSeed`, even though the PATCH handler did. Two construction sites drifted.
+- **Fix:** commit `4aff6df` — mirror the PATCH-path behaviour (emit when non-empty). Regression guard: `TestProfile_GetMeIncludesAvatarSeed`.
+- **Codex verify:** ✅ Clean (confirmed no other `MeResponse` construction sites drop the field).
+- **Retest:** ✅ Hash-compare of rendered avatar SVG proves the seed from `/me` is used across reload.
+- **Status:** ✅ Closed
+
+### F-03.2 User-scope API key create + revoke emit no audit events
+- **Severity:** R / real-bug (observability gap)
+- **Area:** `internal/api/apikeys.go` handleCreateAPIKey + handleRevokeAPIKey; `internal/audit/events.go`
+- **Symptom:** Creating or revoking a user-owned API key through `POST/DELETE /api/v1/me/api-keys` writes the row but emits zero audit entries. Operator grepping `audit_log` for per-user key timelines gets a hole where project keys (which DO emit `project.api-key.{create,revoke}`) are fully traced.
+- **Root cause:** The project-scoped handler in `project_apikeys.go` called `d.recordAudit(...)`; the user-scoped twin was authored without it.
+- **Fix:** commit `3d68953` — add `EvtUserAPIKey{Created,Revoked}` kinds alongside the project variants; emit with `target_kind="user_api_key"` and the numeric id as `target_id`. Tests: `TestUserAPIKey_CreateEmitsAudit`, `TestUserAPIKey_RevokeEmitsAudit` — both also assert `details_json` never contains the plaintext secret.
+- **Codex verify:** ✅ Clean (naming asymmetry vs. project keys flagged as operator-side noise, not a code issue).
+- **Retest:** ✅ `audit_log` now records create + revoke entries per key id.
+- **Status:** ✅ Closed
+
+### F-03.3 API key names accepted at arbitrary length
+- **Severity:** R / real-bug
+- **Area:** `internal/api/apikeys.go` + `internal/api/project_apikeys.go`
+- **Symptom:** `POST /api/v1/me/api-keys` with a 300-byte name → 201 accepted. Long names break the profile + admin tables, bloat `audit_log.details_json`, and invite low-effort abuse vectors.
+- **Fix:** commit `31fb799` — introduce `maxAPIKeyNameLen = 128` on both user and project handlers; return 422 `"name too long"` past the cap. Audit + response now emit the trimmed name. Regression: `TestUserAPIKey_RejectsOverlongName`.
+- **Codex verify:** ✅ Clean.
+- **Retest:** ✅ Boundary test: 128-char name → 201; 129-char → 422.
+- **Status:** ✅ Closed
+
+### F-03.4 Duplicate live API-key names accepted; app-layer check racy
+- **Severity:** R / real-bug
+- **Area:** `internal/api/apikeys.go` + `internal/api/project_apikeys.go`; `internal/metadata/migrations/028_api_keys_live_name_unique.up.sql`
+- **Symptom:** Creating a second API key with the same name as an existing live key succeeded, producing two indistinguishable rows in the profile table.
+- **Root cause:** No app-layer check AND no DB-level uniqueness. Even after adding the app-layer list-then-insert, two concurrent POSTs could both pass.
+- **Fix:**
+  - commit `31fb799` — app-layer guard rejects duplicates (409 `"name already in use"`). Revoked names remain reusable so rotation isn't painful.
+  - commit `be474f8` (Codex pass) — migration 028 adds partial unique indexes on `api_keys(owner_user_id, name)` and `(owner_project_id, name)` WHERE `revoked_at IS NULL`. Both handlers translate the resulting SQLITE_CONSTRAINT error back to the same 409 envelope.
+- **Codex verify:** ✅ Clean.
+- **Retest:** ✅ Serial duplicate → 409; unique index present on live server; concurrent-duplicate race now eliminated at DB level.
+- **Status:** ✅ Closed
+
+### F-03.5 `OptionalSessionOrAPIKey` 200-nulls on invalid API-key creds (BLOCKER)
+- **Severity:** B / blocker
+- **Area:** `internal/auth/middleware/session_or_apikey.go` `OptionalSessionOrAPIKey`
+- **Symptom:** `curl -k -u alice:omr_u_wrongkey https://.../api/v1/me` → **200** with empty body. Identical to "no auth supplied". Protocol CLIs and credential-probe detectors can't tell rejected keys from success; the strict `SessionOrAPIKey` twin correctly 401s on the same inputs.
+- **Root cause:** The optional-middleware branch dropped failed Basic / Bearer auth and flowed through as anonymous. Only a completely valid-but-stale session cookie should demote silently.
+- **Fix:**
+  - commit `517c23f` — Basic/Bearer credentials that fail → 401 via the canonical envelope; session cookies keep silent-200 behaviour (matches `TestLogout` contract). Guard against a present-but-unshaped Basic password.
+  - commit `be474f8` (Codex pass) — also 401 when `Authorization:` carries an empty/whitespace Bearer token or any unknown scheme (previously fell through as anonymous).
+- **Tests:** `TestOptionalMiddleware_BasicAuth_WrongKey_401`, `TestOptionalMiddleware_BasicAuth_MalformedKey_401`, `TestOptionalMiddleware_Bearer_WrongKey_401`, `TestOptionalMiddleware_Bearer_EmptyToken_401`, `TestOptionalMiddleware_UnknownScheme_401`, `TestOptionalMiddleware_NoCreds_200`.
+- **Codex verify:** ✅ Clean (two tightenings applied from review).
+- **Retest:** ✅ Live server returns `401` envelope on every invalid-creds probe; `200 null` only for no-header case.
+- **Status:** ✅ Closed
+
+### F-03.6 Delete-account leaves UI stuck + orphans DB rows
+- **Severity:** R / real-bug
+- **Area:** `web/src/pages/ProfilePage.tsx` DeleteAccountSection; `internal/api/admin_phase1.go` handleDeleteMe
+- **Symptom:** After successful `DELETE /api/v1/me` (200), the frontend called `POST /auth/logout` which 401'd because the session cookie had already been cleared. The logout hook's redirect lived on `onSuccess` so it never fired — user saw the confirmation dialog still open on `/profile`. Separately, `Users.Delete` is a soft-delete, so FK cascades on `sessions` and `api_keys` never fired — orphan rows accumulated.
+- **Fix:**
+  - commit `5f27d48` — DeleteAccountSection drops the logout call and redirects directly (`qc.clear()` + `window.location.href = '/login'`) after the DELETE succeeds.
+  - commit `be474f8` (Codex pass) — handleDeleteMe explicitly calls `Sessions.DeleteAllForUser` + new `APIKeys.RevokeAllByUser` best-effort before clearing the cookie. Middleware already rejects soft-deleted users, but the cleanup keeps the partial unique index slots freed and ensures a future regression can't resurrect the departed user's keys / sessions.
+- **Tests:** `TestDeleteMe_DropsSessionsAndRevokesAPIKeys` asserts `sessions=0` + `live-keys=0` post-delete.
+- **Codex verify:** ✅ Clean (cleanup was Codex's recommendation).
+- **Retest:** ✅ `testdel` throwaway account end-to-end in Playwright: confirm dialog → redirect to `/login` → no 401 console error → DB shows orphan rows gone.
 - **Status:** ✅ Closed
 
 ### F-01.4 Setup endpoints undocumented in OpenAPI spec

@@ -117,6 +117,11 @@ func (h *Handler) mountAt(parent chi.Router, route string, authDeps authmw.Deps)
 		r.Use(PerRepoMutex(h.locks))
 		r.Use(PushSizeLimit(ResolveMaxPushBytes(h.cfg.Repos.Git.MaxPushBytes)))
 		// Plan 11 refs-walker post-hook will be inserted here.
+		// Plan 11-07 (GITMIRROR-04 / D-12): LFS batch endpoint returns 501
+		// lfs.not_supported. Registered BEFORE the /* catch-all so chi's
+		// specific-pattern-beats-wildcard precedence wins — applies to
+		// every method (see lfs.go for rationale).
+		r.Handle("/info/lfs/objects/batch", http.HandlerFunc(h.rejectLFS))
 		r.Handle("/*", http.HandlerFunc(h.dispatchToBackend))
 	})
 }
@@ -213,6 +218,10 @@ func (h *Handler) TestRouter(t testing.TB) http.Handler {
 		r.Route(route, func(sub chi.Router) {
 			sub.Use(ResolveRepoFromURL(h.projects, h.repos))
 			sub.Use(PerRepoMutex(h.locks))
+			// Mirror the production mountAt ordering: LFS refusal registered
+			// BEFORE the /* catch-all so the specific-pattern-beats-wildcard
+			// precedence wins inside the test harness too.
+			sub.Handle("/info/lfs/objects/batch", http.HandlerFunc(h.rejectLFS))
 			sub.Handle("/*", http.HandlerFunc(h.dispatchToBackend))
 		})
 	}

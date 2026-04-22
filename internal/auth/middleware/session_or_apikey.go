@@ -246,7 +246,15 @@ func OptionalSessionOrAPIKey(d Deps) func(http.Handler) http.Handler {
 				writeJSON401(w, r)
 				return
 			}
-			if bearer := stripBearer(r.Header.Get("Authorization")); bearer != "" {
+			if authz := r.Header.Get("Authorization"); authz != "" {
+				bearer := stripBearer(authz)
+				if bearer == "" {
+					// Authorization header was set to something (Bearer with
+					// empty token, or a scheme we don't accept) — that's an
+					// explicit auth attempt, reject as malformed.
+					writeJSON401(w, r)
+					return
+				}
 				actor, ok := authenticateAPIKey(r.Context(), d, bearer)
 				if !ok {
 					writeJSON401(w, r)

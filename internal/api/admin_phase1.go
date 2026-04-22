@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -525,6 +526,23 @@ func (d Deps) handleDeleteMe(w http.ResponseWriter, r *http.Request) {
 	if err := d.Users.Delete(r.Context(), a.ID); err != nil {
 		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
+	}
+	// F-03.6 (wt3): Users.Delete is a soft-delete, so the FK cascade on
+	// sessions and api_keys never fires. The middleware rejects
+	// soft-deleted users on subsequent auth (FindByID scopes to
+	// deleted_at IS NULL) so the orphaned rows are inert — but leaving
+	// them around keeps the partial unique indexes on (owner_user_id,
+	// name) claiming slots for logins that no longer exist, and means a
+	// future regression that loosens the middleware check would silently
+	// resurrect every session / key the departed user ever held. Belt
+	// and braces: drop sessions, revoke live api_keys. Best-effort — any
+	// error is logged but doesn't fail the delete (the account is
+	// already soft-deleted + the cookie will be cleared below).
+	if err := d.Sessions.DeleteAllForUser(r.Context(), a.ID); err != nil {
+		slog.Warn("delete_me: sessions cleanup", "user_id", a.ID, "err", err)
+	}
+	if err := d.APIKeys.RevokeAllByUser(r.Context(), a.ID); err != nil {
+		slog.Warn("delete_me: api_keys revoke", "user_id", a.ID, "err", err)
 	}
 	uid := a.ID
 	d.recordAudit(r, audit.Event{Kind: audit.EvtUserDeleted, ActorUserID: &uid, TargetKind: "user", TargetID: a.Login})

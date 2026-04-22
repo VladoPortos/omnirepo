@@ -254,3 +254,23 @@ func (r *APIKeysRepo) Revoke(ctx context.Context, id int64) error {
 		return nil
 	})
 }
+
+// RevokeAllByUser marks every live user-owned API key as revoked. Called on
+// account deletion (F-03.6 wt3): users are soft-deleted, so the FK cascade
+// that would normally clean up api_keys never fires — without this the
+// rows stay around as DB garbage and the partial unique index on
+// (owner_user_id, name) keeps claiming slot names for logins that no
+// longer exist.
+func (r *APIKeysRepo) RevokeAllByUser(ctx context.Context, userID int64) error {
+	return r.db.WriteTx(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `
+			UPDATE api_keys
+			SET revoked_at=CURRENT_TIMESTAMP
+			WHERE owner_user_id=? AND revoked_at IS NULL
+		`, userID)
+		if err != nil {
+			return fmt.Errorf("api_keys: revoke all by user %d: %w", userID, err)
+		}
+		return nil
+	})
+}

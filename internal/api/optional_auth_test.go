@@ -80,6 +80,47 @@ func TestOptionalMiddleware_Bearer_WrongKey_401(t *testing.T) {
 	}
 }
 
+// F-03.5 Codex-pass tightening: a header like `Authorization: Bearer `
+// with empty payload is still an explicit auth attempt and must 401.
+// Before the tighten it fell through as anonymous because stripBearer
+// returned "" and the guard used to be `bearer != ""`.
+func TestOptionalMiddleware_Bearer_EmptyToken_401(t *testing.T) {
+	s := newTestServer(t)
+
+	req, err := http.NewRequest("GET", s.ts.URL+"/api/v1/me", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer ")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("empty Bearer: want 401, got %d", resp.StatusCode)
+	}
+}
+
+// Unrelated non-Bearer Authorization scheme is also an explicit attempt.
+func TestOptionalMiddleware_UnknownScheme_401(t *testing.T) {
+	s := newTestServer(t)
+
+	req, err := http.NewRequest("GET", s.ts.URL+"/api/v1/me", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Negotiate abcd")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("unknown scheme: want 401, got %d", resp.StatusCode)
+	}
+}
+
 func TestOptionalMiddleware_NoCreds_200(t *testing.T) {
 	s := newTestServer(t)
 

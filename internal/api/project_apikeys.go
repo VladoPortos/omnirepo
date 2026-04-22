@@ -140,6 +140,12 @@ func (d Deps) handleCreateProjectAPIKey(w http.ResponseWriter, r *http.Request) 
 	}
 	id, err := d.APIKeys.CreateProjectKey(r.Context(), projectID, name, key.Prefix, key.SHA256)
 	if err != nil {
+		// Partial unique index idx_apikeys_project_live_name
+		// (migration 028) backstops the racy app-layer check above.
+		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
+			writeJSONError(w, r, http.StatusConflict, ErrValidationFailed, "name already in use")
+			return
+		}
 		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
 	}

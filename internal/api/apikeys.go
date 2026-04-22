@@ -126,6 +126,14 @@ func (d Deps) handleCreateAPIKey(w http.ResponseWriter, r *http.Request) {
 
 	id, err := d.APIKeys.CreateUserKey(r.Context(), actor.ID, name, key.Prefix, key.SHA256)
 	if err != nil {
+		// Partial unique index idx_apikeys_user_live_name (migration 028)
+		// is the race-safe backstop for the app-layer duplicate check
+		// above — two concurrent POSTs with the same name otherwise both
+		// pass the list check and both reach INSERT.
+		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
+			writeJSONError(w, r, http.StatusConflict, ErrValidationFailed, "name already in use")
+			return
+		}
 		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
 	}

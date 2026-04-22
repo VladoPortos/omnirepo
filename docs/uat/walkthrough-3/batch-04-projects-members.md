@@ -1,6 +1,6 @@
 # Batch 04 — Projects, members, access control, upstream credentials
 
-**Status:** ✅ Passed (2 findings landed + retested; Codex verification pending)
+**Status:** ✅ Passed (2 findings landed + Codex-verified; 1 latent follow-up (F-04.3) tracked for Batch 14)
 **Prereqs:** Batch 03 ✅ (users + API keys exist)
 **State produced for later batches:**
 - Projects: `acme` (alice=admin, bob=member), `beta` (alice=admin), `closed` (superadmin only)
@@ -137,16 +137,22 @@
   1. `GET /api/v1/admin/audit?from=2026-04-22T10:00:00Z&limit=200` → returned 0 items (with 131 matching rows in DB).
   2. `GET /api/v1/admin/audit?limit=3` → cursor. Follow-up with `?limit=3&cursor=<...>` → same ids as page 1.
 - **Root cause:** `audit.Record` bound `time.Time` directly to the driver. `modernc.org/sqlite` stores `time.Time.String()` = `"2026-04-22 12:43:05.123456789 +0000 UTC"`. The admin endpoint bound its `from`/`to`/cursor as RFC3339 (space→T at index 10 differs: `' ' 0x20 < 'T' 0x54`), so same-day lex comparisons always failed.
-- **Fix:**
-  - Write path now formats as `time.RFC3339Nano` — SQLite-parseable, lex-stable.
-  - Filter + cursor bind values also use RFC3339Nano so formats match end-to-end.
-  - Migration 029 rewrites legacy rows (`substr + 'T' + substr + 'Z'`, matched by `LIKE '%+0000 UTC'`).
-- **Retest:**
-  - `from=2026-04-22T10:00:00Z` → 131 items. `from=2099-01-01T00:00:00Z` → 0 items.
-  - Pagination page 1 ids `[138,137,136]`, page 2 `[135,133,132]` — strictly monotonic.
-  - Fresh write: `2026-04-22T12:55:44.489206228Z` in DB.
-  - `go test ./internal/audit/... ./internal/api/... ./internal/metadata/...` all green.
-- **Status:** ✅ Closed (Codex verify pending)
+- **Fix (initial, `610d01e`):** Write + filter + cursor format RFC3339Nano; migration 029 rewrites legacy rows. SQLite-parseable, but Codex caught that RFC3339Nano strips trailing zeros → variable width → same-second lex order broken (`Z` 0x5A > `.` 0x2E).
+- **Fix (Codex-pass, `cd6618a`):** Switched to fixed-width 30-char layout via new `audit.DBTimestampLayout` (`2006-01-02T15:04:05.000000000Z07:00`) — audit.go, admin_audit.go, migration 030 all share it. Migration 030 pads legacy rows to 9-digit fraction.
+- **Retest (final):**
+  - `from=10:00` → 50 items; `to=10:30` → 30; `from=2099-…` → 0.
+  - Pagination `[142,141,140] → [139,138,137] → [136,135,133]` — strictly monotonic including same-second rows.
+  - Fresh write lands as 30-char `...T13:06:21.283318398Z`.
+  - go test (audit, api, metadata) all green.
+- **Codex verify:** ✅ Clean (follow-up applied).
+- **Status:** ✅ Closed
+
+### F-04.3 (carried forward / latent) Session + API-key timestamps have the same Go-`%v` storage format
+- **Severity:** m / minor — surfaced by Codex during F-04.2 review
+- **Area:** `internal/metadata/sessions.go:38, 58`; `internal/metadata/apikeys.go:239`
+- **Symptom:** Same storage bug — modernc converts `time.Time` binds to Go `.String()` for sessions + api_keys time columns. Session expiry `expires_at > CURRENT_TIMESTAMP` happens to lex-work most of the time, but a session expiring mid-second is evicted ≤1 s late.
+- **Fix:** Out of batch 04 scope. Captured for Batch 14 (admin) or a dedicated cleanup — switch every `time.Time`-bound timestamp column in metadata to `audit.DBTimestampLayout` in one pass.
+- **Status:** 🟨 Open (tracked)
 
 ## Sign-off
 
@@ -157,5 +163,5 @@
   - [x] `closed` project exists (live copy id=6), another `closed` in trash (id=5)
   - [x] `docker.io / docker` upstream credential configured on `acme` (schema uses host+kind, not name+type — doc prescription was outdated)
   - [x] Project API key `acme-ci` = `omr_p_pe6XW0JfotVXu6tJIWYVIw8f4rlN` (id=8, project scope verified: acme 200 / beta 403)
-- [x] All F-04.* closed (F-04.1 + F-04.2)
-- [ ] README.md batch 04 status flipped to ✅ (pending Codex pass)
+- [x] All F-04.* closed (F-04.1 + F-04.2; F-04.3 tracked-open by design for Batch 14)
+- [x] README.md batch 04 status flipped to ✅

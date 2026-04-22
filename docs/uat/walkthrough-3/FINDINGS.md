@@ -21,8 +21,9 @@ Status: 🟨 Open · ✅ Closed · 🟥 Rejected (disputed)
 | F-03.4 | R | apikeys.go + project_apikeys.go + migration 028 | Duplicate live key names accepted; race-safe partial unique index added | `31fb799` + `be474f8` | ✅ Clean | ✅ Passed | ✅ Closed |
 | F-03.5 | **B** | OptionalSessionOrAPIKey | Invalid Basic/Bearer API-key credentials silently 200-null instead of 401 | `517c23f` + `be474f8` | ✅ Clean | ✅ Passed | ✅ Closed |
 | F-03.6 | R | DeleteAccountSection + handleDeleteMe | Post-delete UI stuck on /profile (logout 401'd); orphan session + api_key rows never cleaned | `5f27d48` + `be474f8` | ✅ Clean | ✅ Passed | ✅ Closed |
-| F-04.1 | R | ProjectsPage Create dialog | Stale name + stale error banner on reopen after Esc-close | _pending_ | ⬜ Pending | ✅ Passed | ✅ Closed |
-| F-04.2 | **B** | internal/audit + admin_audit + migration 029 | `audit_log.occurred_at` stored as Go `%v` string → from/to filters return 0, keyset pagination returns page-1 rows again | _pending_ | ⬜ Pending | ✅ Passed | ✅ Closed |
+| F-04.1 | R | ProjectsPage Create dialog | Stale name + stale error banner on reopen after Esc-close | `1082324` | ✅ Clean | ✅ Passed | ✅ Closed |
+| F-04.2 | **B** | internal/audit + admin_audit + migrations 029+030 | `audit_log.occurred_at` stored as Go `%v` string → from/to filters return 0, keyset pagination returns page-1 rows; RFC3339Nano variable-width trap found on Codex pass | `610d01e` + `cd6618a` | ✅ Clean | ✅ Passed | ✅ Closed |
+| F-04.3 | m | sessions + apikeys metadata | `sessions.{issued_at,last_seen_at,expires_at}` + `api_keys.last_used_at` share the F-04.2 storage bug; session expiry off by ≤1 s at sub-second boundary. Latent; tracked for Batch 14. | _follow-up_ | — | — | 🟨 Open |
 
 ---
 
@@ -185,14 +186,27 @@ Status: 🟨 Open · ✅ Closed · 🟥 Rejected (disputed)
   1. `GET /api/v1/admin/audit?from=2026-04-22T10:00:00Z` returned 0 items even though every row was from 2026-04-22 after 10:00.
   2. Keyset pagination returned the same first-page rows on page 2 (the `occurred_at < cursor OR (... = ... AND id < ...)` predicate never excluded anything).
 - **Root cause:** `audit.Record` bound `e.OccurredAt` (a `time.Time`) directly to `ExecContext`. `modernc.org/sqlite`'s default conversion uses Go's `time.Time.String()` — `"2026-04-22 12:43:05.123456789 +0000 UTC"`. That format (a) is not parseable by SQLite's `datetime()` / `strftime()`, and (b) sorts lexicographically AFTER RFC3339 strings when the date is equal (space `0x20` < `T` `0x54` at index 10). The admin endpoint formatted its `from` / `to` / cursor as RFC3339, so every same-day comparison lost.
-- **Fix:**
-  - `internal/audit/audit.go` now writes `e.OccurredAt.UTC().Format(time.RFC3339Nano)` — ISO-8601, parseable by SQLite, sort-stable.
-  - `internal/api/admin_audit.go` formats `from` / `to` and the cursor `SortValue` as `time.RFC3339Nano` so the bound value and the stored value share one format.
-  - `migrations/029_audit_occurred_at_rfc3339.up.sql` rewrites existing rows: `substr(s, 1, 10) || 'T' || substr(s, 12, length(s)-21) || 'Z'`, matched by `WHERE occurred_at LIKE '%+0000 UTC'` (leaves already-ISO rows untouched).
-- **Retest:**
-  - `from=2026-04-22T10:00:00Z` → 131 items (was 0). `from=2099-01-01T00:00:00Z` → 0 items.
-  - Pagination: page 1 ids `[138,137,136]`, page 2 ids `[135,133,132]` — strictly monotonic, no overlap.
-  - Fresh write lands as `2026-04-22T12:55:44.489206228Z` in DB.
+- **Fix (initial, commit `610d01e`):**
+  - `internal/audit/audit.go` wrote `e.OccurredAt.UTC().Format(time.RFC3339Nano)` — ISO-8601, parseable by SQLite.
+  - `internal/api/admin_audit.go` formatted `from` / `to` and the cursor `SortValue` as `time.RFC3339Nano`.
+  - `migrations/029_audit_occurred_at_rfc3339.up.sql` rewrote legacy rows: `substr(s, 1, 10) || 'T' || substr(s, 12, length(s)-21) || 'Z'`.
+- **Codex verdict:** Found a residual blocker — `time.RFC3339Nano` strips trailing zeros (Go's `.999999999` format verb), so the stored text has variable width. Lex comparison then breaks on a zero-ns row in second S vs a sub-second row in the same second: `"...:05Z"` vs `"...:05.1Z"` — `'Z' (0x5A) > '.' (0x2E)`, wrong order. `ORDER BY`, keyset cursors, and range filters all affected in the narrow window.
+- **Fix (Codex-pass, commit `cd6618a`):**
+  - Introduced `audit.DBTimestampLayout = "2006-01-02T15:04:05.000000000Z07:00"` — fixed-width 30-char ISO-8601.
+  - `audit.go` now binds via `DBTimestampLayout`; `admin_audit.go` binds filter values, cursor `SortValue`, and response `timestamp` via the same layout (end-to-end format symmetry).
+  - `migrations/030_audit_occurred_at_fixed_width.up.sql` pads legacy RFC3339Nano rows: short-fraction rows get `.X...Z` → `.XYYYYYYYYZ`; zero-fraction rows get `.000000000Z` inserted.
+- **Retest (final):**
+  - DB: 136/136 rows at length 30; sample row id=135 padded from `...50:54.79858302Z` (29 chars) to `...50:54.798583020Z` (30 chars).
+  - Filter `from=2026-04-22T10:00:00Z` → 50 items; `to=2026-04-22T10:30:00Z` → 30 items; `from=2099-01-01T00:00:00Z` → 0 items.
+  - Pagination: p1 `[142,141,140]`, p2 `[139,138,137]`, p3 `[136,135,133]` — strict monotonic across same-second events (139 `.489`, 138 `.423`).
+  - Fresh write emitted at 30 chars (`2026-04-22T13:06:21.283318398Z`).
   - `go test ./internal/audit/... ./internal/api/... ./internal/metadata/...` all green.
-- **Codex verify:** ⬜ Pending
+- **Codex verify:** ✅ Clean (follow-up applied).
 - **Status:** ✅ Closed
+
+### F-04.3 (carried forward) Session + API-key timestamps have the same Go-`%v` storage format
+- **Severity:** m / minor (surfaced by Codex during F-04.2 review)
+- **Area:** `internal/metadata/sessions.go:38` (INSERT), `internal/metadata/sessions.go:58` (`expires_at > CURRENT_TIMESTAMP`), `internal/metadata/apikeys.go:239` (`last_used_at`)
+- **Symptom:** Same storage bug as F-04.2 — modernc binds `time.Time` via `.String()`. Sessions expiry check works today only because Go-`%v` happens to lex-compare correctly against SQLite's `CURRENT_TIMESTAMP` for typical date values; sub-second boundary behaviour is wrong but not observable (session expires ≤1 second late).
+- **Fix:** Not in batch 04 scope; the user-facing consequence is latent. Recorded here so Batch 14 (admin + session management) picks it up, or a dedicated audit pass converts all `time.Time`-bound columns to `audit.DBTimestampLayout` in one change.
+- **Status:** 🟨 Open (tracked for follow-up)

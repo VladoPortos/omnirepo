@@ -81,6 +81,132 @@ func TestRepoContent_DockerListsTags(t *testing.T) {
 	}
 }
 
+// TestRepoContent_DockerIndexTag_AggregatesChildrenScans is the F-05.3
+// regression. A tag pointing at an OCI image index previously showed
+// "Not scanned" forever because the /content query LEFT JOINs scan rows
+// by artifact_id = tag digest — and image indexes are intentionally not
+// scanned (see scan/manifest_classify.go:52). The fix aggregates the
+// latest scan of each referenced child manifest and synthesises a
+// status + severity-count rollup the UI treats exactly like a direct
+// scan row.
+func TestRepoContent_DockerIndexTag_AggregatesChildrenScans(t *testing.T) {
+	s := newTestServer(t)
+	_, pw := seedTestUser(t, s.db, "root", "r@x", true, false)
+	cookie, _, _ := s.login(t, "root", pw)
+
+	ctx := context.Background()
+	pid, _ := s.deps.Projects.Create(ctx, "idxproj", "")
+	repoID, _ := s.deps.Repos.Create(ctx, pid, "docker", "idx", "", nil, nil, nil)
+
+	// Seed two child image manifests with one known scan each.
+	indexBody := []byte(`{"manifests":[{"digest":"sha256:child-amd64"},{"digest":"sha256:child-arm64"}]}`)
+	if _, err := s.db.Writer.ExecContext(ctx,
+		`INSERT INTO docker_manifests(digest, repo_id, media_type, body, size_bytes, ref_count) VALUES
+		 ('sha256:child-amd64', ?, 'application/vnd.oci.image.manifest.v1+json', X'7b7d', 100, 1),
+		 ('sha256:child-arm64', ?, 'application/vnd.oci.image.manifest.v1+json', X'7b7d', 100, 1),
+		 ('sha256:index',       ?, 'application/vnd.oci.image.index.v1+json',    ?,       200, 0)`,
+		repoID, repoID, repoID, indexBody,
+	); err != nil {
+		t.Fatalf("seed manifests: %v", err)
+	}
+	if _, err := s.db.Writer.ExecContext(ctx,
+		`INSERT INTO docker_tags(repo_id, image, tag, digest) VALUES (?, '', 'latest', 'sha256:index')`,
+		repoID,
+	); err != nil {
+		t.Fatalf("seed tag: %v", err)
+	}
+	// amd64 child: done, 1 high CVE.  arm64 child: done, 2 medium CVEs.
+	// Aggregate rollup must therefore show status=done, high=1, medium=2.
+	if _, err := s.db.Writer.ExecContext(ctx,
+		`INSERT INTO scans(repo_id, artifact_kind, artifact_id, status, severity_summary_json, finished_at) VALUES
+		 (?, 'docker', 'sha256:child-amd64', 'done', '{"critical":0,"high":1,"medium":0,"low":0}', CURRENT_TIMESTAMP),
+		 (?, 'docker', 'sha256:child-arm64', 'done', '{"critical":0,"high":0,"medium":2,"low":0}', CURRENT_TIMESTAMP)`,
+		repoID, repoID,
+	); err != nil {
+		t.Fatalf("seed scans: %v", err)
+	}
+
+	resp, raw := s.doRaw(t, "GET", "/api/v1/projects/idxproj/repos/docker/idx/content", cookie, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d body=%s", resp.StatusCode, raw)
+	}
+	var page struct {
+		Items []map[string]any `json:"items"`
+	}
+	if err := json.Unmarshal(raw, &page); err != nil {
+		t.Fatalf("decode: %v body=%s", err, raw)
+	}
+	if len(page.Items) != 1 {
+		t.Fatalf("want 1 row, got %d; body=%s", len(page.Items), raw)
+	}
+	row := page.Items[0]
+	if got := row["scan_severity"]; got != "high" {
+		t.Errorf("scan_severity=%v, want 'high' (worst across children)", got)
+	}
+	extra, _ := row["extra"].(map[string]any)
+	if got := extra["scan_status"]; got != "done" {
+		t.Errorf("extra.scan_status=%v, want 'done'", got)
+	}
+	counts, _ := extra["severity_counts"].(map[string]any)
+	if counts["high"].(float64) != 1 || counts["medium"].(float64) != 2 {
+		t.Errorf("severity_counts=%v, want high=1 medium=2", counts)
+	}
+}
+
+// TestRepoContent_DockerIndexTag_ScanningWinsOverDone pins the status
+// precedence: any child pending/running → status='scanning' (→ UI
+// 'scanning' label) even if another child is already done. Otherwise the
+// user would see "Clean" prematurely while other arches are still being
+// scanned.
+func TestRepoContent_DockerIndexTag_ScanningWinsOverDone(t *testing.T) {
+	s := newTestServer(t)
+	_, pw := seedTestUser(t, s.db, "root", "r@x", true, false)
+	cookie, _, _ := s.login(t, "root", pw)
+
+	ctx := context.Background()
+	pid, _ := s.deps.Projects.Create(ctx, "idxproj2", "")
+	repoID, _ := s.deps.Repos.Create(ctx, pid, "docker", "idx", "", nil, nil, nil)
+
+	indexBody := []byte(`{"manifests":[{"digest":"sha256:child-a"},{"digest":"sha256:child-b"}]}`)
+	if _, err := s.db.Writer.ExecContext(ctx,
+		`INSERT INTO docker_manifests(digest, repo_id, media_type, body, size_bytes, ref_count) VALUES
+		 ('sha256:child-a', ?, 'application/vnd.oci.image.manifest.v1+json', X'7b7d', 100, 1),
+		 ('sha256:child-b', ?, 'application/vnd.oci.image.manifest.v1+json', X'7b7d', 100, 1),
+		 ('sha256:index2',  ?, 'application/vnd.docker.distribution.manifest.list.v2+json', ?, 200, 0)`,
+		repoID, repoID, repoID, indexBody,
+	); err != nil {
+		t.Fatalf("seed manifests: %v", err)
+	}
+	if _, err := s.db.Writer.ExecContext(ctx,
+		`INSERT INTO docker_tags(repo_id, image, tag, digest) VALUES (?, '', 'latest', 'sha256:index2')`,
+		repoID,
+	); err != nil {
+		t.Fatalf("seed tag: %v", err)
+	}
+	if _, err := s.db.Writer.ExecContext(ctx,
+		`INSERT INTO scans(repo_id, artifact_kind, artifact_id, status, severity_summary_json) VALUES
+		 (?, 'docker', 'sha256:child-a', 'done',    '{"critical":0,"high":0,"medium":0,"low":0}'),
+		 (?, 'docker', 'sha256:child-b', 'running', '{}')`,
+		repoID, repoID,
+	); err != nil {
+		t.Fatalf("seed scans: %v", err)
+	}
+
+	resp, raw := s.doRaw(t, "GET", "/api/v1/projects/idxproj2/repos/docker/idx/content", cookie, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d body=%s", resp.StatusCode, raw)
+	}
+	var page struct{ Items []map[string]any `json:"items"` }
+	_ = json.Unmarshal(raw, &page)
+	extra, _ := page.Items[0]["extra"].(map[string]any)
+	if got := extra["scan_status"]; got != "pending" {
+		t.Errorf("scan_status=%v, want 'pending' while a child is still running", got)
+	}
+	if got := page.Items[0]["scan_severity"]; got != "scanning" {
+		t.Errorf("scan_severity=%v, want 'scanning'", got)
+	}
+}
+
 // TestRepoContent_DockerEmptyRepoReturnsEmptyArray keeps the contract for
 // brand-new docker repos: the endpoint must return [] (not null) so the UI
 // renders the empty-state card instead of treating the response as "error".

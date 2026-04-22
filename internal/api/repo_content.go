@@ -557,7 +557,7 @@ func (d Deps) listDockerContent(r *http.Request, repoID, limit, offset int64) ([
 		SELECT COUNT(*) FROM json_each(dm.body, '$.layers')
 	)`
 	query := `
-		SELECT dt.image, dt.tag, dt.digest, dm.media_type,
+		SELECT dt.image, dt.tag, dt.digest, dm.media_type, dm.body,
 		       ` + dockerImageSizeExpr + ` AS total_size,
 		       COALESCE(` + dockerLayerCountExpr + `, 0) AS layer_count,
 		       dt.updated_at,
@@ -577,13 +577,33 @@ func (d Deps) listDockerContent(r *http.Request, repoID, limit, offset int64) ([
 	var out []RepoContentEntry
 	for rows.Next() {
 		var image, tag, digest, mediaType, updatedAt string
+		var body []byte
 		var size sql.NullInt64
 		var layerCount sql.NullInt64
 		var scanStatus, scanSummary string
 		var scanID sql.NullInt64
-		if err := rows.Scan(&image, &tag, &digest, &mediaType, &size, &layerCount, &updatedAt,
+		if err := rows.Scan(&image, &tag, &digest, &mediaType, &body, &size, &layerCount, &updatedAt,
 			&scanID, &scanStatus, &scanSummary); err != nil {
 			return nil, err
+		}
+		// F-05.3 — multi-arch scan aggregation. OCI image indexes / Docker
+		// manifest lists are explicitly skipped for scanning (see
+		// scan/manifest_classify.go:52) because they're metadata, not
+		// rootfs — their child manifests are scanned instead. Before this
+		// aggregation the tag row would show "Not scanned" forever
+		// because the scan-status LEFT JOIN looked up by dt.digest (== the
+		// index digest) and never found a row. Here, when the tag points
+		// at an index and no direct scan exists, we roll up the latest
+		// scans of the referenced child manifests:
+		//   status   = worst transitive (scanning > failed > done > "")
+		//   counts   = sum per severity across the latest-per-child scans
+		// The resulting JSON feeds deriveScanSeverity + severityCounts
+		// exactly as if it were a direct scan row.
+		if scanStatus == "" && isIndexMediaType(mediaType) && len(body) > 0 {
+			if aggStatus, aggSummary, ok := d.aggregateIndexScan(r, repoID, body); ok {
+				scanStatus = aggStatus
+				scanSummary = aggSummary
+			}
 		}
 		name := tag
 		if image != "" {
@@ -608,6 +628,141 @@ func (d Deps) listDockerContent(r *http.Request, repoID, limit, offset int64) ([
 		})
 	}
 	return out, rows.Err()
+}
+
+// isIndexMediaType matches the two OCI/Docker media types that identify
+// an image index (aka manifest list). Kept inline here so the Docker
+// listing doesn't reach into the oci protocol package for a one-string
+// check — changing the set in both places is obvious since the
+// classifier in scan/manifest_classify.go has the canonical list.
+func isIndexMediaType(mt string) bool {
+	switch mt {
+	case "application/vnd.oci.image.index.v1+json",
+		"application/vnd.docker.distribution.manifest.list.v2+json":
+		return true
+	}
+	return false
+}
+
+// aggregateIndexScan walks the child manifests referenced by an image
+// index's body, pulls the latest scan row for each, and returns a synthetic
+// status + severity-summary JSON that mirrors the shape deriveScanSeverity
+// expects on a native scan row. Returns ok=false when the body can't be
+// parsed or no children have been scanned yet — callers then fall back to
+// the empty-status path (which renders "Not scanned").
+//
+// Aggregation rules:
+//
+//   - Counts are summed per severity bucket across every child's latest
+//     scan (one row per child).
+//   - Status precedence: "scanning" > "failed" > "done" > "". A tag is
+//     "scanning" if ANY child is still pending/running; "failed" if no
+//     children are in-flight but at least one failed; "done" only when
+//     every scanned child is done. Children with no scan row are ignored
+//     — a multi-arch push usually races N+1 scan enqueues, and we want
+//     the UI to unstick from "Not scanned" as soon as the first arch
+//     completes.
+func (d Deps) aggregateIndexScan(r *http.Request, repoID int64, body []byte) (status, summary string, ok bool) {
+	var idx struct {
+		Manifests []struct {
+			Digest string `json:"digest"`
+		} `json:"manifests"`
+	}
+	if err := json.Unmarshal(body, &idx); err != nil {
+		return "", "", false
+	}
+	if len(idx.Manifests) == 0 {
+		return "", "", false
+	}
+	digests := make([]string, 0, len(idx.Manifests))
+	for _, m := range idx.Manifests {
+		if m.Digest != "" {
+			digests = append(digests, m.Digest)
+		}
+	}
+	if len(digests) == 0 {
+		return "", "", false
+	}
+
+	// Build: SELECT artifact_id, status, severity_summary_json FROM scans
+	// WHERE id IN (latest-per-child). Stable ordering via the grouped MAX(id)
+	// subquery so duplicate scans on the same child collapse to one row.
+	placeholders := make([]byte, 0, 2*len(digests))
+	args := make([]any, 0, 2+len(digests)*2)
+	args = append(args, repoID, "docker")
+	for i, dg := range digests {
+		if i > 0 {
+			placeholders = append(placeholders, ',')
+		}
+		placeholders = append(placeholders, '?')
+		args = append(args, dg)
+	}
+	q := `
+		SELECT s.artifact_id, s.status, COALESCE(s.severity_summary_json, '')
+		FROM scans s
+		INNER JOIN (
+			SELECT artifact_id, MAX(id) AS max_id
+			FROM scans
+			WHERE repo_id = ? AND artifact_kind = ? AND artifact_id IN (` + string(placeholders) + `)
+			GROUP BY artifact_id
+		) latest ON s.id = latest.max_id`
+	rows, err := d.DB.Reader.QueryContext(r.Context(), q, args...)
+	if err != nil {
+		return "", "", false
+	}
+	defer func() { _ = rows.Close() }()
+
+	var crit, high, med, low int64
+	anyScanning, anyFailed, anyDone := false, false, false
+	for rows.Next() {
+		var aid, st, sum string
+		if err := rows.Scan(&aid, &st, &sum); err != nil {
+			return "", "", false
+		}
+		switch st {
+		case "pending", "running":
+			anyScanning = true
+		case "failed":
+			anyFailed = true
+		case "done":
+			anyDone = true
+			var s struct {
+				Critical int64 `json:"critical"`
+				High     int64 `json:"high"`
+				Medium   int64 `json:"medium"`
+				Low      int64 `json:"low"`
+			}
+			if sum != "" {
+				_ = json.Unmarshal([]byte(sum), &s)
+			}
+			crit += s.Critical
+			high += s.High
+			med += s.Medium
+			low += s.Low
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return "", "", false
+	}
+
+	switch {
+	case anyScanning:
+		status = "pending"
+	case anyFailed && !anyDone:
+		status = "failed"
+	case anyDone:
+		status = "done"
+	default:
+		// No scanned children → nothing to report.
+		return "", "", false
+	}
+	summaryJSON, _ := json.Marshal(map[string]int64{
+		"critical": crit,
+		"high":     high,
+		"medium":   med,
+		"low":      low,
+	})
+	return status, string(summaryJSON), true
 }
 
 func (d Deps) listRawContent(r *http.Request, repoID, limit, offset int64) ([]RepoContentEntry, error) {

@@ -47,12 +47,16 @@ const (
 )
 
 // mirrorSupportedTypes enumerates repo types eligible for the is_mirror flag
-// (D-01). Raw/S3/Git/Docker are out of scope for v1.1 per the design spec.
+// (D-01). Raw/S3/Docker remain out of scope; Git is widened in Phase 11
+// (plan 11-05, GITMIRROR-01) — HTTPS+PAT only per GITMIRROR-05, with
+// oci:// / ssh:// / file:// filtered out by validateMirrorUpstreamURL's
+// scheme check.
 var mirrorSupportedTypes = map[string]struct{}{
 	"deb":  {},
 	"rpm":  {},
 	"pypi": {},
 	"helm": {},
+	"git":  {}, // Phase 11 / GITMIRROR-01 — HTTPS-PAT mirror via go-git v6.
 }
 
 // HelmSourceKind is the api-layer mirror of helm.EntrySourceKind.

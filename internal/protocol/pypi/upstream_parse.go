@@ -312,3 +312,29 @@ func (sf SyncFilter) AcceptProject(normalizedProject string) bool {
 func joinFilenameURL(base, filename string) string {
 	return strings.TrimRight(base, "/") + "/" + path.Base(filename)
 }
+
+// isInstallableExt reports whether filename has a suffix pip will actually
+// install from a PEP 503 simple index in 2026. Only wheels and the three
+// sdist archive extensions matter: pip stopped installing from .egg via
+// simple/ in 2017, and .exe / .msi bdists haven't been accepted as new
+// uploads on pypi.org for just as long.
+//
+// The mirror sync must reject non-installable upstream entries up front
+// (F-07.4, wt3 §7.11 side obs): the inline sync-path version parser in
+// sync_handler.go strips only .gz/.tar/.zip, so legacy files whose
+// filename tail contains a dash — e.g. `requests-2.23.0-py2.7.egg` —
+// land in pypi_files with the tail as the "version" and pollute the
+// Simple-index grouping, scan-result cards, and UI collapsed rows.
+func isInstallableExt(filename string) bool {
+	l := strings.ToLower(filename)
+	switch {
+	case strings.HasSuffix(l, ".whl"):
+		return true
+	case strings.HasSuffix(l, ".tar.gz"),
+		strings.HasSuffix(l, ".tgz"),
+		strings.HasSuffix(l, ".zip"):
+		return true
+	default:
+		return false
+	}
+}

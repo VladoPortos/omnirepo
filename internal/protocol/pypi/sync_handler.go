@@ -185,6 +185,16 @@ func (h *SyncHandler) Handle(ctx context.Context, payload string, projectID, rep
 			if !pl.Filter.FilterFile(f, project) {
 				continue
 			}
+			// F-07.4 (wt3): upstream pypi.org still lists legacy .egg /
+			// .exe / .msi entries for some projects. pip hasn't installed
+			// from any of them via simple/ since 2017, and the inline
+			// sync-path version parser below only strips .gz/.tar/.zip —
+			// so a .egg filename tail ends up as the "version" column.
+			// Skip here before we ever enqueue the download so the mirror
+			// stays clean (sdist parse invariant in parse.go:202).
+			if !isInstallableExt(f.Filename) {
+				continue
+			}
 			// Idempotency by filename — matches pypi_files UNIQUE(repo_id, filename) (D-15).
 			if existing, ferr := h.deps.PyPIFiles.FindByFilename(ctx, repoID, f.Filename); ferr == nil && existing != nil {
 				continue

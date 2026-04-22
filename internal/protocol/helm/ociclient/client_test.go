@@ -311,6 +311,30 @@ func TestResolve(t *testing.T) {
 	}
 }
 
+// TestNormalizeRefCaseInsensitive covers the Codex batch-09 follow-up:
+// validateMirrorUpstreamURL accepts OCI scheme case-insensitively, so the
+// prefix strip in ociclient must match to keep the canonical ref
+// parseable by ORAS downstream.
+func TestNormalizeRefCaseInsensitive(t *testing.T) {
+	cases := []struct {
+		in, want string
+	}{
+		{"oci://registry-1.docker.io/bitnamicharts/nginx", "registry-1.docker.io/bitnamicharts/nginx"},
+		{"OCI://registry-1.docker.io/bitnamicharts/nginx", "registry-1.docker.io/bitnamicharts/nginx"},
+		{"Oci://registry-1.docker.io/bitnamicharts/nginx", "registry-1.docker.io/bitnamicharts/nginx"},
+		{"oCi://registry-1.docker.io/bitnamicharts/nginx:1.2.3", "registry-1.docker.io/bitnamicharts/nginx:1.2.3"},
+		// Non-oci prefixes passed through untouched.
+		{"https://registry-1.docker.io/bitnamicharts/nginx", "https://registry-1.docker.io/bitnamicharts/nginx"},
+		{"", ""},
+		{"oc", "oc"},
+	}
+	for _, tc := range cases {
+		if got := normalizeRef(tc.in); got != tc.want {
+			t.Errorf("normalizeRef(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
 func TestListTags(t *testing.T) {
 	fix := newFixture(t, "test-chart", "1.0.0", registry.ChartLayerMediaType)
 	srv, hc, _ := newTLSFakeRegistry(t, fix, "", []string{"1.0.0", "2.0.0"})

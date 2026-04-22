@@ -121,8 +121,17 @@ func New(httpClient *http.Client) Client {
 // newReference already trims this for Pull, but Tags and Resolve call
 // oras' registry.ParseReference / remote.NewRepository directly without
 // the strip — so we normalize up-front to keep behavior uniform.
+//
+// Scheme comparison is case-insensitive to match validateMirrorUpstreamURL
+// and the sync handler's dispatch (both use strings.ToLower before the
+// HasPrefix check). Without this, an "OCI://…" ref accepted by the
+// validator would reach ORAS with a scheme ORAS can't parse as a
+// registry reference. Codex batch-09 review surfaced the inconsistency.
 func normalizeRef(ref string) string {
-	return strings.TrimPrefix(ref, "oci://")
+	if len(ref) >= len("oci://") && strings.EqualFold(ref[:len("oci://")], "oci://") {
+		return ref[len("oci://"):]
+	}
+	return ref
 }
 
 // newSDKClient builds a fresh registry.Client for a single operation.

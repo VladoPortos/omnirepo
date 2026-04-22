@@ -249,12 +249,20 @@ func (d SyncRESTDeps) handleSync(w http.ResponseWriter, r *http.Request) {
 	// the sync-trigger endpoint must accept the same set of schemes or a
 	// created mirror can never actually sync. Other protocols keep the
 	// http(s)-only contract.
-	allowOCI := repoType == "helm"
-	if perr != nil || u.Host == "" ||
-		(u.Scheme != "http" && u.Scheme != "https" && !(allowOCI && u.Scheme == "oci")) {
+	//
+	// Codex batch-09 review (real-issue): gate OCI on repo.IsMirror so a
+	// non-mirror helm repo's body-driven sync (pull-external-style) can't
+	// smuggle in an oci:// URL that was never vetted by
+	// validateMirrorUpstreamURL + refuseDockerHubWithoutCred. Also require
+	// a non-empty path for oci:// so "oci://host" (classifyHelmUpstream
+	// rejects it at create-time) stays rejected here if ever reached.
+	allowOCI := repoType == "helm" && repo.IsMirror
+	schemeOK := u.Scheme == "http" || u.Scheme == "https" ||
+		(allowOCI && u.Scheme == "oci" && u.Path != "" && u.Path != "/")
+	if perr != nil || u.Host == "" || !schemeOK {
 		msg := "upstream_url must be http(s)"
 		if allowOCI {
-			msg = "upstream_url must be http(s) or oci:// (helm only)"
+			msg = "upstream_url must be http(s) or oci://host/path (helm only)"
 		}
 		writeJSONErr(w, http.StatusBadRequest, "validation_failed", msg)
 		return

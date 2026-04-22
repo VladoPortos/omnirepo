@@ -15,7 +15,7 @@
  *   - Button disabled while the mutation is pending (prevents rapid
  *     double-fire)
  *   - Button disabled while `isPolling` — backend also enforces
- *     concurrency via 409 sync.sync_already_running, but we don't
+ *     concurrency via 409 mirror.sync.in_flight, but we don't
  *     want to generate those 409s from our own UI double-clicks.
  *
  * The backend emits

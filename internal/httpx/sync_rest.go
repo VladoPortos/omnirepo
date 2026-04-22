@@ -22,10 +22,12 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
 	"github.com/dxc-internal/omnirepo/internal/audit"
+	"github.com/dxc-internal/omnirepo/internal/httperr"
 	"github.com/dxc-internal/omnirepo/internal/metadata"
 )
 
@@ -40,10 +42,24 @@ const MaxSyncBodyBytes = 16 * 1024
 // satisfies the envelope schema regex while the second segment keeps the
 // operator-facing token verbatim so grep-based plan-check assertions
 // resolve against this file.
+//
+// Phase 11 Plan 05 (D-11): the concurrent-sync-collision 409 code was
+// generalized to `codeMirrorSyncInFlight` (below) so it can carry
+// cross-kind details `{kind, job_id, started_at}` under a single
+// envelope. This is a v1.4-minor clean switch (no external API
+// stability promise in v1.x point releases). Docs and cron scripts in
+// `docs/operations/scheduled-sync.md` track the new code.
 const (
 	codeSyncMirrorOverridesNotAllowed = "sync.mirror_overrides_not_allowed"
-	codeSyncAlreadyRunning            = "sync.sync_already_running"
 	codeSyncInvalidRequestBody        = "sync.invalid_request_body"
+
+	// codeMirrorSyncInFlight is the D-11 generalized 409 envelope code
+	// for a concurrent-sync collision on the same repo. Emitted via
+	// httperr.Write with details={kind, job_id, started_at} so the UI
+	// renders "Sync already running — started N min ago" uniformly
+	// across protocol kinds (apt_sync, rpm_sync, pypi_sync, helm_sync,
+	// git_sync).
+	codeMirrorSyncInFlight = "mirror.sync.in_flight"
 )
 
 // SyncActor is the auth-agnostic projection of the request actor used by
@@ -117,7 +133,7 @@ func (d SyncRESTDeps) handleSync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch repoType {
-	case "rpm", "deb", "pypi", "helm":
+	case "rpm", "deb", "pypi", "helm", "git":
 	default:
 		writeJSONErr(w, http.StatusBadRequest, "validation_failed", "unsupported repo type: "+repoType)
 		return
@@ -183,11 +199,14 @@ func (d SyncRESTDeps) handleSync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Phase 8 Plan 01 (MIRROR-04): one-in-flight-sync-per-repo. The
-	// CountRepoInflight + subsequent Enqueue are NOT atomic; a race between
-	// two concurrent POSTs can produce two pending rows. The worker pool's
-	// LeaseOne uses UPDATE ... RETURNING so only one lease wins, capping
-	// the residual cost at one wasted pending row (T-08-01-04).
+	// Phase 8 Plan 01 (MIRROR-04): one-in-flight-sync-per-repo.
+	// Phase 11 Plan 05 (D-11): the fast-path pre-check uses GetInflightTx
+	// via the reader pool equivalent — but since GetInflightTx is
+	// writer-tx-scoped for the race-closing guarantee below, the fast-path
+	// here calls CountRepoInflight (reader pool) and, on a hit, does a
+	// second read through GetInflight to populate the envelope details.
+	// The authoritative check still runs inside the writer tx further
+	// down, so this duplicate is an optimization, not a correctness gate.
 	inflight, cerr := d.SyncJobs.CountRepoInflight(r.Context(), repo.ID)
 	if cerr != nil {
 		slog.ErrorContext(r.Context(), "sync.rest.inflight_count", "err", cerr)
@@ -195,8 +214,7 @@ func (d SyncRESTDeps) handleSync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if inflight > 0 {
-		writeJSONErr(w, http.StatusConflict, codeSyncAlreadyRunning,
-			"a sync is already running for this repo")
+		writeMirrorSyncInFlight(w, r, d, repo.ID)
 		return
 	}
 
@@ -277,25 +295,26 @@ func (d SyncRESTDeps) handleSync(w http.ResponseWriter, r *http.Request) {
 		kind = "apt_sync"
 	}
 
-	// Plan 08-06 Codex rescue Q7: CountRepoInflight + Enqueue must be
+	// Plan 08-06 Codex rescue Q7: inflight-check + Enqueue must be
 	// atomic against concurrent /sync POSTs. The earlier Reader-pool
 	// CountRepoInflight above is a fast-path short-circuit; the
 	// authoritative check lives inside the writer tx. SQLite serialises
-	// writer-pool statements so the tx-scoped count+insert pair is
+	// writer-pool statements so the tx-scoped check+insert pair is
 	// race-free — a second caller either (a) sees the first tx's pending
-	// row and returns errInflight, or (b) commits first and makes the
-	// second caller observe inflight > 0.
-	var (
-		jobID       int64
-		errInflight = errors.New("sync_already_running_tx")
-	)
+	// row and returns inflightErr with populated details, or (b) commits
+	// first and makes the second caller observe the in-flight row.
+	//
+	// Plan 11-05 (D-11): the tx-scoped check moved from CountRepoInflightTx
+	// to GetInflightTx so the returned details (kind, job_id, started_at)
+	// flow into the 409 envelope without a second read.
+	var jobID int64
 	wtxErr := d.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
-		n, err := d.SyncJobs.CountRepoInflightTx(r.Context(), tx, repo.ID)
+		got, exists, err := d.SyncJobs.GetInflightTx(r.Context(), tx, repo.ID)
 		if err != nil {
 			return err
 		}
-		if n > 0 {
-			return errInflight
+		if exists {
+			return &inflightErr{job: got}
 		}
 		id, err := d.SyncJobs.Enqueue(r.Context(), tx, kind, proj.ID, repo.ID, string(buf))
 		if err != nil {
@@ -304,9 +323,21 @@ func (d SyncRESTDeps) handleSync(w http.ResponseWriter, r *http.Request) {
 		jobID = id
 		return nil
 	})
-	if errors.Is(wtxErr, errInflight) {
-		writeJSONErr(w, http.StatusConflict, codeSyncAlreadyRunning,
-			"a sync is already running for this repo")
+	var iErr *inflightErr
+	if errors.As(wtxErr, &iErr) {
+		httperr.Write(w, r, &httperr.Error{
+			Envelope: httperr.Envelope{
+				Code:    codeMirrorSyncInFlight,
+				Message: "A sync is already running for this repo.",
+				Class:   httperr.ClassTransient,
+				Details: map[string]any{
+					"kind":       iErr.job.Kind,
+					"job_id":     iErr.job.ID,
+					"started_at": iErr.job.StartedAt.UTC().Format(time.RFC3339),
+				},
+			},
+			Status: http.StatusConflict,
+		})
 		return
 	}
 	if wtxErr != nil {
@@ -352,4 +383,50 @@ func writeJSONOK(w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(body)
+}
+
+// inflightErr is the sentinel error returned from the /sync writer tx
+// when a concurrent sync is already running for the target repo. The
+// embedded InflightJob carries kind/id/started_at for the 409 envelope
+// details (plan 11-05 D-11). Local to this file — do not export.
+type inflightErr struct {
+	job metadata.InflightJob
+}
+
+func (e *inflightErr) Error() string { return "mirror_sync_in_flight_tx" }
+
+// writeMirrorSyncInFlight emits the D-11 generalized 409 envelope for a
+// concurrent-sync collision. Uses a reader-pool GetInflight call to
+// populate {kind, job_id, started_at}; if that lookup races with the
+// job finishing (a vanishingly rare window since the caller just
+// observed inflight > 0), falls back to a best-effort envelope with
+// empty details. Response shape parity with the writer-tx emission
+// further down handleSync.
+func writeMirrorSyncInFlight(w http.ResponseWriter, r *http.Request, d SyncRESTDeps, repoID int64) {
+	details := map[string]any{}
+	// Use a short-lived writer tx for the lookup. The reader pool could
+	// miss a very-recent insert under SQLite's WAL semantics; the writer
+	// tx guarantees we see it. This is a single-row read on an indexed
+	// column — cheap even on the writer.
+	_ = d.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
+		job, exists, err := d.SyncJobs.GetInflightTx(r.Context(), tx, repoID)
+		if err != nil {
+			return err
+		}
+		if exists {
+			details["kind"] = job.Kind
+			details["job_id"] = job.ID
+			details["started_at"] = job.StartedAt.UTC().Format(time.RFC3339)
+		}
+		return nil
+	})
+	httperr.Write(w, r, &httperr.Error{
+		Envelope: httperr.Envelope{
+			Code:    codeMirrorSyncInFlight,
+			Message: "A sync is already running for this repo.",
+			Class:   httperr.ClassTransient,
+			Details: details,
+		},
+		Status: http.StatusConflict,
+	})
 }

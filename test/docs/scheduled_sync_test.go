@@ -72,7 +72,7 @@ func TestScheduledSyncDocStructure(t *testing.T) {
 		{"D-20 bash shebang", "#!/usr/bin/env bash"},
 		{"D-20 set -euo pipefail", "set -euo pipefail"},
 		{"CRONDOCS-02 Bearer auth header", "Authorization: Bearer"},
-		{"CRONDOCS-02 409 envelope code", "sync.sync_already_running"},
+		{"CRONDOCS-02 409 envelope code", "mirror.sync.in_flight"},
 		{"D-21 K8s CronJob apiVersion", "apiVersion: batch/v1"},
 		{"D-21 K8s CronJob kind", "kind: CronJob"},
 		{"D-21 concurrencyPolicy Forbid", "concurrencyPolicy: Forbid"},

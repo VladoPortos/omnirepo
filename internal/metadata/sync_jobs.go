@@ -191,7 +191,8 @@ func (r *SyncJobsRepo) SetFilesSynced(ctx context.Context, jobID, files int64) e
 // CountRepoInflight reports how many sync_jobs rows for repoID are
 // currently pending or running. Used by the mirror-aware /sync endpoint
 // (Phase 8 Plan 01, D-07) to enforce one-in-flight-sync-per-repo with
-// 409 sync_already_running.
+// a 409 envelope (plan 11-05 D-11 generalized this to
+// `mirror.sync.in_flight`).
 //
 // Reader-pool variant (fast-path pre-check). Callers that MUST enforce
 // "exactly one in-flight at a time" should use CountRepoInflightTx within
@@ -208,6 +209,89 @@ func (r *SyncJobsRepo) CountRepoInflight(ctx context.Context, repoID int64) (int
 		return 0, fmt.Errorf("sync_jobs: count inflight %d: %w", repoID, err)
 	}
 	return n, nil
+}
+
+// InflightJob summarizes the currently-running (or pending) sync for a
+// repo. Used by internal/httpx/sync_rest.go to populate the D-11
+// generalized 409 envelope `mirror.sync.in_flight` with details
+// `{kind, job_id, started_at}`.
+//
+// StartedAt is sourced from `COALESCE(leased_at, created_at)`. The
+// sync_jobs schema (migration 002) does not carry a dedicated
+// `started_at` column — leased_at is populated at LeaseOne time, while
+// created_at defaults to CURRENT_TIMESTAMP at Enqueue. The coalesce
+// gives the UI a stable RFC3339 timestamp for both pending (not yet
+// leased) and running (leased) rows.
+type InflightJob struct {
+	ID        int64
+	Kind      string
+	StartedAt time.Time
+}
+
+// GetInflightTx returns the newest pending/running sync job for repoID,
+// or (InflightJob{}, false, nil) when none. Intended to be called inside
+// the same DB.WriteTx as the subsequent Enqueue so a concurrent /sync
+// POST either (a) observes the first tx's pending row and short-circuits
+// with a 409, or (b) commits first and makes the second caller observe
+// an in-flight row.
+//
+// Sort is `ORDER BY id DESC` so the caller sees the most recently
+// enqueued row — this matches the pooled "one writer serializes"
+// semantics of modernc SQLite and keeps the 409 envelope deterministic
+// when (pathologically) multiple pending rows exist for the same repo.
+//
+// Kind-agnostic: no `kind = ?` clause in the WHERE, identical filter
+// shape to CountRepoInflightTx. INV-11-05-03: plans 11-06 + future
+// kind additions must not tighten this filter.
+func (r *SyncJobsRepo) GetInflightTx(ctx context.Context, tx *sql.Tx, repoID int64) (InflightJob, bool, error) {
+	const q = `
+		SELECT id, kind, COALESCE(leased_at, created_at) AS started_at
+		FROM sync_jobs
+		WHERE repo_id = ? AND status IN ('pending','running')
+		ORDER BY id DESC
+		LIMIT 1
+	`
+	var job InflightJob
+	// modernc.org/sqlite stores TIMESTAMP columns as TEXT in SQLite's
+	// native format "YYYY-MM-DD HH:MM:SS" (from CURRENT_TIMESTAMP) or, if
+	// a Go time.Time was passed directly, as the driver-stringified form
+	// "YYYY-MM-DD HH:MM:SS.nnnnnnnnn +0000 UTC" (see scans.go:95-104 for
+	// the F-T6 wedge we hit last time this bit us). Scanning into
+	// sql.NullTime fails on both formats, so scan as string and parse
+	// by trying the native shape first, then the driver-stringified
+	// shape as a fallback.
+	var startedAt sql.NullString
+	err := tx.QueryRowContext(ctx, q, repoID).Scan(&job.ID, &job.Kind, &startedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return InflightJob{}, false, nil
+	}
+	if err != nil {
+		return InflightJob{}, false, fmt.Errorf("sync_jobs: get_inflight %d: %w", repoID, err)
+	}
+	if startedAt.Valid && startedAt.String != "" {
+		job.StartedAt = parseSyncJobTimestamp(startedAt.String)
+	}
+	return job, true, nil
+}
+
+// parseSyncJobTimestamp parses the TEXT-stored sync_jobs timestamp back
+// into a time.Time. Falls through the two shapes modernc.org/sqlite
+// actually emits for this column; any unparseable value produces the
+// zero time (the 409 envelope still renders — just without a valid
+// started_at — rather than failing the whole request).
+func parseSyncJobTimestamp(raw string) time.Time {
+	for _, layout := range []string{
+		"2006-01-02 15:04:05",                    // SQLite CURRENT_TIMESTAMP
+		"2006-01-02 15:04:05.999999999 -0700 MST", // time.Time.String()
+		"2006-01-02T15:04:05Z",                    // RFC3339 (future-proof)
+		"2006-01-02T15:04:05.000Z",                // milli-UTC (future-proof)
+		time.RFC3339Nano,
+	} {
+		if t, err := time.Parse(layout, raw); err == nil {
+			return t.UTC()
+		}
+	}
+	return time.Time{}
 }
 
 // CountRepoInflightTx is the tx-scoped variant of CountRepoInflight,

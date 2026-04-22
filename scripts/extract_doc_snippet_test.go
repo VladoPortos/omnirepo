@@ -165,7 +165,7 @@ func TestExtractSnippet_RealDoc(t *testing.T) {
 		}
 		t.Fatalf("body missing shebang prefix; got: %q", body[:n])
 	}
-	if !strings.Contains(body, "sync.sync_already_running") {
+	if !strings.Contains(body, "mirror.sync.in_flight") {
 		t.Fatal("body missing 409 envelope code")
 	}
 	if !strings.Contains(body, "Authorization: Bearer") {

@@ -16,7 +16,7 @@ Do not embed the key literal in the script. Load it from a file (chmod 600) or a
 
 ## Worked example: APT mirror (archive.ubuntu.com/ubuntu)
 
-The script below fires a sync for an APT mirror repo, polls its sync-job until it reaches a terminal state, and exits with a distinct code per failure mode. Treat `409 sync.sync_already_running` as an idempotent happy path — another caller (or a previous cron tick whose sync outlived its window) is already doing the work.
+The script below fires a sync for an APT mirror repo, polls its sync-job until it reaches a terminal state, and exits with a distinct code per failure mode. Treat `409 mirror.sync.in_flight` as an idempotent happy path — another caller (or a previous cron tick whose sync outlived its window) is already doing the work.
 
 <!-- shellcheck-id: scheduled-sync -->
 ```bash
@@ -41,10 +41,10 @@ MAX_ATTEMPTS=60
 SLEEP_SECONDS=10
 
 # 1. Enqueue the sync. 202 -> {"job_id": N, "kind": "..."}.
-#    409 sync.sync_already_running = idempotent happy exit (0).
+#    409 mirror.sync.in_flight = idempotent happy exit (0).
 resp=$(curl -fsS --max-time 30 -H "${AUTH_HEADER}" -X POST "${BASE}/sync" || true)
 case "$resp" in
-  *"sync.sync_already_running"*)
+  *"mirror.sync.in_flight"*)
     echo "Sync already in flight - trusting it. Exiting 0."
     exit 0
     ;;
@@ -128,7 +128,7 @@ spec:
 
                   resp=$(curl -fsS --max-time 30 -H "${AUTH_HEADER}" -X POST "${BASE}/sync" || true)
                   case "$resp" in
-                    *"sync.sync_already_running"*) echo "Already in flight - exiting 0"; exit 0 ;;
+                    *"mirror.sync.in_flight"*) echo "Already in flight - exiting 0"; exit 0 ;;
                     *"job_id"*) job_id=$(echo "$resp" | sed -n 's/.*"job_id":[[:space:]]*\([0-9]*\).*/\1/p') ;;
                     *) echo "Unexpected response: $resp" >&2; exit 2 ;;
                   esac
@@ -181,7 +181,7 @@ The same flow works for RPM (`REPO_TYPE=rpm`), PyPI (`REPO_TYPE=pypi`), Helm (`R
 
 | Exit | Meaning |
 |------|---------|
-| `0`  | Sync completed successfully **or** `sync.sync_already_running` idempotent hit. |
+| `0`  | Sync completed successfully **or** `mirror.sync.in_flight` idempotent hit. |
 | `1`  | Sync job reached terminal status `failed`. Investigate via admin UI → **Background Jobs**, or fetch `last_error` from `GET /sync-jobs/{id}`. |
 | `2`  | Unexpected REST response or unknown status. Likely misconfiguration (wrong API key, wrong URL, or an OmniRepo upgrade changed response shape — file an issue). |
 | `3`  | `MAX_ATTEMPTS × SLEEP_SECONDS` elapsed without reaching a terminal state. The job may still complete; exit 3 is the alert, not the truth. |

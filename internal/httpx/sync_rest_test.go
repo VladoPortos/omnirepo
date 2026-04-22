@@ -275,7 +275,10 @@ func TestSync_NonMirrorBodyDriven(t *testing.T) {
 }
 
 // TestSync_ConcurrencyGuardReturns409 plants a pending sync_jobs row for
-// the target repo, then POSTs /sync and asserts 409 sync_already_running.
+// the target repo, then POSTs /sync and asserts 409 mirror.sync.in_flight
+// (plan 11-05 D-11 clean switch from the legacy `sync.sync_already_running`
+// code). Payload shape is the full httperr.Envelope now, not the minimal
+// {error, detail} shape the pre-11-05 writeJSONErr emitted.
 func TestSync_ConcurrencyGuardReturns409(t *testing.T) {
 	s := setupSyncTestServer(t)
 	ctx := context.Background()
@@ -295,11 +298,11 @@ func TestSync_ConcurrencyGuardReturns409(t *testing.T) {
 	if resp.StatusCode != http.StatusConflict {
 		t.Fatalf("status = %d, want 409", resp.StatusCode)
 	}
-	var out map[string]any
-	_ = json.NewDecoder(resp.Body).Decode(&out)
-	code, _ := out["error"].(string)
-	if !strings.Contains(code, "sync_already_running") {
-		t.Fatalf("code = %q, want *sync_already_running; body=%+v", code, out)
+	var env map[string]any
+	_ = json.NewDecoder(resp.Body).Decode(&env)
+	code, _ := env["code"].(string)
+	if code != "mirror.sync.in_flight" {
+		t.Fatalf("code = %q, want mirror.sync.in_flight; body=%+v", code, env)
 	}
 }
 

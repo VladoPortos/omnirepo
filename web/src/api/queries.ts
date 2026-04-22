@@ -1282,7 +1282,7 @@ export function usePullExternal(projectName: string, repoName: string) {
  * from the repo row (mirror_upstream_url, mirror_filter_json,
  * mirror_cred_id, scan_on_sync) — see
  * internal/httpx/sync_rest.go's 3-way branch. The 409
- * sync.sync_already_running envelope surfaces via ErrorEnvelopeRenderer
+ * mirror.sync.in_flight envelope surfaces via ErrorEnvelopeRenderer
  * when a prior job is still in flight (backend CountRepoInflight guard,
  * plan 08-01 T-08-01-04).
  *

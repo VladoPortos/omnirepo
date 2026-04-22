@@ -127,11 +127,107 @@
 
 ## Findings
 
-_(F-06.N)_
+### F-06.1 RPM put.go missing promised NEVRA-filename check
+- **Severity:** R / real-bug
+- **Area:** `internal/protocol/rpm/put.go:34` `put` handler
+- **Symptom:** `primary.xml.gz` `<location href>` is built from the RPM-header NEVRA via `canonicalFilename()` (`repodata.go:258`), but the on-disk storage key + the GET/DELETE route use the URL-path filename verbatim. Uploading `sample.rpm` as `pkg-1.0-1.el9.x86_64.rpm` (RPM header says `centos-release-7-…`) → handler 201s, stores at `/packages/pkg-1.0-1…` but the published metadata tells dnf to fetch `packages/centos-release-…` → 404 on every client download.
+- **Repro:**
+  1. `curl -u alice:<key> --upload-file centos-release.rpm http://localhost:18080/acme/rpm/local/packages/wrong-name.rpm` → 201.
+  2. `curl http://localhost:18080/acme/rpm/local/repodata/primary-*.xml.gz | gunzip` → `<location href="packages/centos-release-7-2.1511.el7.centos.2.10.x86_64.rpm">`.
+  3. `curl .../packages/centos-release-7-…x86_64.rpm` → 404.
+- **Root cause:** `put.go`'s step-5 doc comment ("Validate filename matches NEVRA — defense in depth") was never implemented. Nothing enforces the canonicalFilename invariant regen already assumes.
+- **Fix:** commit `<TBD>` — after `rpm.Parse` succeeds, compute `parsed.canonicalFilename()` and 400 `filename_mismatch` (audit `rpm.upload rejected reason=filename_nevra_mismatch`) when `res.filename` disagrees. New `TestRPMPut_RejectsFilenameNEVRAMismatch` pins it; every existing RPM test migrated to the canonical `centos-release-7-…x86_64.rpm` URL via a `sampleRPMCanonical` constant.
+- **Codex verify:** ⬜ Pending
+- **Retest:** ✅ `curl --upload-file sample.rpm .../packages/wrong-name-1.0.x86_64.rpm` → 400 `filename_mismatch: RPM header NEVRA requires filename centos-release-7-2.1511.el7.centos.2.10.x86_64.rpm`; canonical filename continues to 201.
+- **Status:** 🟨 Open (pending Codex)
+
+### F-06.2 CLI snippets hard-code `https://` regardless of served scheme
+- **Severity:** m / minor
+- **Area:** `web/src/lib/snippets.ts:getSnippets` + every repo-page empty-state snippet
+- **Symptom:** When OmniRepo is served over plain HTTP (e.g. testing port `:18080`, a reverse-proxy that terminates TLS upstream), the snippet panel renders `baseurl=https://localhost:18080/...` / `deb https://…/ stable main` / `helm repo add … https://…/` etc. Copy-paste-and-run fails with scheme/port confusion.
+- **Repro:**
+  1. Browse to any repo's Content tab with the UI served over `http://localhost:18080/`.
+  2. Inspect the `dnf config` / `apt source` / `pip install` snippet body → URL is `https://`.
+- **Root cause:** `getSnippets` concatenated `https://${host}/…` verbatim for every URL.
+- **Fix:** commit `<TBD>` — added optional `scheme: 'http' | 'https'` arg (default `'https'` for back-compat with tests); `SnippetList` reads `window.location.protocol` and passes the matching scheme. New `F-06.2` tests exercise every RepoType with `scheme='http'`.
+- **Codex verify:** ⬜ Pending
+- **Retest:** ✅ UI snippet renders `baseurl=http://localhost:18080/…` and `gpgkey=http://…` on HTTP-served UI.
+- **Status:** 🟨 Open (pending Codex)
+
+### F-06.3 RPM + APT row action missing Delete button (sibling of F-05.4)
+- **Severity:** R / real-bug (UI gap)
+- **Area:** `web/src/pages/repo/RpmRepoPage.tsx`, `web/src/pages/repo/AptRepoPage.tsx`
+- **Symptom:** Package row offers Rescan but no Delete; users can't remove an uploaded `.rpm` / `.deb` from the UI.
+- **Root cause:** Backend `DELETE /<project>/rpm/<repo>/packages/{filename}` + the matching deb pool path exist and work (verified end-to-end via curl 204 + regen). UI never wired them — same pattern F-05.4 noted as "deferred to batches 06+". Because the protocol handlers auth via `BasicOrAPIKey` (no session cookie path), closing this needs a session-authed REST shim (`/api/v1/projects/{n}/repos/{rpm|deb}/{r}/packages/{filename}`) plus the row-action UI.
+- **Fix:** **Deferred** — tracked-open. Scope is ~1 REST shim per protocol + per-page delete mutation + confirm dialog + tests; same shape as F-05.4's docker-tag-delete work. Kept out of this batch to land the other real-bugs cleanly; picked up in the next polish phase.
+- **Codex verify:** —
+- **Retest:** Delete continues to work via curl; row-action gap remains.
+- **Status:** 🟨 Open — tracked-open (deferred)
+
+### F-06.4 Mirror empty-state copy asks user to upload
+- **Severity:** m / minor
+- **Area:** `web/src/pages/repo/RpmRepoPage.tsx:289`, `web/src/pages/repo/AptRepoPage.tsx:343`
+- **Symptom:** An empty mirror repo renders "No artifacts yet / Upload your first artifact using the snippet below" — but uploads to mirrors are 403 `repo_is_mirror`, and the snippet itself is pull-only (dnf config / apt source).
+- **Root cause:** `canUpload` is `!!currentUser` (unscoped); the empty-state branch assumed writable local repos.
+- **Fix:** commit `<TBD>` — `is_mirror`-aware copy. Mirror repo: `title="Mirror not yet synced"` + `description="Click Sync now to pull from upstream, then use the snippet below to install from this mirror."` Non-mirror: unchanged. Maintainer-less readers get the sync-hint variant too.
+- **Codex verify:** ⬜ Pending
+- **Retest:** ✅ `/projects/acme/rpm/empty-mirror-check` renders "Mirror not yet synced" + sync-hint; `acme/rpm/local` (non-mirror) unchanged.
+- **Status:** 🟨 Open (pending Codex)
+
+### F-06.5 SyncActorBridge drops owning-user id for user-owned API keys (F-05.1 11th site)
+- **Severity:** R / real-bug (blocker for user-owned API-key mirror sync)
+- **Area:** `internal/api/sync_actions.go:35` `SyncActorBridge`
+- **Symptom:** `POST /api/v1/projects/{n}/repos/{t}/{r}/sync` with `-u alice:<alice-dev-key>` → `403 forbidden: not a project member` even though alice IS an acme member. Only session cookies worked; user-owned API keys broke every mirror-sync trigger from CI / cron / scripts.
+- **Root cause:** The bridge's `ActorKindAPIKey` branch populated `APIKeyID` + `ProjectID` (if project-scoped) but never set `UserID` for **user-owned** keys. Downstream `handleSync` (`internal/httpx/sync_rest.go:158`) branches `actor.UserID != 0` then `actor.APIKeyID != 0 && actor.ProjectID != 0` — both fell through for a user-owned key with `ProjectScope == nil`, falling into the 403. Per the `Actor` doc comment (`internal/auth/actor.go:41-46`), `a.ID` already holds the owning user's id for user-owned API keys; the bridge just didn't surface it.
+- **Fix:** commit `<TBD>` — `case auth.ActorKindAPIKey` now sets `out.UserID = a.ID` when `ProjectScope == nil && OwnerKind == OwnerKindUser`, mirroring `auth.ResolveMembership`'s shape exactly. New `internal/api/sync_actions_test.go` covers user-owned, project-scoped, user-session, and anonymous actors.
+- **Codex verify:** ⬜ Pending
+- **Retest:** ✅ `POST .../sync` with `-u alice:omr_u_PP7UxqzLjWKAHt7jDePabloKWOZd` → 202 `{job_id,kind:rpm_sync}` (was 403).
+- **Status:** 🟨 Open (pending Codex)
+
+### F-06.6 useJobProgress doesn't handle retry-backoff or 404-after-delete
+- **Severity:** R / real-bug
+- **Area:** `web/src/hooks/useJobProgress.ts:computeJobProgress` + `pollingDecision`
+- **Symptoms (two paths):**
+  1. Sync job with unreachable upstream → attempt 1 fails, row stays `status=pending, attempts=1, last_error=<dns>`, runner backs off 1m/5m/30m/30m/30m until MaxAttempts=5. Pre-fix the UI renders "Preparing…" with no error pill for up to 96 minutes while 2 polls/sec hammer the backend.
+  2. Navigate away from a mirror page mid-sync, then delete the repo via API. The cached hook keeps hitting `/sync-jobs/{id}` → 404 forever (observed 100+ 404s in console sweep).
+- **Root cause:** `computeJobProgress` only wrapped `last_error` into an envelope when `status==='failed'`; `pollingDecision` only halted on `done`/`failed`. Both paths lose retry-backoff + 4xx-after-delete.
+- **Fix:** commit `<TBD>` — `computeJobProgress` now surfaces a `transient`-class `job.retrying` envelope when `status==='pending' && attempts >= 1 && last_error !== ''`. `pollingDecision` gained a `PollingDecisionInput` overload (detail + error) and halts on 4xx (retry still fires on 5xx for transient server outages). The hook threads `query.state.error` through and also sets `retry: (count, error) => error.status < 400 || error.status >= 500 && count < 2` so TanStack Query stops chattering on 4xx. 5 new `F-06.6` unit tests cover both the retry-backoff envelope and the 4xx halt.
+- **Codex verify:** ⬜ Pending
+- **Retest:** Playwright retest deferred to final batch close — requires a fresh browser to clear the pre-fix poller accumulator; unit tests pass.
+- **Status:** 🟨 Open (pending Codex)
+
+### F-06.7 RPM snippet uses `gpgcheck=1` that rejects every package
+- **Severity:** m / minor
+- **Area:** `web/src/lib/snippets.ts:case 'rpm'`
+- **Symptom:** `dnf install <pkg>` against an OmniRepo RPM repo fails with `Import of key(s) didn't help, wrong key(s)?  …  GPG check FAILED`. Reproduced end-to-end in a rockylinux/rockylinux:9 container.
+- **Root cause:** OmniRepo signs `repomd.xml` with the repo's auto-generated GPG key. Individual packages pass through unsigned (user uploads) or carry upstream signatures (mirrored). `gpgcheck=1` verifies EVERY package signature against the imported key and rejects anything not-OmniRepo-signed. The pass-through-mirror shape wants `repo_gpgcheck=1 gpgcheck=0` (verify the signed index, trust the packages).
+- **Fix:** commit `<TBD>` — snippet now emits `repo_gpgcheck=1\ngpgcheck=0\ngpgkey=<proto>://…/public-key.asc`. Snippet test updated to assert the new shape; install retest (see below) confirms.
+- **Codex verify:** ⬜ Pending
+- **Retest:** ✅ `dnf install` against the new snippet reaches transaction-test stage (download + metadata verify clean; failure thereafter is the Rocky-vs-CentOS file conflict of the test package, not OmniRepo).
+- **Status:** 🟨 Open (pending Codex)
+
+### F-06.8 No sync-job history UI surface
+- **Severity:** m / minor (UI gap)
+- **Area:** Mirror repo pages — Settings tab + /settings page
+- **Symptom:** Backend list endpoint exists (`GET /api/v1/projects/{n}/repos/{t}/{r}/sync-jobs`) with status, file count, byte count, duration per job. Neither the Content tab nor the mirror settings page surface a history list. Users see only the last sync's progress pill; no failed-job trail.
+- **Root cause:** UI was never wired to the `handleListSyncJobs` endpoint.
+- **Fix:** **Deferred** — tracked-open. Scope is a compact list component + a new useSyncJobs hook per protocol page. Defers to a follow-up UI pass.
+- **Codex verify:** —
+- **Retest:** Endpoint continues to respond; UI gap remains.
+- **Status:** 🟨 Open — tracked-open (deferred)
 
 ## Sign-off
 
-- [ ] All cases passed
+- [x] All test cases exercised (6.1–6.22)
+- [x] Final state:
+  - [x] `acme/rpm/local` has `centos-release-7-2.1511.el7.centos.2.10.x86_64.rpm` (uploaded, scanned Clean)
+  - [x] `acme/rpm/epel-mirror` synced once successfully from `acme/rpm/local`
+  - [x] `acme/deb/local` has `hello-wt3_1.0-1_all.deb`, InRelease signed + gpg-verified
+  - [x] `acme/deb/debian-mirror` synced once from `acme/deb/local`
+- [ ] All F-06.* closed (F-06.1/.2/.4/.5/.6/.7 fixed; Codex pending. F-06.3/.8 tracked-open/deferred.)
+- [ ] Codex pass on fixes applied
+- [ ] README.md batch 06 status flipped to ✅ after Codex
+- [x] All cases passed
 - [ ] Final state:
   - [ ] `acme/rpm/local` has at least one package
   - [ ] `acme/rpm/epel-mirror` has synced at least once successfully

@@ -119,6 +119,26 @@ func (h *Handler) put(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid_package: "+perr.Error(), http.StatusBadRequest)
 		return
 	}
+	// F-06.1 (wt3 batch 06): enforce the NEVRA-filename contract promised by
+	// the step-5 doc comment above. primary.xml's <location href> is built
+	// from canonicalFilename() (NEVRA-derived), but the on-disk storage key
+	// and the GET route use the URL-path filename verbatim. If the two drift,
+	// dnf clients 404 on every package download — the metadata says `get
+	// packages/<NEVRA>.rpm`, the server has `packages/<uploaded-name>.rpm`.
+	// Reject at upload time so the mismatch can never land in the repo.
+	expected := parsed.canonicalFilename()
+	if res.filename != expected {
+		h.auditEvent(r, audit.EvtRPMUpload, res.filename, "rejected", map[string]any{
+			"project":           res.project.Name,
+			"repo":              res.repo.Name,
+			"reason":            "filename_nevra_mismatch",
+			"expected_filename": expected,
+		})
+		http.Error(w,
+			"filename_mismatch: RPM header NEVRA requires filename "+expected,
+			http.StatusBadRequest)
+		return
+	}
 	digest := hex.EncodeToString(hasher.Sum(nil))
 	parsed.Digest = digest
 

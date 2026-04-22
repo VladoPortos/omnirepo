@@ -229,12 +229,18 @@ func readFixtureRPM(t *testing.T) []byte {
 	return b
 }
 
+// sampleRPMCanonical is the NEVRA-derived filename the RPM handler expects
+// for testdata/sample.rpm. Wired since F-06.1 added the filename-matches-
+// NEVRA guard to put.go — every test upload path must use this exact name
+// or the handler will 400 with filename_mismatch.
+const sampleRPMCanonical = "centos-release-7-2.1511.el7.centos.2.10.x86_64.rpm"
+
 func TestRPMPutRoundTrip(t *testing.T) {
 	f := newRPMFixture(t)
 	_, repoID := f.seedRepo("proj", "myrepo", false)
 
 	body := readFixtureRPM(t)
-	resp := f.put(t, "/proj/rpm/myrepo/packages/sample.rpm", body, true)
+	resp := f.put(t, "/proj/rpm/myrepo/packages/"+sampleRPMCanonical, body, true)
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusCreated {
 		out, _ := io.ReadAll(resp.Body)
@@ -249,8 +255,8 @@ func TestRPMPutRoundTrip(t *testing.T) {
 	if len(pkgs) != 1 {
 		t.Fatalf("got %d rows, want 1", len(pkgs))
 	}
-	if pkgs[0].Filename != "sample.rpm" {
-		t.Errorf("filename=%q", pkgs[0].Filename)
+	if pkgs[0].Filename != sampleRPMCanonical {
+		t.Errorf("filename=%q want %q", pkgs[0].Filename, sampleRPMCanonical)
 	}
 	if pkgs[0].SizeBytes != int64(len(body)) {
 		t.Errorf("size=%d want %d", pkgs[0].SizeBytes, len(body))
@@ -312,7 +318,7 @@ func TestRPMUploadForbiddenForOutsider(t *testing.T) {
 		t.Fatalf("drop member: %v", err)
 	}
 	body := readFixtureRPM(t)
-	resp := f.put(t, "/proj/rpm/myrepo/packages/sample.rpm", body, true)
+	resp := f.put(t, "/proj/rpm/myrepo/packages/"+sampleRPMCanonical, body, true)
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("status=%d", resp.StatusCode)
@@ -324,7 +330,7 @@ func TestRPMDeleteRemovesFTSRow(t *testing.T) {
 	_, repoID := f.seedRepo("proj", "myrepo", false)
 
 	body := readFixtureRPM(t)
-	resp := f.put(t, "/proj/rpm/myrepo/packages/sample.rpm", body, true)
+	resp := f.put(t, "/proj/rpm/myrepo/packages/"+sampleRPMCanonical, body, true)
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("upload: %d", resp.StatusCode)
@@ -335,7 +341,7 @@ func TestRPMDeleteRemovesFTSRow(t *testing.T) {
 	}
 	first := f.kickCount(repoID)
 
-	resp = f.doMethod(t, http.MethodDelete, "/proj/rpm/myrepo/packages/sample.rpm", true)
+	resp = f.doMethod(t, http.MethodDelete, "/proj/rpm/myrepo/packages/"+sampleRPMCanonical, true)
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("delete status=%d", resp.StatusCode)
@@ -388,18 +394,56 @@ func TestRPMInvalidFilenameRejected(t *testing.T) {
 	}
 }
 
+// TestRPMPut_RejectsFilenameNEVRAMismatch pins F-06.1 (wt3 batch 06):
+// when the URL filename does not match the RPM header's NEVRA, the put
+// handler must reject with 400 filename_mismatch before anything touches
+// disk. Primary.xml builds <location href> from canonicalFilename(), so
+// accepting a mismatched upload would leave dnf fetching a path that
+// does not exist.
+func TestRPMPut_RejectsFilenameNEVRAMismatch(t *testing.T) {
+	f := newRPMFixture(t)
+	_, repoID := f.seedRepo("proj", "myrepo", false)
+
+	body := readFixtureRPM(t)
+	// testdata/sample.rpm's NEVRA is centos-release-7-2.1511.el7.centos.2.10
+	// x86_64, so any other plausible-looking .rpm name must be rejected.
+	resp := f.put(t, "/proj/rpm/myrepo/packages/pkg-1.0-1.el9.x86_64.rpm", body, true)
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status=%d, want 400", resp.StatusCode)
+	}
+	out, _ := io.ReadAll(resp.Body)
+	if !bytes.Contains(out, []byte("filename_mismatch")) {
+		t.Errorf("body=%q missing filename_mismatch marker", out)
+	}
+	if !bytes.Contains(out, []byte(sampleRPMCanonical)) {
+		t.Errorf("body=%q missing expected canonical name %q", out, sampleRPMCanonical)
+	}
+
+	// Nothing persisted: no DB row, no FTS row, no on-disk package.
+	pkgs, _ := f.rpmPackages.ListByRepo(context.Background(), repoID)
+	if len(pkgs) != 0 {
+		t.Errorf("got %d pkg rows after rejected NEVRA-mismatch upload, want 0", len(pkgs))
+	}
+	pkgPath := filepath.Join(f.repoRoot, "acme-nevra-mismatch-check-no-write-expected")
+	if _, err := os.Stat(pkgPath); err == nil {
+		t.Errorf("unexpected file at %s", pkgPath)
+	}
+}
+
 func TestRPMGetServePackage(t *testing.T) {
 	f := newRPMFixture(t)
 	_, _ = f.seedRepo("proj", "myrepo", true) // public_read so anon GETs work
 
 	body := readFixtureRPM(t)
-	resp := f.put(t, "/proj/rpm/myrepo/packages/sample.rpm", body, true)
+	resp := f.put(t, "/proj/rpm/myrepo/packages/"+sampleRPMCanonical, body, true)
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("upload: %d", resp.StatusCode)
 	}
 
-	resp = f.doMethod(t, http.MethodGet, "/proj/rpm/myrepo/packages/sample.rpm", false)
+	resp = f.doMethod(t, http.MethodGet, "/proj/rpm/myrepo/packages/"+sampleRPMCanonical, false)
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status=%d", resp.StatusCode)
@@ -429,7 +473,7 @@ func TestUpload_MirrorRepoReturns403(t *testing.T) {
 		t.Fatalf("set mirror cfg: %v", err)
 	}
 	body := readFixtureRPM(t)
-	resp := f.put(t, "/proj/rpm/mirrored/packages/sample.rpm", body, true)
+	resp := f.put(t, "/proj/rpm/mirrored/packages/"+sampleRPMCanonical, body, true)
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403", resp.StatusCode)
@@ -444,7 +488,7 @@ func TestUpload_NonMirrorRepoStillWorks(t *testing.T) {
 	f := newRPMFixture(t)
 	_, _ = f.seedRepo("proj", "plain", false)
 	body := readFixtureRPM(t)
-	resp := f.put(t, "/proj/rpm/plain/packages/sample.rpm", body, true)
+	resp := f.put(t, "/proj/rpm/plain/packages/"+sampleRPMCanonical, body, true)
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusCreated {
 		bodyBytes, _ := io.ReadAll(resp.Body)

@@ -21,6 +21,7 @@ import (
 	"github.com/dxc-internal/omnirepo/internal/metadata"
 	"github.com/dxc-internal/omnirepo/internal/protocol/deb"
 	"github.com/dxc-internal/omnirepo/internal/protocol/helm"
+	"github.com/dxc-internal/omnirepo/internal/protocol/helm/ociclient"
 	"github.com/dxc-internal/omnirepo/internal/protocol/pypi"
 	"github.com/dxc-internal/omnirepo/internal/protocol/regen"
 	"github.com/dxc-internal/omnirepo/internal/protocol/rpm"
@@ -92,6 +93,14 @@ func (d syncDeps) wireSync() *api.SyncRESTAdapter {
 		Coalescer: d.helmRegistry, HTTPClient: httpClient,
 		RepoRoot: repoRoot, Cfg: d.cfg.Sync,
 		SyncJobs: syncJobsRepo,
+		// Plan 11-03: wire the OCI Helm client so fetchAndCommit can
+		// branch on UpstreamEntry.Source == EntrySourceOCI. The shared
+		// httpClient already carries TLS/proxy/timeout config.
+		OCIClient: ociclient.New(httpClient),
+		// Plan 11-03 (D-02): tag-rebound handling soft-deletes the prior
+		// digest's on-disk file via Trash.Move with kind
+		// "oci_tag_rebound" before inserting the replacement row.
+		Trash: storage.NewTrash(filepath.Join(d.cfg.DataRoot, "trash")),
 	})
 
 	d.syncHandlers[rpm.SyncJobKind] = func(c context.Context, j *jobs.JobView) error {

@@ -23,6 +23,7 @@ import (
 	"github.com/dxc-internal/omnirepo/internal/httpx"
 	"github.com/dxc-internal/omnirepo/internal/jobs"
 	"github.com/dxc-internal/omnirepo/internal/metadata"
+	"github.com/dxc-internal/omnirepo/internal/protocol/helm/ociclient"
 	"github.com/dxc-internal/omnirepo/internal/protocol/regen"
 	"github.com/dxc-internal/omnirepo/internal/storage"
 )
@@ -55,6 +56,19 @@ type SyncDeps struct {
 	// Helm is step-based (D-11 — index.yaml lacks chart sizes), so
 	// total_bytes is always 0 and progress_bytes counts completed charts.
 	SyncJobs *metadata.SyncJobsRepo
+	// OCIClient is the Helm OCI registry client used when UpstreamEntry.Source
+	// is EntrySourceOCI. Injected from phase3_sync.wireSync with the shared
+	// HTTPClient. Plan 11-01 isolates this behind a narrow interface so
+	// sync_handler_test.go can use ociclient.NewFake() for hermetic coverage.
+	// Plan 11-03 consumes this field to replace the v1.2 skipped_oci_entries
+	// stub with a real OCI pull + tag-rebound branch.
+	OCIClient ociclient.Client
+	// Trash is the soft-delete primitive used by the OCI tag-rebound handler
+	// (plan 11-03, D-02) to move the prior chart's on-disk file under
+	// <root>/trash/<ts>-oci_tag_rebound-<id>/ BEFORE inserting the
+	// replacement helm_charts row. Nil in tests that do not exercise the
+	// rebound path — fetchAndCommitOCI no-ops the trash step when nil.
+	Trash storage.Trash
 }
 
 // SyncHandler is the sync-pool handler for kind="helm_sync".

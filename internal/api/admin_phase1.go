@@ -509,10 +509,15 @@ func (d Deps) handleMe(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, nil)
 		return
 	}
-	writeJSON(w, http.StatusOK, MeResponse{
+	resp := MeResponse{
 		Id: u.ID, Login: u.Login, Email: u.Email,
 		IsSuperAdmin: u.IsSuperAdmin, MustChangePassword: u.MustChangePassword,
-	})
+	}
+	if u.AvatarSeed != "" {
+		s := u.AvatarSeed
+		resp.AvatarSeed = &s
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (d Deps) handleDeleteMe(w http.ResponseWriter, r *http.Request) {

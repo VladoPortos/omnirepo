@@ -41,6 +41,30 @@ func TestProfile_PatchAvatarSeed(t *testing.T) {
 	}
 }
 
+// GET /api/v1/me must return avatar_seed so the UI can reconstruct the
+// customized avatar after reload. Regression guard for F-03.1 (wt3): the
+// PATCH handler set the field, but the GET handler omitted it, so reloading
+// the profile page silently reverted the avatar to the login-string default.
+func TestProfile_GetMeIncludesAvatarSeed(t *testing.T) {
+	s := newTestServer(t)
+	_, pw := seedTestUser(t, s.db, "root", "r@x", true, false)
+	cookie, _, _ := s.login(t, "root", pw)
+
+	if resp, _ := s.do(t, "PATCH", "/api/v1/me", cookie, map[string]any{
+		"avatar_seed": "persisted-seed",
+	}); resp.StatusCode != http.StatusOK {
+		t.Fatalf("patch code=%d", resp.StatusCode)
+	}
+
+	resp, body := s.do(t, "GET", "/api/v1/me", cookie, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("get code=%d body=%v", resp.StatusCode, body)
+	}
+	if body["avatar_seed"] != "persisted-seed" {
+		t.Fatalf("expected avatar_seed=persisted-seed in GET /me, got %v", body["avatar_seed"])
+	}
+}
+
 func TestProfile_PatchEmptyEmail(t *testing.T) {
 	s := newTestServer(t)
 	_, pw := seedTestUser(t, s.db, "root", "r@x", true, false)

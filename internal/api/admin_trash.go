@@ -143,6 +143,29 @@ func (d Deps) handleRestoreTrash(w http.ResponseWriter, r *http.Request) {
 		if dirName != id {
 			continue
 		}
+		// F-11 follow-up: metadata-only entries (soft-delete of a
+		// never-synced git mirror etc.) have no tree to move back.
+		// Restore the DB row + clean the holder dir; the sync handler
+		// will re-create on-disk state on first success.
+		if e.Empty {
+			if e.Kind == "repo" || e.Kind == "git-repo" {
+				_ = d.Repos.Restore(r.Context(), e.OriginalID)
+			}
+			_ = os.Remove(filepath.Join(e.Path, "omnirepo-trash.json"))
+			_ = os.Remove(e.Path)
+			if a, ok := auth.ActorFromContext(r.Context()); ok {
+				uid := a.ID
+				d.recordAudit(r, audit.Event{
+					Kind:        audit.EvtRepoUpdated,
+					ActorUserID: &uid,
+					TargetKind:  "trash",
+					TargetID:    id,
+					Outcome:     "restored_empty",
+				})
+			}
+			writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+			return
+		}
 		// Audit finding #2: prefer the sidecar-persisted OriginalPath so the
 		// restore lands at the exact pre-delete location. Previous behavior
 		// reconstructed only the basename, losing project/type context and

@@ -199,10 +199,11 @@ test.describe('Create repo: Git mirror (Phase 11 / plan 11-09)', () => {
       'https://github.com/example/mirror-target.git',
     );
     expect(body.mirror_cred_id).toBe(11);
-    // mirror_filter is sent as the empty AnyFilter object for git
-    // (the filter widget is suppressed but the state default still
-    // serialises). Backend tolerates {} per plan 11-05.
-    expect(body.mirror_filter).toEqual({});
+    // mirror_filter is OMITTED entirely for git mirrors (F-11.1 fix):
+    // git has no per-ref filter API (GITMIRROR-01), so sending an empty
+    // AnyFilter object trips the backend's SyncFilter-shape validator.
+    // The CreateRepoDialog strips it from the body when repoType==='git'.
+    expect(body.mirror_filter).toBeUndefined();
   });
 
   test('Git mirror cred picker filters to kind=basic only (D-13)', async ({

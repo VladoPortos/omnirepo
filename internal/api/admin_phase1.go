@@ -906,11 +906,14 @@ func (d Deps) handleDeleteRepo(w http.ResponseWriter, r *http.Request) {
 			trashKind = "git-repo"
 		}
 		if _, err := d.Trash.Move(r.Context(), onDisk, trashKind, rr.ID, auth.ActorLoginFromContext(r.Context())); err != nil {
-			// Tree may not exist for a freshly-created empty repo; that's not a failure.
-			// Use errors.Is(os.ErrNotExist) instead of string-matching — rename
-			// error wrapping via fmt.Errorf(..., %w) preserves the sentinel.
+			// Tree may not exist for a freshly-created empty repo or an
+			// unsynced git mirror. F-11 follow-up: Trash.Move now creates
+			// a metadata-only sidecar in that case and returns the
+			// os.ErrNotExist sentinel so the UI still has a restore
+			// target (the DB row). Treat the sentinel as success; other
+			// errors log via audit without failing the request — the
+			// DB row is already soft-deleted.
 			if !errors.Is(err, context.Canceled) && !errors.Is(err, os.ErrNotExist) {
-				// Log via audit, do not fail the request — DB row is already soft-deleted.
 				if a, ok := auth.ActorFromContext(r.Context()); ok {
 					uid := a.ID
 					d.recordAudit(r, audit.Event{Kind: audit.EvtRepoDeleted, ActorUserID: &uid, TargetKind: "repo", TargetID: projectName + "/" + typ + "/" + repoName, Outcome: "trash_move_failed", Details: map[string]any{"err": err.Error()}})

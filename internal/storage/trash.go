@@ -30,6 +30,10 @@ type TrashEntry struct {
 	DeletedByUser string // F-15: users.login of the actor who triggered the
 	// soft-delete. Empty for legacy entries and for GC-driven / system-
 	// initiated moves.
+	Empty bool // true when the soft-delete was metadata-only (the source
+	// tree was absent at delete time — e.g. a git mirror that was
+	// created but never synced). Restore re-creates the DB row and only
+	// mkdir's the parent; there is no content to rename back.
 }
 
 // trashMetadata is the on-disk shape of the sidecar written by Move and
@@ -42,6 +46,11 @@ type trashMetadata struct {
 	OriginalID    int64  `json:"original_id"`
 	MovedAtUnix   int64  `json:"moved_at_unix"`
 	DeletedByUser string `json:"deleted_by,omitempty"`
+	// Empty marks trash entries created for a soft-delete whose on-disk
+	// tree was absent (e.g. a never-synced git mirror). Restore treats
+	// these as metadata-only and only re-creates the DB row + target
+	// parent dir; the sync handler will populate content on first success.
+	Empty bool `json:"empty,omitempty"`
 }
 
 // Trash is the soft-delete primitive (D-31). Move renames a tree into
@@ -81,7 +90,18 @@ func (t *trashImpl) Move(ctx context.Context, srcPath, kind string, id int64, ac
 		return "", fmt.Errorf("trash: mkdir: %w", err)
 	}
 	dst := filepath.Join(dstDir, filepath.Base(srcPath))
-	if err := os.Rename(srcPath, dst); err != nil {
+	// F-11 follow-up: tolerate a missing source. Git mirrors that have
+	// never synced (InitBare intentionally skipped per GITMIRROR-06) have
+	// no on-disk dir, and freshly-created non-mirror repos may also be
+	// deleted before any data lands. Without an entry the admin trash
+	// list can't surface them and /admin/trash/{id}/restore has nothing
+	// to target — the DB row sits orphaned-soft-deleted. Create a
+	// metadata-only entry so Restore can bring the row back even when
+	// there is nothing to rename.
+	var missing bool
+	if _, statErr := os.Stat(srcPath); errors.Is(statErr, os.ErrNotExist) {
+		missing = true
+	} else if err := os.Rename(srcPath, dst); err != nil {
 		return "", fmt.Errorf("trash: rename: %w", err)
 	}
 	// Sidecar metadata — written after the rename so a failed Move doesn't
@@ -95,9 +115,13 @@ func (t *trashImpl) Move(ctx context.Context, srcPath, kind string, id int64, ac
 		OriginalID:    id,
 		MovedAtUnix:   now.Unix(),
 		DeletedByUser: actor,
+		Empty:         missing,
 	}
 	if b, err := json.Marshal(meta); err == nil {
 		_ = os.WriteFile(filepath.Join(dstDir, trashMetaFile), b, 0o640)
+	}
+	if missing {
+		return "", os.ErrNotExist
 	}
 	return dst, nil
 }
@@ -149,6 +173,7 @@ func (t *trashImpl) List(ctx context.Context) ([]TrashEntry, error) {
 			if json.Unmarshal(b, &m) == nil {
 				parsed.OriginalPath = m.OriginalPath
 				parsed.DeletedByUser = m.DeletedByUser
+				parsed.Empty = m.Empty
 				// Sidecar kind/id override the holder-name parse in case
 				// the holder name was constructed before the kind format
 				// stabilized.

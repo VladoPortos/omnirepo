@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -19,6 +20,7 @@ import (
 	"time"
 
 	"github.com/dxc-internal/omnirepo/internal/audit"
+	"github.com/dxc-internal/omnirepo/internal/auth"
 	"github.com/dxc-internal/omnirepo/internal/config"
 	"github.com/dxc-internal/omnirepo/internal/httpx"
 	"github.com/dxc-internal/omnirepo/internal/jobs"
@@ -164,18 +166,19 @@ func (h *SyncHandler) Handle(ctx context.Context, payload string, projectID, rep
 	// knows the total chart count. Helm is step-based — total_bytes stays
 	// 0 (D-11).
 	//
-	// Phase 9 POLISH-05: upstream chart repos are migrating to OCI (e.g.
-	// bitnami post-2024 publishes newer versions as
-	// `oci://registry-1.docker.io/bitnamicharts/<chart>:<version>`). This
-	// sync only speaks HTTP(S) today — OCI chart ingestion is a deferred
-	// feature, not an in-scope v1.2 fix. We SKIP oci:// (and any other
-	// non-HTTP) entries with an audit note so the HTTP-tgz portion of the
-	// index still mirrors cleanly. Without this filter a single oci://
-	// entry fails the whole sync and the job retries indefinitely,
-	// re-downloading every successfully-fetched chart on each attempt.
+	// Phase 11 Plan 03 (OCIHELM-01..06): oci:// entries are no longer
+	// skipped. ParseUpstream tags each UpstreamEntry with Source
+	// (EntrySourceHTTP / EntrySourceOCI / EntrySourceUnknown); the
+	// per-entry dispatch in fetchAndCommit branches on the tag. The
+	// skipped_non_http_entries counter is retained for any unclassified
+	// entry (should be zero in normal operation — ParseUpstream only yields
+	// entries whose v.URLs[0] parses; classifyEntryPath sets Source from
+	// the scheme). The v1.2 skipped_oci_entries counter is retired: the
+	// audit detail is preserved as a 0-valued field on the progress
+	// event when any non-http skipping actually occurred, so downstream
+	// dashboards don't break — Success Criterion 1 in ROADMAP.
 	var (
 		entries       []UpstreamEntry
-		skippedOCI    int
 		skippedOtherP int
 	)
 	collectFn := func(ent UpstreamEntry) error {
@@ -184,11 +187,10 @@ func (h *SyncHandler) Handle(ctx context.Context, payload string, projectID, rep
 				return nil
 			}
 		}
-		switch {
-		case strings.HasPrefix(ent.Path, "oci://"):
-			skippedOCI++
-			return nil
-		case !strings.HasPrefix(ent.Path, "http://") && !strings.HasPrefix(ent.Path, "https://"):
+		// Only yield entries with a recognized transport. OCI + HTTP both
+		// dispatch from fetchAndCommit based on ent.Source; anything else
+		// (e.g. file://, ftp://) is counted and dropped.
+		if ent.Source != EntrySourceHTTP && ent.Source != EntrySourceOCI {
 			skippedOtherP++
 			return nil
 		}
@@ -199,16 +201,20 @@ func (h *SyncHandler) Handle(ctx context.Context, payload string, projectID, rep
 	if parseErr != nil {
 		return h.fail(ctx, repoID, pl, startedAt, httpx.SanitizeUpstreamErr(parseErr))
 	}
-	if (skippedOCI > 0 || skippedOtherP > 0) && h.deps.Audit != nil {
+	if skippedOtherP > 0 && h.deps.Audit != nil {
 		_ = h.deps.Audit.Record(ctx, audit.Event{
 			Kind:       audit.EvtSyncProgress,
 			TargetKind: "repo",
 			TargetID:   strconv.FormatInt(repoID, 10),
 			Details: map[string]any{
-				"skipped_oci_entries":     skippedOCI,
+				// Plan 11-03: skipped_oci_entries now always 0 at steady
+				// state. Kept for dashboard backward-compat (Success
+				// Criterion 1 in ROADMAP: value stays 0 for eligible
+				// upstreams).
+				"skipped_oci_entries":      0,
 				"skipped_non_http_entries": skippedOtherP,
-				"upstream_url":            pl.UpstreamURL,
-				"note":                    "OCI chart ingestion not yet supported; http(s) tgz entries mirrored normally",
+				"upstream_url":             pl.UpstreamURL,
+				"note":                     "non-http/oci entries skipped (unsupported transport)",
 			},
 		})
 	}
@@ -318,6 +324,16 @@ func (h *SyncHandler) fail(ctx context.Context, repoID int64, pl SyncPayload, st
 }
 
 func (h *SyncHandler) fetchAndCommit(ctx context.Context, projectName string, repo *metadata.Repo, ent UpstreamEntry, creds AuthCreds) (int64, error) {
+	// Plan 11-03: dispatch on UpstreamEntry.Source. HTTP path falls
+	// through to the existing implementation below unchanged; OCI entries
+	// route through fetchAndCommitOCI which handles tag-rebound detection
+	// (D-02), soft-delete via Trash.Move with kind "oci_tag_rebound"
+	// (D-02), EvtOciTagRebound emission with the D-05 details shape
+	// (OCIHELM-04), and dedup on (repo_id, name, version, digest) via
+	// HelmCharts.FindByNameVersion.
+	if ent.Source == EntrySourceOCI {
+		return h.fetchAndCommitOCI(ctx, projectName, repo, ent, creds)
+	}
 	if ent.Digest != "" {
 		if existing, ferr := h.deps.HelmCharts.FindByDigest(ctx, repo.ID, ent.Digest); ferr == nil && existing != nil {
 			return 0, nil
@@ -379,6 +395,198 @@ func (h *SyncHandler) fetchAndCommit(ctx context.Context, projectName string, re
 		return 0, fmt.Errorf("helm_sync: commit %s: %w", ent.Filename, err)
 	}
 	return size, nil
+}
+
+// fetchAndCommitOCI handles a single oci:// upstream entry. Mirrors
+// fetchAndCommit's HTTP-path commit-tail but swaps the fetch step for a
+// Helm SDK OCI pull via ociclient.Client. Replaces the v1.2
+// skipped_oci_entries stub at the collectFn boundary (plan 11-03).
+//
+// Flow (ADR-aligned with D-02 + D-05 + OCIHELM-01..04):
+//  1. Nil-guard on deps.OCIClient — the SyncDeps wiring in
+//     app.phase3_sync.wireSync always populates this, but tests that
+//     construct SyncHandler directly may omit it. A nil client returns a
+//     descriptive error rather than panicking.
+//  2. Resolve the manifest digest pre-flight to gate bandwidth: if an
+//     existing helm_charts row for (repo_id, name, version) already
+//     carries this exact digest, skip the pull entirely (dedup — Success
+//     Criterion for OCIHELM-04).
+//  3. Pull chart bytes only when the digest is new or different.
+//  4. Tag-rebound handling when the existing row's digest differs from
+//     the newly-pulled chart-layer digest (D-02):
+//       - Soft-delete the prior on-disk tgz via Trash.Move with kind
+//         "oci_tag_rebound" (distinct from the generic mirror-replaced
+//         label; lets operators grep CVE-driven republication timelines
+//         without a JOIN).
+//       - Emit EvtOciTagRebound with the full D-05 details shape:
+//         {name, version, old_digest, new_digest, upstream_url, repo_id,
+//          replaced_at}.
+//  5. Commit-tail — Put bytes → Parse → helm_charts.Insert (which does
+//     UPSERT on (repo_id,name,version) so the replacement row lands in
+//     place of the old one automatically).
+func (h *SyncHandler) fetchAndCommitOCI(ctx context.Context, projectName string, repo *metadata.Repo, ent UpstreamEntry, creds AuthCreds) (int64, error) {
+	if h.deps.OCIClient == nil {
+		return 0, fmt.Errorf("helm_sync: OCIClient not wired; upstream %s requires OCI support", ent.Path)
+	}
+
+	// Derive (chartName, chartVersion) from the ref so we can run the
+	// dedup lookup BEFORE spending a PullChart call. For Helm OCI refs
+	// the tag IS the version; the last path segment before ':' is the
+	// chart name. Example: "registry-1.docker.io/bitnamicharts/nginx:15.14.0"
+	chartName, chartVersion := parseOCIRef(ent.Path)
+	if chartName == "" || chartVersion == "" {
+		return 0, fmt.Errorf("helm_sync: cannot parse name/version from oci ref %q", ent.Path)
+	}
+
+	ociCreds := ociclient.AuthCreds{User: creds.User, Password: creds.Password}
+
+	// 1. Pre-flight manifest-digest resolve for dedup gate.
+	manifestDigest, err := h.deps.OCIClient.Resolve(ctx, ent.Path, ociCreds)
+	if err != nil {
+		return 0, fmt.Errorf("helm_sync: resolve %s: %w", ent.Path, httpx.SanitizeUpstreamErr(err))
+	}
+
+	// 2. Dedup gate on (repo_id, name, version, digest). If the existing
+	// row already carries the same manifest-or-chart-layer digest, skip.
+	// We compare against the manifest digest first because that's what
+	// Resolve returns; PullChart's Digest is the chart-layer digest
+	// (typically different hex). Both are recorded consistently below.
+	existing, ferr := h.deps.HelmCharts.FindByNameVersion(ctx, repo.ID, chartName, chartVersion)
+	if ferr != nil && !errors.Is(ferr, metadata.ErrNotFound) {
+		return 0, fmt.Errorf("helm_sync: find-by-name-version: %w", ferr)
+	}
+	if existing != nil && existing.Digest == manifestDigest {
+		// Exact digest already cached; no pull, no audit.
+		return 0, nil
+	}
+
+	// 3. Pull chart bytes. Helm SDK verifies layer digests internally via
+	// ORAS Copy; we capture the result's chart-layer digest for dedup
+	// semantics consistent with HTTP path (helm_charts.digest column is
+	// the sha256 of the downloaded tgz bytes).
+	res, err := h.deps.OCIClient.PullChart(ctx, ent.Path, ociCreds)
+	if err != nil {
+		return 0, fmt.Errorf("helm_sync: pull %s: %w", ent.Path, httpx.SanitizeUpstreamErr(err))
+	}
+	if res == nil || len(res.Data) == 0 {
+		return 0, fmt.Errorf("helm_sync: empty chart bytes for %s", ent.Path)
+	}
+	chartDigest := res.Digest
+	if chartDigest == "" {
+		chartDigest = manifestDigest
+	}
+
+	// Second dedup gate: the post-pull layer digest may match the stored
+	// one even when the pre-flight manifest digest differed (e.g. Resolve
+	// returned a manifest digest but the stored row captured a layer
+	// digest from a prior pull). Cheap to double-check before writing.
+	if existing != nil && existing.Digest == chartDigest {
+		return 0, nil
+	}
+
+	// 4. Tag-rebound handling.
+	if existing != nil && existing.Digest != chartDigest {
+		actor := auth.ActorLoginFromContext(ctx)
+		// 4a. Soft-delete the prior chart tgz on disk via Trash.Move with
+		// the oci_tag_rebound retention label (D-02).
+		if h.deps.Trash != nil && existing.Filename != "" {
+			oldPath := filepath.Join(h.deps.RepoRoot, projectName, "helm", repo.Name, "charts", existing.Filename)
+			if _, terr := h.deps.Trash.Move(ctx, oldPath, "oci_tag_rebound", existing.ID, actor); terr != nil {
+				// Non-fatal if the file is already gone (GC, test
+				// fixture, prior failed sync). Any other error surfaces
+				// so operators see the failure.
+				if !errors.Is(terr, os.ErrNotExist) {
+					return 0, fmt.Errorf("helm_sync: trash.Move on rebound: %w", terr)
+				}
+			}
+		}
+		// 4b. Emit EvtOciTagRebound with the D-05 details_json shape.
+		if h.deps.Audit != nil {
+			_ = h.deps.Audit.Record(ctx, audit.Event{
+				Kind:       audit.EvtOciTagRebound,
+				TargetKind: "repo",
+				TargetID:   strconv.FormatInt(repo.ID, 10),
+				Details: map[string]any{
+					"name":         chartName,
+					"version":      chartVersion,
+					"old_digest":   existing.Digest,
+					"new_digest":   chartDigest,
+					"upstream_url": ent.Path,
+					"repo_id":      repo.ID,
+					"replaced_at":  time.Now().UTC().Format(time.RFC3339),
+				},
+			})
+		}
+	}
+
+	// 5. Commit-tail — mirrors the HTTP path.
+	filename := fmt.Sprintf("%s-%s.tgz", chartName, chartVersion)
+	storageKey := strings.Join([]string{projectName, "helm", repo.Name, "charts", filename}, "/")
+	if _, err := h.deps.Path.Put(ctx, storageKey, openBytesReader(res.Data)); err != nil {
+		return 0, fmt.Errorf("helm_sync: store %s: %w", filename, err)
+	}
+	abs := filepath.Join(h.deps.RepoRoot, filepath.FromSlash(storageKey))
+	chart, perr := Parse(abs)
+	if perr != nil {
+		_ = os.Remove(abs)
+		return 0, fmt.Errorf("helm_sync: parse %s: %w", filename, perr)
+	}
+	size := int64(len(res.Data))
+	if err := h.deps.DB.WriteTx(ctx, func(tx *sql.Tx) error {
+		if _, err := h.deps.HelmCharts.Insert(ctx, tx, &metadata.HelmChart{
+			RepoID:          repo.ID,
+			Name:            chart.Name,
+			Version:         chart.Version,
+			AppVersion:      chart.AppVersion,
+			Description:     chart.Description,
+			KeywordsJSON:    chart.KeywordsJSON(),
+			MaintainersJSON: chart.MaintainersJSON(),
+			SizeBytes:       size,
+			Digest:          chartDigest,
+			Filename:        filename,
+		}); err != nil {
+			return err
+		}
+		if err := metadata.IndexHelmDelete(ctx, tx, repo.ID, chart.Name, chart.Version, chart.AppVersion); err != nil {
+			return err
+		}
+		if err := metadata.IndexHelm(ctx, tx, repo.ID, chart.Name, chart.Version, chart.AppVersion, chart.Description); err != nil {
+			return err
+		}
+		if repo.AutoScan && h.deps.Scans != nil {
+			if _, err := h.deps.Scans.Enqueue(ctx, tx, repo.ID, "helm", filename); err != nil {
+				return err
+			}
+		}
+		return h.deps.Repos.SetMetadataState(ctx, tx, repo.ID, metadata.MetadataStateDirty)
+	}); err != nil {
+		_ = os.Remove(abs)
+		return 0, fmt.Errorf("helm_sync: commit %s: %w", filename, err)
+	}
+	return size, nil
+}
+
+// parseOCIRef extracts (chartName, chartVersion) from
+// "[oci://]host/path/<chartName>:<chartVersion>". Returns ("","") if the
+// ref is malformed. The Helm OCI convention ties the chart name to the
+// last path segment and the version to the tag.
+func parseOCIRef(ref string) (name, version string) {
+	trimmed := strings.TrimPrefix(ref, "oci://")
+	colonIdx := strings.LastIndex(trimmed, ":")
+	if colonIdx < 0 {
+		return "", ""
+	}
+	version = trimmed[colonIdx+1:]
+	pre := trimmed[:colonIdx]
+	slashIdx := strings.LastIndex(pre, "/")
+	if slashIdx < 0 || slashIdx == len(pre)-1 {
+		return "", ""
+	}
+	name = pre[slashIdx+1:]
+	if name == "" || version == "" {
+		return "", ""
+	}
+	return name, version
 }
 
 func downloadAndHash(ctx context.Context, client *http.Client, urlStr string, creds AuthCreds) ([]byte, int64, string, error) {

@@ -24,6 +24,7 @@ import (
 	"github.com/dxc-internal/omnirepo/internal/metadata"
 	"github.com/dxc-internal/omnirepo/internal/metadata/sqlitetest"
 	"github.com/dxc-internal/omnirepo/internal/protocol/helm"
+	"github.com/dxc-internal/omnirepo/internal/protocol/helm/ociclient"
 	"github.com/dxc-internal/omnirepo/internal/storage"
 )
 
@@ -169,30 +170,18 @@ func TestHelmSync_EmitsStepProgress(t *testing.T) {
 	}
 }
 
-// TestHelmSync_SkipsOCIEntries is the Phase 9 POLISH-05 regression test
-// for bug #4 uncovered during live verification against charts.bitnami.com.
+// TestHelmSync_MixedHTTPAndOCIEntries is the updated Phase 11 Plan 03
+// (OCIHELM-01..04) version of the former Phase 9 POLISH-05
+// `TestHelmSync_SkipsOCIEntries` regression test. Upstream charts migrated
+// to OCI used to be silently skipped (v1.2 skipped_oci_entries stub); now
+// they are pulled via ociclient.Client + committed alongside http-tgz
+// entries in the same index.yaml.
 //
-// Context: Helm chart repos are gradually migrating to OCI distribution.
-// bitnami's post-2024 chart versions publish as
-// `oci://registry-1.docker.io/bitnamicharts/<chart>:<version>` inside the
-// same index.yaml alongside older https-tgz entries. OmniRepo's Helm
-// sync uses http.Client, which rejects `oci://` with
-// "unsupported protocol scheme". Before the fix, any single oci:// entry
-// failed the whole sync (downloadErrors[0] short-circuits h.fail) and
-// the job retried indefinitely, re-downloading every successfully-
-// fetched chart on each attempt.
-//
-// The fix filters oci:// (and any other non-HTTP) entries at the
-// collectFn boundary — they're recorded as a SyncProgress audit detail
-// ("skipped_oci_entries") but don't count as errors. The http-tgz
-// portion of the index mirrors cleanly. OCI chart ingestion is a
-// deferred v1.3+ feature, not an in-scope v1.2 fix.
-//
-// This test mirrors the upstream shape that live-verification saw: an
-// index.yaml with one http-tgz entry and one oci:// entry. The sync
-// MUST complete successfully, the http-tgz chart lands, the oci://
-// entry is cleanly skipped.
-func TestHelmSync_SkipsOCIEntries(t *testing.T) {
+// This test keeps the original fixture shape — an index.yaml listing one
+// http-tgz chart AND one oci:// chart — but now asserts BOTH charts land.
+// The oci entry is served by an ociclient.FakeClient so the test stays
+// hermetic (no Docker Hub network traffic).
+func TestHelmSync_MixedHTTPAndOCIEntries(t *testing.T) {
 	db := sqlitetest.New(t)
 
 	reposRepo := metadata.NewReposRepo(db)
@@ -202,6 +191,9 @@ func TestHelmSync_SkipsOCIEntries(t *testing.T) {
 
 	chartHTTP := makeChartTGZ(t, "nginx", "1.0.0", "1.25", "web server", nil)
 	dHTTP := shaHex(chartHTTP)
+	chartOCI := makeChartTGZ(t, "nginx", "2.0.0", "1.26", "web server next-gen", nil)
+	ociDigest := "sha256:" + shaHex(chartOCI)
+	ociRef := "registry-1.docker.io/bitnamicharts/nginx:2.0.0"
 
 	// Mixed index: one http-tgz chart + one oci:// chart. Real upstream
 	// shape observed against charts.bitnami.com during Phase 9 live tests.
@@ -223,7 +215,7 @@ entries:
       description: web server next-gen
       digest: 0000000000000000000000000000000000000000000000000000000000000000
       urls:
-        - oci://registry-1.docker.io/bitnamicharts/nginx:2.0.0
+        - oci://` + ociRef + `
 generated: "2026-04-20T00:00:00Z"
 `
 	mux := http.NewServeMux()
@@ -239,7 +231,7 @@ generated: "2026-04-20T00:00:00Z"
 	t.Cleanup(srv.Close)
 
 	ctx := context.Background()
-	pid, err := projectsRepo.Create(ctx, "ociproj", "oci skip regression")
+	pid, err := projectsRepo.Create(ctx, "ociproj", "mixed http+oci sync")
 	if err != nil {
 		t.Fatalf("create project: %v", err)
 	}
@@ -250,7 +242,16 @@ generated: "2026-04-20T00:00:00Z"
 
 	dataRoot := t.TempDir()
 	repoRoot := filepath.Join(dataRoot, "repos")
+	trashRoot := filepath.Join(dataRoot, "trash")
 	pathStore := storage.NewPathStore(repoRoot)
+
+	fakeOCI := ociclient.NewFake()
+	fakeOCI.Results[ociRef] = &ociclient.PullResult{
+		Data:   chartOCI,
+		Digest: ociDigest,
+		Size:   int64(len(chartOCI)),
+		Meta:   ociclient.ChartMeta{Name: "nginx", Version: "2.0.0"},
+	}
 
 	h := helm.NewSyncHandler(helm.SyncDeps{
 		DB:         db,
@@ -264,6 +265,8 @@ generated: "2026-04-20T00:00:00Z"
 		RepoRoot:   repoRoot,
 		Cfg:        config.SyncConfig{MaxParallelDownloadsPerJob: 1},
 		SyncJobs:   metadata.NewSyncJobsRepo(db),
+		OCIClient:  fakeOCI,
+		Trash:      storage.NewTrash(trashRoot),
 	})
 
 	jobID := seedHelmSyncJobRow(t, db, rid)
@@ -271,23 +274,22 @@ generated: "2026-04-20T00:00:00Z"
 	payload := map[string]string{"upstream_url": srv.URL}
 	pb, _ := json.Marshal(payload)
 	if err := h.Handle(ctx, string(pb), 0, rid, jobID); err != nil {
-		t.Fatalf("Handle returned error (oci:// entry should be skipped, not fatal): %v", err)
+		t.Fatalf("Handle returned error: %v", err)
 	}
 
-	// Sync should have landed exactly the 1 http-tgz chart (nginx-1.0.0).
-	// The oci:// entry (nginx-2.0.0) must not be counted or fetched.
+	// Sync should have landed BOTH charts: the http-tgz nginx-1.0.0 AND
+	// the OCI nginx-2.0.0 (plan 11-03: oci entries are no longer skipped).
 	var count int64
 	if err := db.Reader.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM helm_charts WHERE repo_id=?`, rid,
 	).Scan(&count); err != nil {
 		t.Fatalf("count helm_charts: %v", err)
 	}
-	if count != 1 {
-		t.Fatalf("helm_charts rowcount=%d; want 1 (http-tgz chart only; oci:// entry must be skipped)", count)
+	if count != 2 {
+		t.Fatalf("helm_charts rowcount=%d; want 2 (http-tgz + oci chart both committed)", count)
 	}
 
-	// Job row should show status progression to done (progress_bytes = 1
-	// chart processed, not 2).
+	// Job row should show status progression to done.
 	var (
 		progressBytes, totalBytes int64
 		currentStep               string
@@ -303,9 +305,7 @@ generated: "2026-04-20T00:00:00Z"
 	if currentStep != "done" {
 		t.Errorf("current_step=%q; want \"done\"", currentStep)
 	}
-	// progress_bytes is the chart count at the final Set; should be 1
-	// (only the http-tgz chart made it into entries[]).
-	if progressBytes != 1 {
-		t.Errorf("progress_bytes=%d; want 1 (oci:// chart skipped, http-tgz chart processed)", progressBytes)
+	if progressBytes != 2 {
+		t.Errorf("progress_bytes=%d; want 2 (both http-tgz and oci charts processed)", progressBytes)
 	}
 }

@@ -3,7 +3,7 @@ DATA_ROOT ?= /var/lib/omnirepo
 BENCH_DURATION ?= 30s
 BENCH_WORKERS ?= 16
 
-.PHONY: dev build test test-airgap test-perf bench-sqlite bench-git-fixture bench-git \
+.PHONY: dev build test test-airgap test-perf test-live-oci bench-sqlite bench-git-fixture bench-git \
 	vendor lint seed lint-protocol-redaction \
 	check-contrast lint-typography lint-spacing-carveout lint-axe-devdep \
 	lint-docs \
@@ -31,6 +31,27 @@ test-airgap:
 test-perf:
 	$(GO) test -mod=vendor -tags=perf500 -timeout=20m \
 		-run TestAdminDBHealth_PerfBudget_500MB ./internal/api/...
+
+# test-live-oci (OCIHELM-08 / D-16): live E2E against
+# oci://registry-1.docker.io/bitnamicharts/nginx. Gated behind the
+# `live_oci` Go build tag so default `make test` never touches Docker
+# Hub. Requires DOCKERHUB_USER + DOCKERHUB_TOKEN env vars (Docker Hub
+# PAT with Read:Public_Repos scope is sufficient); skips cleanly when
+# absent so CI without secrets stays green.
+#
+# NOT a prerequisite of `test` — live endpoints belong behind an
+# opt-in target. Mirrors the Phase 10 test-perf / perf500 pattern.
+# See internal/protocol/helm/sync_oci_live_test.go for the test body
+# and the scope-guard rationale (three smokes only — hermetic tests
+# in plan 11-03 cover the full Handle round-trip).
+test-live-oci:
+	@set -e; \
+	if [ -z "$$DOCKERHUB_USER" ] || [ -z "$$DOCKERHUB_TOKEN" ]; then \
+		echo "SKIP: DOCKERHUB_USER / DOCKERHUB_TOKEN unset — live OCI test requires Docker Hub PAT"; \
+		exit 0; \
+	fi; \
+	$(GO) test -mod=vendor -tags=live_oci -timeout=300s -v \
+		-run TestLiveOCIBitnamiSync ./internal/protocol/helm/...
 
 bench-sqlite:
 	$(GO) run -mod=vendor ./cmd/bench/sqlite --duration=$(BENCH_DURATION) --workers=$(BENCH_WORKERS)

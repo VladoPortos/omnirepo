@@ -10,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/dxc-internal/omnirepo/internal/metadata"
@@ -127,6 +129,81 @@ func TestUpload_DuplicateFilenameReturns409(t *testing.T) {
 	sum := sha256.Sum256(got)
 	if want := "sha256:" + hex.EncodeToString(sum[:]); want != after.Digest {
 		t.Fatalf("blob sha256 %s != row digest %s (blob mutated on dup)", want, after.Digest)
+	}
+}
+
+// TestUpload_ConcurrentFirstUploads_ExactlyOneWins — wt3 F-07.1 Codex
+// follow-up #2. Ten goroutines race to upload the same filename. Exactly
+// one must succeed (2xx + row insert); the other nine must 409; the
+// on-disk blob's sha256 must match the DB row's digest.
+//
+// Before the per-(repo, filename) mutex, two concurrent first-uploads
+// could both pass FindByFilename + both PathStore.Put (last-rename-wins
+// on disk); the first to commit won the DB row but the on-disk bytes
+// belonged to whoever renamed last — so GET /packages/<filename> could
+// return bytes whose sha256 didn't match the published digest.
+func TestUpload_ConcurrentFirstUploads_ExactlyOneWins(t *testing.T) {
+	f := newHandlerFixture(t)
+	_, repoID := f.seedRepo("proj1", "concurrent", true, false)
+
+	const N = 10
+	const filename = "racepkg-1.0-py3-none-any.whl"
+	wheel := makeWheelBytes(t, "racepkg", "1.0")
+	expectSum := sha256.Sum256(wheel)
+
+	var ok, conflict, other int64
+	var wg sync.WaitGroup
+	wg.Add(N)
+	start := make(chan struct{})
+	for i := 0; i < N; i++ {
+		go func() {
+			defer wg.Done()
+			<-start
+			resp := twineUpload(t, f.srv.URL, "proj1", "concurrent", filename, wheel, "bdist_wheel", f.basicAuth())
+			defer func() { _ = resp.Body.Close() }()
+			switch {
+			case resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusCreated:
+				atomic.AddInt64(&ok, 1)
+			case resp.StatusCode == http.StatusConflict:
+				atomic.AddInt64(&conflict, 1)
+			default:
+				atomic.AddInt64(&other, 1)
+			}
+			_, _ = io.Copy(io.Discard, resp.Body)
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	if got := atomic.LoadInt64(&ok); got != 1 {
+		t.Fatalf("wanted exactly 1 winner, got ok=%d conflict=%d other=%d", got, conflict, other)
+	}
+	if got := atomic.LoadInt64(&conflict); got != N-1 {
+		t.Fatalf("wanted %d 409s, got ok=%d conflict=%d other=%d", N-1, ok, got, other)
+	}
+	if got := atomic.LoadInt64(&other); got != 0 {
+		t.Fatalf("unexpected non-409 non-2xx response count=%d", got)
+	}
+
+	row, err := f.pypiRepo.FindByFilename(context.Background(), repoID, filename)
+	if err != nil {
+		t.Fatalf("find row: %v", err)
+	}
+	if row == nil {
+		t.Fatalf("no row after concurrent uploads")
+	}
+	if want := "sha256:" + hex.EncodeToString(expectSum[:]); row.Digest != want {
+		t.Fatalf("row digest %s != expected %s", row.Digest, want)
+	}
+
+	blobPath := filepath.Join(f.repoRoot, "proj1", "pypi", "concurrent", "packages", filename)
+	blob, err := os.ReadFile(blobPath)
+	if err != nil {
+		t.Fatalf("blob missing: %v", err)
+	}
+	blobSum := sha256.Sum256(blob)
+	if hex.EncodeToString(blobSum[:]) != hex.EncodeToString(expectSum[:]) {
+		t.Fatalf("on-disk blob sha256 %x != expected %x (loser's bytes landed)", blobSum, expectSum)
 	}
 }
 

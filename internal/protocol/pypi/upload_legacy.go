@@ -219,15 +219,24 @@ func (h *Handler) handleLegacyUpload(w http.ResponseWriter, r *http.Request) {
 	parsed.Digest = digest
 	parsed.SizeBytes = size
 
+	storageKey := packageStorageKey(res.project.Name, res.repo.Name, filename)
+
+	// F-07.1 (wt3) Codex follow-up #2: serialize pre-check → Put →
+	// commit → rollback for this (repo, filename) pair. Without the
+	// lock, two concurrent first-uploads of the same filename would both
+	// pass FindByFilename, both `PathStore.Put` (last-rename-wins on
+	// disk), and then only one would commit a pypi_files row — leaving
+	// the DB winner's digest pointing at the loser's bytes. The lock is
+	// keyed by storageKey so different filenames don't contend.
+	unlock := h.lockUpload(storageKey)
+	defer unlock()
+
 	// F-07.1 (wt3) Codex follow-up: pre-check existence BEFORE PathStore.Put
 	// because pathstore.Put is not content-addressed — it overwrites any
 	// prior blob at the same storage key, and the rollback path's Delete
-	// would then unlink the **winning** upload's on-disk file. Doing the
-	// lookup up front keeps the common dup-case data-safe. The writer-tx
-	// FindByFilenameTx inside commitPyPIRow still defends against the
-	// narrow race where a concurrent upload commits between this read
-	// and our Insert — in that race, we deliberately do NOT delete the
-	// blob on rollback because the bytes now belong to the winner.
+	// would then unlink the **winning** upload's on-disk file. With the
+	// storageKey mutex above held, this read + the writer-tx commit below
+	// form one atomic section per-(repo, filename).
 	if existing, ferr := h.pypiFiles.FindByFilename(r.Context(), res.repo.ID, filename); ferr == nil && existing != nil {
 		h.auditEvent(r, audit.EvtPyPIUpload, filename, "rejected", map[string]any{
 			"project": res.project.Name,
@@ -253,7 +262,6 @@ func (h *Handler) handleLegacyUpload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
-	storageKey := packageStorageKey(res.project.Name, res.repo.Name, filename)
 	if _, err := h.pathStore.Put(r.Context(), storageKey, bytes.NewReader(tmpBytes)); err != nil {
 		slog.ErrorContext(r.Context(), "pypi.legacy.storage_failed",
 			slog.String("incident_id", chimw.GetReqID(r.Context())),

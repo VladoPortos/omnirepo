@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -78,6 +79,30 @@ type Handler struct {
 
 	maxPutBytes int64
 	repoRoot    string
+
+	// F-07.1 Codex follow-up #2: per-storageKey upload serialization.
+	// Two concurrent first-uploads of the same filename would otherwise
+	// both pass the pre-check, both `PathStore.Put` (last-rename-wins on
+	// disk), and then only one would commit a pypi_files row — leaving
+	// the DB winner's digest pointing at the loser's bytes. Holding this
+	// mutex from pre-check through commit/rollback serializes the critical
+	// section so the second-comer always observes the committed row and
+	// takes the 409 branch without touching disk. Entries are kept for
+	// the process lifetime (tiny, ~40 B each, bounded by distinct
+	// filenames ever uploaded this run) — deleting on unlock would race
+	// against goroutines that LoadOrStore'd the same key between our
+	// Unlock and Delete.
+	uploadLocks sync.Map
+}
+
+// lockUpload serializes the pre-check → Put → commit → rollback critical
+// section for storageKey across concurrent handler goroutines. Returns
+// the release func the caller must defer.
+func (h *Handler) lockUpload(key string) func() {
+	v, _ := h.uploadLocks.LoadOrStore(key, &sync.Mutex{})
+	m := v.(*sync.Mutex)
+	m.Lock()
+	return m.Unlock
 }
 
 // defaultMaxPutBytes is the spec-default 5 GiB cap on a single PUT body.

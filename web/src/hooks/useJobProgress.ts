@@ -80,11 +80,25 @@ export function computeJobProgress(detail: JobDetail | undefined): JobProgress {
   const percent =
     totalBytes > 0 ? Math.round((progressBytes / totalBytes) * 100) : null;
   const status = detail.status;
+  const attempts = Number(detail.attempts) || 0;
+  const lastError = detail.last_error ?? '';
+  // F-06.6 (wt3 batch 06): the job runner retries transient sync failures
+  // up to MaxAttempts=5 (backoff 1m/5m/30m/30m/30m) before marking the row
+  // `failed`. Between attempts the row stays status=pending with
+  // attempts>=1 and last_error set. Pre-fix we treated that as a normal
+  // in-flight state and kept the progress bar pinned on "Preparing…" for
+  // up to 96 minutes while the bogus-upstream mirror churned DNS lookups.
+  // Surface it as a proper (transient-class) error envelope so the UI
+  // renders the "sync failed, retrying" pill the spec expects after the
+  // first attempt. `isPolling` stays true through retry-backoff so the
+  // bar flips back to "running" if a later attempt progresses.
+  const inRetryBackoff =
+    status === 'pending' && attempts >= 1 && lastError !== '';
   const error =
-    status === 'failed' && detail.last_error
-      ? localEnvelope(detail.last_error, {
+    (status === 'failed' && lastError) || inRetryBackoff
+      ? localEnvelope(lastError, {
           class: 'transient',
-          code: 'job.failed',
+          code: inRetryBackoff ? 'job.retrying' : 'job.failed',
         })
       : null;
   return {
@@ -104,10 +118,37 @@ export function computeJobProgress(detail: JobDetail | undefined): JobProgress {
  * refetchInterval callback so it's unit-testable without TanStack's
  * query object. Returns the delay to use for the next poll, or `false`
  * to stop polling. First-run (no data yet) also polls after 500 ms.
+ *
+ * F-06.6 (wt3 batch 06): when the sync-job endpoint surfaces a 4xx
+ * (repo deleted underneath, auth dropped, job id invalid), stop
+ * polling instead of looping 2×/sec forever. 5xx still retries once
+ * so a transient outage self-heals. The caller passes `error` through
+ * from TanStack's query.state.error; `undefined` means "no error".
  */
-export function pollingDecision(detail: JobDetail | undefined): number | false {
-  if (!detail) return POLL_INTERVAL_MS;
-  if (detail.status === 'done' || detail.status === 'failed') return false;
+export interface PollingDecisionInput {
+  detail: JobDetail | undefined;
+  /** TanStack query error, if any. We only inspect numeric .status. */
+  error?: { status?: number } | null;
+}
+
+export function pollingDecision(
+  input: JobDetail | undefined | PollingDecisionInput,
+): number | false {
+  const data =
+    input && typeof input === 'object' && 'detail' in input
+      ? (input as PollingDecisionInput).detail
+      : (input as JobDetail | undefined);
+  const err =
+    input && typeof input === 'object' && 'error' in input
+      ? (input as PollingDecisionInput).error ?? null
+      : null;
+  if (err && typeof err.status === 'number' && err.status >= 400 && err.status < 500) {
+    // 4xx — repo deleted / no longer authorized / job id gone. No point
+    // hammering the endpoint; user will re-open the page to re-arm.
+    return false;
+  }
+  if (!data) return POLL_INTERVAL_MS;
+  if (data.status === 'done' || data.status === 'failed') return false;
   return POLL_INTERVAL_MS;
 }
 
@@ -134,7 +175,23 @@ export function useJobProgress(
     enabled,
     // v5 signature: callback receives the query object, NOT the data
     // value. The pure decision helper below is unit-tested.
-    refetchInterval: (query) => pollingDecision(query.state.data),
+    refetchInterval: (query) =>
+      pollingDecision({
+        detail: query.state.data,
+        // Surface any HTTP-shaped error (.status set by api.get on non-2xx)
+        // so 4xx (repo deleted mid-sync) halts polling (F-06.6).
+        error: query.state.error as { status?: number } | null,
+      }),
+    // Don't keep the query alive across repo deletions. When the UI
+    // unmounts the page, stop retrying on network errors immediately —
+    // matching the refetchInterval short-circuit for 4xx.
+    retry: (failureCount, error) => {
+      const status = (error as { status?: number })?.status;
+      if (typeof status === 'number' && status >= 400 && status < 500) {
+        return false;
+      }
+      return failureCount < 2;
+    },
     staleTime: 0,
   });
 

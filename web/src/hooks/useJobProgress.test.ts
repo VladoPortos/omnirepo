@@ -221,3 +221,81 @@ describe('useJobProgress — error wrapping', () => {
     expect(p.error).toBeNull();
   });
 });
+
+// F-06.6 (wt3 batch 06) — retry backoff + polling halts on 4xx.
+describe('useJobProgress — F-06.6 retry-backoff state', () => {
+  it('pending + attempts>=1 + last_error surfaces a transient "job.retrying" envelope', () => {
+    // Reproduces the bogus-host mirror sync: status stays `pending` with
+    // attempts=1 and last_error populated while the job-runner backoff
+    // timer elapses (1 minute for attempt 1). Pre-fix the UI rendered
+    // "Preparing…" with no error pill for up to 96 minutes (5 attempts).
+    const retrying = job({
+      status: 'pending',
+      attempts: 1,
+      last_error:
+        'rpm upstream: get http://rpm-not-here.invalid/repodata/repomd.xml: dial tcp: lookup rpm-not-here.invalid: no such host',
+    });
+    const p = computeJobProgress(retrying);
+    expect(p.error).not.toBeNull();
+    expect(p.error?.class).toBe('transient');
+    expect(p.error?.code).toBe('job.retrying');
+    expect(p.error?.message).toContain('no such host');
+    // isPolling stays true — next attempt may progress.
+    expect(p.isPolling).toBe(true);
+  });
+
+  it('pending + attempts=0 (pre-first-try) does NOT synthesise an error', () => {
+    const firstTry = job({ status: 'pending', attempts: 0 });
+    expect(computeJobProgress(firstTry).error).toBeNull();
+  });
+
+  it('pending + attempts>=1 WITHOUT last_error stays clean (legacy rows)', () => {
+    const legacy = job({ status: 'pending', attempts: 1, last_error: '' });
+    expect(computeJobProgress(legacy).error).toBeNull();
+  });
+
+  it('terminal failed status still emits job.failed (not job.retrying)', () => {
+    const terminal = job({
+      status: 'failed',
+      attempts: 5,
+      last_error: 'gave up after 5 attempts',
+    });
+    expect(computeJobProgress(terminal).error?.code).toBe('job.failed');
+  });
+});
+
+describe('useJobProgress — F-06.6 pollingDecision 4xx halt', () => {
+  it('stops polling when query error carries a 4xx status', () => {
+    // Repo deleted underneath while the SyncNowButton instance was
+    // polling its job id — the endpoint now returns 404 forever.
+    // Pre-fix: pollingDecision returned 500 (data undefined) and the
+    // hook hammered the endpoint twice per second indefinitely. Now:
+    // any 4xx halts the loop.
+    expect(
+      pollingDecision({ detail: undefined, error: { status: 404 } }),
+    ).toBe(false);
+    expect(
+      pollingDecision({ detail: undefined, error: { status: 403 } }),
+    ).toBe(false);
+    expect(
+      pollingDecision({ detail: undefined, error: { status: 401 } }),
+    ).toBe(false);
+  });
+
+  it('still polls on 5xx (transient server outage self-heals)', () => {
+    expect(
+      pollingDecision({ detail: undefined, error: { status: 503 } }),
+    ).toBe(POLL_INTERVAL_MS);
+  });
+
+  it('still polls when no error and data is undefined (first run)', () => {
+    expect(pollingDecision({ detail: undefined, error: null })).toBe(
+      POLL_INTERVAL_MS,
+    );
+  });
+
+  it('legacy single-arg signature (detail only) still works', () => {
+    expect(pollingDecision(job({ status: 'running' }))).toBe(POLL_INTERVAL_MS);
+    expect(pollingDecision(job({ status: 'done' }))).toBe(false);
+  });
+});

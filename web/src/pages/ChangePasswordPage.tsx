@@ -69,6 +69,7 @@ export function ChangePasswordPage() {
         initial={{ opacity: 0, scale: 0.95 }}
         animate={{ opacity: 1, scale: 1 }}
         transition={{ duration: 0.15, ease: 'easeOut' }}
+        className="w-full max-w-md"
       >
         <Card className="w-full max-w-md">
           <CardHeader className="text-center">

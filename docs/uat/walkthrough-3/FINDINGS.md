@@ -11,6 +11,7 @@ Status: 🟨 Open · ✅ Closed · 🟥 Rejected (disputed)
 | F-01.2 | n | browser console | Browser-native "Failed to load resource" logs on every 4xx fetch | _(no fix — cure worse than disease)_ | — | ✅ Accepted | ✅ Closed |
 | F-01.3 | R | AuthGuard + LoginPage | Deep-link lost across login redirect | `12ac7e1` | ✅ Clean | ✅ Passed | ✅ Closed |
 | F-01.4 | m | openapi.yaml | `/setup/status` + `/setup/superadmin` undocumented | `3d06d11` | ✅ Clean | ✅ Passed | ✅ Closed |
+| F-01.5 | R | auth pages | Cards render squished — motion.div flex-item has no width | _(pending commit)_ | ⬜ Pending | ✅ Passed | ✅ Closed |
 
 ---
 
@@ -46,6 +47,15 @@ Status: 🟨 Open · ✅ Closed · 🟥 Rejected (disputed)
 - **Fix:** commit `12ac7e1` — AuthGuard attaches `state.from`; LoginPage navigates to `state.from.pathname` (+ search + hash) on success. Path must start with `/` and not `//` (open-redirect guard); otherwise falls back to `/`.
 - **Codex verify:** ✅ Clean (batched)
 - **Retest:** ✅ Retried repro — lands on `/projects/acme/docker/demo` (NotFound page, correct for now).
+- **Status:** ✅ Closed
+
+### F-01.5 Auth cards render squished — motion.div flex-item has no width
+- **Severity:** R / real-bug
+- **Area:** `web/src/pages/LoginPage.tsx`, `web/src/pages/SetupPage.tsx` (both branches), `web/src/pages/ChangePasswordPage.tsx`
+- **Symptom:** Every unauthenticated card (login, setup form, "Setup complete", change-password) renders at ~137-272px instead of the intended `max-w-md` (448px). "Setup complete" title wraps to two lines; description wraps to four.
+- **Root cause:** `motion.div` wraps the `Card` inside a `flex items-center justify-center` parent. With no width class on the motion.div and no intrinsic-min from the content, the flex item shrinks below `max-w-md` and the Card's `w-full` then resolves against the collapsed parent.
+- **Fix:** Add `className="w-full max-w-md"` to every `motion.div` wrapper. Pinned four call sites. Card width measured at 448px after fix.
+- **Retest:** ✅ Screenshots show the card at proper width on /setup (setup-complete) and /login.
 - **Status:** ✅ Closed
 
 ### F-01.4 Setup endpoints undocumented in OpenAPI spec

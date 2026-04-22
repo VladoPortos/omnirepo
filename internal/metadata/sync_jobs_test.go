@@ -350,6 +350,140 @@ func TestSyncJobsRepo_CountRepoInflight_Empty(t *testing.T) {
 	}
 }
 
+// TestSyncJobs_GetInflightTx — plan 11-05 (D-11). The generalized 409
+// envelope for concurrent-sync collisions needs the in-flight job's
+// identity, not just its count, so the REST handler can populate
+// details: {kind, job_id, started_at}. Shape parity with
+// CountRepoInflightTx (kind-agnostic WHERE clause); returns the newest
+// pending/running row, or (InflightJob{}, false, nil) when none.
+func TestSyncJobs_GetInflightTx(t *testing.T) {
+	t.Parallel()
+	db := sqlitetest.New(t)
+	ctx := context.Background()
+	jobs := metadata.NewSyncJobsRepo(db)
+	pid := seedProject(t, db, "get-inflight")
+	repos := metadata.NewReposRepo(db)
+	repoA, err := repos.Create(ctx, pid, "git", "r-a", "", nil, nil, nil)
+	if err != nil {
+		t.Fatalf("seed repo A: %v", err)
+	}
+	repoEmpty, err := repos.Create(ctx, pid, "rpm", "r-empty", "", nil, nil, nil)
+	if err != nil {
+		t.Fatalf("seed repo empty: %v", err)
+	}
+
+	// Case A: no rows → (zero, false, nil).
+	if err := db.WriteTx(ctx, func(tx *sql.Tx) error {
+		got, ok, err := jobs.GetInflightTx(ctx, tx, repoEmpty)
+		if err != nil {
+			return err
+		}
+		if ok {
+			t.Fatalf("no-rows: want exists=false, got exists=true (job=%+v)", got)
+		}
+		if got.ID != 0 || got.Kind != "" {
+			t.Fatalf("no-rows: want zero InflightJob, got %+v", got)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("case-empty: %v", err)
+	}
+
+	// Case B: single in-flight row → returns it.
+	var firstID int64
+	if err := db.WriteTx(ctx, func(tx *sql.Tx) error {
+		id, err := jobs.Enqueue(ctx, tx, "git_sync", pid, repoA, "{}")
+		if err != nil {
+			return err
+		}
+		firstID = id
+		return nil
+	}); err != nil {
+		t.Fatalf("seed first: %v", err)
+	}
+	if err := db.WriteTx(ctx, func(tx *sql.Tx) error {
+		got, ok, err := jobs.GetInflightTx(ctx, tx, repoA)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			t.Fatalf("single-row: want exists=true, got false")
+		}
+		if got.ID != firstID {
+			t.Fatalf("single-row: id=%d want %d", got.ID, firstID)
+		}
+		if got.Kind != "git_sync" {
+			t.Fatalf("single-row: kind=%q want git_sync", got.Kind)
+		}
+		// StartedAt is populated from COALESCE(leased_at, created_at);
+		// on a pending row with no leased_at yet, it comes from
+		// created_at which the migration defaults to CURRENT_TIMESTAMP.
+		if got.StartedAt.IsZero() {
+			t.Fatalf("single-row: StartedAt must be non-zero (fallback to created_at)")
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("case-single: %v", err)
+	}
+
+	// Case C: two in-flight rows → returns the newest (id DESC).
+	var secondID int64
+	if err := db.WriteTx(ctx, func(tx *sql.Tx) error {
+		id, err := jobs.Enqueue(ctx, tx, "git_sync", pid, repoA, "{}")
+		if err != nil {
+			return err
+		}
+		secondID = id
+		return nil
+	}); err != nil {
+		t.Fatalf("seed second: %v", err)
+	}
+	if secondID <= firstID {
+		t.Fatalf("secondID=%d must be > firstID=%d for the ORDER BY id DESC assertion", secondID, firstID)
+	}
+	if err := db.WriteTx(ctx, func(tx *sql.Tx) error {
+		got, ok, err := jobs.GetInflightTx(ctx, tx, repoA)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			t.Fatalf("two-rows: want exists=true")
+		}
+		if got.ID != secondID {
+			t.Fatalf("two-rows: id=%d want %d (newest)", got.ID, secondID)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("case-two: %v", err)
+	}
+
+	// Case D: done/failed rows are NOT considered in-flight.
+	// Mark both rows done; a subsequent GetInflightTx must return false.
+	if err := db.WriteTx(ctx, func(tx *sql.Tx) error {
+		if err := jobs.MarkDone(ctx, tx, firstID); err != nil {
+			return err
+		}
+		if err := jobs.MarkDone(ctx, tx, secondID); err != nil {
+			return err
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("mark done: %v", err)
+	}
+	if err := db.WriteTx(ctx, func(tx *sql.Tx) error {
+		_, ok, err := jobs.GetInflightTx(ctx, tx, repoA)
+		if err != nil {
+			return err
+		}
+		if ok {
+			t.Fatalf("done-rows: want exists=false (status='done' excluded)")
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("case-done: %v", err)
+	}
+}
+
 // TestSyncJobsRepo_CountRepoInflightTx — plan 08-06 Codex rescue Q7.
 // The tx-scoped variant lets callers run check+Enqueue atomically to
 // eliminate the documented T-08-01-04 race. Asserts shape parity with

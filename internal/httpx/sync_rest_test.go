@@ -8,8 +8,10 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -298,6 +300,217 @@ func TestSync_ConcurrencyGuardReturns409(t *testing.T) {
 	code, _ := out["error"].(string)
 	if !strings.Contains(code, "sync_already_running") {
 		t.Fatalf("code = %q, want *sync_already_running; body=%+v", code, out)
+	}
+}
+
+// --------------------------------------------------------------------------
+// Phase 11 Plan 05 (GITMIRROR-01, D-11) — git allow-list + generalized 409
+// envelope code `mirror.sync.in_flight` with {kind, job_id, started_at}.
+// --------------------------------------------------------------------------
+
+// setupGitSyncServer wires a sync-aware chi router with a git-type mirror
+// repo seeded. Used to exercise the allow-list widening and the
+// generalized 409 envelope.
+func setupGitSyncServer(t *testing.T) (*syncTestServer, int64) {
+	t.Helper()
+	db := sqlitetest.New(t)
+	ctx := context.Background()
+	projects := metadata.NewProjectsRepo(db)
+	repos := metadata.NewReposRepo(db)
+	syncJobs := metadata.NewSyncJobsRepo(db)
+
+	pid, err := projects.Create(ctx, "demo", "demo project")
+	if err != nil {
+		t.Fatalf("project: %v", err)
+	}
+	gitID, err := repos.Create(ctx, pid, "git", "upstream-mirror", "", nil, nil, nil)
+	if err != nil {
+		t.Fatalf("git repo: %v", err)
+	}
+	if err := db.WriteTx(ctx, func(tx *sql.Tx) error {
+		return repos.SetMirrorConfigInTx(ctx, tx, gitID, metadata.MirrorConfig{
+			IsMirror:    true,
+			UpstreamURL: "https://github.com/pallets/click.git",
+			FilterJSON:  "",
+			CredID:      nil,
+			ScanOnSync:  false,
+		})
+	}); err != nil {
+		t.Fatalf("set mirror cfg: %v", err)
+	}
+
+	r := chi.NewRouter()
+	httpx.MountSyncRoutes(r, httpx.SyncRESTDeps{
+		DB:       db,
+		Repos:    repos,
+		Projects: projects,
+		SyncJobs: syncJobs,
+		Audit:    nopAudit{},
+		ActorResolver: func(*http.Request) httpx.SyncActor {
+			return httpx.SyncActor{Authenticated: true, UserID: 1}
+		},
+	})
+	srv := httptest.NewServer(r)
+	t.Cleanup(srv.Close)
+	return &syncTestServer{
+		srv:        srv,
+		db:         db,
+		projects:   projects,
+		repos:      repos,
+		syncJobs:   syncJobs,
+		projectID:  pid,
+		mirrorRepo: gitID,
+		plainRepo:  0,
+	}, gitID
+}
+
+// TestSyncRest_GitAccepted asserts POST /sync on a type=git mirror repo is
+// accepted (no longer blocked by the "unsupported repo type" allow-list).
+// Returns 202 with job_id + kind="git_sync".
+func TestSyncRest_GitAccepted(t *testing.T) {
+	s, _ := setupGitSyncServer(t)
+	resp, err := http.Post(s.srv.URL+"/projects/demo/repos/git/upstream-mirror/sync",
+		"application/json", bytes.NewReader([]byte{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusAccepted {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 202; body=%s", resp.StatusCode, body)
+	}
+	var out map[string]any
+	_ = json.NewDecoder(resp.Body).Decode(&out)
+	if _, ok := out["job_id"]; !ok {
+		t.Fatalf("missing job_id: %+v", out)
+	}
+	if out["kind"] != "git_sync" {
+		t.Fatalf("kind = %v, want git_sync", out["kind"])
+	}
+}
+
+// TestSyncRest_409Envelope_NewShape asserts the D-11 generalized 409
+// envelope: code=`mirror.sync.in_flight`, class=transient, and
+// details={kind, job_id, started_at}. Replaces the legacy
+// `sync.sync_already_running` emission.
+func TestSyncRest_409Envelope_NewShape(t *testing.T) {
+	s, gitID := setupGitSyncServer(t)
+	ctx := context.Background()
+	// Plant a pending git_sync row for the mirror repo.
+	var seededID int64
+	if err := s.db.WriteTx(ctx, func(tx *sql.Tx) error {
+		id, err := s.syncJobs.Enqueue(ctx, tx, "git_sync", s.projectID, gitID, "{}")
+		if err != nil {
+			return err
+		}
+		seededID = id
+		return nil
+	}); err != nil {
+		t.Fatalf("seed pending: %v", err)
+	}
+
+	resp, err := http.Post(s.srv.URL+"/projects/demo/repos/git/upstream-mirror/sync",
+		"application/json", bytes.NewReader([]byte{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusConflict {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 409; body=%s", resp.StatusCode, body)
+	}
+
+	var env map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&env); err != nil {
+		t.Fatalf("decode envelope: %v", err)
+	}
+	if code, _ := env["code"].(string); code != "mirror.sync.in_flight" {
+		t.Fatalf("envelope.code = %q, want mirror.sync.in_flight; body=%+v", code, env)
+	}
+	if class, _ := env["class"].(string); class != "transient" {
+		t.Fatalf("envelope.class = %q, want transient; body=%+v", class, env)
+	}
+	details, ok := env["details"].(map[string]any)
+	if !ok {
+		t.Fatalf("envelope.details missing or wrong shape: %+v", env)
+	}
+	if kind, _ := details["kind"].(string); kind != "git_sync" {
+		t.Fatalf("details.kind = %q, want git_sync", kind)
+	}
+	jid, ok := details["job_id"].(float64)
+	if !ok {
+		t.Fatalf("details.job_id missing or non-numeric: %+v", details)
+	}
+	if int64(jid) != seededID {
+		t.Fatalf("details.job_id = %d, want %d", int64(jid), seededID)
+	}
+	startedAt, _ := details["started_at"].(string)
+	if startedAt == "" {
+		t.Fatalf("details.started_at missing: %+v", details)
+	}
+	// Parse as RFC3339 to assert shape.
+	if _, err := time.Parse(time.RFC3339, startedAt); err != nil {
+		t.Fatalf("details.started_at %q not RFC3339: %v", startedAt, err)
+	}
+	// Legacy code MUST NOT be present in the response body.
+	if code, _ := env["code"].(string); strings.Contains(code, "sync_already_running") {
+		t.Fatalf("legacy code %q still emitted from /sync 409 path", code)
+	}
+}
+
+// TestSyncRest_ExistingProtocols_StillWork — regression guard. A 409 on
+// an rpm/deb/pypi/helm mirror sync also uses the new generalized
+// envelope shape (all kinds flow through the same emitter).
+func TestSyncRest_ExistingProtocols_StillWork(t *testing.T) {
+	s := setupSyncTestServer(t)
+	ctx := context.Background()
+	// Plant a pending apt_sync row for the deb mirror repo.
+	if err := s.db.WriteTx(ctx, func(tx *sql.Tx) error {
+		_, err := s.syncJobs.Enqueue(ctx, tx, "apt_sync", s.projectID, s.mirrorRepo, "{}")
+		return err
+	}); err != nil {
+		t.Fatalf("seed pending: %v", err)
+	}
+	resp, err := http.Post(s.srv.URL+"/projects/demo/repos/deb/ubuntu-focal/sync",
+		"application/json", bytes.NewReader([]byte{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("status = %d, want 409", resp.StatusCode)
+	}
+	var env map[string]any
+	_ = json.NewDecoder(resp.Body).Decode(&env)
+	if code, _ := env["code"].(string); code != "mirror.sync.in_flight" {
+		t.Fatalf("deb 409 code = %q, want mirror.sync.in_flight", code)
+	}
+	details, _ := env["details"].(map[string]any)
+	if kind, _ := details["kind"].(string); kind != "apt_sync" {
+		t.Fatalf("deb 409 details.kind = %q, want apt_sync", kind)
+	}
+}
+
+// TestSyncRest_LegacyCode_NotEmitted asserts the old
+// `sync.sync_already_running` code is removed from the production
+// sync_rest code path (both the fast-path pre-check and the writer-tx
+// re-check). Grep-based assertion makes the invariant enforceable
+// from the file body regardless of test harness shape.
+func TestSyncRest_LegacyCode_NotEmitted(t *testing.T) {
+	data, err := os.ReadFile("sync_rest.go")
+	if err != nil {
+		t.Fatalf("read sync_rest.go: %v", err)
+	}
+	body := string(data)
+	if strings.Contains(body, "sync.sync_already_running") {
+		t.Errorf("sync_rest.go must not emit legacy 409 code `sync.sync_already_running` after plan 11-05")
+	}
+	if !strings.Contains(body, "mirror.sync.in_flight") {
+		t.Errorf("sync_rest.go must emit the generalized 409 code `mirror.sync.in_flight`")
+	}
+	// git widening invariant (plan 11-05 verify block).
+	if !strings.Contains(body, `"rpm", "deb", "pypi", "helm", "git"`) {
+		t.Errorf("sync_rest.go allow-list must include git after plan 11-05 widening")
 	}
 }
 

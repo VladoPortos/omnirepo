@@ -366,7 +366,13 @@ export function PypiRepoPage({ repo }: PypiRepoPageProps) {
                     >
                       <a
                         className="font-mono text-primary hover:underline"
-                        href={`/${encodeURIComponent(projectName ?? '')}/pypi/${encodeURIComponent(repo.name)}/simple/${encodeURIComponent(row.normalized_name)}/${encodeURIComponent(f.filename)}`}
+                        // F-07.3 (wt3): backend only serves wheels/sdists
+                        // at `/<project>/pypi/<repo>/packages/<filename>`.
+                        // The simple/ tree holds the PEP 503 index pages,
+                        // not artefacts; linking inside it 404s the SPA.
+                        // Session cookie auths the request same-origin.
+                        href={`/${encodeURIComponent(projectName ?? '')}/pypi/${encodeURIComponent(repo.name)}/packages/${encodeURIComponent(f.filename)}`}
+                        download={f.filename}
                       >
                         {f.filename}
                       </a>

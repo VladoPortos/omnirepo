@@ -168,6 +168,203 @@ func TestGitRefsFindByName(t *testing.T) {
 	}
 }
 
+// --- Plan 11-06 Task 2a: ReplaceAllTx explicit tx-scoped variant ---
+
+// TestGitRefs_ReplaceAllTx_AtomicReplace seeds prior ref rows then calls
+// ReplaceAllTx inside WriteTx with a replacement set. The commit must be
+// atomic — post-commit we see only the replacement set, no leftovers from
+// the prior state.
+func TestGitRefs_ReplaceAllTx_AtomicReplace(t *testing.T) {
+	t.Parallel()
+	db := sqlitetest.New(t)
+	ctx := context.Background()
+	repoID := seedGitRepo(t, db)
+	r := metadata.NewGitRefsRepo(db)
+
+	// Seed 3 prior rows.
+	prior := []metadata.GitRef{
+		{Name: "refs/heads/main", Target: "sha-main-old", Type: metadata.GitRefBranch},
+		{Name: "refs/heads/dev", Target: "sha-dev-old", Type: metadata.GitRefBranch},
+		{Name: "refs/tags/v0.9", Target: "sha-tag-old", Type: metadata.GitRefTag},
+	}
+	if err := db.WriteTx(ctx, func(tx *sql.Tx) error {
+		return r.ReplaceAllTx(ctx, tx, repoID, prior)
+	}); err != nil {
+		t.Fatalf("seed prior: %v", err)
+	}
+
+	// Replace with 4 new rows.
+	next := []metadata.GitRef{
+		{Name: "refs/heads/main", Target: "sha-main-new", Type: metadata.GitRefBranch},
+		{Name: "refs/heads/feature", Target: "sha-feat", Type: metadata.GitRefBranch},
+		{Name: "refs/tags/v1.0", Target: "sha-v10", Type: metadata.GitRefTag},
+		{Name: "HEAD", Target: "refs/heads/main", Type: metadata.GitRefSymbolic},
+	}
+	if err := db.WriteTx(ctx, func(tx *sql.Tx) error {
+		return r.ReplaceAllTx(ctx, tx, repoID, next)
+	}); err != nil {
+		t.Fatalf("replace_all_tx: %v", err)
+	}
+
+	got, err := r.List(ctx, repoID)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(got) != len(next) {
+		t.Fatalf("want %d refs, got %d: %+v", len(next), len(got), got)
+	}
+	// Prior refs must be completely gone.
+	for _, g := range got {
+		if g.Name == "refs/heads/dev" || g.Name == "refs/tags/v0.9" {
+			t.Fatalf("prior ref %q should have been pruned", g.Name)
+		}
+		if g.Name == "refs/heads/main" && g.Target == "sha-main-old" {
+			t.Fatalf("refs/heads/main still carries the old target")
+		}
+	}
+}
+
+// TestGitRefs_ReplaceAllTx_RollbackLeavesPriorState pins the writer-tx
+// atomicity invariant: when the closure returns a non-nil error AFTER
+// ReplaceAllTx ran, the whole transaction rolls back and the prior rows
+// remain untouched. This is the load-bearing guarantee GITMIRROR-06 asks
+// for — "no partial state after a failed mid-sync."
+func TestGitRefs_ReplaceAllTx_RollbackLeavesPriorState(t *testing.T) {
+	t.Parallel()
+	db := sqlitetest.New(t)
+	ctx := context.Background()
+	repoID := seedGitRepo(t, db)
+	r := metadata.NewGitRefsRepo(db)
+
+	prior := []metadata.GitRef{
+		{Name: "refs/heads/main", Target: "sha-main", Type: metadata.GitRefBranch},
+		{Name: "refs/tags/v1.0", Target: "sha-v10", Type: metadata.GitRefTag},
+	}
+	if err := db.WriteTx(ctx, func(tx *sql.Tx) error {
+		return r.ReplaceAllTx(ctx, tx, repoID, prior)
+	}); err != nil {
+		t.Fatalf("seed prior: %v", err)
+	}
+
+	sentinel := errors.New("deliberate failure after ReplaceAllTx")
+	err := db.WriteTx(ctx, func(tx *sql.Tx) error {
+		if err := r.ReplaceAllTx(ctx, tx, repoID, []metadata.GitRef{
+			{Name: "refs/heads/feature", Target: "never-visible", Type: metadata.GitRefBranch},
+		}); err != nil {
+			return err
+		}
+		return sentinel // force rollback
+	})
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("expected sentinel error, got %v", err)
+	}
+
+	// Prior state must be intact.
+	got, err := r.List(ctx, repoID)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(got) != len(prior) {
+		t.Fatalf("want prior state (%d refs), got %d: %+v", len(prior), len(got), got)
+	}
+	for _, g := range got {
+		if g.Name == "refs/heads/feature" {
+			t.Fatalf("rollback failed — refs/heads/feature leaked post-rollback")
+		}
+	}
+}
+
+// TestGitRefs_ReplaceAllTx_EmptySetPrunes pins the prune-only path: calling
+// with refs=nil (or empty slice) must DELETE every row for repoID and leave
+// the table free of any entry for that repo.
+func TestGitRefs_ReplaceAllTx_EmptySetPrunes(t *testing.T) {
+	t.Parallel()
+	db := sqlitetest.New(t)
+	ctx := context.Background()
+	repoID := seedGitRepo(t, db)
+	r := metadata.NewGitRefsRepo(db)
+
+	// Seed some rows.
+	if err := db.WriteTx(ctx, func(tx *sql.Tx) error {
+		return r.ReplaceAllTx(ctx, tx, repoID, []metadata.GitRef{
+			{Name: "refs/heads/main", Target: "t1", Type: metadata.GitRefBranch},
+			{Name: "refs/heads/dev", Target: "t2", Type: metadata.GitRefBranch},
+			{Name: "refs/tags/v1", Target: "t3", Type: metadata.GitRefTag},
+		})
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	// Prune with nil.
+	if err := db.WriteTx(ctx, func(tx *sql.Tx) error {
+		return r.ReplaceAllTx(ctx, tx, repoID, nil)
+	}); err != nil {
+		t.Fatalf("prune nil: %v", err)
+	}
+	got, err := r.List(ctx, repoID)
+	if err != nil {
+		t.Fatalf("list after nil: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("expected 0 rows after nil prune, got %d: %+v", len(got), got)
+	}
+
+	// Re-seed and prune with empty slice — same outcome.
+	if err := db.WriteTx(ctx, func(tx *sql.Tx) error {
+		return r.ReplaceAllTx(ctx, tx, repoID, []metadata.GitRef{
+			{Name: "refs/heads/only", Target: "x", Type: metadata.GitRefBranch},
+		})
+	}); err != nil {
+		t.Fatalf("re-seed: %v", err)
+	}
+	if err := db.WriteTx(ctx, func(tx *sql.Tx) error {
+		return r.ReplaceAllTx(ctx, tx, repoID, []metadata.GitRef{})
+	}); err != nil {
+		t.Fatalf("prune empty-slice: %v", err)
+	}
+	got, _ = r.List(ctx, repoID)
+	if len(got) != 0 {
+		t.Fatalf("expected 0 rows after empty-slice prune, got %d", len(got))
+	}
+}
+
+// TestGitRefs_ReplaceAllTx_ColumnOrderMatchesSchema inserts a ref with
+// explicit Name/Target/Type values and then SELECTs it back via FindByName,
+// asserting each field survives the round-trip. Guards against column-order
+// drift in the INSERT statement (e.g. future refactor that accidentally
+// swaps target and name).
+func TestGitRefs_ReplaceAllTx_ColumnOrderMatchesSchema(t *testing.T) {
+	t.Parallel()
+	db := sqlitetest.New(t)
+	ctx := context.Background()
+	repoID := seedGitRepo(t, db)
+	r := metadata.NewGitRefsRepo(db)
+
+	if err := db.WriteTx(ctx, func(tx *sql.Tx) error {
+		return r.ReplaceAllTx(ctx, tx, repoID, []metadata.GitRef{
+			{Name: "refs/tags/v9.9.9", Target: "deadbeef0000111122223333444455556666777", Type: metadata.GitRefTag},
+		})
+	}); err != nil {
+		t.Fatalf("replace_all_tx: %v", err)
+	}
+	got, err := r.FindByName(ctx, repoID, "refs/tags/v9.9.9")
+	if err != nil {
+		t.Fatalf("find: %v", err)
+	}
+	if got.Name != "refs/tags/v9.9.9" {
+		t.Fatalf("Name = %q, want refs/tags/v9.9.9", got.Name)
+	}
+	if got.Target != "deadbeef0000111122223333444455556666777" {
+		t.Fatalf("Target = %q, want the full sha", got.Target)
+	}
+	if got.Type != metadata.GitRefTag {
+		t.Fatalf("Type = %q, want tag", got.Type)
+	}
+	if got.RepoID != repoID {
+		t.Fatalf("RepoID = %d, want %d", got.RepoID, repoID)
+	}
+}
+
 func TestReposGitMaxPushBytes(t *testing.T) {
 	t.Parallel()
 	db := sqlitetest.New(t)

@@ -75,6 +75,30 @@ func (r *GitRefsRepo) ReplaceAll(ctx context.Context, tx *sql.Tx, repoID int64, 
 	return nil
 }
 
+// ReplaceAllTx is the explicitly-tx-scoped variant of ReplaceAll. It is
+// functionally identical — prune all git_refs for repoID, batch-INSERT the
+// new set in chunks of gitRefsChunkSize — but the `Tx` suffix makes the
+// caller-owned-transaction contract load-bearing in call sites where the
+// surrounding writer tx is the unit of atomicity (GITMIRROR-06: post-fetch
+// refs rewrite must be atomic so concurrent readers never observe a partial
+// ref set).
+//
+// Plan 11-06 Task 2a adds this so the git mirror sync handler
+// (internal/protocol/git/sync_handler.go) reads:
+//
+//	h.deps.DB.WriteTx(ctx, func(tx *sql.Tx) error {
+//	    return refsRepo.ReplaceAllTx(ctx, tx, repoID, newRefs)
+//	})
+//
+// rather than the older ReplaceAll name which predates the tx-requirement
+// contract. Both methods delegate to the same implementation — ReplaceAllTx
+// exists for intent-reading clarity at the sync handler's writer-tx
+// boundary. The existing receive-pack walker (internal/protocol/git/refs.go
+// WalkAndReplace) continues to use ReplaceAll unchanged to minimize churn.
+func (r *GitRefsRepo) ReplaceAllTx(ctx context.Context, tx *sql.Tx, repoID int64, refs []GitRef) error {
+	return r.ReplaceAll(ctx, tx, repoID, refs)
+}
+
 func (r *GitRefsRepo) insertBatch(ctx context.Context, tx *sql.Tx, repoID int64, batch []GitRef) error {
 	if len(batch) == 0 {
 		return nil

@@ -90,7 +90,20 @@ export function ProjectsPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <h1 className="text-[28px] font-semibold leading-tight">Projects</h1>
-        <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+        <Dialog
+          open={dialogOpen}
+          onOpenChange={(open) => {
+            setDialogOpen(open);
+            if (!open) {
+              // Reset form + error banner when the dialog is dismissed
+              // (Esc / overlay click / Cancel). Without this, reopening after
+              // a rejected submit shows the stale name + stale error.
+              setName('');
+              setDescription('');
+              setErrorEnvelope(null);
+            }
+          }}
+        >
           <DialogTrigger render={<Button size="sm" />}>
             <Plus className="mr-1.5 size-4" />
             Create Project

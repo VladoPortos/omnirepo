@@ -19,6 +19,41 @@ import (
 	helmrepo "helm.sh/helm/v3/pkg/repo"
 )
 
+// EntrySourceKind classifies the fetch transport for a single upstream
+// index entry. Tagged onto UpstreamEntry so sync_handler.fetchAndCommit
+// (plan 11-03) can dispatch to HTTP vs OCI code paths (OCIHELM-03).
+//
+// ParseUpstream sets Source from the entry's Path prefix:
+//   - "http://" or "https://" → EntrySourceHTTP
+//   - "oci://"               → EntrySourceOCI
+//   - anything else          → EntrySourceUnknown (skipped downstream)
+type EntrySourceKind int
+
+const (
+	// EntrySourceUnknown is the zero value — ParseUpstream assigns it to
+	// any path that lacks a recognized scheme prefix. The v1.2 sync
+	// handler's existing "skip unsupported" branch will drop these.
+	EntrySourceUnknown EntrySourceKind = iota
+	// EntrySourceHTTP is the pre-v1.4 default — chart tgz fetched over
+	// http(s) from the URL recorded in the upstream index.yaml.
+	EntrySourceHTTP
+	// EntrySourceOCI means the chart lives at an oci:// reference and
+	// must be pulled via the ociclient subpackage (plan 11-03).
+	EntrySourceOCI
+)
+
+// String returns the short kind name used in audit/log output.
+func (k EntrySourceKind) String() string {
+	switch k {
+	case EntrySourceHTTP:
+		return "http"
+	case EntrySourceOCI:
+		return "oci"
+	default:
+		return "unknown"
+	}
+}
+
 // UpstreamEntry is one chart version yielded by ParseUpstream.
 type UpstreamEntry struct {
 	Path     string // absolute URL to fetch the .tgz
@@ -26,6 +61,7 @@ type UpstreamEntry struct {
 	Size     int64
 	Filename string // canonical chart filename (<name>-<version>.tgz)
 	Metadata *helmrepo.ChartVersion
+	Source   EntrySourceKind // http vs oci vs unknown (plan 11-02)
 }
 
 // AuthCreds carries optional Basic / Bearer credentials.
@@ -116,6 +152,7 @@ func ParseUpstream(
 				Digest:   digest,
 				Filename: filename,
 				Metadata: v,
+				Source:   classifyEntryPath(fetchURL),
 			}
 			if err := yield(ent); err != nil {
 				return count, err
@@ -169,4 +206,20 @@ func resolveURL(base *url.URL, href string) string {
 		return href
 	}
 	return base.ResolveReference(rel).String()
+}
+
+// classifyEntryPath returns the EntrySourceKind for a post-resolveURL entry
+// path. Case-insensitive on the scheme. Plan 11-02 introduces this tag so
+// plan 11-03's fetchAndCommit can dispatch to HTTP vs OCI code paths
+// without re-parsing the URL. OCIHELM-03.
+func classifyEntryPath(path string) EntrySourceKind {
+	lower := strings.ToLower(path)
+	switch {
+	case strings.HasPrefix(lower, "oci://"):
+		return EntrySourceOCI
+	case strings.HasPrefix(lower, "http://"), strings.HasPrefix(lower, "https://"):
+		return EntrySourceHTTP
+	default:
+		return EntrySourceUnknown
+	}
 }

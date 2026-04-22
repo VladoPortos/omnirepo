@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"strings"
 	"unicode/utf8"
 
 	"github.com/dxc-internal/omnirepo/internal/metadata"
@@ -52,12 +53,72 @@ var mirrorSupportedTypes = map[string]struct{}{
 	"helm": {},
 }
 
-// validateMirrorUpstreamURL enforces http(s) scheme + non-empty host.
-// Rejects file://, javascript:, ftp://, bare paths, and missing hosts
-// (T-08-01-03).
-func validateMirrorUpstreamURL(raw string) bool {
+// HelmSourceKind is the api-layer mirror of helm.EntrySourceKind.
+// Duplicated here to keep the api package cycle-free (the header comment
+// above the package declaration forbids importing protocol packages —
+// the same rationale applies to a new helm import). The three constants
+// are kept in lock-step with helm.EntrySource* by convention; downstream
+// callers that need the helm-native kind map through a local switch.
+type HelmSourceKind int
+
+// Helm upstream classifier kinds (plan 11-02).
+const (
+	HelmSourceUnknown HelmSourceKind = iota
+	HelmSourceHTTP
+	HelmSourceOCI
+)
+
+// classifyHelmUpstream returns the fetch-transport kind for a helm mirror
+// upstream URL (OCIHELM-03). Supported schemes: http, https, oci. Scheme
+// comparison is case-insensitive. oci:// must have both a host and a
+// path component ("oci://host/chart") — bare "oci://host" is rejected so
+// the downstream pull has an unambiguous reference.
+//
+// Bare-host strings without any scheme (e.g. "registry-1.docker.io/foo")
+// are rejected in v1.4 even though the Helm SDK accepts them — the
+// validator requires an explicit scheme for UX clarity and to keep the
+// Docker Hub gate in refuseDockerHubWithoutCred deterministic.
+func classifyHelmUpstream(raw string) (HelmSourceKind, error) {
+	if raw == "" {
+		return HelmSourceUnknown, fmt.Errorf("mirror upstream URL is empty")
+	}
+	lower := strings.ToLower(raw)
+	switch {
+	case strings.HasPrefix(lower, "oci://"):
+		rest := raw[len("oci://"):]
+		if rest == "" || !strings.Contains(rest, "/") {
+			return HelmSourceUnknown, fmt.Errorf("oci upstream missing host/path: %q", raw)
+		}
+		// First segment = host; must be non-empty.
+		if idx := strings.Index(rest, "/"); idx == 0 || idx == -1 {
+			return HelmSourceUnknown, fmt.Errorf("oci upstream missing host: %q", raw)
+		}
+		return HelmSourceOCI, nil
+	case strings.HasPrefix(lower, "http://"), strings.HasPrefix(lower, "https://"):
+		u, err := url.Parse(raw)
+		if err != nil || u.Host == "" {
+			return HelmSourceUnknown, fmt.Errorf("invalid http upstream: %q", raw)
+		}
+		return HelmSourceHTTP, nil
+	}
+	return HelmSourceUnknown, fmt.Errorf("unsupported upstream scheme: %q", raw)
+}
+
+// validateMirrorUpstreamURL enforces http(s) scheme + non-empty host, with a
+// repoType-gated widening for helm mirrors that additionally accept oci://
+// (plan 11-02, OCIHELM-03). Rejects file://, javascript:, ftp://, bare
+// paths, and missing hosts (T-08-01-03) regardless of repoType.
+func validateMirrorUpstreamURL(raw, repoType string) bool {
 	if raw == "" {
 		return false
+	}
+	lower := strings.ToLower(raw)
+	if strings.HasPrefix(lower, "oci://") {
+		if repoType != "helm" {
+			return false
+		}
+		_, err := classifyHelmUpstream(raw)
+		return err == nil
 	}
 	u, err := url.Parse(raw)
 	if err != nil {

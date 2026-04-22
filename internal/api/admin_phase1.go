@@ -706,7 +706,7 @@ func (d Deps) handleCreateRepo(w http.ResponseWriter, r *http.Request) {
 				"mirror flag only supported for deb/rpm/pypi/helm")
 			return
 		}
-		if !validateMirrorUpstreamURL(req.MirrorUpstreamURL) {
+		if !validateMirrorUpstreamURL(req.MirrorUpstreamURL, req.Type) {
 			writeJSONError(w, r, http.StatusBadRequest, codeRepoMirrorURLInvalid,
 				"upstream URL must be http(s) with a host")
 			return

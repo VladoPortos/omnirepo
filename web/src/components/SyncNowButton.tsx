@@ -273,7 +273,17 @@ export function SyncNowButton({
         </div>
       )}
 
-      {progress.status === 'failed' && progress.error && (
+      {/*
+        F-06.6 follow-up (Codex pass): useJobProgress now emits a
+        transient-class `job.retrying` envelope while status stays
+        `pending` between retry-backoff attempts. Pre-fix this render
+        gate required `status === 'failed'` — it silently swallowed
+        every retrying envelope for up to 96 minutes. Show the
+        envelope whenever computeJobProgress produced one; the
+        envelope carries its own class/code, so the UI renders the
+        correct severity.
+      */}
+      {progress.error && (
         <ErrorEnvelopeRenderer envelope={progress.error} mode="inline" />
       )}
 

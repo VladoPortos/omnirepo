@@ -308,19 +308,46 @@ func (h *SyncHandler) fetchAndCommit(ctx context.Context, projectName string, re
 		return 0, nil
 	}
 
-	storageKey := storageKeyFor(projectName, repo.Name, ent.Filename)
-	if _, err := h.deps.Path.Put(ctx, storageKey, openBytesReader(body)); err != nil {
-		return 0, fmt.Errorf("rpm_sync: store %s: %w", ent.Filename, err)
+	// F-06.1 extension (Codex follow-up): upstream repositories occasionally
+	// publish an href/NEVRA mismatch (e.g. packages/foo.rpm whose internal
+	// header says centos-release-7-…). If we stored + indexed at ent.Filename
+	// here, regen would emit <location href="packages/<canonicalFilename>">
+	// (NEVRA-derived) and every dnf client would 404 the fetch. Stage the
+	// download to a tmp path, parse, then commit storage + DB entries under
+	// the canonical NEVRA filename so every published href points at a
+	// file that actually exists.
+	tmpDir := filepath.Join(h.deps.RepoRoot, ".tmp-rpm-sync")
+	if err := os.MkdirAll(tmpDir, 0o750); err != nil {
+		return 0, fmt.Errorf("rpm_sync: mkdir tmp %s: %w", ent.Filename, err)
+	}
+	tmpFile, err := os.CreateTemp(tmpDir, "rpm-sync-*.rpm")
+	if err != nil {
+		return 0, fmt.Errorf("rpm_sync: tmp %s: %w", ent.Filename, err)
+	}
+	tmpPath := tmpFile.Name()
+	// Belt-and-braces: always delete the staging copy on the way out —
+	// succeeded or not. Storage Put reads the body buffer directly (not
+	// the file) so the canonical storage is independent of tmpPath.
+	defer func() { _ = os.Remove(tmpPath) }()
+	if _, err := tmpFile.Write(body); err != nil {
+		_ = tmpFile.Close()
+		return 0, fmt.Errorf("rpm_sync: tmp write %s: %w", ent.Filename, err)
+	}
+	if err := tmpFile.Close(); err != nil {
+		return 0, fmt.Errorf("rpm_sync: tmp close %s: %w", ent.Filename, err)
 	}
 
-	// Parse the on-disk file via existing rpm.Parse for canonical metadata.
-	abs := filepath.Join(h.deps.RepoRoot, filepath.FromSlash(storageKey))
-	parsed, perr := Parse(abs)
+	parsed, perr := Parse(tmpPath)
 	if perr != nil {
-		// Best-effort rollback of file.
-		_ = os.Remove(abs)
 		return 0, fmt.Errorf("rpm_sync: parse %s: %w", ent.Filename, perr)
 	}
+
+	canonicalName := parsed.canonicalFilename()
+	storageKey := storageKeyFor(projectName, repo.Name, canonicalName)
+	if _, err := h.deps.Path.Put(ctx, storageKey, openBytesReader(body)); err != nil {
+		return 0, fmt.Errorf("rpm_sync: store %s: %w", canonicalName, err)
+	}
+	abs := filepath.Join(h.deps.RepoRoot, filepath.FromSlash(storageKey))
 
 	if err := h.deps.DB.WriteTx(ctx, func(tx *sql.Tx) error {
 		if _, err := h.deps.RPMPackages.Insert(ctx, tx, &metadata.RPMPackage{
@@ -337,7 +364,7 @@ func (h *SyncHandler) fetchAndCommit(ctx context.Context, projectName string, re
 			SourceRPM:   parsed.SourceRPM,
 			SizeBytes:   size,
 			Digest:      digest,
-			Filename:    ent.Filename,
+			Filename:    canonicalName,
 		}); err != nil {
 			return err
 		}
@@ -348,7 +375,7 @@ func (h *SyncHandler) fetchAndCommit(ctx context.Context, projectName string, re
 			return err
 		}
 		if repo.AutoScan && h.deps.Scans != nil {
-			if _, err := h.deps.Scans.Enqueue(ctx, tx, repo.ID, "rpm", ent.Filename); err != nil {
+			if _, err := h.deps.Scans.Enqueue(ctx, tx, repo.ID, "rpm", canonicalName); err != nil {
 				return err
 			}
 		}
@@ -357,7 +384,7 @@ func (h *SyncHandler) fetchAndCommit(ctx context.Context, projectName string, re
 		return h.deps.Repos.SetMetadataState(ctx, tx, repo.ID, metadata.MetadataStateDirty)
 	}); err != nil {
 		_ = os.Remove(abs)
-		return 0, fmt.Errorf("rpm_sync: commit %s: %w", ent.Filename, err)
+		return 0, fmt.Errorf("rpm_sync: commit %s: %w", canonicalName, err)
 	}
 	return size, nil
 }

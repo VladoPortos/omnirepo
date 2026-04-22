@@ -1,6 +1,6 @@
 # Batch 08 — Helm (HTTP index.yaml)
 
-**Status:** 🟨 In progress — Codex pass pending
+**Status:** ✅ Closed — Codex clean (1 blocker fixed, 5 findings deferred, 1 Codex-surfaced cross-cutting tracked)
 **Prereqs:** Batch 04 ✅
 **State produced for later batches:**
 - `acme/helm/local` with `mychart-0.2.0.tgz` (uploaded) + `vulny-0.1.0.tgz` (intentionally misconfigured fixture kept for cross-batch gate retests)
@@ -82,16 +82,18 @@
   3. `PATCH block_on_severity=high` on the repo.
   4. `curl /acme/helm/local/charts/vulny-0.1.0.tgz` → **200 OK** (should be 403 blocked_by_scan).
 - **Root cause:** `internal/scan/parse.go`'s `trivyReportBlock` declared only `Vulnerabilities`, never `Misconfigurations`. Trivy is invoked with `--scanners vuln,secret,misconfig` (per `trivy.go:54`), and the handler correctly comments "Helm chart scans in particular light up the misconfig scanner on templates/*.yaml" — but every misconfig finding was silently dropped at parse time. Summary counts therefore stayed zero for Helm (whose only meaningful findings are misconfigs), and `repos.block_on_severity` never had a non-zero severity to compare against. Manual `trivy fs` against the server's materialized tmp layout found HIGH:16 MEDIUM:10 LOW:24 on the same chart; the parser ate all of them.
-- **Fix (commit `14773c7`):**
-  - `parse.go`: added `Misconfigurations []trivyReportMisconf` to the block; new `trivyReportMisconf` struct (ID, AVDID, Title, Description, Severity, Resolution, Status); `ParseTrivyJSON` now iterates FAIL misconfigs, buckets severity into Summary, and appends each as a synthetic `Vuln{CVEID: "KSV-####", Package: block.Target, …}`. PASS / EXCEPTION statuses skipped so resolved rules don't inflate the gate.
-  - `parse_test.go`: two new tests pin the behavior — `TestParseTrivyMisconfigurationsCountInSummary` (FAIL counts, PASS excluded, resolution folded into Description) and `TestParseTrivyVulnsPlusMisconfigsAdditive` (CVEs + misconfigs coexist in the summary).
+- **Fix (commit `14773c7` + Codex follow-up `bd3d8dc`):**
+  - `parse.go`: added `Misconfigurations []trivyReportMisconf` to the block; new `trivyReportMisconf` struct (ID, AVDID, Title, Description, Severity, Resolution, Status); `ParseTrivyJSON` now iterates misconfigs, buckets **active findings (Status="FAIL" OR empty)** into Summary by severity, and appends each as a synthetic `Vuln{CVEID: m.ID, Package: block.Target, …}`. PASS / EXCEPTION statuses skipped so resolved rules don't inflate the gate.
+  - Codex follow-up: if both `ID` and `AVDID` are absent the CVEID is synthesized as `MISCONF-<target>-<i>` so no row lands with `cve_id=""` (NOT NULL accepts empty strings and would silently accumulate "ghost" vulnerability rows).
+  - `parse_test.go`: three tests pin the behavior — `TestParseTrivyMisconfigurationsCountInSummary` (FAIL counts, PASS excluded, resolution folded into Description), `TestParseTrivyMisconfigEmptyStatusCountsAndSynthesizesID` (empty Status counted + empty-ID fallback synthesis), `TestParseTrivyVulnsPlusMisconfigsAdditive` (CVEs + misconfigs coexist in the summary).
 - **Retest:**
   - Rescan vulny → `severity_summary_json = {"critical":0,"high":16,"low":24,"medium":10,"unknown":0}`.
   - Pull with `block_on_severity=high` → **403** `{"error":"blocked_by_scan","severity":"high","scan_id":385}`.
   - Clean chart (`mychart-0.2.0.tgz`) → 200 under the same gate.
   - Lower gate to `critical` (vulny has 0 critical), wait for 30 s cache TTL, pull again → 200. Confirms the gate threshold comparison is additive and correct.
-  - `go test ./internal/scan/... -count=1` → green.
-- **Status:** ✅ Fixed (Codex verification pending)
+  - `go test ./internal/scan/... -count=1` → green (9/9, incl. 3 new misconfig cases).
+- **Codex verify:** ✅ Clean — 2 minors applied (empty-Status + ID-fallback), 1 cross-cutting surfaced as F-08.6 (materialize_pkg double-counts same misconfig across tgz + extracted targets; gate still fires correctly either way, defer to batch-15).
+- **Status:** ✅ Closed
 
 ### F-08.3 Helm mirror empty-state still offers upload snippet (deferred)
 - **Severity:** m / minor
@@ -118,8 +120,8 @@
 - [x] Final state:
   - [x] `acme/helm/local` has charts (`mychart-0.2.0.tgz` + `vulny-0.1.0.tgz`)
   - [x] `acme/helm/http-mirror` synced once (66 grafana-agent-operator versions)
-- [x] F-08.2 fixed — Codex verification pending
-- [ ] README.md batch 08 status flipped to ✅ (after Codex clean)
+- [x] F-08.2 fixed + Codex-clean after follow-up (`bd3d8dc`)
+- [x] README.md batch 08 status flipped to ✅
 
 ## Test cases — actuals
 

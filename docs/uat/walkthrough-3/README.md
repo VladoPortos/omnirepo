@@ -27,7 +27,7 @@ unless the batch explicitly asks for it.
 | 05 | [batch-05-docker-oci.md](batch-05-docker-oci.md) | Docker/OCI: push, browse, scan, pull-external, severity gate | ✅ |
 | 06 | [batch-06-rpm-apt.md](batch-06-rpm-apt.md) | RPM & APT: upload, mirror, sync, metadata regen, delete | ✅ |
 | 07 | [batch-07-pypi.md](batch-07-pypi.md) | PyPI: upload, PEP 503 simple index, mirror, sync, delete | ✅ |
-| 08 | [batch-08-helm-http.md](batch-08-helm-http.md) | Helm HTTP: upload, index.yaml, mirror (charts.bitnami HTTP) | ⬜ |
+| 08 | [batch-08-helm-http.md](batch-08-helm-http.md) | Helm HTTP: upload, index.yaml, mirror (charts.bitnami HTTP) | ✅ |
 | 09 | [batch-09-helm-oci.md](batch-09-helm-oci.md) | **Helm OCI (NEW v1.3+)**: oci:// upstream, cred gate, tag-rebound | ⬜ |
 | 10 | [batch-10-git-hosting.md](batch-10-git-hosting.md) | Git hosting (non-mirror): clone/push/fetch, browse, blame, compare | ⬜ |
 | 11 | [batch-11-git-mirror.md](batch-11-git-mirror.md) | **Git mirrors (NEW v1.3+)**: sync, LFS gate 501, receive-pack 403, badge | ⬜ |

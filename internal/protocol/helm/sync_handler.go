@@ -198,7 +198,18 @@ func (h *SyncHandler) Handle(ctx context.Context, payload string, projectID, rep
 		entries = append(entries, ent)
 		return nil
 	}
-	_, parseErr := ParseUpstream(ctx, h.deps.HTTPClient, pl.UpstreamURL, creds, *pl.Filter, collectFn)
+	var parseErr error
+	if strings.HasPrefix(strings.ToLower(pl.UpstreamURL), "oci://") {
+		// Pure-OCI top-level helm upstream (OCIHELM-09 follow-up to
+		// OCIHELM-03 validator widen): enumerate tags via OCIClient and
+		// synthesize UpstreamEntry per semver tag. Plan 11-03 marked this
+		// path out-of-scope; batch-09 UAT surfaced it as a release-gap
+		// because the validator already accepts oci:// but the HTTP path
+		// would fail on "oci://.../index.yaml".
+		_, parseErr = ParseOCIUpstream(ctx, h.deps.OCIClient, pl.UpstreamURL, creds, *pl.Filter, collectFn)
+	} else {
+		_, parseErr = ParseUpstream(ctx, h.deps.HTTPClient, pl.UpstreamURL, creds, *pl.Filter, collectFn)
+	}
 	if parseErr != nil {
 		return h.fail(ctx, repoID, pl, startedAt, httpx.SanitizeUpstreamErr(parseErr))
 	}

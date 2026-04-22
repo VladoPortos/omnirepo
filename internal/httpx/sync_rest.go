@@ -245,8 +245,18 @@ func (d SyncRESTDeps) handleSync(w http.ResponseWriter, r *http.Request) {
 	}
 
 	u, perr := url.Parse(req.UpstreamURL)
-	if perr != nil || (u.Scheme != "http" && u.Scheme != "https") {
-		writeJSONErr(w, http.StatusBadRequest, "validation_failed", "upstream_url must be http(s)")
+	// OCIHELM-03 widens helm mirrors to oci:// in validateMirrorUpstreamURL;
+	// the sync-trigger endpoint must accept the same set of schemes or a
+	// created mirror can never actually sync. Other protocols keep the
+	// http(s)-only contract.
+	allowOCI := repoType == "helm"
+	if perr != nil || u.Host == "" ||
+		(u.Scheme != "http" && u.Scheme != "https" && !(allowOCI && u.Scheme == "oci")) {
+		msg := "upstream_url must be http(s)"
+		if allowOCI {
+			msg = "upstream_url must be http(s) or oci:// (helm only)"
+		}
+		writeJSONErr(w, http.StatusBadRequest, "validation_failed", msg)
 		return
 	}
 

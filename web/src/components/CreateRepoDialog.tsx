@@ -157,8 +157,18 @@ export function CreateRepoDialog({
         setClientError('Upstream URL is required');
         return;
       }
-      if (!/^https?:\/\//i.test(url)) {
-        setClientError('URL must use http(s)');
+      // OCIHELM-03 widens helm mirrors to also accept oci:// for OCI-only
+      // upstreams (e.g. registry-1.docker.io/bitnamicharts/*). Other repo
+      // types remain http(s)-only. Backend re-validates scheme + type
+      // pairing in validateMirrorUpstreamURL; this check is a UX guard only.
+      const isOCI = /^oci:\/\//i.test(url);
+      const isHTTP = /^https?:\/\//i.test(url);
+      if (!isHTTP && !(isOCI && repoType === 'helm')) {
+        setClientError(
+          repoType === 'helm'
+            ? 'URL must use http(s) or oci:// (helm only)'
+            : 'URL must use http(s)',
+        );
         return;
       }
     }

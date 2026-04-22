@@ -16,6 +16,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/Masterminds/semver/v3"
+	"github.com/dxc-internal/omnirepo/internal/protocol/helm/ociclient"
 	helmrepo "helm.sh/helm/v3/pkg/repo"
 )
 
@@ -222,4 +224,91 @@ func classifyEntryPath(path string) EntrySourceKind {
 	default:
 		return EntrySourceUnknown
 	}
+}
+
+// chartNameFromOCIRef returns the last path segment of an oci:// ref with
+// no tag (e.g. "oci://registry-1.docker.io/bitnamicharts/nginx" → "nginx").
+// Returns "" for refs that don't parse. Used by ParseOCIUpstream to derive
+// the helm chart name for filter matching and filename synthesis.
+func chartNameFromOCIRef(ref string) string {
+	trimmed := strings.TrimPrefix(strings.ToLower(ref), "oci://")
+	// Strip any tag suffix so pure-path refs and tagged refs both work.
+	if at := strings.LastIndex(trimmed, ":"); at > strings.LastIndex(trimmed, "/") {
+		trimmed = trimmed[:at]
+	}
+	trimmed = strings.TrimRight(trimmed, "/")
+	if idx := strings.LastIndex(trimmed, "/"); idx >= 0 && idx+1 < len(trimmed) {
+		return trimmed[idx+1:]
+	}
+	return ""
+}
+
+// ParseOCIUpstream enumerates tags for a pure oci:// helm upstream and
+// yields one UpstreamEntry per semver-parseable tag. The top-level URL
+// points at a single chart repo (e.g.
+// "oci://registry-1.docker.io/bitnamicharts/nginx"); each tag becomes a
+// chart version. This is the OCI equivalent of ParseUpstream for helm
+// mirrors whose upstream has no HTTP index.yaml.
+//
+// Semantics:
+//   - Tags that don't parse as SemVer are skipped silently. Helm requires
+//     SemVer for Chart.yaml:version; non-semver tags can't become chart
+//     versions anyway.
+//   - filter.Names — matched against the chart name derived from the ref's
+//     last path segment. A single-chart OCI upstream with a non-matching
+//     allowlist name yields zero entries (mirrors the HTTP behavior of
+//     filtering an index.yaml chart entry).
+//   - filter.Globs — matched against the synthetic filename
+//     "<chart>-<tag>.tgz".
+//   - Digest left empty — fetchAndCommitOCI calls Resolve to get the
+//     manifest digest and runs the dedup gate there. Pre-resolving here
+//     would double the registry round-trips for no benefit.
+//
+// The caller supplies an OCIClient; pass nil only for tests that stub out
+// tag enumeration upstream. A nil client returns a descriptive error so
+// the sync handler's fail() path records it in the audit log.
+func ParseOCIUpstream(
+	ctx context.Context,
+	client ociclient.Client,
+	upstreamURL string,
+	creds AuthCreds,
+	filter SyncFilter,
+	yield func(UpstreamEntry) error,
+) (int, error) {
+	if client == nil {
+		return 0, fmt.Errorf("helm oci upstream: OCIClient not wired")
+	}
+	chart := chartNameFromOCIRef(upstreamURL)
+	if chart == "" {
+		return 0, fmt.Errorf("helm oci upstream: cannot derive chart name from %q", upstreamURL)
+	}
+	if !filter.acceptName(chart) {
+		return 0, nil
+	}
+	ociCreds := ociclient.AuthCreds{User: creds.User, Password: creds.Password}
+	tags, err := client.ListTags(ctx, upstreamURL, ociCreds)
+	if err != nil {
+		return 0, fmt.Errorf("helm oci upstream: list tags %s: %w", upstreamURL, err)
+	}
+	count := 0
+	base := strings.TrimRight(strings.TrimSuffix(upstreamURL, "/"), ":")
+	for _, tag := range tags {
+		if _, verr := semver.NewVersion(tag); verr != nil {
+			continue
+		}
+		filename := fmt.Sprintf("%s-%s.tgz", chart, tag)
+		if !filter.acceptFilename(filename) {
+			continue
+		}
+		ent := UpstreamEntry{
+			Path:     base + ":" + tag,
+			Filename: filename,
+			Source:   EntrySourceOCI,
+		}
+		if err := yield(ent); err != nil {
+			return count, err
+		}
+		count++
+	}
+	return count, nil
 }

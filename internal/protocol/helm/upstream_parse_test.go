@@ -2,13 +2,16 @@ package helm_test
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/dxc-internal/omnirepo/internal/protocol/helm"
+	"github.com/dxc-internal/omnirepo/internal/protocol/helm/ociclient"
 )
 
 const upstreamIndexYAML = `apiVersion: v1
@@ -203,4 +206,132 @@ func TestHelmParseUpstreamContextCancel(t *testing.T) {
 		helm.AuthCreds{}, helm.SyncFilter{}, func(helm.UpstreamEntry) error { return nil }); err == nil {
 		t.Fatal("expected timeout")
 	}
+}
+
+// TestParseOCIUpstream covers pure-OCI top-level helm mirror enumeration
+// (follow-up to OCIHELM-03 validator widen; prior impl left SyncHandler
+// unable to process oci:// top-level refs). The FakeClient stands in for
+// the Helm SDK's OCI registry so the test stays hermetic.
+func TestParseOCIUpstream(t *testing.T) {
+	t.Run("yields semver tags with synthetic filenames and source=oci", func(t *testing.T) {
+		fake := ociclient.NewFake()
+		fake.Tags["registry-1.docker.io/bitnamicharts/nginx"] = []string{
+			"15.14.0",
+			"15.14.1",
+			"latest",  // non-semver → skipped
+			"invalid", // non-semver → skipped
+		}
+		var got []helm.UpstreamEntry
+		n, err := helm.ParseOCIUpstream(context.Background(), fake,
+			"oci://registry-1.docker.io/bitnamicharts/nginx",
+			helm.AuthCreds{User: "u", Password: "p"},
+			helm.SyncFilter{},
+			func(e helm.UpstreamEntry) error { got = append(got, e); return nil })
+		if err != nil {
+			t.Fatalf("ParseOCIUpstream: %v", err)
+		}
+		if n != 2 || len(got) != 2 {
+			t.Fatalf("want 2 yielded, got n=%d entries=%d", n, len(got))
+		}
+		// Order mirrors ListTags order from the fake; sort before asserting.
+		sort.Slice(got, func(i, j int) bool { return got[i].Path < got[j].Path })
+		if got[0].Path != "oci://registry-1.docker.io/bitnamicharts/nginx:15.14.0" {
+			t.Errorf("entry[0].Path = %q", got[0].Path)
+		}
+		if got[0].Filename != "nginx-15.14.0.tgz" {
+			t.Errorf("entry[0].Filename = %q, want nginx-15.14.0.tgz", got[0].Filename)
+		}
+		if got[0].Source != helm.EntrySourceOCI {
+			t.Errorf("entry[0].Source = %v, want EntrySourceOCI", got[0].Source)
+		}
+	})
+
+	t.Run("credentials thread through to ListTags", func(t *testing.T) {
+		fake := ociclient.NewFake()
+		fake.Tags["registry-1.docker.io/bitnamicharts/redis"] = []string{"7.0.0"}
+		_, err := helm.ParseOCIUpstream(context.Background(), fake,
+			"oci://registry-1.docker.io/bitnamicharts/redis",
+			helm.AuthCreds{User: "alice", Password: "pat"},
+			helm.SyncFilter{},
+			func(helm.UpstreamEntry) error { return nil })
+		if err != nil {
+			t.Fatalf("ParseOCIUpstream: %v", err)
+		}
+		if fake.LastCreds.User != "alice" || fake.LastCreds.Password != "pat" {
+			t.Errorf("creds not threaded: got %+v", fake.LastCreds)
+		}
+	})
+
+	t.Run("name filter excludes the whole upstream when chart does not match", func(t *testing.T) {
+		fake := ociclient.NewFake()
+		fake.Tags["registry-1.docker.io/bitnamicharts/postgresql"] = []string{"15.0.0"}
+		yielded := 0
+		n, err := helm.ParseOCIUpstream(context.Background(), fake,
+			"oci://registry-1.docker.io/bitnamicharts/postgresql",
+			helm.AuthCreds{},
+			helm.SyncFilter{Names: []string{"nginx"}}, // mismatch
+			func(helm.UpstreamEntry) error { yielded++; return nil })
+		if err != nil {
+			t.Fatalf("ParseOCIUpstream: %v", err)
+		}
+		if n != 0 || yielded != 0 {
+			t.Errorf("expected 0 yield, got n=%d yielded=%d", n, yielded)
+		}
+		// Efficiency: filter short-circuits before ListTags is called.
+		for _, c := range fake.Calls {
+			if strings.HasPrefix(c, "ListTags:") {
+				t.Errorf("ListTags should be skipped when name filter rejects the chart; got %q", c)
+			}
+		}
+	})
+
+	t.Run("glob filter on filename", func(t *testing.T) {
+		fake := ociclient.NewFake()
+		fake.Tags["registry-1.docker.io/bitnamicharts/nginx"] = []string{"15.14.0", "17.0.0"}
+		var got []string
+		_, err := helm.ParseOCIUpstream(context.Background(), fake,
+			"oci://registry-1.docker.io/bitnamicharts/nginx",
+			helm.AuthCreds{},
+			helm.SyncFilter{Globs: []string{"*-17.*.tgz"}},
+			func(e helm.UpstreamEntry) error { got = append(got, e.Filename); return nil })
+		if err != nil {
+			t.Fatalf("ParseOCIUpstream: %v", err)
+		}
+		if len(got) != 1 || got[0] != "nginx-17.0.0.tgz" {
+			t.Errorf("glob filter result = %v, want [nginx-17.0.0.tgz]", got)
+		}
+	})
+
+	t.Run("nil client returns descriptive error", func(t *testing.T) {
+		_, err := helm.ParseOCIUpstream(context.Background(), nil,
+			"oci://registry-1.docker.io/bitnamicharts/nginx",
+			helm.AuthCreds{}, helm.SyncFilter{},
+			func(helm.UpstreamEntry) error { return nil })
+		if err == nil || !strings.Contains(err.Error(), "OCIClient not wired") {
+			t.Errorf("want OCIClient-not-wired error, got %v", err)
+		}
+	})
+
+	t.Run("ListTags error propagates wrapped", func(t *testing.T) {
+		fake := ociclient.NewFake()
+		fake.Errors["registry-1.docker.io/bitnamicharts/nginx"] = errors.New("registry unreachable")
+		_, err := helm.ParseOCIUpstream(context.Background(), fake,
+			"oci://registry-1.docker.io/bitnamicharts/nginx",
+			helm.AuthCreds{}, helm.SyncFilter{},
+			func(helm.UpstreamEntry) error { return nil })
+		if err == nil || !strings.Contains(err.Error(), "registry unreachable") {
+			t.Errorf("want wrapped ListTags error, got %v", err)
+		}
+	})
+
+	t.Run("bad oci ref (no path segment) returns descriptive error", func(t *testing.T) {
+		fake := ociclient.NewFake()
+		_, err := helm.ParseOCIUpstream(context.Background(), fake,
+			"oci://registry-1.docker.io", // missing chart path
+			helm.AuthCreds{}, helm.SyncFilter{},
+			func(helm.UpstreamEntry) error { return nil })
+		if err == nil || !strings.Contains(err.Error(), "cannot derive chart name") {
+			t.Errorf("want chart-name-derive error, got %v", err)
+		}
+	})
 }

@@ -135,3 +135,51 @@ func TestUsersRepo_FindByLogin_NotFound(t *testing.T) {
 		t.Fatalf("expected ErrNotFound, got %v", err)
 	}
 }
+
+// TestUsersRepo_DeleteEnforceLastSuperAdmin pins the transactional guard
+// that prevents the admin-delete handler from soft-deleting the last
+// live super-admin (F-02.3). The check and the soft-delete share one
+// WriteTx so two concurrent delete requests cannot race past the count
+// and both succeed.
+func TestUsersRepo_DeleteEnforceLastSuperAdmin(t *testing.T) {
+	db := sqlitetest.New(t)
+	repo := metadata.NewUsersRepo(db)
+	ctx := context.Background()
+
+	// Two live super-admins — first delete should succeed.
+	sa1, err := repo.Create(ctx, "super1", "s1@x", "h", true, false)
+	if err != nil {
+		t.Fatalf("Create super1: %v", err)
+	}
+	sa2, err := repo.Create(ctx, "super2", "s2@x", "h", true, false)
+	if err != nil {
+		t.Fatalf("Create super2: %v", err)
+	}
+	if err := repo.DeleteEnforceLastSuperAdmin(ctx, sa1); err != nil {
+		t.Fatalf("first delete: %v", err)
+	}
+
+	// sa2 is now the only live super-admin — delete must be refused.
+	err = repo.DeleteEnforceLastSuperAdmin(ctx, sa2)
+	if !errors.Is(err, metadata.ErrLastSuperAdmin) {
+		t.Fatalf("last super-admin delete: %v, want ErrLastSuperAdmin", err)
+	}
+
+	// sa2 still live.
+	u, err := repo.FindByID(ctx, sa2)
+	if err != nil {
+		t.Fatalf("FindByID sa2: %v", err)
+	}
+	if !u.IsSuperAdmin {
+		t.Fatal("sa2 should still be a super-admin")
+	}
+
+	// Non-super-admin users still delete freely.
+	uid, err := repo.Create(ctx, "alice", "a@x", "h", false, false)
+	if err != nil {
+		t.Fatalf("Create alice: %v", err)
+	}
+	if err := repo.DeleteEnforceLastSuperAdmin(ctx, uid); err != nil {
+		t.Fatalf("delete non-admin: %v", err)
+	}
+}

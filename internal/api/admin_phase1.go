@@ -578,29 +578,20 @@ func (d Deps) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 	//      only admin leaves the instance permanently unable to manage
 	//      itself (no way back into /admin/*), which is a
 	//      practically-irrecoverable state for an air-gapped deployment.
-	// The count-then-delete window is non-transactional; a second
-	// concurrent admin running a parallel delete could still race us.
-	// That's a very narrow window and needs two concurrent super-admin
-	// sessions both targeting the last two admins. Accepted for v1;
-	// tighten into a WriteTx if this ever shows up in the wild.
+	//      The last-admin check runs inside the same WriteTx as the
+	//      soft-delete (via Users.DeleteEnforceLastSuperAdmin), so two
+	//      concurrent delete requests cannot race past the check.
 	actor, _ := auth.ActorFromContext(r.Context())
 	if actor.ID == u.ID {
 		writeJSONError(w, r, http.StatusConflict, ErrConflict, "cannot delete yourself — use the self-service delete in your profile")
 		return
 	}
-	if u.IsSuperAdmin {
-		n, cerr := d.Users.CountLiveSuperAdmins(r.Context())
-		if cerr != nil {
-			writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
-			return
-		}
-		if n <= 1 {
+
+	if err := d.Users.DeleteEnforceLastSuperAdmin(r.Context(), u.ID); err != nil {
+		if errors.Is(err, metadata.ErrLastSuperAdmin) {
 			writeJSONError(w, r, http.StatusConflict, ErrConflict, "cannot delete the last super-admin — promote another user first")
 			return
 		}
-	}
-
-	if err := d.Users.Delete(r.Context(), u.ID); err != nil {
 		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
 	}

@@ -119,6 +119,47 @@ func (r *UsersRepo) Delete(ctx context.Context, id int64) error {
 	})
 }
 
+// ErrLastSuperAdmin is returned by DeleteEnforceLastSuperAdmin when the
+// target user is the last live super-admin. Used by the admin delete
+// handler to refuse the operation with a 409 envelope rather than
+// racing past the non-transactional count-then-delete window (F-02.3).
+var ErrLastSuperAdmin = errors.New("users: cannot delete the last super-admin")
+
+// DeleteEnforceLastSuperAdmin soft-deletes a user inside a WriteTx after
+// asserting (in the same transaction) that the target is not the last
+// live super-admin. The check and the soft-delete therefore share the
+// SQLite writer's reserved lock, so two concurrent delete requests
+// cannot both pass the check and both succeed. If the target is the
+// last live super-admin, returns ErrLastSuperAdmin with the row
+// untouched.
+func (r *UsersRepo) DeleteEnforceLastSuperAdmin(ctx context.Context, id int64) error {
+	return r.db.WriteTx(ctx, func(tx *sql.Tx) error {
+		var isSA int64
+		if err := tx.QueryRowContext(ctx,
+			`SELECT is_super_admin FROM users WHERE id=? AND deleted_at IS NULL`, id,
+		).Scan(&isSA); err != nil {
+			return fmt.Errorf("users: delete enforce: lookup %d: %w", id, err)
+		}
+		if isSA == 1 {
+			var live int64
+			if err := tx.QueryRowContext(ctx,
+				`SELECT COUNT(*) FROM users WHERE is_super_admin=1 AND deleted_at IS NULL`,
+			).Scan(&live); err != nil {
+				return fmt.Errorf("users: delete enforce: count super-admins: %w", err)
+			}
+			if live <= 1 {
+				return ErrLastSuperAdmin
+			}
+		}
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE users SET deleted_at=CURRENT_TIMESTAMP WHERE id=?`, id,
+		); err != nil {
+			return fmt.Errorf("users: delete enforce: update %d: %w", id, err)
+		}
+		return nil
+	})
+}
+
 // scanOne runs a WHERE clause against the reader pool and decodes exactly one
 // User. Returns ErrNotFound on sql.ErrNoRows.
 func (r *UsersRepo) scanOne(ctx context.Context, where string, args ...any) (*User, error) {

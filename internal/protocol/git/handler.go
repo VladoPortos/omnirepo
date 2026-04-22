@@ -12,6 +12,7 @@ import (
 	"github.com/dxc-internal/omnirepo/internal/audit"
 	authmw "github.com/dxc-internal/omnirepo/internal/auth/middleware"
 	"github.com/dxc-internal/omnirepo/internal/config"
+	"github.com/dxc-internal/omnirepo/internal/httperr"
 	"github.com/dxc-internal/omnirepo/internal/metadata"
 	"github.com/dxc-internal/omnirepo/internal/protocol/git/gitkit"
 	"github.com/dxc-internal/omnirepo/internal/protocol/git/gogit"
@@ -139,6 +140,29 @@ func (h *Handler) dispatchToBackend(w http.ResponseWriter, r *http.Request) {
 
 	isReceivePack := r.Method == http.MethodPost &&
 		strings.HasSuffix(r.URL.Path, "/git-receive-pack")
+
+	// Plan 11-07 / GITMIRROR-03: receive-pack against mirror repos is rejected
+	// with 403 + httperr envelope code `mirror.push_rejected`. The gate covers
+	// BOTH the POST /git-receive-pack (actual push) AND the GET
+	// /info/refs?service=git-receive-pack (capability negotiation) paths.
+	// Gating only the POST would let clients negotiate push and read the full
+	// ref snapshot before the 403 — the info/refs leg is where pkt-line
+	// advertises every ref, so we reject it too (T-11-07-04).
+	//
+	// Git clients surface the 403 as "fatal: ... The requested URL returned
+	// error: 403". The JSON envelope is for operators hitting the endpoint
+	// directly via curl/Postman (RESEARCH §5 resolution — JSON envelope via
+	// httperr.Write is the portable answer for Smart-HTTP refusal).
+	isReceivePackGet := r.Method == http.MethodGet &&
+		strings.HasSuffix(r.URL.Path, "/info/refs") &&
+		r.URL.Query().Get("service") == "git-receive-pack"
+	if (isReceivePack || isReceivePackGet) && repo.IsMirror {
+		httperr.Write(w, r, httperr.Permission(
+			"mirror.push_rejected",
+			"Push is not allowed on mirror repositories.",
+		))
+		return
+	}
 
 	h.backend.Handler(repoPath).ServeHTTP(w, r)
 

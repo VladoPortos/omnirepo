@@ -11,7 +11,7 @@ Status: 🟨 Open · ✅ Closed · 🟥 Rejected (disputed)
 | F-01.2 | n | browser console | Browser-native "Failed to load resource" logs on every 4xx fetch | _(no fix — cure worse than disease)_ | — | ✅ Accepted | ✅ Closed |
 | F-01.3 | R | AuthGuard + LoginPage | Deep-link lost across login redirect | `12ac7e1` | ✅ Clean | ✅ Passed | ✅ Closed |
 | F-01.4 | m | openapi.yaml | `/setup/status` + `/setup/superadmin` undocumented | `3d06d11` | ✅ Clean | ✅ Passed | ✅ Closed |
-| F-01.5 | R | auth pages | Cards render squished — motion.div flex-item has no width | _(pending commit)_ | ⬜ Pending | ✅ Passed | ✅ Closed |
+| F-01.5 | R | auth pages | Cards render squished — motion.div flex-item has no width | `fa179e9` | ⬜ Pending | ✅ Passed | ✅ Closed |
 
 ---
 

@@ -162,7 +162,7 @@
   1. Screenshot `http://localhost:18080/setup` after super-admin exists.
   2. Observed: narrow card with "Setup / complete" title wrap; browser DOM shows the `.group/card` element at 136.8px width with the motion.div parent also at 136.8px.
 - **Root cause:** Each page wraps the `Card` in `<motion.div>` inside `<div className="flex items-center justify-center">`. `motion.div` had no width class. A flex item with no explicit width and no intrinsic minimum from its children shrinks to fit. The Card's `w-full` then computes against the collapsed parent, and `max-w-md` never engages. The issue is hidden on forms only because inputs have enough intrinsic width to hold the parent open a little.
-- **Fix:** Add `className="w-full max-w-md"` to every `motion.div` on the three auth pages (one in LoginPage, two in SetupPage, one in ChangePasswordPage). Parent now pins to 448px; the Card's `w-full` expands to fill. Fix commit: (see batch-01 close-out commit below).
+- **Fix:** commit `fa179e9` — add `className="w-full max-w-md"` to every `motion.div` on the three auth pages (one in LoginPage, two in SetupPage, one in ChangePasswordPage). Parent now pins to 448px; the Card's `w-full` expands to fill.
 - **Codex verify:** ⬜ Pending (next Codex run)
 - **Retest:** ✅ Card width is now 448px exactly; "Setup complete" renders on one line; description on one line; login inputs + button fill the card. See screenshots `batch-01-setup-complete-before.png` vs `batch-01-setup-complete-after.png`.
 - **Status:** ✅ Closed

@@ -12,6 +12,8 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { CopyButton } from '@/components/common/CopyButton';
 import { EmptyState } from '@/components/common/EmptyState';
 import { SnippetList } from '@/components/common/SnippetList';
+import { StatusBadge } from '@/components/common/StatusBadge';
+import { SyncNowButton } from '@/components/SyncNowButton';
 import { RepoPageLayout } from './RepoPageLayout';
 import { RefSelector } from '@/components/git/RefSelector';
 import { FileTree } from '@/components/git/FileTree';
@@ -115,6 +117,12 @@ export function GitRepoPage({ repo }: GitRepoPageProps) {
   // EMPTY-03 for empty git repos: no refs = no commits pushed yet.
   // When zero refs, show an EmptyState with the git push snippet inline
   // instead of the empty Files/Commits/Refs tabs dance.
+  //
+  // Plan 11-10 / GITMIRROR-03 (D-09): mirror repos get a different empty
+  // state — "Mirror is empty" + SyncNowButton — because the push snippet
+  // is misleading (mirror repos refuse receive-pack with 403
+  // mirror.push_rejected per plan 11-07). Refs appear after the first
+  // successful sync.
   if (!refsLoading && refs.length === 0) {
     return (
       <RepoPageLayout repo={repo}>
@@ -123,8 +131,31 @@ export function GitRepoPage({ repo }: GitRepoPageProps) {
             <GitBranch className="size-4 text-muted-foreground" />
             <code className="text-xs">{cloneUrl}</code>
             <CopyButton text={cloneUrl} />
+            {repo.is_mirror && (
+              <StatusBadge
+                status="warning"
+                label="Read-only mirror"
+                size="sm"
+              />
+            )}
           </div>
-          {canUpload ? (
+          {repo.is_mirror ? (
+            <div className="space-y-4">
+              <SyncNowButton
+                projectName={projectName ?? ''}
+                repoType="git"
+                repoName={repo.name}
+                upstreamUrl={repo.mirror_upstream_url}
+                // D-07: no filter widget for git mirrors (all-refs mode).
+                filterSummary={undefined}
+              />
+              <EmptyState
+                icon={Terminal}
+                title="Mirror is empty"
+                description="Run a sync to populate this mirror from its upstream."
+              />
+            </div>
+          ) : canUpload ? (
             <EmptyState
               icon={Terminal}
               title="No artifacts yet"
@@ -136,6 +167,12 @@ export function GitRepoPage({ repo }: GitRepoPageProps) {
                 repoName={repo.name}
                 hostname={hostname}
                 className="w-full max-w-2xl"
+                // Plan 11-10 / D-09: hide push instructions on mirror
+                // repos. This branch is only reached when !repo.is_mirror,
+                // but passing the prop explicitly documents the contract
+                // (SnippetList is a reusable primitive and other callers
+                // may pipe a mirror-state value through).
+                hidePush={repo.is_mirror}
               />
             </EmptyState>
           ) : (
@@ -153,6 +190,20 @@ export function GitRepoPage({ repo }: GitRepoPageProps) {
   return (
     <RepoPageLayout repo={repo}>
       <div className="space-y-4">
+        {/* Plan 11-10 / GITMIRROR-03 (D-09): mirror Sync Now affordance,
+            parallel to HelmRepoPage / AptRepoPage / RpmRepoPage / PypiRepoPage.
+            Renders only when is_mirror is true so dev repos stay unchanged. */}
+        {repo.is_mirror && (
+          <SyncNowButton
+            projectName={projectName ?? ''}
+            repoType="git"
+            repoName={repo.name}
+            upstreamUrl={repo.mirror_upstream_url}
+            // D-07: no filter UI for git mirrors (all-refs mirror mode).
+            filterSummary={undefined}
+          />
+        )}
+
         {/* Top bar: ref selector + clone URL */}
         <div className="flex flex-wrap items-center justify-between gap-3">
           <RefSelector
@@ -165,6 +216,13 @@ export function GitRepoPage({ repo }: GitRepoPageProps) {
             <GitBranch className="size-4 text-muted-foreground" />
             <code className="text-xs">{cloneUrl}</code>
             <CopyButton text={cloneUrl} />
+            {repo.is_mirror && (
+              <StatusBadge
+                status="warning"
+                label="Read-only mirror"
+                size="sm"
+              />
+            )}
           </div>
         </div>
 

@@ -24,7 +24,46 @@ export interface SnippetListProps {
   repoName: string;
   hostname: string;
   className?: string;
+  /**
+   * Plan 11-10 / GITMIRROR-03 (D-09): hide push-related snippet blocks
+   * when the repo is a mirror (read-only). The clone/pull sections
+   * remain visible so the read path is still discoverable.
+   *
+   * Filter rules per repoType (label-based; matches getSnippets copy):
+   *   - git:    drop "Authenticate" (the credential-helper block that
+   *             is only useful for push/fetch against a writable repo).
+   *             Keep "Clone".
+   *   - helm:   drop "helm push (OCI)".
+   *   - pypi:   drop ".pypirc" and "twine upload".
+   *   - docker: drop "Push" and "Login".
+   *   - raw:    drop "Upload".
+   *   - deb/rpm/s3: no push snippet distinguished here; pass through.
+   * Currently GitRepoPage is the only caller that sets this prop — the
+   * other protocols have their own mirror-aware EmptyState path via
+   * SyncNowButton — but the filter is defined generically so it's safe
+   * to extend later without another prop.
+   */
+  hidePush?: boolean;
 }
+
+/** Labels (per lib/snippets.ts) that describe write/push actions. The
+ * SnippetList filters these out when hidePush is true. Kept as a Set
+ * for O(1) membership check and so the intent is testable without
+ * greping the snippet strings at render time. */
+const PUSH_LABELS = new Set<string>([
+  // git — auth is only relevant for push/fetch against a writable remote.
+  'Authenticate',
+  // helm OCI push (traditional helm repo add doesn't support push).
+  'helm push (OCI)',
+  // pypi upload tooling.
+  '.pypirc',
+  'twine upload',
+  // docker write path.
+  'Login',
+  'Push',
+  // raw write path.
+  'Upload',
+]);
 
 export function SnippetList({
   repoType,
@@ -32,8 +71,12 @@ export function SnippetList({
   repoName,
   hostname,
   className,
+  hidePush = false,
 }: SnippetListProps) {
-  const snippets = getSnippets(repoType, projectName, repoName, hostname);
+  const allSnippets = getSnippets(repoType, projectName, repoName, hostname);
+  const snippets = hidePush
+    ? allSnippets.filter((s) => !PUSH_LABELS.has(s.label))
+    : allSnippets;
   return (
     <ScrollArea className={className}>
       <div className="space-y-4 pb-4">

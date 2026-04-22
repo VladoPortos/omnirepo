@@ -43,8 +43,20 @@ func SyncActorBridge(r *http.Request) httpx.SyncActor {
 		out.UserID = a.ID
 	case auth.ActorKindAPIKey:
 		out.APIKeyID = a.APIKeyID
-		if a.ProjectScope != nil {
+		switch {
+		case a.ProjectScope != nil:
+			// Project-owned API key: pin every access to that project.
 			out.ProjectID = *a.ProjectScope
+		case a.OwnerKind == auth.OwnerKindUser:
+			// User-owned API key: per the Actor contract, a.ID already holds
+			// the owning user's id. Surface it here so the downstream
+			// membership branch (`actor.UserID != 0` in handleSync) resolves
+			// against the owning user's project memberships — the same
+			// shape auth.ResolveMembership applies for every protocol
+			// handler since F-05.1. Missing this line made user-owned API
+			// keys 403 on POST .../sync even when the owning user was a
+			// project member (F-06.5; 11th site of the F-05.1 family).
+			out.UserID = a.ID
 		}
 	}
 	return out

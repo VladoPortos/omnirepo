@@ -1,10 +1,28 @@
 # Batch 09 — Helm OCI (NEW in v1.3+)
 
-**Status:** ✅ Closed (2026-04-22)
+**Status:** ✅ Closed (2026-04-22, live verify 2026-04-22)
 **Prereqs:** Batch 08 ✅, `dockerhub` upstream credential on acme (Batch 04)
 **State produced for later batches:**
 - `acme/helm/bitnami-oci` mirror repo against `oci://registry-1.docker.io/bitnamicharts/nginx`
+  - 166 chart versions synced (of 203 after `-metadata` filter — remaining blocked by Docker Hub authenticated-PAT rate limit, not a code issue)
+  - index.yaml populated, served, `helm repo add` + `helm pull` verified
 - `acme/helm/bitnami-oci-nocred` NOT created — Docker Hub gate (OCIHELM-05 / D-04) blocks creation
+- Additional helm-kind upstream cred on `registry-1.docker.io` updated with real Docker Hub PAT for `vladoportos`
+
+## Live-path verification (2026-04-22)
+
+After the initial close with dummy test creds, the user provided a real
+Docker Hub PAT (`vladoportos` / `dckr_pat_...`) and the full 9.3–9.10
+arc was re-run against real Bitnami. Three additional gaps surfaced and
+were fixed in commits `3bf5d04` + `0cfcc67`:
+
+- **F-09.5** — Bitnami `-metadata` sidecar tags aborted the whole sync.
+- **F-09.8** — Sync failures skipped regen Kick, leaving index.yaml
+  empty after partial-success batches.
+- **F-09.10** — MirrorGuard envelope copy said "uploads" but also
+  rejects DELETE.
+
+See Findings below and `FINDINGS.md` for full detail.
 
 ## Scope — what's new
 
@@ -161,12 +179,68 @@ So v1.3 shipped **only** the validator widening, the Docker Hub gate, and per-en
 - **Not filed as a bug:** backend contract explicitly split. UX-wise, Batch 04's "dockerhub" label was misleading for this batch's test; documenting for the UAT record.
 - **Status:** noise (no action)
 
+### F-09.5 Bitnami `-metadata` sidecar tags abort the whole sync batch
+
+- **Severity:** B (blocker — surfaces on the primary documented OCI helm source)
+- **Area:** `internal/protocol/helm/upstream_parse.go` + `sync_handler.go:fetchAndCommitOCI`
+- **Symptom:** Live sync against `oci://registry-1.docker.io/bitnamicharts/nginx` aborted at around chart 154/240 with `manifest does not contain minimum number of descriptors (2), descriptors found: 1`. Bitnami publishes `<version>-metadata` OCI artifacts alongside every chart tag (vulnerability scan + SBOM sidecars, single-layer manifests). Semver accepts the `-metadata` suffix as a pre-release identifier, so the naive filter yielded them; Helm SDK PullChart fails on the single-layer manifest and the failure propagates via downloadErrors aborting 239 other good tags.
+- **Fix:** commit `3bf5d04`
+  - `isNonChartOCISidecarTag(tag)` prefilter in `ParseOCIUpstream` skips `"*-metadata"` (case-insensitive) before the semver check. Documented Bitnami convention; narrow + intentional.
+  - `isNonChartManifestErr(err)` in `fetchAndCommitOCI` catches the SDK error string and returns `(0, nil)` instead of propagating — defence in depth for future single-layer conventions.
+  - New `TestIsNonChartManifestErr` (internal) + extended `TestParseOCIUpstream` subtest covering `-metadata`, `-METADATA`, mixed tag lists.
+- **Codex verify:** ✅ Clean — reviewer flagged `HasSuffix` as narrow on purpose and suggested relying on `isNonChartManifestErr` for future sidecar conventions; agreed, no broadening.
+- **Retest:** ✅ Passed — 166 charts synced from Bitnami before Docker Hub rate limit kicked in on the remaining 37 (upstream limit, not code issue).
+- **Status:** ✅ Closed
+
+### F-09.6 `UpstreamHTTPTimeout` 60s default vs per-job context semantics
+
+- **Severity:** m (minor — correctness OK, UX poor for large OCI batches)
+- **Area:** `internal/config/config.go:274` + `internal/protocol/helm/sync_handler.go:91`
+- **Observed:** The config field is documented as "per-request deadline" but the sync handler applies it to the whole job via `context.WithTimeout(ctx, timeout)`. For a 203-tag OCI batch this is too tight — sync is cut off mid-batch and then auto-retries with fresh deadline, making steady progress via dedup-skip.
+- **Deferred:** split into per-request + per-job, or bump default; document the current semantics. Not batch-09 blocking because the retry loop + `files_synced > 0` regen Kick (F-09.8) converge on the right state eventually.
+- **Status:** 🟨 Open (deferred)
+
+### F-09.7 / F-09.8 Regen Kick skipped on sync failure — index.yaml behind DB for hours
+
+- **Severity:** B (blocker — index.yaml stays empty while helm_charts has rows; helm clients see nothing after partial sync)
+- **Area:** `internal/protocol/helm/sync_handler.go:287` (failure path)
+- **Symptom:** After the F-09.5 fix landed, live sync pulled 166 chart versions successfully, then hit Docker Hub's 100/6h auth-rate-limit at chart 167. Per-chart commits had flipped `metadata_state=dirty`, but the regen coalescer Kick lived only on the success path. Fetching `/acme/helm/bitnami-oci/index.yaml` returned `apiVersion: v1\nentries: {}` — empty, despite 166 DB rows + 8.3 MB of .tgz on disk. UI showed "0 B · 0 charts"; `helm repo add` returned an empty catalog.
+- **Root cause:** The success-only Kick left every partial-success sync dependent on a subsequent successful sync firing the regen — under Docker Hub's rate limit, that's 6h+ away.
+- **Fix:** commit `3bf5d04` — Kick the regen coalescer on the failure path too, no `filesAdded > 0` gate. Regen is idempotent + cheap under the storage per-repo lock. Verified: after the fix, the next failed sync Kicked regen, `index.yaml` grew to 228 KB with 166 chart entries, `helm search repo` returned real catalogue.
+- **Cross-protocol:** Codex flagged the same pattern in rpm/deb/pypi sync handlers (Q6). Fixed in commit `0cfcc67` — RPM primary.xml/repomd, APT Packages/Release, PEP 503 simple index all now regen on failure too. All suites green.
+- **Codex verify:** ✅ Clean (3 real-issues → 2 fixed here, 1 deferred — Q3a regen/sync lock race is pre-existing).
+- **Retest:** ✅ Passed end-to-end — helm repo add, helm search, helm pull, digest parity, severity gate 403.
+- **Status:** ✅ Closed
+
+### F-09.9 (deferred → moved to batch-15) ListTags/Resolve rate-limit inefficiency
+
+- **Severity:** m (minor — UX rough edge, not a correctness bug)
+- **Observed:** On each sync attempt, `fetchAndCommitOCI` calls `OCIClient.Resolve(ref)` BEFORE the dedup gate — so 166 already-synced charts each cost one Docker Hub API call before dedup-skip. On a 203-tag upstream with Docker Hub's 200/6h authenticated rate limit, the pre-dedup Resolves alone can exhaust quota.
+- **Direction:** Dedup gate should check `(repo_id, name, version)` tuple presence BEFORE Resolve; only Resolve when no existing row, or skip entirely if the tag was pulled within a "freshness window" (e.g. 24h).
+- **Deferred:** batch-15 cross-cutting sync-efficiency work.
+- **Status:** 🟨 Open (deferred)
+
+### F-09.10 MirrorGuard 403 envelope copy misleading on DELETE
+
+- **Severity:** m (minor — operator confusion only)
+- **Area:** `internal/httpx/mirror_guard.go:87`
+- **Observed:** `DELETE /acme/helm/bitnami-oci/charts/<file>` returns 403 with `{"code":"repo.repo_is_mirror","message":"uploads to mirror repos are disabled"}`. The guard covers both PUT and DELETE on mirror repos; copy only mentioned uploads.
+- **Fix:** commit `3bf5d04` — copy changed to `"writes to mirror repos are disabled (uploads + deletes)"`. Downstream Playwright E2E stub `web/e2e/mirror-upload-rejected.spec.ts` updated to match (Codex Q4); no other consumers of the old string.
+- **Design note:** Mirror repos are intentionally read-only at the chart level. Use the mirror's `filter.Names`/`filter.Globs` config to exclude versions; do not delete individual mirrored charts.
+- **Codex verify:** ✅ Clean.
+- **Retest:** ✅ Passed — new copy surfaces; E2E stub assertion updated.
+- **Status:** ✅ Closed
+
 ## Sign-off
 
 - [x] All cases passed, skipped-with-reason, or fixed
 - [x] Final state:
-  - [x] `acme/helm/bitnami-oci` exists (id=15) with oci:// upstream + helm-kind cred attached
-  - [x] `make test-live-oci` skips cleanly (no DH PAT)
-- [x] F-09.1 + F-09.2 closed; F-09.3 deferred (documented); F-09.4 noise
-- [x] **Codex MUST be run** on the fixes — done (agent aafc0d3bd65f4725b); 3 real-issues → 2 fixed, 1 deferred
+  - [x] `acme/helm/bitnami-oci` exists (id=15) with oci:// upstream + helm-kind cred + 166 synced chart versions
+  - [x] `index.yaml` serves 166 chart entries (228 KB)
+  - [x] `helm repo add` + `helm pull` works end-to-end; digest parity verified
+  - [x] `make test-live-oci` smoke1 (ListTags) + smoke2 (Resolve) pass; smoke3 (PullChart) hit Docker Hub rate limit — functionally equivalent to 9.3 which passed
+- [x] F-09.1 + F-09.2 closed; F-09.3 deferred → batch-15; F-09.4 noise
+- [x] F-09.5 + F-09.7/.8 + F-09.10 closed (live-path fixes in 3bf5d04 + 0cfcc67)
+- [x] F-09.6 + F-09.9 deferred — batch-15 cross-cutting work
+- [x] **Codex run twice** — agent `aafc0d3bd65f4725b` (pure-oci:// feature) + agent `ae7da25076b5dd6e8` (live-path). 6 real-issues → 4 fixed, 2 deferred.
 - [x] README.md batch 09 status flipped to ✅

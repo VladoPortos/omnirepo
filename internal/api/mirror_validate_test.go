@@ -319,6 +319,82 @@ func TestValidateMirrorFilter_RejectsMixedCasingForSameField(t *testing.T) {
 	}
 }
 
+// TestMirrorValidate_GitAccepted — plan 11-05 (GITMIRROR-01). Widening the
+// mirrorSupportedTypes map lets type=git take the is_mirror=true branch.
+// Validator must also accept typical https:// Git remotes via the shared
+// URL check.
+func TestMirrorValidate_GitAccepted(t *testing.T) {
+	if _, ok := mirrorSupportedTypes["git"]; !ok {
+		t.Fatalf("mirrorSupportedTypes must include \"git\" after plan 11-05")
+	}
+	if !validateMirrorUpstreamURL("https://github.com/foo/bar.git", "git") {
+		t.Fatal("git mirror must accept https://github.com/foo/bar.git")
+	}
+}
+
+// TestMirrorValidate_GitRejectsOCI — git is HTTPS-PAT only per GITMIRROR-05.
+// oci:// is reserved for helm mirrors (plan 11-02) and must not leak into
+// the git branch.
+func TestMirrorValidate_GitRejectsOCI(t *testing.T) {
+	if validateMirrorUpstreamURL("oci://reg/foo/chart", "git") {
+		t.Fatal("git must NOT accept oci:// (GITMIRROR-05 HTTPS-PAT only)")
+	}
+}
+
+// TestMirrorValidate_GitHTTPOnly — plaintext http is permitted alongside
+// https in v1.4 (SSH is the deferred feature, not plaintext-http). Air-gap
+// operators running an internal mirror over plain HTTP inside the corporate
+// LAN are still supported.
+func TestMirrorValidate_GitHTTPOnly(t *testing.T) {
+	if !validateMirrorUpstreamURL("http://insecure.example/foo.git", "git") {
+		t.Fatal("git mirror must accept http:// in v1.4")
+	}
+}
+
+// TestMirrorValidate_GitRejectsInvalidSchemes — ssh://, file://, git://,
+// javascript: all deferred beyond v1.4. The URL validator's scheme check
+// filters them out at the binary accept/reject boundary.
+func TestMirrorValidate_GitRejectsInvalidSchemes(t *testing.T) {
+	bad := []string{
+		"ssh://foo@bar/baz.git",
+		"git://github.com/foo/bar.git",
+		"file:///etc/passwd",
+		"javascript:alert(1)",
+		"ftp://legacy/foo.git",
+	}
+	for _, raw := range bad {
+		if validateMirrorUpstreamURL(raw, "git") {
+			t.Errorf("git must reject %q (deferred to v1.5+ or unsupported)", raw)
+		}
+	}
+}
+
+// TestMirrorValidate_ExistingProtocolsUnchanged guards against regression
+// in the widening — deb/rpm/pypi/helm acceptance semantics stay identical.
+func TestMirrorValidate_ExistingProtocolsUnchanged(t *testing.T) {
+	for _, rt := range []string{"deb", "rpm", "pypi", "helm"} {
+		if _, ok := mirrorSupportedTypes[rt]; !ok {
+			t.Errorf("mirrorSupportedTypes must still include %q", rt)
+		}
+		if !validateMirrorUpstreamURL("https://example.com/repo", rt) {
+			t.Errorf("%s must still accept https://", rt)
+		}
+		if validateMirrorUpstreamURL("file:///etc/passwd", rt) {
+			t.Errorf("%s must still reject file://", rt)
+		}
+	}
+	// helm-specific: still accepts oci://
+	if !validateMirrorUpstreamURL("oci://reg.io/charts/nginx", "helm") {
+		t.Fatal("helm must still accept oci:// after plan 11-05 widening")
+	}
+	// rpm/deb/pypi still reject oci://
+	for _, rt := range []string{"deb", "rpm", "pypi"} {
+		if validateMirrorUpstreamURL("oci://reg.io/charts/nginx", rt) {
+			t.Errorf("%s must still reject oci://", rt)
+		}
+	}
+}
+
 // TestRefuseDockerHubWithoutCred covers the 11-02 Docker Hub gate (D-04,
 // OCIHELM-05). registry-1.docker.io OCI upstreams MUST carry a basic
 // credential or the validator returns a 422 httperr.Error with envelope

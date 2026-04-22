@@ -1,6 +1,6 @@
 # Batch 02 — User management (admin)
 
-**Status:** ⬜ Not started
+**Status:** 🟨 In progress (2026-04-22)
 **Prereqs:** Batch 01 ✅ (superadmin + alice exist, session active)
 **State produced for later batches:**
 - Users: `superadmin`, `alice`, `bob`, `mallory`
@@ -114,12 +114,47 @@
 
 ## Findings
 
-_(add F-02.N entries here; mirror into FINDINGS.md)_
+### F-02.1 Toast host never mounted — all `toast.*` calls silent
+- **Severity:** R / real-bug (UX across the whole app, not scoped to this batch)
+- **Area:** `web/src/main.tsx` — root app entry
+- **Symptom:** Every `toast.success()` / `toast.error()` call across the app (UsersPage, TLSPage, DockerRepoPage, MaintenancePage, TrashPage, GCPage, PypiRepoPage) is a no-op. Exercised by attempting to create a duplicate user: `POST /admin/users → 409`, form field cleared, no toast, no inline error, no visible feedback at all. User would assume it succeeded.
+- **Root cause:** `components/ui/sonner.tsx` defines a `<Toaster>` wrapper but nothing imports or mounts it; `main.tsx` rendered only `<RouterProvider>` and `<QueryClientProvider>`.
+- **Fix:** mount `<Toaster richColors position="top-right" />` in `main.tsx` as a sibling of `RouterProvider`. Programmatic probe after fix: on dup-create, a Sonner toast with text `login exists` appeared within the 50ms poll.
+- **Codex verify:** ⬜ Pending (batched at end of batch 02)
+- **Retest:** ✅ 409 dup-create now surfaces a visible toast (auto-dismisses after 4s default; captured via DOM scrape within the dismiss window).
+- **Status:** ✅ Closed (commit `bdca441`)
+
+### F-02.2 `wrong current password` on self-service change not audited
+- **Severity:** m / minor (observability gap)
+- **Area:** `internal/api/admin_phase1.go:419` `handleChangePassword`
+- **Symptom:** Hitting `/auth/change-password` with a wrong `current` returns 401 but emits zero audit rows. `auth.password.changed` was only recorded on success. Same threat surface as login brute-force (credential-testing via a stolen session cookie), but no audit trail.
+- **Fix:** commit `ddc6d81` — failure branch now writes `auth.password.changed` with `outcome=wrong_password` before returning 401; success branch now sets `outcome=ok` explicitly so filters can separate the two cleanly.
+- **Codex verify:** ⬜ Pending
+- **Retest:** ✅ `curl -d '{"current":"WRONG",...}' → 401`; `audit_log` now shows `auth.password.changed / alice / wrong_password`.
+- **Status:** ✅ Closed
+
+### F-02.3 Self-delete + last-super-admin delete both succeed (BLOCKER)
+- **Severity:** B / blocker
+- **Area:** `internal/api/admin_phase1.go:565` `handleDeleteUser`
+- **Symptom:** `DELETE /api/v1/admin/users/{login}` had zero safety checks. Observed live: super-admin deleted itself with status 200; `SELECT COUNT(*) FROM users WHERE is_super_admin=1 AND deleted_at IS NULL` returned **0**. Instance had zero remaining super-admins, no way back into /admin/* from the UI, no "reset admin password" flow (air-gap: there cannot be one). One-click soft-brick.
+- **Repro:**
+  1. Log in as super-admin.
+  2. `curl -X DELETE /api/v1/admin/users/superadmin` → 200.
+  3. `sqlite3 ... "SELECT COUNT(*) FROM users WHERE is_super_admin=1 AND deleted_at IS NULL"` → 0.
+  4. Instance cannot manage users, TLS certs, projects, or anything requiring super-admin — reachable only by direct SQL edit on the data volume.
+- **Root cause:** Delete handler validated only that the target existed. No check for `actor.ID == target.ID`; no check that target was the last live super-admin.
+- **Fix:** commit `7c8daea` — two safety checks before `Users.Delete`:
+  1. `actor.ID == u.ID` → 409 envelope directing the caller to the DELETE /me self-service flow (which has its own confirmation UX and signs the actor out).
+  2. Target is a super-admin AND `Users.CountLiveSuperAdmins() <= 1` → 409 envelope "cannot delete the last super-admin — promote another user first". New helper `Users.CountLiveSuperAdmins` added in `internal/metadata/users.go`.
+  Regression tests `TestDeleteUser_CannotDeleteSelf` + `TestDeleteUser_CannotDeleteLastSuperAdmin` pin the rule; existing `TestDeleteUser` still passes. Race caveat: count-then-delete is non-transactional; needs two concurrent super-admin sessions both running deletes on the last two admins. Accepted for v1 with a code comment.
+- **Codex verify:** ⬜ Pending
+- **Retest:** ✅ Post-fix `DELETE /admin/users/superadmin` as superadmin → 409 with the correct envelope; superadmin row stays live.
+- **Status:** ✅ Closed
 
 ## Sign-off
 
-- [ ] All cases passed
-- [ ] All F-02.* findings ✅ Closed
-- [ ] Backend log zero ERROR/panic
-- [ ] Final user set: `superadmin`, `alice`, `bob` (live); `mallory` (soft-deleted OR re-created; document which)
-- [ ] README.md batch 02 status flipped to ✅
+- [x] All cases passed (2.1–2.17)
+- [x] All F-02.* findings ✅ Closed, retested (Codex pass pending)
+- [x] Backend log zero ERROR/panic after fixes applied
+- [x] Final user set: `superadmin`, `alice`, `bob`, `mallory` (live, all must_change=false); old `mallory` + test user `a` retained in DB as soft-deleted (visible under Show-deleted toggle)
+- [ ] README.md batch 02 status flipped to ✅ (pending Codex)

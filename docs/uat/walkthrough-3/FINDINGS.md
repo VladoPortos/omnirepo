@@ -12,6 +12,9 @@ Status: 🟨 Open · ✅ Closed · 🟥 Rejected (disputed)
 | F-01.3 | R | AuthGuard + LoginPage | Deep-link lost across login redirect | `12ac7e1` | ✅ Clean | ✅ Passed | ✅ Closed |
 | F-01.4 | m | openapi.yaml | `/setup/status` + `/setup/superadmin` undocumented | `3d06d11` | ✅ Clean | ✅ Passed | ✅ Closed |
 | F-01.5 | R | auth pages | Cards render squished — motion.div flex-item has no width | `fa179e9` | ⬜ Pending | ✅ Passed | ✅ Closed |
+| F-02.1 | R | main.tsx | Toaster never mounted — all `toast.*` silent across the app | `bdca441` | ⬜ Pending | ✅ Passed | ✅ Closed |
+| F-02.2 | m | handleChangePassword | Wrong-current-password on self-service change not audited | `ddc6d81` | ⬜ Pending | ✅ Passed | ✅ Closed |
+| F-02.3 | **B** | handleDeleteUser | Self-delete + last-super-admin delete both succeed → instance soft-brick | `7c8daea` | ⬜ Pending | ✅ Passed | ✅ Closed |
 
 ---
 
@@ -47,6 +50,30 @@ Status: 🟨 Open · ✅ Closed · 🟥 Rejected (disputed)
 - **Fix:** commit `12ac7e1` — AuthGuard attaches `state.from`; LoginPage navigates to `state.from.pathname` (+ search + hash) on success. Path must start with `/` and not `//` (open-redirect guard); otherwise falls back to `/`.
 - **Codex verify:** ✅ Clean (batched)
 - **Retest:** ✅ Retried repro — lands on `/projects/acme/docker/demo` (NotFound page, correct for now).
+- **Status:** ✅ Closed
+
+### F-02.3 Self-delete + last-super-admin delete both succeed (BLOCKER)
+- **Severity:** B / blocker
+- **Area:** `internal/api/admin_phase1.go:565` `handleDeleteUser`
+- **Symptom:** Super-admin deleted itself via the admin API; zero live super-admins remained. Instance loses all admin-surface access; recovery needs direct SQL on the data volume.
+- **Fix:** commit `7c8daea` — two safety checks in `handleDeleteUser`: actor ≠ target (else 409, point user to `/me`); if target is super-admin, require `CountLiveSuperAdmins > 1` (else 409 "promote another user first"). New `Users.CountLiveSuperAdmins` helper. Regression tests pin both rules.
+- **Retest:** ✅ Post-fix `DELETE /admin/users/superadmin` as superadmin → 409 with correct envelope; row stays live.
+- **Status:** ✅ Closed
+
+### F-02.2 Wrong-current-password on self-service change not audited
+- **Severity:** m / minor (observability gap)
+- **Area:** `internal/api/admin_phase1.go:419` `handleChangePassword`
+- **Symptom:** Failing `/auth/change-password` (wrong current password) returned 401 but emitted no audit row. Same threat surface as login brute-force, but untracked.
+- **Fix:** commit `ddc6d81` — failure branch now writes `auth.password.changed / outcome=wrong_password`; success branch now sets `outcome=ok` explicitly.
+- **Retest:** ✅ `auth_log` carries both outcomes after retrying the repro.
+- **Status:** ✅ Closed
+
+### F-02.1 Toast host never mounted — every `toast.*` call silent
+- **Severity:** R / real-bug (affects the whole app)
+- **Area:** `web/src/main.tsx` (app root)
+- **Symptom:** `<Toaster>` component defined in `components/ui/sonner.tsx` but never mounted anywhere. All `toast.success` / `toast.error` calls across UsersPage, TLSPage, DockerRepoPage, MaintenancePage, TrashPage, GCPage, PypiRepoPage were silent no-ops. Observed in Batch 02 case 2.4 (dup-create → form clears, zero feedback).
+- **Fix:** commit `bdca441` — `main.tsx` now mounts `<Toaster richColors position="top-right" />` as a sibling of RouterProvider. DOM probe after fix confirms a toast element with text `login exists` appears on dup-create within the 50ms poll.
+- **Retest:** ✅ Confirmed.
 - **Status:** ✅ Closed
 
 ### F-01.5 Auth cards render squished — motion.div flex-item has no width

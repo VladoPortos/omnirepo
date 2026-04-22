@@ -14,6 +14,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/dxc-internal/omnirepo/internal/audit"
 	"github.com/dxc-internal/omnirepo/internal/auth"
 )
 
@@ -105,6 +106,19 @@ func (d Deps) handleCreateAPIKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	uid := actor.ID
+	d.recordAudit(r, audit.Event{
+		Kind:        audit.EvtUserAPIKeyCreated,
+		ActorUserID: &uid,
+		TargetKind:  "user_api_key",
+		TargetID:    strconv.FormatInt(id, 10),
+		Details: map[string]any{
+			"id":     id,
+			"name":   req.Name,
+			"prefix": key.Prefix,
+		},
+	})
+
 	writeJSON(w, http.StatusCreated, apiKeyCreateResponse{
 		ID:        id,
 		Name:      req.Name,
@@ -143,6 +157,18 @@ func (d Deps) handleRevokeAPIKey(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
 	}
+
+	uid := actor.ID
+	d.recordAudit(r, audit.Event{
+		Kind:        audit.EvtUserAPIKeyRevoked,
+		ActorUserID: &uid,
+		TargetKind:  "user_api_key",
+		TargetID:    strconv.FormatInt(id, 10),
+		Details: map[string]any{
+			"id":   id,
+			"name": key.Name,
+		},
+	})
 
 	w.WriteHeader(http.StatusNoContent)
 }

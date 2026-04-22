@@ -139,6 +139,14 @@ const (
 	EvtProjectAPIKeyCreated EventKind = "project.api-key.create"
 	EvtProjectAPIKeyRevoked EventKind = "project.api-key.revoke"
 
+	// User-scoped API keys (D-1). Mints "omr_u_*" tokens tied to a single
+	// user (self-service, shown once). "create" carries {id, name, prefix};
+	// "revoke" carries {id, name}. target_kind="user_api_key" so operator
+	// can grep audit_log for per-key timelines without needing to know the
+	// numeric id up front.
+	EvtUserAPIKeyCreated EventKind = "user.api-key.create"
+	EvtUserAPIKeyRevoked EventKind = "user.api-key.revoke"
+
 	// S3 bucket provisioning (walkthrough 2026-04-17). Emitted by the
 	// REST endpoint that creates/deletes an s3_buckets row + on-disk dir.
 	// Details: {project, name}. Delete additionally carries

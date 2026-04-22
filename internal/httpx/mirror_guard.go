@@ -84,7 +84,7 @@ func mirrorGuardImpl(repos *metadata.ReposRepo, projects *metadata.ProjectsRepo,
 				// against this source file and the wire body. The dotted
 				// prefix satisfies the envelope schema.
 				httperr.Write(w, r, httperr.Permission(codeRepoIsMirror,
-					"uploads to mirror repos are disabled"))
+					"writes to mirror repos are disabled (uploads + deletes)"))
 				return
 			}
 			next.ServeHTTP(w, r)

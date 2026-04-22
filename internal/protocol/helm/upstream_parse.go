@@ -293,6 +293,17 @@ func ParseOCIUpstream(
 	count := 0
 	base := strings.TrimRight(strings.TrimSuffix(upstreamURL, "/"), ":")
 	for _, tag := range tags {
+		// Skip Bitnami's non-chart sidecar artifacts. Bitnami publishes a
+		// parallel tag <version>-metadata alongside every chart tag that
+		// carries vulnerability-scan + SBOM artifacts with a single-layer
+		// manifest. Helm's Pull requires ≥2 descriptors (config + chart
+		// layer) and bubbles up "manifest does not contain minimum number
+		// of descriptors" mid-sync, aborting the whole batch on one bad
+		// tag. Filter at enumeration time — cheaper than a failed Pull,
+		// and the convention is stable and documented upstream.
+		if isNonChartOCISidecarTag(tag) {
+			continue
+		}
 		if _, verr := semver.NewVersion(tag); verr != nil {
 			continue
 		}
@@ -311,4 +322,17 @@ func ParseOCIUpstream(
 		count++
 	}
 	return count, nil
+}
+
+// isNonChartOCISidecarTag returns true when the tag follows a known
+// non-chart convention. Bitnami publishes "<ver>-metadata" as scan +
+// SBOM sidecars (single-layer manifests that aren't Helm charts); these
+// break Helm SDK Pull. Case-insensitive on the suffix.
+//
+// Kept as a named function so new conventions (e.g. "-cnab",
+// "-signature") can be added alongside without touching the main
+// filter loop.
+func isNonChartOCISidecarTag(tag string) bool {
+	lower := strings.ToLower(tag)
+	return strings.HasSuffix(lower, "-metadata")
 }

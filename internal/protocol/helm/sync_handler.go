@@ -285,6 +285,16 @@ func (h *SyncHandler) Handle(ctx context.Context, payload string, projectID, rep
 	wg.Wait()
 
 	if len(downloadErrors) > 0 {
+		// F-09.8: failed syncs must still kick regen. Any charts that
+		// landed before the error stay on disk + in helm_charts; the
+		// per-entry commit flips metadata_state=dirty (fetchAndCommitOCI
+		// / fetchAndCommit HTTP path). Skipping the Kick here leaves
+		// index.yaml behind the DB until a subsequent successful sync
+		// happens to run — easily 6h+ under a Docker Hub rate limit.
+		// Regen is idempotent and cheap; no filesAdded gate.
+		if h.deps.Coalescer != nil {
+			h.deps.Coalescer.Get(repoID).Kick()
+		}
 		return h.fail(ctx, repoID, pl, startedAt, httpx.SanitizeUpstreamErr(downloadErrors[0]))
 	}
 
@@ -478,6 +488,20 @@ func (h *SyncHandler) fetchAndCommitOCI(ctx context.Context, projectName string,
 	// the sha256 of the downloaded tgz bytes).
 	res, err := h.deps.OCIClient.PullChart(ctx, ent.Path, ociCreds)
 	if err != nil {
+		// Defence in depth: the upstream may publish non-chart OCI
+		// artifacts under the same tag namespace (Bitnami's `-metadata`
+		// sidecar is filtered at ParseOCIUpstream but new conventions
+		// may appear). Helm SDK bubbles these up as "manifest does not
+		// contain minimum number of descriptors". Treat as a skip with
+		// WARN so one malformed tag doesn't abort a 200-tag sync.
+		if isNonChartManifestErr(err) {
+			slog.WarnContext(ctx, "helm_sync: skipping non-chart OCI artifact",
+				slog.Int64("repo_id", repo.ID),
+				slog.String("ref", ent.Path),
+				slog.Any("err", err),
+			)
+			return 0, nil
+		}
 		return 0, fmt.Errorf("helm_sync: pull %s: %w", ent.Path, httpx.SanitizeUpstreamErr(err))
 	}
 	if res == nil || len(res.Data) == 0 {
@@ -662,6 +686,19 @@ func (h *SyncHandler) fetchAndCommitOCI(ctx context.Context, projectName string,
 		})
 	}
 	return size, nil
+}
+
+// isNonChartManifestErr matches Helm SDK / ORAS errors from pulling an
+// OCI artifact that doesn't carry the 2+ descriptors a Helm chart ref
+// requires (config + chart layer). Bitnami's `-metadata` sidecar tags
+// and any future single-layer "alongside the chart" artifact hit this
+// path. String-matched because neither library exports a typed error
+// for the condition (verified against helm.sh/helm/v3 v3.20.x).
+func isNonChartManifestErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), "minimum number of descriptors")
 }
 
 // parseOCIRef extracts (chartName, chartVersion) from

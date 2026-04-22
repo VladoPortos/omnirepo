@@ -334,4 +334,41 @@ func TestParseOCIUpstream(t *testing.T) {
 			t.Errorf("want chart-name-derive error, got %v", err)
 		}
 	})
+
+	// F-09.5 regression — Bitnami publishes "<ver>-metadata" sidecar tags
+	// alongside every chart tag; these are single-layer OCI artifacts
+	// carrying scan + SBOM data, not Helm charts. Semver parses them
+	// (pre-release label), so the naive filter yielded them — Helm SDK
+	// Pull aborted mid-batch with "minimum number of descriptors".
+	t.Run("bitnami -metadata sidecar tags are filtered at enumeration", func(t *testing.T) {
+		fake := ociclient.NewFake()
+		fake.Tags["registry-1.docker.io/bitnamicharts/nginx"] = []string{
+			"22.6.5",
+			"22.6.5-metadata",
+			"22.6.4",
+			"22.6.4-metadata",
+			// Capitalized variant — should also be skipped (lower-case compare).
+			"22.6.3-METADATA",
+			"22.6.3",
+		}
+		var got []string
+		_, err := helm.ParseOCIUpstream(context.Background(), fake,
+			"oci://registry-1.docker.io/bitnamicharts/nginx",
+			helm.AuthCreds{User: "u", Password: "p"},
+			helm.SyncFilter{},
+			func(e helm.UpstreamEntry) error { got = append(got, e.Filename); return nil })
+		if err != nil {
+			t.Fatalf("ParseOCIUpstream: %v", err)
+		}
+		sort.Strings(got)
+		want := []string{"nginx-22.6.3.tgz", "nginx-22.6.4.tgz", "nginx-22.6.5.tgz"}
+		if len(got) != len(want) {
+			t.Fatalf("got %v, want %v", got, want)
+		}
+		for i, w := range want {
+			if got[i] != w {
+				t.Errorf("entry[%d] = %q, want %q", i, got[i], w)
+			}
+		}
+	})
 }

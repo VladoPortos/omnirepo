@@ -449,6 +449,46 @@ func TestBlobHEAD(t *testing.T) {
 	}
 }
 
+// TestBlobGet_UnknownDigest_DoesNotLeakFSPath is the F-05.2 regression:
+// the 404 BLOB_UNKNOWN envelope must not echo the CAS filesystem path in
+// its `detail` field. Before the fix, os.Open's PathError.Error() was
+// copied verbatim as detail, exposing <dataRoot>/blobs/sha256/<aa>/<hex>.
+func TestBlobGet_UnknownDigest_DoesNotLeakFSPath(t *testing.T) {
+	f := newBlobFixture(t)
+	bogus := "sha256:" + strings.Repeat("c", 64)
+
+	req, _ := http.NewRequest("GET", f.srv.URL+"/v2/"+f.repoPath+"/blobs/"+bogus, nil)
+	resp, err := http.DefaultClient.Do(f.authed(req))
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status=%d, want 404", resp.StatusCode)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	var env struct {
+		Errors []struct {
+			Code   string `json:"code"`
+			Detail string `json:"detail"`
+		} `json:"errors"`
+	}
+	if err := json.Unmarshal(body, &env); err != nil {
+		t.Fatalf("decode envelope: %v; body=%s", err, body)
+	}
+	if len(env.Errors) == 0 || env.Errors[0].Code != "BLOB_UNKNOWN" {
+		t.Fatalf("want BLOB_UNKNOWN; got %s", body)
+	}
+	// The dataRoot path must not appear anywhere in the response.
+	if strings.Contains(string(body), f.dataRoot) {
+		t.Fatalf("envelope leaks dataRoot %q: %s", f.dataRoot, body)
+	}
+	// Belt-and-suspenders: no "/blobs/sha256/" subpath either.
+	if strings.Contains(env.Errors[0].Detail, "/blobs/sha256/") {
+		t.Fatalf("detail leaks CAS layout: %q", env.Errors[0].Detail)
+	}
+}
+
 // TestBlobDelete_RefCountZero_AllowsDelete removes the docker_blobs row
 // when ref_count==0 and emits the oci.blob.deleted audit event.
 func TestBlobDelete_RefCountZero_AllowsDelete(t *testing.T) {

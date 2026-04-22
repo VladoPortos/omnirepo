@@ -30,6 +30,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -592,10 +593,17 @@ func (h *Handler) blobGet(w http.ResponseWriter, r *http.Request) {
 	f, err := os.Open(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			writeOCIErr(w, http.StatusNotFound, ErrCodeBlobUnknown, err)
+			// F-05.2: never echo the CAS filesystem path back to the
+			// client — os.PathError.Error() would embed
+			// /var/lib/omnirepo/blobs/sha256/<aa>/<digest>. Emit the
+			// canonical OCI "blob unknown" instead.
+			writeOCIErr(w, http.StatusNotFound, ErrCodeBlobUnknown, errors.New("blob unknown"))
 			return
 		}
-		writeOCIErr(w, http.StatusInternalServerError, ErrCodeUnknown, err)
+		// Swallow the raw path-bearing error into the (logged)
+		// X-Incident-Id path — the client sees only the generic code.
+		slog.ErrorContext(r.Context(), "oci.blob_open_failed", "err", err, "digest", digest)
+		writeOCIErr(w, http.StatusInternalServerError, ErrCodeUnknown, errors.New("internal error"))
 		return
 	}
 	defer func() { _ = f.Close() }()

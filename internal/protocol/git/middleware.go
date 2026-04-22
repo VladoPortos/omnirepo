@@ -125,6 +125,11 @@ func ResolveRepoFromURL(projects *metadata.ProjectsRepo, repos *metadata.ReposRe
 // (upload-pack / info/refs?service=git-upload-pack) or a write
 // (receive-pack / info/refs?service=git-receive-pack), then calls
 // auth.Can with the corresponding Action.
+//
+// Anonymous requests (no actor on ctx) are allowed to fall into auth.Can
+// as Actor{Kind: ActorKindAnonymous}: for a read action on a repo with
+// PublicRead=true the policy short-circuit returns allowed; every other
+// path still 401s after Can rejects with ReasonRequiresAuth.
 func RequireGitPermission() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -136,20 +141,83 @@ func RequireGitPermission() func(http.Handler) http.Handler {
 
 			actor, ok := auth.ActorFromContext(r.Context())
 			if !ok {
-				http.Error(w, "unauthenticated", http.StatusUnauthorized)
-				return
+				actor = auth.Actor{Kind: auth.ActorKindAnonymous}
 			}
 
 			action := resolveGitAction(r)
 
-			allowed, _ := auth.Can(r.Context(), actor, action,
-				auth.Target{Kind: "repo", ProjectID: repo.ProjectID, RepoID: repo.ID})
+			allowed, reason := auth.Can(r.Context(), actor, action,
+				auth.Target{
+					Kind:       "repo",
+					ProjectID:  repo.ProjectID,
+					RepoID:     repo.ID,
+					PublicRead: repo.PublicRead,
+				})
 			if !allowed {
+				// Distinguish "no creds" from "wrong creds" so git clients
+				// get a 401 + WWW-Authenticate challenge they can respond
+				// to, rather than a flat 403.
+				if actor.Kind == auth.ActorKindAnonymous &&
+					reason == auth.ReasonRequiresAuth {
+					w.Header().Set("WWW-Authenticate", `Basic realm="omnirepo"`)
+					http.Error(w, "unauthenticated", http.StatusUnauthorized)
+					return
+				}
 				http.Error(w, "forbidden", http.StatusForbidden)
 				return
 			}
 
 			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// AnonymousGitRead returns a chi middleware that attaches an anonymous
+// Actor to the request context when (a) no Authorization header is
+// present, (b) the resolved repo has PublicRead=true, and (c) the URL
+// describes a read operation (upload-pack, info/refs?service=upload-pack).
+// Downstream auth middleware (wrapped in skipIfActor) then passes through
+// without demanding credentials, and RequireGitPermission calls auth.Can
+// with the anonymous actor — which the policy grants via the
+// anonymous_public_read branch. Writes and non-public repos fall through
+// unchanged so BasicOrAPIKey can 401.
+//
+// Must run AFTER ResolveRepoFromURL (to know repo.PublicRead) and BEFORE
+// BasicOrAPIKey (which would otherwise 401 on missing auth).
+func AnonymousGitRead() func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Header.Get("Authorization") != "" {
+				next.ServeHTTP(w, r)
+				return
+			}
+			repo := RepoFromContext(r.Context())
+			if repo == nil || !repo.PublicRead {
+				next.ServeHTTP(w, r)
+				return
+			}
+			if resolveGitAction(r) != auth.ActionGitRepoRead {
+				next.ServeHTTP(w, r)
+				return
+			}
+			ctx := auth.WithActor(r.Context(), auth.Actor{Kind: auth.ActorKindAnonymous})
+			next.ServeHTTP(w, r.WithContext(ctx))
+		})
+	}
+}
+
+// skipIfActor wraps mw so it pass-throughs when an Actor is already on
+// ctx (the anonymous fast path set by AnonymousGitRead). Matches the
+// pattern used by pypi/rpm/deb handlers.
+func skipIfActor(mw func(http.Handler) http.Handler) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		wrapped := mw(next)
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if _, ok := auth.ActorFromContext(r.Context()); ok {
+				next.ServeHTTP(w, r)
+				return
+			}
+			wrapped.ServeHTTP(w, r)
 		})
 	}
 }

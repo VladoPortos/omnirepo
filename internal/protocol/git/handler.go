@@ -81,14 +81,20 @@ func New(d Deps) *Handler {
 }
 
 // Mount registers the Git Smart-HTTP routes on parent. The middleware chain
-// follows D-30 order:
+// follows D-30 order, amended by F-10.7 (2026-04-22) to allow anonymous
+// clones of public_read=true repos:
 //
-//  1. BasicOrAPIKey — auth (never falls back to anon)
-//  2. ResolveRepoFromURL — parse URL, look up project + repo
-//  3. RequireGitPermission — derive action from path, check auth.Can
-//  4. PerRepoMutex — no-op on reads; serialize writes per repo
-//  5. PushSizeLimit — MaxBytesReader cap on wire bytes (D-33)
-//  6. AuditMiddleware — defer-style capture
+//  1. ResolveRepoFromURL — parse URL, look up project + repo
+//  2. AnonymousGitRead   — when no Authorization header is present and the
+//     repo is public_read + the action is a read, attach an anonymous actor
+//     so downstream checks pass; otherwise fall through.
+//  3. skipIfActor(BasicOrAPIKey) — auth path for credentialed clients;
+//     skipped when step 2 already attached anonymous.
+//  4. resolveMembership — fills project-membership cache for auth.Can.
+//  5. RequireGitPermission — derive action from path, check auth.Can.
+//  6. PerRepoMutex — no-op on reads; serialize writes per repo.
+//  7. PushSizeLimit — MaxBytesReader cap on wire bytes (D-33).
+//  8. AuditMiddleware — defer-style capture.
 //
 // Two URL shapes are mounted with the same handler chain:
 //   - "/git/{project}/{repo}"   — legacy form (kept for compatibility)
@@ -112,9 +118,10 @@ func (h *Handler) Mount(parent chi.Router) {
 // URL shapes without duplicating the chain.
 func (h *Handler) mountAt(parent chi.Router, route string, authDeps authmw.Deps) {
 	parent.Route(route, func(r chi.Router) {
-		r.Use(authmw.BasicOrAPIKey(authDeps))
-		r.Use(resolveMembership(h.members))
 		r.Use(ResolveRepoFromURL(h.projects, h.repos))
+		r.Use(AnonymousGitRead())
+		r.Use(skipIfActor(authmw.BasicOrAPIKey(authDeps)))
+		r.Use(resolveMembership(h.members))
 		r.Use(RequireGitPermission())
 		r.Use(PerRepoMutex(h.locks))
 		r.Use(PushSizeLimit(ResolveMaxPushBytes(h.cfg.Repos.Git.MaxPushBytes)))

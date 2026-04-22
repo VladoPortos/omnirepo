@@ -20,6 +20,11 @@ import (
 type Deps struct {
 	Config   config.Config
 	Settings *metadata.SettingsRepo
+	// LoginBoxSeeder seeds a request-scoped login box so downstream auth
+	// middlewares can populate the authenticated login for the access log.
+	// cmd/omnirepo passes an adapter over auth.WithLoginBox. Leaving it nil
+	// keeps actor_id blank (early plans / tests without auth mounted).
+	LoginBoxSeeder LoginBoxSeeder
 }
 
 // New constructs the OmniRepo chi router with the D-27 global middleware chain.
@@ -36,7 +41,7 @@ func New(d Deps) chi.Router {
 	r.Use(IncidentIDMiddleware)
 	r.Use(middleware.RealIP)
 	r.Use(EnvelopeRecoverer)
-	r.Use(StructuredLogger(d.Config))
+	r.Use(StructuredLogger(d.Config, d.LoginBoxSeeder))
 	r.Use(AuditEnter)
 	r.Use(MaintenanceMode(d.Settings))
 	r.Use(AuditExit)

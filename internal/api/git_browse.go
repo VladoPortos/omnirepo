@@ -24,6 +24,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	gogitpkg "github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
+	"github.com/go-git/go-git/v6/plumbing/filemode"
 	"github.com/go-git/go-git/v6/plumbing/object"
 
 	"github.com/dxc-internal/omnirepo/internal/auth"
@@ -258,38 +259,50 @@ func (d Deps) handleGitTree(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Navigate to subdirectory if path specified.
-	if pathParam != "" {
-		tree, err = tree.Tree(pathParam)
+	prefix := strings.Trim(pathParam, "/")
+	if prefix != "" {
+		tree, err = tree.Tree(prefix)
 		if err != nil {
 			writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "path not found")
 			return
 		}
 	}
 
+	// GitTreeEntry (OpenAPI): name, path, type (blob|tree|commit), size, sha.
 	type treeEntry struct {
 		Name string `json:"name"`
-		Type string `json:"type"` // "file" or "dir"
+		Path string `json:"path"`
+		Type string `json:"type"`
 		Size int64  `json:"size"`
+		SHA  string `json:"sha"`
 	}
 
 	entries := make([]treeEntry, 0, len(tree.Entries))
 	for _, e := range tree.Entries {
-		typ := "file"
-		if e.Mode.IsFile() {
-			typ = "file"
-		} else {
-			typ = "dir"
-		}
+		var typ string
 		var size int64
-		if typ == "file" {
+		switch {
+		case e.Mode.IsFile():
+			typ = "blob"
 			if blob, err := repo.BlobObject(e.Hash); err == nil {
 				size = blob.Size
 			}
+		case e.Mode == filemode.Submodule:
+			// Gitlinks are commit pointers to external repos.
+			typ = "commit"
+		default:
+			typ = "tree"
+		}
+		childPath := e.Name
+		if prefix != "" {
+			childPath = prefix + "/" + e.Name
 		}
 		entries = append(entries, treeEntry{
 			Name: e.Name,
+			Path: childPath,
 			Type: typ,
 			Size: size,
+			SHA:  e.Hash.String(),
 		})
 	}
 
@@ -358,17 +371,20 @@ func (d Deps) handleGitBlob(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// GitFileContent (OpenAPI): name, path, sha, size, encoding, content.
+	// Binary files are base64-encoded and the encoding field signals it;
+	// text is returned as-is under encoding="utf-8".
 	resp := map[string]any{
-		"name":      file.Name,
-		"size":      file.Size,
-		"is_binary": isBinary,
+		"name":     file.Name,
+		"path":     pathParam,
+		"sha":      file.Hash.String(),
+		"size":     file.Size,
+		"encoding": "utf-8",
+		"content":  string(content),
 	}
 	if isBinary {
-		resp["content"] = base64.StdEncoding.EncodeToString(content)
 		resp["encoding"] = "base64"
-	} else {
-		resp["content"] = string(content)
-		resp["encoding"] = "utf-8"
+		resp["content"] = base64.StdEncoding.EncodeToString(content)
 	}
 
 	writeJSON(w, http.StatusOK, resp)
@@ -396,12 +412,17 @@ func (d Deps) handleGitCommits(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// GitCommit (OpenAPI): sha, message, author_*, committer_*, parent_shas.
 	type commitItem struct {
-		SHA     string `json:"sha"`
-		Author  string `json:"author"`
-		Email   string `json:"email"`
-		Date    string `json:"date"`
-		Message string `json:"message"`
+		SHA            string   `json:"sha"`
+		Message        string   `json:"message"`
+		AuthorName     string   `json:"author_name"`
+		AuthorEmail    string   `json:"author_email"`
+		AuthorDate     string   `json:"author_date"`
+		CommitterName  string   `json:"committer_name"`
+		CommitterEmail string   `json:"committer_email"`
+		CommitterDate  string   `json:"committer_date"`
+		ParentSHAs     []string `json:"parent_shas"`
 	}
 
 	// If cursor is set, skip commits until we pass the cursor SHA.
@@ -421,11 +442,15 @@ func (d Deps) handleGitCommits(w http.ResponseWriter, r *http.Request) {
 			return errStopWalk
 		}
 		items = append(items, commitItem{
-			SHA:     c.Hash.String(),
-			Author:  c.Author.Name,
-			Email:   c.Author.Email,
-			Date:    c.Author.When.UTC().Format("2006-01-02T15:04:05Z"),
-			Message: strings.TrimSpace(c.Message),
+			SHA:            c.Hash.String(),
+			Message:        strings.TrimSpace(c.Message),
+			AuthorName:     c.Author.Name,
+			AuthorEmail:    c.Author.Email,
+			AuthorDate:     c.Author.When.UTC().Format("2006-01-02T15:04:05Z"),
+			CommitterName:  c.Committer.Name,
+			CommitterEmail: c.Committer.Email,
+			CommitterDate:  c.Committer.When.UTC().Format("2006-01-02T15:04:05Z"),
+			ParentSHAs:     parentSHAs(c),
 		})
 		return nil
 	}); err != nil && !errors.Is(err, errStopWalk) {
@@ -434,6 +459,17 @@ func (d Deps) handleGitCommits(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{"items": items, "next_cursor": nextCursor})
+}
+
+// parentSHAs returns the commit's parent hashes as a non-nil []string so the
+// JSON envelope always emits `"parent_shas": []` for root commits rather
+// than a missing or null key — the TS interface declares it required.
+func parentSHAs(c *object.Commit) []string {
+	out := make([]string, 0, len(c.ParentHashes))
+	for _, h := range c.ParentHashes {
+		out = append(out, h.String())
+	}
+	return out
 }
 
 func (d Deps) handleGitCommit(w http.ResponseWriter, r *http.Request) {
@@ -455,43 +491,166 @@ func (d Deps) handleGitCommit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	type fileChange struct {
-		Name   string `json:"name"`
-		Action string `json:"action"` // "add", "modify", "delete"
-	}
-
-	// Get changed files via parent diff.
-	changes := make([]fileChange, 0)
+	// Build the GitDiff response: sha, message, stats, files[{path,status,patch}].
+	// For root commits (no parent) we diff against an empty tree so every
+	// file shows as added with its full content as a patch.
+	var parentTree, commitTree *object.Tree
 	if commit.NumParents() > 0 {
-		parent, err := commit.Parent(0)
-		if err == nil {
-			parentTree, _ := parent.Tree()
-			commitTree, _ := commit.Tree()
-			if parentTree != nil && commitTree != nil {
-				diff, _ := parentTree.Diff(commitTree)
-				for _, ch := range diff {
-					action := "modify"
-					name := ch.To.Name
-					if ch.From.Name == "" {
-						action = "add"
-					} else if ch.To.Name == "" {
-						action = "delete"
-						name = ch.From.Name
-					}
-					changes = append(changes, fileChange{Name: name, Action: action})
-				}
-			}
+		if parent, perr := commit.Parent(0); perr == nil {
+			parentTree, _ = parent.Tree()
 		}
 	}
+	commitTree, _ = commit.Tree()
+
+	files, stats := diffTrees(parentTree, commitTree)
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"sha":     commit.Hash.String(),
-		"author":  commit.Author.Name,
-		"email":   commit.Author.Email,
-		"date":    commit.Author.When.UTC().Format("2006-01-02T15:04:05Z"),
 		"message": strings.TrimSpace(commit.Message),
-		"changes": changes,
+		"stats":   stats,
+		"files":   files,
 	})
+}
+
+// diffFile mirrors the GitDiffFile schema in openapi.yaml:
+//
+//	{ path: string, status: string, patch: string }
+//
+// status values: "added" | "modified" | "deleted" | "renamed".
+type diffFile struct {
+	Path   string `json:"path"`
+	Status string `json:"status"`
+	Patch  string `json:"patch"`
+}
+
+// diffStats mirrors the inline GitDiff.stats object:
+//
+//	{ additions: int, deletions: int, files_changed: int }
+type diffStats struct {
+	Additions    int `json:"additions"`
+	Deletions    int `json:"deletions"`
+	FilesChanged int `json:"files_changed"`
+}
+
+// diffTrees returns the per-file GitDiff slice plus aggregate stats.
+// Either side may be nil; a nil `from` means "diff against the empty
+// tree" (root commit case) and a nil `to` means "delete everything"
+// (unused in practice — callers always pass a commit tree as `to`).
+func diffTrees(from, to *object.Tree) ([]diffFile, diffStats) {
+	files := make([]diffFile, 0)
+	var agg diffStats
+	if to == nil {
+		return files, agg
+	}
+	var changes object.Changes
+	if from == nil {
+		// Enumerate the whole target tree as additions.
+		to.Files().ForEach(func(f *object.File) error {
+			patch, additions := blobAsAddPatch(f)
+			files = append(files, diffFile{
+				Path:   f.Name,
+				Status: "added",
+				Patch:  patch,
+			})
+			agg.Additions += additions
+			agg.FilesChanged++
+			return nil
+		})
+		return files, agg
+	}
+	var err error
+	changes, err = from.Diff(to)
+	if err != nil {
+		return files, agg
+	}
+	for _, ch := range changes {
+		status := "modified"
+		path := ch.To.Name
+		switch {
+		case ch.From.Name == "" && ch.To.Name != "":
+			status = "added"
+		case ch.To.Name == "" && ch.From.Name != "":
+			status = "deleted"
+			path = ch.From.Name
+		case ch.From.Name != ch.To.Name:
+			status = "renamed"
+		}
+		patch, adds, dels := changePatch(ch)
+		files = append(files, diffFile{
+			Path:   path,
+			Status: status,
+			Patch:  patch,
+		})
+		agg.Additions += adds
+		agg.Deletions += dels
+		agg.FilesChanged++
+	}
+	return files, agg
+}
+
+// changePatch renders a unified diff for one object.Change and returns
+// (patch, additions, deletions). Errors degrade to an empty patch with
+// zero stats — a missing patch is preferable to failing the whole
+// commit-detail response.
+func changePatch(ch *object.Change) (string, int, int) {
+	p, err := ch.Patch()
+	if err != nil || p == nil {
+		return "", 0, 0
+	}
+	adds, dels := 0, 0
+	for _, fp := range p.FilePatches() {
+		for _, ch := range fp.Chunks() {
+			switch ch.Type() {
+			case 1: // Add
+				adds += lineCount(ch.Content())
+			case 2: // Delete
+				dels += lineCount(ch.Content())
+			}
+		}
+	}
+	return p.String(), adds, dels
+}
+
+// blobAsAddPatch renders a root-commit "all-adds" patch for a single file.
+// Returns (patch, additions). Binary files emit a short marker rather
+// than the blob body so the JSON payload stays sane.
+func blobAsAddPatch(f *object.File) (string, int) {
+	bin, _ := f.IsBinary()
+	if bin {
+		return fmt.Sprintf("Binary files /dev/null and b/%s differ\n", f.Name), 0
+	}
+	contents, err := f.Contents()
+	if err != nil {
+		return "", 0
+	}
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("diff --git a/%s b/%s\n", f.Name, f.Name))
+	b.WriteString("new file\n")
+	b.WriteString("--- /dev/null\n")
+	b.WriteString(fmt.Sprintf("+++ b/%s\n", f.Name))
+	lines := strings.Split(strings.TrimRight(contents, "\n"), "\n")
+	b.WriteString(fmt.Sprintf("@@ -0,0 +1,%d @@\n", len(lines)))
+	adds := 0
+	for _, ln := range lines {
+		b.WriteString("+")
+		b.WriteString(ln)
+		b.WriteString("\n")
+		adds++
+	}
+	return b.String(), adds
+}
+
+// lineCount returns the number of \n-delimited lines in s. Empty strings
+// count as 0; a trailing newline does not count an extra empty line.
+func lineCount(s string) int {
+	if s == "" {
+		return 0
+	}
+	n := strings.Count(s, "\n")
+	if !strings.HasSuffix(s, "\n") {
+		n++
+	}
+	return n
 }
 
 func (d Deps) handleGitBlame(w http.ResponseWriter, r *http.Request) {
@@ -536,24 +695,30 @@ func (d Deps) handleGitBlame(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// GitBlame (OpenAPI): {path, lines:[{line_number, sha, author, date, content}]}.
 	type blameLine struct {
-		SHA    string `json:"sha"`
-		Author string `json:"author"`
-		Date   string `json:"date"`
-		Line   string `json:"line"`
+		LineNumber int    `json:"line_number"`
+		SHA        string `json:"sha"`
+		Author     string `json:"author"`
+		Date       string `json:"date"`
+		Content    string `json:"content"`
 	}
 
 	lines := make([]blameLine, 0, len(result.Lines))
-	for _, l := range result.Lines {
+	for i, l := range result.Lines {
 		lines = append(lines, blameLine{
-			SHA:    l.Hash.String(),
-			Author: l.Author,
-			Date:   l.Date.UTC().Format("2006-01-02T15:04:05Z"),
-			Line:   l.Text,
+			LineNumber: i + 1,
+			SHA:        l.Hash.String(),
+			Author:     l.AuthorName,
+			Date:       l.Date.UTC().Format("2006-01-02T15:04:05Z"),
+			Content:    l.Text,
 		})
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{"lines": lines})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"path":  pathParam,
+		"lines": lines,
+	})
 }
 
 func (d Deps) handleGitCompare(w http.ResponseWriter, r *http.Request) {
@@ -562,9 +727,18 @@ func (d Deps) handleGitCompare(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Accept both "base...head" (GitHub three-dot spelling) and the
+	// legacy two-dot spelling. chi treats "..." and ".." the same in a
+	// single URL segment, so we detect whichever form the client used.
 	spec := chi.URLParam(r, "spec")
-	parts := strings.SplitN(spec, "...", 2)
-	if len(parts) != 2 {
+	var parts []string
+	switch {
+	case strings.Contains(spec, "..."):
+		parts = strings.SplitN(spec, "...", 2)
+	case strings.Contains(spec, ".."):
+		parts = strings.SplitN(spec, "..", 2)
+	}
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
 		writeJSONError(w, r, http.StatusBadRequest, ErrValidationFailed, "spec must be base...head")
 		return
 	}
@@ -594,32 +768,14 @@ func (d Deps) handleGitCompare(w http.ResponseWriter, r *http.Request) {
 	baseTree, _ := baseCommit.Tree()
 	headTree, _ := headCommit.Tree()
 
-	type diffEntry struct {
-		Name   string `json:"name"`
-		Action string `json:"action"`
-	}
+	files, stats := diffTrees(baseTree, headTree)
 
-	diffs := make([]diffEntry, 0)
-	if baseTree != nil && headTree != nil {
-		changes, err := baseTree.Diff(headTree)
-		if err == nil {
-			for _, ch := range changes {
-				action := "modify"
-				name := ch.To.Name
-				if ch.From.Name == "" {
-					action = "add"
-				} else if ch.To.Name == "" {
-					action = "delete"
-					name = ch.From.Name
-				}
-				diffs = append(diffs, diffEntry{Name: name, Action: action})
-			}
-		}
-	}
-
+	// Compare renders as a GitDiff (same schema as commit detail) with the
+	// head commit's SHA and message so UIs can reuse the same component.
 	writeJSON(w, http.StatusOK, map[string]any{
-		"base":    baseCommit.Hash.String(),
-		"head":    headCommit.Hash.String(),
-		"changes": diffs,
+		"sha":     headCommit.Hash.String(),
+		"message": strings.TrimSpace(headCommit.Message),
+		"stats":   stats,
+		"files":   files,
 	})
 }

@@ -155,8 +155,14 @@ func TestGitBrowse_BlobEndpoint(t *testing.T) {
 	if body["name"] != "README.md" {
 		t.Fatalf("expected name=README.md, got %v", body["name"])
 	}
-	if body["is_binary"] != false {
-		t.Fatalf("expected is_binary=false, got %v", body["is_binary"])
+	if body["path"] != "README.md" {
+		t.Fatalf("expected path=README.md, got %v", body["path"])
+	}
+	if _, ok := body["sha"].(string); !ok {
+		t.Fatalf("expected sha string field, got %T", body["sha"])
+	}
+	if body["encoding"] != "utf-8" {
+		t.Fatalf("expected encoding=utf-8 for text content, got %v", body["encoding"])
 	}
 	content, ok := body["content"].(string)
 	if !ok || content == "" {
@@ -186,8 +192,17 @@ func TestGitBrowse_CommitsEndpoint(t *testing.T) {
 		t.Fatalf("expected commits, got %v", body)
 	}
 	first := commits[0].(map[string]any)
-	if first["author"] != "Test User" {
-		t.Fatalf("expected author=Test User, got %v", first["author"])
+	if first["author_name"] != "Test User" {
+		t.Fatalf("expected author_name=Test User, got %v", first["author_name"])
+	}
+	if _, ok := first["author_email"].(string); !ok {
+		t.Fatalf("expected author_email string, got %T", first["author_email"])
+	}
+	if _, ok := first["committer_name"].(string); !ok {
+		t.Fatalf("expected committer_name string, got %T", first["committer_name"])
+	}
+	if _, ok := first["parent_shas"].([]any); !ok {
+		t.Fatalf("expected parent_shas array (non-nil even for root commits), got %T", first["parent_shas"])
 	}
 }
 

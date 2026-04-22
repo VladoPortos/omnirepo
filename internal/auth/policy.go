@@ -201,12 +201,18 @@ func isMemberOfProject(ctx context.Context, projectID int64) bool {
 func Can(ctx context.Context, actor Actor, action Action, target Target) (bool, string) {
 	// 0. Anonymous-actor short-circuit (D-33, REPO-09). Must precede the
 	// must_change_password check because anonymous actors have no password
-	// to change; the MCP gate is undefined for them. Only repo.read on a
-	// target flagged PublicRead is ever allowed; every other action
+	// to change; the MCP gate is undefined for them. Only read actions on a
+	// target flagged PublicRead are ever allowed; every other action
 	// returns "requires_auth" so the chi middleware can 401 and trigger
 	// the Bearer challenge.
+	//
+	// Both the generic ActionRepoRead (protocol-neutral read used by deb /
+	// rpm / pypi / helm / raw / docker) and ActionGitRepoRead (the
+	// git-specific Smart-HTTP upload-pack) pass through this gate — `git
+	// clone` against a public_read=true repo must succeed anonymously.
 	if actor.Kind == ActorKindAnonymous {
-		if action == ActionRepoRead && target.Kind == "repo" && target.PublicRead {
+		if target.Kind == "repo" && target.PublicRead &&
+			(action == ActionRepoRead || action == ActionGitRepoRead) {
 			return true, ReasonAnonymousPublicRead
 		}
 		return false, ReasonRequiresAuth

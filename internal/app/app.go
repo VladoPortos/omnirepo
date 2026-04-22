@@ -19,6 +19,7 @@ import (
 
 	"github.com/dxc-internal/omnirepo/internal/api"
 	"github.com/dxc-internal/omnirepo/internal/audit"
+	"github.com/dxc-internal/omnirepo/internal/auth"
 	"github.com/dxc-internal/omnirepo/internal/config"
 	omrcrypto "github.com/dxc-internal/omnirepo/internal/crypto"
 	"github.com/dxc-internal/omnirepo/internal/httpx"
@@ -378,8 +379,15 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 	// Running the pool before the map is complete would race the
 	// dispatcher against handler registration.
 
-	// 6. Router with global middleware + system routes.
-	router := httpx.New(httpx.Deps{Config: cfg, Settings: metadata.NewSettingsRepo(db)})
+	// 6. Router with global middleware + system routes. LoginBoxSeeder
+	// seeds an auth.LoginBox on each request so StructuredLogger can
+	// record the authenticated login even though auth middlewares mutate
+	// ctx inside inner chains that the outer logger never sees directly.
+	router := httpx.New(httpx.Deps{
+		Config:         cfg,
+		Settings:       metadata.NewSettingsRepo(db),
+		LoginBoxSeeder: seedLoginBox,
+	})
 
 	// 6a. S3 virtual-host rewrite (Phase 04-07, D-23). MUST be registered
 	// as global middleware BEFORE any routes so chi's route matching sees
@@ -974,6 +982,22 @@ func RecordBakedTrivyDBMeta(ctx context.Context, db *sql.DB, dataRoot string) er
 	)
 	return nil
 }
+
+// seedLoginBox is the httpx.LoginBoxSeeder adapter: it allocates a fresh
+// auth.LoginBox for each request and stashes it on the ctx so downstream
+// auth middlewares (auth.WithActor) populate it. StructuredLogger reads
+// box.GetLogin() at request exit to fill the actor_id slog attribute.
+func seedLoginBox(ctx context.Context) (context.Context, httpx.LoginBox) {
+	box := &authLoginBox{inner: &auth.LoginBox{}}
+	return auth.WithLoginBox(ctx, box.inner), box
+}
+
+// authLoginBox is a thin adapter from *auth.LoginBox (concrete type) to
+// the httpx.LoginBox interface — httpx cannot import auth without a
+// cycle, so the interface is defined in httpx and implemented here.
+type authLoginBox struct{ inner *auth.LoginBox }
+
+func (b *authLoginBox) GetLogin() string { return b.inner.Login }
 
 // dirSizeBytes walks dir and sums regular-file sizes. Errors and non-regular
 // entries are skipped silently — this is a best-effort metric.

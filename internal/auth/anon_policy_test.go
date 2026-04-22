@@ -42,8 +42,10 @@ func TestAnonymousDeniedOnNonReadActions(t *testing.T) {
 	anon := auth.Actor{Kind: auth.ActorKindAnonymous}
 	target := auth.Target{Kind: "repo", RepoID: 7, PublicRead: true}
 	// Iterate every non-read action and assert denial with requires_auth.
+	// ActionRepoRead and ActionGitRepoRead both cover public-read clone and
+	// must pass when target.PublicRead=true — skip both in the denial loop.
 	for _, action := range auth.AllActions {
-		if action == auth.ActionRepoRead {
+		if action == auth.ActionRepoRead || action == auth.ActionGitRepoRead {
 			continue
 		}
 		ok, reason := auth.Can(context.Background(), anon, action, target)
@@ -51,6 +53,22 @@ func TestAnonymousDeniedOnNonReadActions(t *testing.T) {
 			t.Errorf("anonymous + %s: got (%v, %q); want (false, %q)",
 				action, ok, reason, auth.ReasonRequiresAuth)
 		}
+	}
+}
+
+func TestAnonymousGitRepoReadAllowedOnPublicRepo(t *testing.T) {
+	anon := auth.Actor{Kind: auth.ActorKindAnonymous}
+	pub := auth.Target{Kind: "repo", RepoID: 7, PublicRead: true}
+	if ok, reason := auth.Can(context.Background(), anon, auth.ActionGitRepoRead, pub); !ok ||
+		reason != auth.ReasonAnonymousPublicRead {
+		t.Fatalf("anonymous + git:repo:read + PublicRead=true: got (%v, %q); want (true, %q)",
+			ok, reason, auth.ReasonAnonymousPublicRead)
+	}
+	priv := auth.Target{Kind: "repo", RepoID: 7, PublicRead: false}
+	if ok, reason := auth.Can(context.Background(), anon, auth.ActionGitRepoRead, priv); ok ||
+		reason != auth.ReasonRequiresAuth {
+		t.Fatalf("anonymous + git:repo:read + PublicRead=false: got (%v, %q); want (false, %q)",
+			ok, reason, auth.ReasonRequiresAuth)
 	}
 }
 

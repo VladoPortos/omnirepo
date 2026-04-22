@@ -59,7 +59,10 @@ func (d Deps) liveRepoSizes(ctx context.Context, ids []int64) map[int64]int64 {
 //   - pypi   : one row per uploaded sdist/wheel
 //   - helm   : one row per chart version
 //   - raw    : one row per stored object
-//   - git    : refs count (branches + tags + HEAD)
+//   - git    : branches + tags only (symbolic HEAD is excluded — it's an
+//     internal bookkeeping ref that never appears in the refs list API or
+//     in `git ls-remote` output, so counting it here would contradict what
+//     users see and break the UI badge).
 //   - s3     : repo-level count is 0 here (buckets carry their own counts)
 const repoItemCountExpr = `(
     CASE r.type
@@ -69,7 +72,7 @@ const repoItemCountExpr = `(
         WHEN 'pypi'   THEN (SELECT COUNT(*) FROM pypi_files WHERE repo_id = r.id)
         WHEN 'helm'   THEN (SELECT COUNT(*) FROM helm_charts WHERE repo_id = r.id)
         WHEN 'raw'    THEN (SELECT COUNT(*) FROM raw_files WHERE repo_id = r.id)
-        WHEN 'git'    THEN (SELECT COUNT(*) FROM git_refs WHERE repo_id = r.id)
+        WHEN 'git'    THEN (SELECT COUNT(*) FROM git_refs WHERE repo_id = r.id AND type <> 'symbolic')
         ELSE 0
     END
 )`

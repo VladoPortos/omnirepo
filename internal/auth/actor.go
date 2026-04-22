@@ -74,9 +74,39 @@ type Actor struct {
 // ctxKey is the unexported context key for Actor.
 type ctxKey struct{}
 
+// loginBoxKey stashes a *LoginBox on the context. Outer middlewares (e.g.
+// StructuredLogger) seed one on entry; auth middlewares update it via
+// WithActor so the log record can carry the authenticated login even
+// though the outer handler never sees the inner r.WithContext chain.
+type loginBoxKey struct{}
+
+// LoginBox is a tiny mutable holder for the authenticated login. The
+// outer StructuredLogger middleware attaches a pointer to one via
+// WithLoginBox; every call to WithActor that follows updates it, so the
+// log record at request exit can read the final login without knowing the
+// inner middleware chain. Anonymous actors leave it empty.
+type LoginBox struct {
+	// Login is the actor's login. Concurrent access is not expected —
+	// the box is scoped to a single request and Go's HTTP server serves
+	// each request on one goroutine.
+	Login string
+}
+
+// WithLoginBox returns ctx annotated with box. StructuredLogger is the
+// sole caller in production; tests may also seed one to assert that the
+// login propagates through their chains.
+func WithLoginBox(ctx context.Context, box *LoginBox) context.Context {
+	return context.WithValue(ctx, loginBoxKey{}, box)
+}
+
 // WithActor returns ctx annotated with a. Middlewares call this after
-// successful authentication.
+// successful authentication. If ctx carries a *LoginBox (attached by the
+// outer StructuredLogger), its Login field is updated so request logs
+// pick up the authenticated login automatically.
 func WithActor(ctx context.Context, a Actor) context.Context {
+	if box, _ := ctx.Value(loginBoxKey{}).(*LoginBox); box != nil {
+		box.Login = a.Login
+	}
 	return context.WithValue(ctx, ctxKey{}, a)
 }
 

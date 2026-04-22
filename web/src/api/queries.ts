@@ -210,6 +210,58 @@ export function useRescanArtifact(
   });
 }
 
+/**
+ * usePromoteDockerTag — POST
+ *   /projects/{src_project}/repos/docker/{src_repo}/promote
+ * Body: { src_tag, dst_project, dst_repo, dst_tag }. Backend route is in
+ * internal/protocol/oci/promote.go; this hook closes F-05.6 (the UI
+ * previously toasted "API not yet connected" despite the route being
+ * fully wired). Invalidates the destination repo's content so the new tag
+ * appears without a manual refresh.
+ */
+export function usePromoteDockerTag(srcProjectName: string, srcRepoName: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (req: {
+      src_tag: string;
+      dst_project: string;
+      dst_repo: string;
+      dst_tag: string;
+    }) =>
+      api.post<{ dst_project: string; dst_repo: string; dst_tag: string; digest: string }>(
+        `/projects/${enc(srcProjectName)}/repos/docker/${enc(srcRepoName)}/promote`,
+        req,
+      ),
+    onSuccess: (_data, req) => {
+      qc.invalidateQueries({ queryKey: ['repo-content', req.dst_project, 'docker', req.dst_repo] });
+      qc.invalidateQueries({ queryKey: ['repo-content', srcProjectName, 'docker', srcRepoName] });
+    },
+  });
+}
+
+/**
+ * useDeleteDockerTag — DELETE
+ *   /projects/{name}/repos/docker/{repo}/tags/{tag}
+ * Session-authed REST shim for OCI v2 tag deletion (F-05.4). The OCI
+ * DELETE /v2/<name>/manifests/<ref> endpoint requires Bearer auth from
+ * /v2/token, which the UI can't perform from a session cookie. This REST
+ * wrapper reuses the same delete logic server-side under the browser's
+ * session credentials. Invalidates repo-content so the row disappears.
+ */
+export function useDeleteDockerTag(projectName: string, repoName: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (tag: string) =>
+      api.del<{ deleted: boolean; digest: string }>(
+        `/projects/${enc(projectName)}/repos/docker/${enc(repoName)}/tags/${enc(tag)}`,
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['repo-content', projectName, 'docker', repoName] });
+      qc.invalidateQueries({ queryKey: ['repo-scans', projectName, 'docker', repoName] });
+    },
+  });
+}
+
 // -- Repo content (listing artifacts uploaded to a repo) --
 
 // useRepoContent returns the entries array for the page. Existing consumers

@@ -509,6 +509,7 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 	pullExternalREST := oci.NewPullExternalREST(ociHandler, upstreamCreds,
 		metadata.NewSyncJobsRepo(db), syncPool.Kick)
 	promoteREST := oci.NewPromoteREST(ociHandler)
+	deleteTagREST := oci.NewDeleteTagREST(ociHandler)
 
 	// 6b.3. Plan 02-12: super-admin GC handler. Registers on the sync
 	// pool under jobs.GCJobKind. The corresponding REST endpoint (POST
@@ -658,10 +659,11 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 			ScanKick: scanPool.Kick,
 			SBOMRoot: filepath.Join(cfg.DataRoot, "sboms"),
 		},
-		// Plan 02-10: OCI pull-external + promote.
+		// Plan 02-10: OCI pull-external + promote + tag delete (F-05.4).
 		OCIActions: &api.OCIActionsDeps{
 			PullExternal: pullExternalREST,
 			Promote:      promoteREST,
+			DeleteTag:    deleteTagREST,
 		},
 		// Plan 02-12: super-admin GC trigger.
 		GCDeps: &api.GCDeps{

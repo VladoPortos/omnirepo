@@ -43,7 +43,14 @@ import {
 } from '@/components/common/ArtifactDetail';
 import { RepoPageLayout } from './RepoPageLayout';
 import { formatBytes, formatDate } from '@/lib/format';
-import { useMe, useRepoContent, useRepoScans, useRescanArtifact } from '@/api/queries';
+import {
+  useMe,
+  useRepoContent,
+  useRepoScans,
+  useRescanArtifact,
+  usePromoteDockerTag,
+  useDeleteDockerTag,
+} from '@/api/queries';
 import { api, ApiError, envelopeFromError, type ApiErrorEnvelope } from '@/api/client';
 import { ErrorEnvelopeRenderer } from '@/components/common/ErrorEnvelope';
 import { CloneImageDialog } from '@/components/CloneImageDialog';
@@ -76,6 +83,23 @@ export function DockerRepoPage({ repo }: DockerRepoPageProps) {
   const [cloneOpen, setCloneOpen] = useState(false);
   const [promoteOpen, setPromoteOpen] = useState(false);
   const [expandedTag, setExpandedTag] = useState<string | null>(null);
+
+  // F-05.6 — Promote dialog form state. Split `dst_project/dst_repo`
+  // from one combined input so the placeholder "project/repo" can keep
+  // its familiar shape while validation and the submit payload stay
+  // typed separately.
+  const [promoteSrcTag, setPromoteSrcTag] = useState('');
+  const [promoteDst, setPromoteDst] = useState(''); // "project/repo"
+  const [promoteDstTag, setPromoteDstTag] = useState('');
+  const [promoteError, setPromoteError] = useState<ApiErrorEnvelope | null>(null);
+  const promoteMut = usePromoteDockerTag(projectName ?? '', repo.name);
+
+  // F-05.4 — Delete-tag confirm state. Stores the tag pending deletion so
+  // we can surface it in the AlertDialog and in toast outcomes.
+  const [tagPendingDelete, setTagPendingDelete] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<ApiErrorEnvelope | null>(null);
+  const deleteTagMut = useDeleteDockerTag(projectName ?? '', repo.name);
+
 
   // EMPTY-03 upload-permission gate. v1.0 ships flat project membership
   // (any member = full access) — if the user can see this authenticated
@@ -306,8 +330,13 @@ export function DockerRepoPage({ repo }: DockerRepoPageProps) {
             className="size-7"
           />
           <button
-            className="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+            className="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-destructive-foreground hover:bg-destructive/10"
             title="Delete tag"
+            onClick={() => {
+              setDeleteError(null);
+              setTagPendingDelete(row.tag);
+            }}
+            disabled={deleteTagMut.isPending}
           >
             <Trash2 className="size-3.5" />
           </button>
@@ -441,8 +470,20 @@ export function DockerRepoPage({ repo }: DockerRepoPageProps) {
         repoId={repo.id}
       />
 
-      {/* Promote/Retag dialog */}
-      <Dialog open={promoteOpen} onOpenChange={setPromoteOpen}>
+      {/* Promote/Retag dialog (F-05.6 — wired to
+          POST /api/v1/projects/{src}/repos/docker/{repo}/promote). */}
+      <Dialog
+        open={promoteOpen}
+        onOpenChange={(open) => {
+          setPromoteOpen(open);
+          if (!open) {
+            setPromoteSrcTag('');
+            setPromoteDst('');
+            setPromoteDstTag('');
+            setPromoteError(null);
+          }
+        }}
+      >
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Promote / Retag Image</DialogTitle>
@@ -452,30 +493,151 @@ export function DockerRepoPage({ repo }: DockerRepoPageProps) {
           </DialogHeader>
           <div className="space-y-3 py-2">
             <div className="space-y-1.5">
-              <Label>Source tag</Label>
-              <Input placeholder="latest" />
+              <Label htmlFor="promote-src-tag">Source tag</Label>
+              <Input
+                id="promote-src-tag"
+                placeholder="latest"
+                value={promoteSrcTag}
+                onChange={(e) => setPromoteSrcTag(e.target.value)}
+                disabled={promoteMut.isPending}
+              />
             </div>
             <div className="space-y-1.5">
-              <Label>Target project/repo</Label>
-              <Input placeholder="production/releases" />
+              <Label htmlFor="promote-dst">Target project/repo</Label>
+              <Input
+                id="promote-dst"
+                placeholder="production/releases"
+                value={promoteDst}
+                onChange={(e) => setPromoteDst(e.target.value)}
+                disabled={promoteMut.isPending}
+              />
             </div>
             <div className="space-y-1.5">
-              <Label>Target tag</Label>
-              <Input placeholder="v1.0.0" />
+              <Label htmlFor="promote-dst-tag">Target tag</Label>
+              <Input
+                id="promote-dst-tag"
+                placeholder="v1.0.0"
+                value={promoteDstTag}
+                onChange={(e) => setPromoteDstTag(e.target.value)}
+                disabled={promoteMut.isPending}
+              />
             </div>
+            {promoteError && (
+              <ErrorEnvelopeRenderer envelope={promoteError} mode="inline" />
+            )}
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setPromoteOpen(false)}>
+            <Button
+              variant="outline"
+              onClick={() => setPromoteOpen(false)}
+              disabled={promoteMut.isPending}
+            >
               Cancel
             </Button>
             <Button
-              onClick={() => {
-                toast.info('Promote requested (API not yet connected).');
-                setPromoteOpen(false);
+              onClick={async () => {
+                setPromoteError(null);
+                const slash = promoteDst.indexOf('/');
+                if (slash < 1 || slash === promoteDst.length - 1) {
+                  setPromoteError({
+                    code: 'ui.local',
+                    message: 'Target must be in the form "project/repo".',
+                    class: 'validation',
+                  });
+                  return;
+                }
+                const dstProject = promoteDst.slice(0, slash);
+                const dstRepo = promoteDst.slice(slash + 1);
+                try {
+                  const resp = await promoteMut.mutateAsync({
+                    src_tag: promoteSrcTag,
+                    dst_project: dstProject,
+                    dst_repo: dstRepo,
+                    dst_tag: promoteDstTag,
+                  });
+                  toast.success(
+                    `Promoted ${promoteSrcTag} → ${resp.dst_project}/${resp.dst_repo}:${resp.dst_tag}`,
+                  );
+                  setPromoteOpen(false);
+                } catch (err) {
+                  setPromoteError(
+                    envelopeFromError(err, 'Promote failed.'),
+                  );
+                }
               }}
+              disabled={
+                promoteMut.isPending ||
+                !promoteSrcTag ||
+                !promoteDst ||
+                !promoteDstTag
+              }
             >
-              <ArrowRightLeft className="mr-1.5 size-4" />
-              Promote
+              {promoteMut.isPending ? (
+                <Loader2 className="mr-1.5 size-4 animate-spin" />
+              ) : (
+                <ArrowRightLeft className="mr-1.5 size-4" />
+              )}
+              {promoteMut.isPending ? 'Promoting…' : 'Promote'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete-tag confirm (F-05.4 — wired to
+          DELETE /api/v1/projects/{name}/repos/docker/{repo}/tags/{tag}). */}
+      <Dialog
+        open={!!tagPendingDelete}
+        onOpenChange={(open) => {
+          if (!open) {
+            setTagPendingDelete(null);
+            setDeleteError(null);
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete tag?</DialogTitle>
+            <DialogDescription>
+              This removes the tag <code className="rounded bg-muted px-1 text-xs">{tagPendingDelete}</code> from{' '}
+              <code className="rounded bg-muted px-1 text-xs">{repo.name}</code>. The underlying manifest stays
+              referenced for other tags; blob reclamation happens on the next GC
+              sweep once its ref-count reaches zero.
+            </DialogDescription>
+          </DialogHeader>
+          {deleteError && (
+            <div className="py-2">
+              <ErrorEnvelopeRenderer envelope={deleteError} mode="inline" />
+            </div>
+          )}
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setTagPendingDelete(null)}
+              disabled={deleteTagMut.isPending}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={async () => {
+                if (!tagPendingDelete) return;
+                setDeleteError(null);
+                try {
+                  await deleteTagMut.mutateAsync(tagPendingDelete);
+                  toast.success(`Tag "${tagPendingDelete}" deleted`);
+                  setTagPendingDelete(null);
+                } catch (err) {
+                  setDeleteError(envelopeFromError(err, 'Delete failed.'));
+                }
+              }}
+              disabled={deleteTagMut.isPending}
+            >
+              {deleteTagMut.isPending ? (
+                <Loader2 className="mr-1.5 size-4 animate-spin" />
+              ) : (
+                <Trash2 className="mr-1.5 size-4" />
+              )}
+              {deleteTagMut.isPending ? 'Deleting…' : 'Delete'}
             </Button>
           </DialogFooter>
         </DialogContent>

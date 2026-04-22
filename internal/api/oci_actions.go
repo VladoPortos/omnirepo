@@ -22,10 +22,11 @@ import (
 type OCIActionsDeps struct {
 	PullExternal *oci.PullExternalREST
 	Promote      *oci.PromoteREST
+	DeleteTag    *oci.DeleteTagREST
 }
 
 // RegisterOCIActionsRoutes mounts the handlers on r. No-op when d is nil.
-// The caller (internal/app.Run) constructs d with both handlers wired.
+// The caller (internal/app.Run) constructs d with all handlers wired.
 func RegisterOCIActionsRoutes(r chi.Router, d *OCIActionsDeps) {
 	if d == nil {
 		return
@@ -35,5 +36,8 @@ func RegisterOCIActionsRoutes(r chi.Router, d *OCIActionsDeps) {
 	}
 	if d.Promote != nil {
 		r.Post("/projects/{name}/repos/docker/{repo}/promote", d.Promote.Handle)
+	}
+	if d.DeleteTag != nil {
+		r.Delete("/projects/{name}/repos/docker/{repo}/tags/{tag}", d.DeleteTag.Handle)
 	}
 }

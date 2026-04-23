@@ -462,7 +462,7 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 	rpmGate := rpm.SeverityGateFn(rawGate)
 	debGate := deb.SeverityGateFn(rawGate)
 
-	helmRegistry, helmMirror := helmDeps{
+	helmRegistry, helmMirror, helmHandler := helmDeps{
 		cfg: cfg, db: db, auditLogger: auditLogger, locks: sharedLocks,
 		severity: helmGate,
 	}.wireHelm(router)
@@ -635,20 +635,20 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 	// NOTE: helmRegistry + helmMirror are wired earlier (above the OCI
 	// handler) so the mirror adapter can feed oci.Deps.HelmMirror. The
 	// other protocol registries do not need that coupling.
-	pypiRegistry := pypiDeps{
+	pypiRegistry, pypiHandler := pypiDeps{
 		cfg: cfg, db: db, auditLogger: auditLogger, locks: sharedLocks,
 		severity: pypiGate,
 	}.wirePyPI(router)
 	defer shutdownPyPIRegistry(context.Background(), pypiRegistry)
 
-	rpmRegistry := rpmDeps{
+	rpmRegistry, rpmHandler := rpmDeps{
 		cfg: cfg, db: db, auditLogger: auditLogger,
 		signingKeys: signingKeysRepo, locks: sharedLocks,
 		severity: rpmGate,
 	}.wireRPM(router)
 	defer shutdownRPMRegistry(context.Background(), rpmRegistry)
 
-	debRegistry := debDeps{
+	debRegistry, debHandler := debDeps{
 		cfg: cfg, db: db, auditLogger: auditLogger,
 		signingKeys: signingKeysRepo, locks: sharedLocks,
 		severity: debGate,
@@ -711,6 +711,16 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 			PullExternal: pullExternalREST,
 			Promote:      promoteREST,
 			DeleteTag:    deleteTagREST,
+		},
+		// F-06.3 / F-07.2 / F-08.1: session-authed row-delete shims.
+		// The four protocol handlers already implement DELETE; these
+		// re-expose them under /api/v1 where SessionOrAPIKey is active
+		// so the browser's session cookie can drive row-level deletes.
+		ProtocolDeletes: &api.ProtocolDeletesDeps{
+			RPM:  rpmHandler,
+			DEB:  debHandler,
+			PyPI: pypiHandler,
+			Helm: helmHandler,
 		},
 		// Plan 02-12: super-admin GC trigger.
 		GCDeps: &api.GCDeps{

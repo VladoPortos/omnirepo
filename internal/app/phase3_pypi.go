@@ -28,7 +28,11 @@ type pypiDeps struct {
 // wirePyPI constructs the PyPI handler + its per-repo regen coalescer
 // registry and mounts /<project>/pypi/<repo>/... routes on router. Returns
 // the registry so app.Run can drain it during graceful shutdown.
-func (d pypiDeps) wirePyPI(router chi.Router) *regen.Registry {
+// wirePyPI mounts /<project>/pypi/<repo>/... and returns the coalescer
+// registry plus the handler. The handler is captured so the /api/v1
+// session-authed row-delete shim (F-07.2) can dispatch to the same
+// delete logic.
+func (d pypiDeps) wirePyPI(router chi.Router) (*regen.Registry, *pypi.Handler) {
 	repoRoot := filepath.Join(d.cfg.DataRoot, "repos")
 
 	reposRepo := metadata.NewReposRepo(d.db)
@@ -70,7 +74,7 @@ func (d pypiDeps) wirePyPI(router chi.Router) *regen.Registry {
 		RepoRoot:     repoRoot,
 	})
 	h.Mount(router)
-	return registry
+	return registry, h
 }
 
 // shutdownPyPIRegistry drains the coalescer registry returned by wirePyPI.

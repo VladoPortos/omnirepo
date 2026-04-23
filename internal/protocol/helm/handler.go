@@ -192,8 +192,15 @@ type resolved struct {
 // resolveRepo validates {project}+{repo} URL params, looks up the repo row,
 // validates the filename (if requireFilename), and returns the resolved
 // triple. Writes a 404/400 to w on miss and returns ok=false.
+//
+// Protocol routes use {project}; the /api/v1 session-authed shim
+// (F-08.1 row-delete) uses {name}. Fall back so one handler serves
+// both mount points.
 func (h *Handler) resolveRepo(w http.ResponseWriter, r *http.Request, requireFilename bool) (resolved, bool) {
 	projectName := chi.URLParam(r, "project")
+	if projectName == "" {
+		projectName = chi.URLParam(r, "name")
+	}
 	repoName := chi.URLParam(r, "repo")
 	filename := chi.URLParam(r, "filename")
 

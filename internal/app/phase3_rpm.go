@@ -29,9 +29,10 @@ type rpmDeps struct {
 }
 
 // wireRPM constructs the RPM handler + its per-repo regen coalescer registry
-// and mounts the routes on router. Returns the registry so app.Run can drain
-// it on shutdown.
-func (d rpmDeps) wireRPM(router chi.Router) *regen.Registry {
+// and mounts the routes on router. Returns the registry (so app.Run can drain
+// it on shutdown) and the handler (so the /api/v1 session-authed row-delete
+// shim — F-06.3 — can dispatch to the same delete logic).
+func (d rpmDeps) wireRPM(router chi.Router) (*regen.Registry, *rpm.Handler) {
 	repoRoot := filepath.Join(d.cfg.DataRoot, "repos")
 
 	reposRepo := metadata.NewReposRepo(d.db)
@@ -77,7 +78,7 @@ func (d rpmDeps) wireRPM(router chi.Router) *regen.Registry {
 		RepoRoot:       repoRoot,
 	})
 	h.Mount(router)
-	return registry
+	return registry, h
 }
 
 // shutdownRPMRegistry drains the registry returned by wireRPM.

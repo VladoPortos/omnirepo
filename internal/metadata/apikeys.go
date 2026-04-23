@@ -234,9 +234,13 @@ func (r *APIKeysRepo) ListByProject(ctx context.Context, projectID int64) ([]API
 
 // TouchLastUsed updates api_keys.last_used_at. Invoked on every successful
 // middleware auth (KEY-08).
+//
+// F-04.3: write via DBTimestampLayout (fixed-width ISO-8601) instead of
+// raw time.Time binding — modernc/sqlite otherwise serializes as Go-%v
+// with variable fractional-second width, breaking lex ordering.
 func (r *APIKeysRepo) TouchLastUsed(ctx context.Context, id int64, t time.Time) error {
 	return r.db.WriteTx(ctx, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `UPDATE api_keys SET last_used_at=? WHERE id=?`, t.UTC(), id)
+		_, err := tx.ExecContext(ctx, `UPDATE api_keys SET last_used_at=? WHERE id=?`, t.UTC().Format(DBTimestampLayout), id)
 		if err != nil {
 			return fmt.Errorf("api_keys: touch last_used %d: %w", id, err)
 		}

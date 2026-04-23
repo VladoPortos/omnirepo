@@ -1,0 +1,6 @@
+-- 031_sessions_apikeys_fixed_width.down.sql (F-04.3)
+--
+-- No-op. The up migration only rewrites the format of existing rows —
+-- it does not add/drop columns. Reverting to the Go-%v format would
+-- intentionally re-introduce the lex-comparison bug this migration
+-- fixes, so a true reversal is refused by omission.

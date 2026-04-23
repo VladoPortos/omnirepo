@@ -83,6 +83,11 @@ type Deps struct {
 	// nil-safe — when nil, the two endpoints are not mounted.
 	OCIActions *OCIActionsDeps
 
+	// ProtocolDeletes (F-06.3 / F-07.2 / F-08.1) surfaces the existing
+	// protocol DELETE handlers under /api/v1 so the session-authed UI can
+	// drive row-level Delete buttons. nil-safe.
+	ProtocolDeletes *ProtocolDeletesDeps
+
 	// GCDeps is the Plan 02-12 admin GC trigger dependency bundle.
 	// nil-safe — when nil, /api/v1/admin/gc is not mounted.
 	GCDeps *GCDeps
@@ -273,6 +278,14 @@ func Mount(r chi.Router, d Deps) {
 			// PromoteREST handlers re-check membership inline (same pattern
 			// as upstream-creds) so they can return distinct 401/403/404.
 			RegisterOCIActionsRoutes(r, d.OCIActions)
+
+			// F-06.3 / F-07.2 / F-08.1: session-authed row-delete shims
+			// for RPM / DEB / PyPI / Helm. Each protocol already has a
+			// working DELETE handler under its native route with
+			// BasicOrAPIKey auth; these re-mount the exact same handler
+			// under /api/v1 (where SessionOrAPIKey is active) so the UI's
+			// row Delete button can dispatch from a session cookie.
+			RegisterProtocolDeleteRoutes(r, d.ProtocolDeletes)
 
 			// Phase 02-12: super-admin garbage collection trigger
 			// (D-37, OPS-06). RequireCan(ActionTriggerGC) gate inside.

@@ -445,3 +445,11 @@ func (h *Handler) deletePackage(w http.ResponseWriter, r *http.Request) {
 	})
 	w.WriteHeader(http.StatusNoContent)
 }
+
+// DeleteREST is the exported wrapper that the session-authed /api/v1 shim
+// mounts at DELETE /api/v1/projects/{name}/repos/pypi/{repo}/packages/{filename}
+// (F-07.2). It dispatches to the same internal logic as the protocol-native
+// DELETE route; resolveRepo handles the {name} → {project} URL-param fallback.
+func (h *Handler) DeleteREST(w http.ResponseWriter, r *http.Request) {
+	h.deletePackage(w, r)
+}

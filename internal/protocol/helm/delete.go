@@ -115,3 +115,11 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusNoContent)
 }
+
+// DeleteREST is the exported wrapper that the session-authed /api/v1 shim
+// mounts at DELETE /api/v1/projects/{name}/repos/helm/{repo}/charts/{filename}
+// (F-08.1). It dispatches to the same internal logic as the protocol-native
+// DELETE route; resolveRepo handles the {name} → {project} URL-param fallback.
+func (h *Handler) DeleteREST(w http.ResponseWriter, r *http.Request) {
+	h.delete(w, r)
+}

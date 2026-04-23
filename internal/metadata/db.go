@@ -19,6 +19,17 @@ import (
 	_ "modernc.org/sqlite" // registers driver "sqlite"
 )
 
+// DBTimestampLayout is the canonical on-disk representation for any
+// timestamp column compared lexicographically — e.g. sessions.expires_at,
+// api_keys.last_used_at. Fixed-width 30-char ISO-8601 with nanosecond
+// precision avoids the Go-%v format variability that broke F-04.2
+// (audit) and surfaced as F-04.3 (sessions, api-keys).
+//
+// Mirrors audit.DBTimestampLayout verbatim; duplicated here because the
+// audit package imports metadata, so we cannot import it back without a
+// cycle. Keep the two values identical.
+const DBTimestampLayout = "2006-01-02T15:04:05.000000000Z07:00"
+
 // DB wraps the reader/writer *sql.DB pair. Callers use DB.Reader for read
 // queries and DB.WriteTx(ctx, fn) for any writes.
 type DB struct {

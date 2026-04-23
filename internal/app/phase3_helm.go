@@ -47,7 +47,7 @@ type wireHelmResult struct {
 // Mirror (plan 07-04 S-03b) is constructed alongside but is NOT wired to
 // the OCI handler here — app.Run calls wireHelmMirror once the OCI CAS is
 // available, producing the adapter that implements oci.HelmMirrorHook.
-func (d helmDeps) wireHelm(router chi.Router) (*regen.Registry, *helm.Mirror) {
+func (d helmDeps) wireHelm(router chi.Router) (*regen.Registry, *helm.Mirror, *helm.Handler) {
 	repoRoot := filepath.Join(d.cfg.DataRoot, "repos")
 
 	reposRepo := metadata.NewReposRepo(d.db)
@@ -94,7 +94,7 @@ func (d helmDeps) wireHelm(router chi.Router) (*regen.Registry, *helm.Mirror) {
 	// handler. The OCI adapter lives in wireHelmMirror below and is
 	// wired from app.Run once the OCI CAS exists.
 	mirror := helm.NewMirror(d.db, helmCharts, reposRepo, pathStore, registry)
-	return registry, mirror
+	return registry, mirror, h
 }
 
 // ociHelmMirrorAdapter implements oci.HelmMirrorHook by opening the chart

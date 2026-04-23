@@ -209,7 +209,13 @@ type resolved struct {
 }
 
 func (h *Handler) resolveRepo(w http.ResponseWriter, r *http.Request) (resolved, bool) {
+	// Protocol routes use {project}; the /api/v1 session-authed shim
+	// (F-06.3 row-delete) uses {name}. Fall back so one handler serves
+	// both mount points.
 	projectName := chi.URLParam(r, "project")
+	if projectName == "" {
+		projectName = chi.URLParam(r, "name")
+	}
 	repoName := chi.URLParam(r, "repo")
 	if projectName == "" || repoName == "" {
 		http.Error(w, "missing project or repo", http.StatusNotFound)

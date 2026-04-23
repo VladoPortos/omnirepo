@@ -28,14 +28,26 @@ type SessionsRepo struct{ db *DB }
 // NewSessionsRepo constructs a repo bound to db.
 func NewSessionsRepo(db *DB) *SessionsRepo { return &SessionsRepo{db: db} }
 
+// fmtTS is the canonical DBTimestampLayout formatter used by every write
+// on the sessions table. F-04.3: modernc/sqlite serializes time.Time via
+// Go's %v format (variable fractional-second width) which breaks lex
+// comparison against CURRENT_TIMESTAMP at sub-second boundaries. Using
+// the fixed-width layout for every write + passing the current-time as
+// an explicit parameter to FindByPrefixSha (instead of CURRENT_TIMESTAMP)
+// keeps the comparison monotonic.
+func fmtTS(t time.Time) string {
+	return t.UTC().Format(DBTimestampLayout)
+}
+
 // Create inserts a session row and returns the generated id.
 func (r *SessionsRepo) Create(ctx context.Context, userID int64, prefix, sha256hex string, issuedAt, expiresAt time.Time) (int64, error) {
 	var id int64
 	err := r.db.WriteTx(ctx, func(tx *sql.Tx) error {
+		issued := fmtTS(issuedAt)
 		res, execErr := tx.ExecContext(ctx, `
 			INSERT INTO sessions(user_id, token_prefix, token_sha256, issued_at, last_seen_at, expires_at)
 			VALUES (?, ?, ?, ?, ?, ?)
-		`, userID, prefix, sha256hex, issuedAt.UTC(), issuedAt.UTC(), expiresAt.UTC())
+		`, userID, prefix, sha256hex, issued, issued, fmtTS(expiresAt))
 		if execErr != nil {
 			return fmt.Errorf("sessions: create user=%d: %w", userID, execErr)
 		}
@@ -51,12 +63,18 @@ func (r *SessionsRepo) Create(ctx context.Context, userID int64, prefix, sha256h
 
 // FindByPrefixSha returns the live session whose (prefix, sha256) pair matches
 // and which has not expired. Returns ErrNotFound on miss.
+//
+// F-04.3: comparing against CURRENT_TIMESTAMP would fail because stored
+// values are now DBTimestampLayout ('T'-separated) while CURRENT_TIMESTAMP
+// is space-separated — lex ordering diverges at position 10. Pass
+// time.Now() formatted with DBTimestampLayout as an explicit bind instead.
 func (r *SessionsRepo) FindByPrefixSha(ctx context.Context, prefix, sha256hex string) (*Session, error) {
+	now := fmtTS(time.Now())
 	row := r.db.Reader.QueryRowContext(ctx, `
 		SELECT id, user_id, token_prefix, token_sha256, issued_at, last_seen_at, expires_at
 		FROM sessions
-		WHERE token_prefix=? AND token_sha256=? AND expires_at>CURRENT_TIMESTAMP
-	`, prefix, sha256hex)
+		WHERE token_prefix=? AND token_sha256=? AND expires_at>?
+	`, prefix, sha256hex, now)
 	var s Session
 	if err := row.Scan(&s.ID, &s.UserID, &s.TokenPrefix, &s.TokenSHA256, &s.IssuedAt, &s.LastSeenAt, &s.ExpiresAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -70,7 +88,7 @@ func (r *SessionsRepo) FindByPrefixSha(ctx context.Context, prefix, sha256hex st
 // TouchLastSeen updates sessions.last_seen_at for session id.
 func (r *SessionsRepo) TouchLastSeen(ctx context.Context, id int64, t time.Time) error {
 	return r.db.WriteTx(ctx, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `UPDATE sessions SET last_seen_at=? WHERE id=?`, t.UTC(), id)
+		_, err := tx.ExecContext(ctx, `UPDATE sessions SET last_seen_at=? WHERE id=?`, fmtTS(t), id)
 		if err != nil {
 			return fmt.Errorf("sessions: touch last seen %d: %w", id, err)
 		}
@@ -86,11 +104,12 @@ func (r *SessionsRepo) TouchLastSeen(ctx context.Context, id int64, t time.Time)
 // cap backwards.
 func (r *SessionsRepo) SlideExpiry(ctx context.Context, id int64, seenAt, newExpires time.Time) error {
 	return r.db.WriteTx(ctx, func(tx *sql.Tx) error {
+		newExp := fmtTS(newExpires)
 		_, err := tx.ExecContext(ctx, `
 			UPDATE sessions
 			SET last_seen_at=?, expires_at=?
 			WHERE id=? AND expires_at < ?
-		`, seenAt.UTC(), newExpires.UTC(), id, newExpires.UTC())
+		`, fmtTS(seenAt), newExp, id, newExp)
 		if err != nil {
 			return fmt.Errorf("sessions: slide expiry %d: %w", id, err)
 		}

@@ -30,7 +30,10 @@ type debDeps struct {
 // wireDEB constructs the DEB handler + its per-repo regen coalescer registry
 // and mounts the routes on router. Returns the registry so app.Run can drain
 // it on shutdown.
-func (d debDeps) wireDEB(router chi.Router) *regen.Registry {
+// wireDEB mounts /<project>/deb/<repo>/... and returns the coalescer registry
+// plus the handler. The handler is captured so the /api/v1 session-authed
+// row-delete shim (F-06.3) can dispatch to the same delete logic.
+func (d debDeps) wireDEB(router chi.Router) (*regen.Registry, *deb.Handler) {
 	repoRoot := filepath.Join(d.cfg.DataRoot, "repos")
 
 	reposRepo := metadata.NewReposRepo(d.db)
@@ -79,7 +82,7 @@ func (d debDeps) wireDEB(router chi.Router) *regen.Registry {
 		RepoRoot:       repoRoot,
 	})
 	h.Mount(router)
-	return registry
+	return registry, h
 }
 
 // shutdownDEBRegistry drains the registry returned by wireDEB.

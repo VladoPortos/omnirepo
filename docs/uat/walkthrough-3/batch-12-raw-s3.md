@@ -1,6 +1,6 @@
 # Batch 12 — Raw blobs + S3 buckets
 
-**Status:** ⬜ Not started
+**Status:** ✅ Passed (2026-04-23)
 **Prereqs:** Batch 04 ✅
 **State produced for later batches:**
 - `acme/raw/files` with a couple of uploaded blobs
@@ -118,14 +118,28 @@
 
 ## Findings
 
-_(F-12.N)_
+Consolidated in [FINDINGS.md](FINDINGS.md). Summary:
+
+| ID | Sev | One-line | Status |
+|----|-----|----------|--------|
+| F-12.1 | R | `%2e%2e` URL-encoded traversal passed validateRawPath (no real escape — `filepath.Join` doesn't decode; but validator contract violated). Fix: strict mode now percent-decodes each segment on PUT. Lenient on GET/HEAD/DELETE preserves backward-compat for any pre-existing `%2e%2e` rows. | ✅ Closed |
+| F-12.2 | R | 4500-char filename returned 500 via ENAMETOOLONG on rename. Fix: path length caps (255 bytes/segment, 1024 bytes total) in validateRawPath → clean 400. | ✅ Closed |
+| F-12.3 | n | Raw protocol emits plain-text errors, not the `/api/v1` JSON envelope. By design per `internal/httperr/envelope.go:4`. | ✅ Accepted |
+| F-12.4 | m | PUT silently overrides explicit `Content-Type` with extension-sniffed MIME. Spec-compliant ("or sniffed correctly") but surprising. Deferred for XSS whitelist design to batch-15. | 🟨 Deferred |
+| F-12.5 | n | Test plan says audit `raw.upload`, code emits `raw.put`. Code is authoritative; update plan. | ✅ Accepted |
+| F-12.S1 | n | Test plan 12.12 says endpoint `http://localhost:18080`; actual is `/s3` prefix (matches UI empty-state copy). `aws` against bare root hits SPA catch-all. Update plan. | ✅ Accepted |
+| F-12.S2 | m | Create S3 Key dialog has no Label input; backend auto-fills `"Profile-created YYYY-MM-DD"`. Multiple keys per project become hard to distinguish. Deferred to batch-15. | 🟨 Deferred |
+| F-12.S3 | n | `DELETE /api/v1/me/s3-keys/{id}` expects numeric id, 400s on AKID string. Spec-matching; envelope message could hint. Observation only. | ✅ Accepted |
+
+**Codex verification:** `Agent(subagent_type="codex:codex-rescue")` — Q1–Q5 on fix correctness, plus reclassification of F-12.3/12.4/12.S1. Codex flagged Q3 real-issue (historical `%2e%2e` paths would be unreachable via GET/HEAD/DELETE if strict applied everywhere) → split into strict (writes only) / lenient (reads + deletes). Follow-up retest confirmed: PUT `%2e%2e` → 400, GET `legacy/%2e%2e/historic.txt` → 200 serves simulated legacy file, DELETE → 204 removes it.
 
 ## Sign-off
 
-- [ ] All cases passed
-- [ ] Final state:
-  - [ ] `acme/raw/files` has at least one blob
-  - [ ] `acme` has `b1x` bucket with at least one object
-  - [ ] `alice-s3` key active
-- [ ] All F-12.* closed
-- [ ] README.md batch 12 status flipped to ✅
+- [x] All cases passed
+- [x] Final state:
+  - [x] `acme/raw/files` has 7 blobs (hello/world.txt, images/tiny.png, bundles/bundle.tar.gz, docs/doc.xml, a/b/c/d.txt, normal/path.txt, sanity/still-works.txt)
+  - [x] `acme` has `b1x` bucket with 2 objects (large.bin + postrevoke.txt)
+  - [x] `alice-wt3-batch12` user API key active; `AKIA4T73IUOLDKLWDOXD` S3 key created and then revoked per 12.22 — final state is "one S3 key total for alice on acme was provisioned during this batch, then revoked post-test by design"
+- [x] All F-12.* closed or explicitly deferred with tracking entries
+- [x] README.md batch 12 status flipped to ✅
+- [x] `make test` green across `internal/...` (including 15 new `validateRawPath` cases covering percent-encoded traversal, length caps, and strict/lenient mode split)

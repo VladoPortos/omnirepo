@@ -7,6 +7,14 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export default defineConfig({
   testDir: './e2e',
   fullyParallel: false,
+  // v1.5 Phase 1 / plan 01-04 — the DEV-only `POST /api/v1/admin/_reset`
+  // endpoint invoked by every beforeEach wipes the sessions table
+  // globally. With the default (adaptive) worker count, two tests running
+  // in different workers can reset concurrently, each wiping the other's
+  // live session → `resetServerState failed: 401 auth.unauthenticated`.
+  // Pin to 1 worker so the reset contract is race-free. Combined with
+  // fullyParallel: false this gives fully serial execution.
+  workers: 1,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
   reporter: 'html',

@@ -93,7 +93,7 @@ test.describe('Profile page', () => {
     }
   });
 
-  test('password change from profile', async ({ page }) => {
+  test('password change from profile', async ({ page, request }) => {
     await page.goto('/profile');
     await page.waitForTimeout(2000);
 
@@ -124,5 +124,29 @@ test.describe('Profile page', () => {
     await expect(updateBtn).toBeEnabled({ timeout: 5_000 });
     await updateBtn.click();
     await page.waitForTimeout(500);
+
+    // Restore admin password so subsequent specs' adminLoginAPI works.
+    // resetServerState wipes sessions/non-admin users but intentionally
+    // preserves the super-admin row (is_super_admin=1) — including any
+    // password changes it made. Without this restore step, every spec
+    // after profile fails adminLoginAPI with "Invalid login or password."
+    // Issue surfaced during v1.5 Phase 1 plan 01-04 validation runs.
+    // handleChangePassword invalidates all other sessions for the user, so
+    // the request fixture's beforeEach session is now dead — re-login with
+    // the new password before asking for the restore change.
+    const reLogin = await request.post('/api/v1/auth/login', {
+      data: { login: 'admin', password: 'ProfileTest1!' },
+    });
+    expect(
+      reLogin.ok(),
+      `re-login with new pw failed: ${reLogin.status()} ${await reLogin.text()}`,
+    ).toBeTruthy();
+    const restore = await request.post('/api/v1/auth/change-password', {
+      data: { current: 'ProfileTest1!', new: 'AdminTest1!' },
+    });
+    expect(
+      restore.ok(),
+      `restore admin password failed: ${restore.status()} ${await restore.text()}`,
+    ).toBeTruthy();
   });
 });

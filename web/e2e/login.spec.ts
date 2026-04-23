@@ -17,9 +17,15 @@ import {
   ADMIN_PASSWORD,
   adminLoginAPI,
   createForcedChangeUser,
+  resetServerState,
 } from './helpers/auth';
 
 test.describe('Login page', () => {
+  test.beforeEach(async ({ request }) => {
+    await adminLoginAPI(request);
+    await resetServerState(request);
+  });
+
   test('displays sign-in form with OmniRepo branding', async ({ page }) => {
     await page.goto('/login');
     await expect(page.getByText('Sign in to OmniRepo')).toBeVisible();

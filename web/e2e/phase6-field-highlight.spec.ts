@@ -25,11 +25,12 @@
  */
 
 import { test, expect } from '@playwright/test';
-import { ADMIN_PASSWORD, adminLoginAPI, adminLoginUI } from './helpers/auth';
+import { ADMIN_PASSWORD, adminLoginAPI, adminLoginUI, resetServerState } from './helpers/auth';
 
 test.describe('Phase 6 ERR-06 field highlight', () => {
   test.beforeEach(async ({ request }) => {
     await adminLoginAPI(request);
+    await resetServerState(request);
   });
 
   test('change-password: mismatching new + confirm highlights #confirm-password', async ({

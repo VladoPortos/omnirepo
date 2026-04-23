@@ -27,7 +27,7 @@
  */
 
 import { test, expect } from '@playwright/test';
-import { adminLoginAPI, adminLoginUI } from './helpers/auth';
+import { adminLoginAPI, adminLoginUI, resetServerState } from './helpers/auth';
 
 const PROJECT = 'snippet-copy-test';
 const REPO = 'snippet-copy-hub';
@@ -43,8 +43,11 @@ test.use({
 test.describe('SnippetPanel copy-to-clipboard (SNIPPET-09 / S-10)', () => {
   test.beforeEach(async ({ request }) => {
     await adminLoginAPI(request);
+    await resetServerState(request);
     // Idempotent fixture setup: create project + docker repo if missing.
     // 409 (already exists) is expected on reruns and treated as success.
+    // Runs AFTER resetServerState so the seed survives into the test body
+    // (reset wipes every non-bootstrap row).
     await request.post('/api/v1/projects', {
       data: { name: PROJECT },
     });

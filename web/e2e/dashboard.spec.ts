@@ -7,10 +7,16 @@
  */
 
 import { test, expect } from '@playwright/test';
-import { adminLoginUI } from './helpers/auth';
+import { adminLoginAPI, adminLoginUI, resetServerState } from './helpers/auth';
 
 test.describe('Dashboard page', () => {
-  test.beforeEach(async ({ page }) => {
+  test.beforeEach(async ({ page, request }) => {
+    // Reset server state BEFORE the UI login — reset wipes every session
+    // row so the page cookie would be invalidated anyway. adminLoginAPI
+    // seeds the request context so resetServerState has a super-admin
+    // cookie to present.
+    await adminLoginAPI(request);
+    await resetServerState(request);
     await adminLoginUI(page);
     await expect(page).not.toHaveURL(/\/change-password/, { timeout: 10_000 });
   });

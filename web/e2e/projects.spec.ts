@@ -11,11 +11,12 @@
  */
 
 import { test, expect } from '@playwright/test';
-import { adminLoginAPI, adminLoginUI } from './helpers/auth';
+import { adminLoginAPI, adminLoginUI, resetServerState } from './helpers/auth';
 
 test.describe('Projects page', () => {
   test.beforeEach(async ({ request }) => {
     await adminLoginAPI(request);
+    await resetServerState(request);
   });
 
   test('golden path: create project -> list -> view', async ({ page }) => {

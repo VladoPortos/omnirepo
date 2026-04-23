@@ -306,6 +306,7 @@ func Mount(r chi.Router, d Deps) {
 			d.mountAdminDBHealth(r) // Phase 10 DBHEALTH-01..07
 			d.mountAdminTLSHistory(r)
 			d.mountAdminUsersFull(r)
+			d.mountAdminReset(r) // v1.5 Phase 1 — DEV-only test state reset. No-op in prod.
 
 			// Phase 03 Plan 06: SYNC-05 sync REST endpoint. Mounted inside
 			// the SessionOrAPIKey subtree so the ActorResolver finds the

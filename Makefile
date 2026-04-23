@@ -6,6 +6,7 @@ BENCH_WORKERS ?= 16
 .PHONY: dev build test test-airgap test-perf test-live-oci test-live-git bench-sqlite bench-git-fixture bench-git \
 	vendor lint seed lint-protocol-redaction \
 	check-contrast lint-typography lint-spacing-carveout lint-axe-devdep \
+	lint-reset-beforeEach \
 	lint-docs \
 	conformance conformance-oci conformance-rpm conformance-deb \
 	conformance-pypi conformance-helm conformance-s3 conformance-git \
@@ -15,7 +16,7 @@ BENCH_WORKERS ?= 16
 build:
 	$(GO) build -mod=vendor -o bin/omnirepo ./cmd/omnirepo
 
-test: lint-protocol-redaction check-contrast lint-typography lint-spacing-carveout lint-axe-devdep lint-docs
+test: lint-protocol-redaction check-contrast lint-typography lint-spacing-carveout lint-axe-devdep lint-reset-beforeEach lint-docs
 	$(GO) test -mod=vendor ./...
 	$(MAKE) test-airgap
 
@@ -260,6 +261,34 @@ lint-typography:
 		exit 1; \
 	fi; \
 	echo "lint-typography: clean"
+
+# lint-reset-beforeEach (v1.5 Phase 1 / E2E-02): every Playwright spec under
+# web/e2e/ MUST call resetServerState in its beforeEach after adminLoginAPI
+# so each test starts from identical DB state in a shared DATA_ROOT webServer.
+# visual-foundation.spec.ts is the one principled opt-out (hits the dev-only
+# status-badge story page, no auth required, reset would add no value and
+# risks breaking snapshot timing). The grep-gate skips it by filename.
+#
+# Rationale: plan 01-01 added POST /api/v1/admin/_reset, plan 01-02 added the
+# resetServerState() helper, plan 01-03 rolled it out across 25 specs. This
+# gate prevents future specs from silently regressing to the shared-state
+# flake pattern that F-15.4 (v1.4) exposed.
+lint-reset-beforeEach:
+	@set -e; \
+	echo "lint-reset-beforeEach: every e2e spec must call resetServerState in beforeEach (except visual-foundation.spec.ts)"; \
+	missing=$$(for f in web/e2e/*.spec.ts; do \
+		[ "$$(basename $$f)" = "visual-foundation.spec.ts" ] && continue; \
+		if ! grep -q 'resetServerState' "$$f"; then echo "  $$f"; fi; \
+	done); \
+	if [ -n "$$missing" ]; then \
+		echo "ERROR: the following e2e specs do not invoke resetServerState:"; \
+		echo "$$missing"; \
+		echo ""; \
+		echo "Add \`await resetServerState(request)\` to each spec's test.beforeEach after adminLoginAPI."; \
+		echo "Import from './helpers/auth'. See .planning/phases/01-e2e-state-isolation/ for context."; \
+		exit 1; \
+	fi; \
+	echo "lint-reset-beforeEach: clean"
 
 # lint-spacing-carveout (VISUAL-05): the 6px copy-button inset (right-1.5 /
 # top-1.5) was originally grandfathered to the v1.0 SnippetPanel and

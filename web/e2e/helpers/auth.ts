@@ -82,3 +82,40 @@ export async function createForcedChangeUser(
   expect(body.one_time_password, 'server returned no one_time_password').toBeTruthy();
   return body.one_time_password;
 }
+
+/**
+ * Wipe per-test DB state via the DEV-gated
+ * POST /api/v1/admin/_reset endpoint and re-authenticate the caller.
+ *
+ * Preconditions: `request` must already carry a super-admin session
+ * cookie (call `adminLoginAPI` first). The reset wipes the super-admin's
+ * own session, so this helper re-runs `adminLoginAPI(request)` before
+ * returning — the caller's next REST/UI action receives a live cookie.
+ *
+ * The endpoint only exists when the backend was started with
+ * OMNIREPO_DEV=1. playwright.config.ts sets that env var for the
+ * managed webServer. A 404 here indicates a prod-flavoured server;
+ * fail loud.
+ *
+ * Canonical beforeEach pattern:
+ *
+ *   test.beforeEach(async ({ request }) => {
+ *     await adminLoginAPI(request);
+ *     await resetServerState(request);
+ *   });
+ *
+ * Specs that need a non-admin actor (Phase 2 viewer tests, etc.) do:
+ *   adminLoginAPI → resetServerState → createForcedChangeUser → loginAs(user)
+ */
+export async function resetServerState(
+  request: APIRequestContext,
+): Promise<void> {
+  const resp = await request.post('/api/v1/admin/_reset');
+  expect(
+    resp.ok(),
+    `resetServerState failed: ${resp.status()} ${await resp.text()}`,
+  ).toBeTruthy();
+  // Super-admin's session was wiped; re-authenticate so the next call
+  // inherits a live cookie.
+  await adminLoginAPI(request);
+}

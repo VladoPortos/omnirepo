@@ -187,8 +187,15 @@ test.describe('Docker clone modal (Phase 8 / plan 08-03)', () => {
       timeout: 3000,
     });
 
-    // Close dismisses the modal.
-    await page.getByRole('button', { name: 'Close', exact: true }).click();
+    // Close dismisses the modal. Two Close buttons exist — the shadcn
+    // Dialog primitive's auto-rendered X (sr-only "Close") plus the
+    // footer's explicit Close button on the success surface. Scope to
+    // the dialog + pick the last match so we hit the visible footer one.
+    await page
+      .getByRole('dialog', { name: 'Clone external image' })
+      .getByRole('button', { name: 'Close', exact: true })
+      .last()
+      .click();
     await expect(
       page.getByRole('dialog', { name: 'Clone external image' }),
     ).not.toBeVisible();

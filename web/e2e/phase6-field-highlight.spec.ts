@@ -25,31 +25,11 @@
  */
 
 import { test, expect } from '@playwright/test';
-
-const ADMIN_PASSWORD = 'AdminTest1!';
-
-async function loginAndForcePasswordChangeIfNeeded(
-  request: import('@playwright/test').APIRequestContext,
-) {
-  const resp = await request.post('/api/v1/auth/login', {
-    data: { login: 'admin', password: 'AdminTest1!' },
-  });
-  if (resp.ok()) {
-    const body = await resp.json();
-    if (body.must_change_password) {
-      await request.post('/api/v1/auth/change-password', {
-        data: { current: 'AdminTest1!', new: ADMIN_PASSWORD },
-      });
-      await request.post('/api/v1/auth/login', {
-        data: { login: 'admin', password: ADMIN_PASSWORD },
-      });
-    }
-  }
-}
+import { ADMIN_PASSWORD, adminLoginAPI, adminLoginUI } from './helpers/auth';
 
 test.describe('Phase 6 ERR-06 field highlight', () => {
   test.beforeEach(async ({ request }) => {
-    await loginAndForcePasswordChangeIfNeeded(request);
+    await adminLoginAPI(request);
   });
 
   test('change-password: mismatching new + confirm highlights #confirm-password', async ({
@@ -94,19 +74,12 @@ test.describe('Phase 6 ERR-06 field highlight', () => {
 
   test('create-project: server-side bad name highlights #project-name', async ({
     page,
-    request,
   }) => {
-    // Ensure we have membership + auth cookie.
-    const loginResp = await request.post('/api/v1/auth/login', {
-      data: { login: 'admin', password: ADMIN_PASSWORD },
-    });
-    if (!loginResp.ok()) {
-      test.skip();
-      return;
-    }
-
+    // UI login seeds the BrowserContext cookie jar (request's jar is
+    // separate). Without this, /projects?create=1 redirects to /login
+    // and the auto-opened create dialog never renders.
+    await adminLoginUI(page);
     await page.goto('/projects?create=1');
-    // Dialog auto-opens on ?create=1. Wait for the name input.
     const nameInput = page.locator('input#project-name');
     await expect(nameInput).toBeVisible({ timeout: 5000 });
 

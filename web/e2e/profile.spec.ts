@@ -118,13 +118,20 @@ test.describe('Profile page', () => {
       return;
     }
 
-    // Look for password change section
-    const changePwBtn = page.getByRole('button', {
-      name: /change.*password|update.*password/i,
+    // ProfilePage renders a disabled "Update Password" button until
+    // current / new / confirm are populated + new matches confirm.
+    // Pre-F-15.4 the spec just clicked the button blindly — it timed
+    // out because the disabled-gate never cleared. Fill the form so
+    // the click has something to submit.
+    await page.fill('input#current-pw', 'AdminTest1!');
+    await page.fill('input#new-pw', 'ProfileTest1!');
+    await page.fill('input#confirm-pw', 'ProfileTest1!');
+    const updateBtn = page.getByRole('button', {
+      name: /update password/i,
+      exact: false,
     });
-    if ((await changePwBtn.count()) > 0) {
-      await changePwBtn.first().click();
-      await page.waitForTimeout(500);
-    }
+    await expect(updateBtn).toBeEnabled({ timeout: 5_000 });
+    await updateBtn.click();
+    await page.waitForTimeout(500);
   });
 });

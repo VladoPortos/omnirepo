@@ -200,10 +200,15 @@ test.describe('Mirror config settings card (Phase 8 / plan 08-04)', () => {
 
     await expect(page.getByText('Mirror config')).toBeVisible();
 
-    // The URL input inside MirrorConfigSection is readonly.
-    const urlInput = page.locator('input#mirror-url');
-    await expect(urlInput).toBeVisible();
-    await expect(urlInput).toHaveAttribute('readonly', '');
+    // Post-v1.4 (F-15.4): /settings no longer renders the Upstream URL
+    // as an Input — the readonly guarantee is implemented by showing
+    // the value as a CopyInline <code> block with "URL is immutable"
+    // helper text. MirrorConfigSection is invoked with hideUrl=true
+    // in RepoSettingsTab so the duplicate Input never renders.
+    await expect(page.getByText('Upstream URL')).toBeVisible();
+    await expect(
+      page.getByText('URL is immutable — delete and recreate the repo to change.'),
+    ).toBeVisible();
   });
 
   test('non-mirror repo: Mirror config card is absent', async ({
@@ -219,9 +224,19 @@ test.describe('Mirror config settings card (Phase 8 / plan 08-04)', () => {
     await uiLoginAdmin(page);
     await page.goto(`/projects/${project}/deb/${repo}/settings`);
 
-    // Mirror config title should NOT be present.
-    await expect(page.getByText('Mirror config')).toHaveCount(0);
-    // And the fallback "not a mirror" message IS present.
-    await expect(page.getByText('not a mirror')).toBeVisible();
+    // Wait for the settings tab content to render — the "not a mirror"
+    // fallback message is inside a Card that only mounts after the
+    // /api/repo fetch resolves.
+    await expect(page.getByText('not a mirror')).toBeVisible({
+      timeout: 10_000,
+    });
+    // The CardTitle "Mirror config" only renders on the is_mirror
+    // branch — scope to the CardTitle slot rather than any occurrence
+    // of the text.
+    await expect(
+      page
+        .locator('[data-slot="card-title"]')
+        .filter({ hasText: /^Mirror config$/ }),
+    ).toHaveCount(0);
   });
 });

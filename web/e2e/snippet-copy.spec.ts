@@ -27,6 +27,7 @@
  */
 
 import { test, expect } from '@playwright/test';
+import { adminLoginAPI, adminLoginUI } from './helpers/auth';
 
 const PROJECT = 'snippet-copy-test';
 const REPO = 'snippet-copy-hub';
@@ -41,23 +42,7 @@ test.use({
 
 test.describe('SnippetPanel copy-to-clipboard (SNIPPET-09 / S-10)', () => {
   test.beforeEach(async ({ request }) => {
-    // Admin login bootstrap — copied verbatim from error-envelope.spec.ts
-    // to preserve the first-login `must_change_password` handling.
-    const resp = await request.post('/api/v1/auth/login', {
-      data: { login: 'admin', password: 'AdminTest1!' },
-    });
-    if (resp.ok()) {
-      const body = await resp.json();
-      if (body.must_change_password) {
-        await request.post('/api/v1/auth/change-password', {
-          data: { current: 'AdminTest1!', new: 'AdminTest1!' },
-        });
-        await request.post('/api/v1/auth/login', {
-          data: { login: 'admin', password: 'AdminTest1!' },
-        });
-      }
-    }
-
+    await adminLoginAPI(request);
     // Idempotent fixture setup: create project + docker repo if missing.
     // 409 (already exists) is expected on reruns and treated as success.
     await request.post('/api/v1/projects', {
@@ -71,8 +56,10 @@ test.describe('SnippetPanel copy-to-clipboard (SNIPPET-09 / S-10)', () => {
   test('copies first snippet and announces "Copied to clipboard" via aria-live', async ({
     page,
   }) => {
-    // Drive the SPA to the docker repo detail page where SnippetPanel
-    // renders its "CLI Snippets" trigger in the header action row.
+    // UI login first so the page's browser context carries the session
+    // cookie (request's cookie jar is separate from page's). Without
+    // this, page.goto lands on /login and the trigger never renders.
+    await adminLoginUI(page);
     await page.goto(`/projects/${PROJECT}/docker/${REPO}`);
 
     // Open the Sheet via the trigger button (aria-labeled "CLI Snippets").

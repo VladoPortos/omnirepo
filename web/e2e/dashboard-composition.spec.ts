@@ -69,11 +69,12 @@ async function uiLogin(page: Page, login: string, password: string): Promise<voi
   // If a must_change_password wall is hit (fresh non-admin user), drive it.
   await page.waitForLoadState('networkidle');
   if (page.url().includes('/change-password')) {
-    // fill the change-password form — selectors follow the existing
-    // ChangePasswordPage conventions used across other specs.
-    await page.fill('input#current', password);
-    await page.fill('input#new_password', password + 'x');
-    await page.fill('input#new_password_confirm', password + 'x');
+    // ChangePasswordPage uses hyphenated IDs (current-password /
+    // new-password / confirm-password) — underscored locators were
+    // stale pre-F-15.4.
+    await page.fill('input#current-password', password);
+    await page.fill('input#new-password', password + 'x');
+    await page.fill('input#confirm-password', password + 'x');
     await page.click('button[type="submit"]');
     await page.waitForLoadState('networkidle');
     // Log back in with the new password so cookies settle.
@@ -109,9 +110,14 @@ test.describe('DashboardPage Composition row (Phase 7 D-01..D-06)', () => {
     ).toBeVisible({ timeout: 10_000 });
 
     // Wait for at least one admin-only card to confirm is_super_admin
-    // gating evaluated true and the Composition row hydrated.
+    // gating evaluated true and the Composition row hydrated. CardTitle
+    // renders as <div data-slot="card-title"> (not a heading role) in
+    // the current shadcn/ui revision — same selector the title loop
+    // below uses.
     await expect(
-      page.getByRole('heading', { name: 'Background Jobs', exact: true }),
+      page
+        .locator('[data-slot="card-title"]')
+        .filter({ hasText: /^Background Jobs$/ }),
     ).toBeVisible({ timeout: 10_000 });
 
     for (const title of [...USER_VISIBLE_TITLES, ...ADMIN_ONLY_TITLES]) {

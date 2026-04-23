@@ -5,6 +5,8 @@
 package api
 
 import (
+	"context"
+	"database/sql"
 	"fmt"
 	"net/http"
 	"strings"
@@ -21,6 +23,58 @@ import (
 func (d Deps) mountAdminAudit(r chi.Router) {
 	r.With(authmw.RequireCan(auth.ActionTriggerGC)). // reuse super-admin gate
 								Get("/admin/audit", d.handleListAudit)
+	r.With(authmw.RequireCan(auth.ActionTriggerGC)).
+		Get("/admin/audit/facets", d.handleAuditFacets)
+}
+
+// handleAuditFacets returns the distinct event_kind / target_kind / outcome
+// values currently present in audit_log. Powers the Audit Log filter
+// dropdowns without drifting from reality — hand-coded option lists used
+// to ship bastardised names (e.g. "user.create" vs canonical
+// "user.created") that returned zero rows on exact-match filtering.
+func (d Deps) handleAuditFacets(w http.ResponseWriter, r *http.Request) {
+	kinds, err := distinctColumn(r.Context(), d.DB.Reader, "event_kind")
+	if err != nil {
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
+		return
+	}
+	targets, err := distinctColumn(r.Context(), d.DB.Reader, "target_kind")
+	if err != nil {
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
+		return
+	}
+	outcomes, err := distinctColumn(r.Context(), d.DB.Reader, "outcome")
+	if err != nil {
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"kinds":        kinds,
+		"target_kinds": targets,
+		"outcomes":     outcomes,
+	})
+}
+
+func distinctColumn(ctx context.Context, db interface {
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+}, column string) ([]string, error) {
+	// column is caller-controlled (one of three literal identifiers above).
+	// Not user input — interpolated directly.
+	q := fmt.Sprintf("SELECT DISTINCT %s FROM audit_log WHERE %s != '' ORDER BY %s", column, column, column)
+	rows, err := db.QueryContext(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	out := []string{}
+	for rows.Next() {
+		var v string
+		if err := rows.Scan(&v); err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
 }
 
 // auditRow mirrors a single audit_log row for scanning.

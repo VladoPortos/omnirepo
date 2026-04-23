@@ -33,38 +33,22 @@ import { createAvatar } from '@dicebear/core';
 import { initials } from '@dicebear/collection';
 import { Avatar, AvatarImage, AvatarFallback } from '@/components/ui/avatar';
 
-// ---------- Constants ----------
-
-const ACTION_TYPES = [
-  'auth.login',
-  'auth.logout',
-  'user.create',
-  'user.update',
-  'user.delete',
-  'project.create',
-  'project.delete',
-  'repo.create',
-  'repo.delete',
-  'repo.wipe',
-  'scan.trigger',
-  'admin.gc',
-  'admin.maintenance',
-  'admin.tls.upload',
-  'admin.trivy.upload',
-  'admin.trivy.pull',
-] as const;
-
-const TARGET_KINDS = [
-  'user',
-  'project',
-  'repo',
-  'scan',
-  'system',
-] as const;
-
-const OUTCOMES = ['success', 'failure'] as const;
-
 // ---------- Hooks ----------
+
+interface AuditFacets {
+  kinds: string[];
+  target_kinds: string[];
+  outcomes: string[];
+}
+
+function useAuditFacets() {
+  return useQuery({
+    queryKey: ['admin', 'audit', 'facets'],
+    queryFn: () => api.get<AuditFacets>('/admin/audit/facets'),
+    staleTime: 60_000,
+  });
+}
+
 
 interface AuditFilters {
   actor?: string;
@@ -115,6 +99,10 @@ export default function AuditPage() {
   const [filters, setFilters] = useState<AuditFilters>({});
   const [showFilters, setShowFilters] = useState(false);
   const { data, isLoading } = useAuditLog(filters);
+  const { data: facets } = useAuditFacets();
+  const actionOptions = facets?.kinds ?? [];
+  const targetKindOptions = facets?.target_kinds ?? [];
+  const outcomeOptions = facets?.outcomes ?? [];
 
   const [selectedEvent, setSelectedEvent] = useState<AuditEvent | null>(null);
 
@@ -318,7 +306,7 @@ export default function AuditPage() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="">All actions</SelectItem>
-                  {ACTION_TYPES.map((a) => (
+                  {actionOptions.map((a) => (
                     <SelectItem key={a} value={a}>
                       {a}
                     </SelectItem>
@@ -337,7 +325,7 @@ export default function AuditPage() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="">All targets</SelectItem>
-                  {TARGET_KINDS.map((t) => (
+                  {targetKindOptions.map((t) => (
                     <SelectItem key={t} value={t}>
                       {t}
                     </SelectItem>
@@ -356,7 +344,7 @@ export default function AuditPage() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="">All outcomes</SelectItem>
-                  {OUTCOMES.map((o) => (
+                  {outcomeOptions.map((o) => (
                     <SelectItem key={o} value={o}>
                       {o}
                     </SelectItem>

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -1002,8 +1003,17 @@ func readFormFile(r *http.Request, field string) ([]byte, error) {
 
 // recordAudit best-effort records e. Audit failures are NOT surfaced to the
 // client — the state change has already happened and audit durability is a
-// secondary concern (OQ-9).
+// secondary concern (OQ-9). Recovers panics so a broken audit sink cannot
+// swallow the HTTP response that's about to be written (Codex batch-14 Q4).
 func (d Deps) recordAudit(r *http.Request, e audit.Event) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			slog.Error("audit.record.panic",
+				"event_kind", string(e.Kind),
+				"panic", fmt.Sprintf("%v", rec),
+			)
+		}
+	}()
 	if d.Audit == nil {
 		return
 	}

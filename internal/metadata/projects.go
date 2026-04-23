@@ -86,12 +86,64 @@ func (r *ProjectsRepo) Restore(ctx context.Context, id int64) error {
 	})
 }
 
-// HardDelete removes the row permanently. Callers are responsible for
-// cascading FK cleanup (repos, members, audit_log references remain
-// intact via ON DELETE SET NULL on audit_log.actor_user_id only; other
-// FKs rely on upstream callers ensuring no orphan children).
+// ErrNameTaken is returned by RestoreIfNameFree when the project's name
+// is already claimed by a live row. Callers map this to HTTP 409.
+var ErrNameTaken = errors.New("projects: name already taken by a live project")
+
+// RestoreIfNameFree restores the soft-deleted project by id inside a
+// single writer tx, refusing the UPDATE (ErrNameTaken) when the name
+// has since been claimed by another live project. Closes the TOCTOU
+// window between a pre-check and the UPDATE (Codex batch-14 Q2).
+func (r *ProjectsRepo) RestoreIfNameFree(ctx context.Context, id int64) error {
+	return r.db.WriteTx(ctx, func(tx *sql.Tx) error {
+		var name string
+		if err := tx.QueryRowContext(ctx, `SELECT name FROM projects WHERE id=?`, id).Scan(&name); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return ErrNotFound
+			}
+			return fmt.Errorf("projects: restore lookup %d: %w", id, err)
+		}
+		var n int
+		if err := tx.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM projects WHERE name=? AND deleted_at IS NULL AND id!=?`,
+			name, id,
+		).Scan(&n); err != nil {
+			return fmt.Errorf("projects: restore count live %s: %w", name, err)
+		}
+		if n > 0 {
+			return ErrNameTaken
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE projects SET deleted_at=NULL WHERE id=?`, id); err != nil {
+			return fmt.Errorf("projects: restore %d: %w", id, err)
+		}
+		return nil
+	})
+}
+
+// ErrProjectHasRepos is returned by HardDelete when the project still
+// has repos (live OR soft-deleted). Purging would otherwise silently
+// cascade via ON DELETE CASCADE (schema 027) and take down repo rows,
+// artifact rows, and leave on-disk content orphaned (Codex batch-14 Q3).
+// Admins must purge repos explicitly before a project can be hard-
+// deleted.
+var ErrProjectHasRepos = errors.New("projects: project still has repos")
+
+// HardDelete removes the project row + member links permanently. Refuses
+// to proceed when any repo row (live or soft-deleted) still references
+// this project: cascading through repos into docker_blobs / rpm_packages
+// / raw_files / etc. is out of scope for a UI purge and would leave
+// on-disk artifact trees orphaned.
 func (r *ProjectsRepo) HardDelete(ctx context.Context, id int64) error {
 	return r.db.WriteTx(ctx, func(tx *sql.Tx) error {
+		var repoCount int
+		if err := tx.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM repos WHERE project_id=?`, id,
+		).Scan(&repoCount); err != nil {
+			return fmt.Errorf("projects: hard delete count repos %d: %w", id, err)
+		}
+		if repoCount > 0 {
+			return ErrProjectHasRepos
+		}
 		if _, err := tx.ExecContext(ctx, `DELETE FROM project_members WHERE project_id=?`, id); err != nil {
 			return fmt.Errorf("projects: hard delete members %d: %w", id, err)
 		}

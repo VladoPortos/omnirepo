@@ -6,6 +6,7 @@
 package api
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -20,6 +21,7 @@ import (
 	"github.com/dxc-internal/omnirepo/internal/audit"
 	"github.com/dxc-internal/omnirepo/internal/auth"
 	authmw "github.com/dxc-internal/omnirepo/internal/auth/middleware"
+	"github.com/dxc-internal/omnirepo/internal/metadata"
 )
 
 // projectTrashPrefix IDs soft-deleted projects in the Trash list. Picked to
@@ -171,34 +173,21 @@ func (d Deps) handleRestoreTrash(w http.ResponseWriter, r *http.Request) {
 			writeJSONError(w, r, http.StatusBadRequest, ErrValidationFailed, "invalid project id")
 			return
 		}
-		// Look up soft-deleted project so we know the name. Refuse the
-		// restore if a live project has since taken the same name —
-		// projects.name is UNIQUE WHERE deleted_at IS NULL and SQLite
-		// would reject the UPDATE with a transient-looking 500. Return
-		// 409 with an actionable message instead.
-		deleted, findErr := d.Projects.ListDeleted(r.Context())
-		if findErr != nil {
-			writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
-			return
-		}
-		var pname string
-		for _, p := range deleted {
-			if p.ID == pid {
-				pname = p.Name
-				break
+		// RestoreIfNameFree does the name-collision check + UPDATE in
+		// one tx (Codex batch-14 Q2) so no TOCTOU window exists between
+		// a separate FindByName and the UPDATE — projects.name is
+		// UNIQUE WHERE deleted_at IS NULL and a parallel create of the
+		// same name would otherwise turn into a transient 500.
+		if err := d.Projects.RestoreIfNameFree(r.Context(), pid); err != nil {
+			switch {
+			case errors.Is(err, metadata.ErrNotFound):
+				writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "project not in trash")
+			case errors.Is(err, metadata.ErrNameTaken):
+				writeJSONError(w, r, http.StatusConflict, ErrConflict,
+					"a live project with this name already exists; purge the trashed copy or rename the live project first")
+			default:
+				writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "restore failed: "+err.Error())
 			}
-		}
-		if pname == "" {
-			writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "project not in trash")
-			return
-		}
-		if _, live := d.Projects.FindByName(r.Context(), pname); live == nil {
-			writeJSONError(w, r, http.StatusConflict, ErrConflict,
-				"a live project with name "+pname+" already exists; purge the trashed copy or rename the live project first")
-			return
-		}
-		if err := d.Projects.Restore(r.Context(), pid); err != nil {
-			writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "restore failed: "+err.Error())
 			return
 		}
 		if a, ok := auth.ActorFromContext(r.Context()); ok {
@@ -335,7 +324,12 @@ func (d Deps) handlePurgeTrash(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := d.Projects.HardDelete(r.Context(), pid); err != nil {
-			writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "purge failed")
+			if errors.Is(err, metadata.ErrProjectHasRepos) {
+				writeJSONError(w, r, http.StatusConflict, ErrConflict,
+					"project still has repos; purge each repo first (cascading delete is not supported from the Trash UI)")
+				return
+			}
+			writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "purge failed: "+err.Error())
 			return
 		}
 		if a, ok := auth.ActorFromContext(r.Context()); ok {

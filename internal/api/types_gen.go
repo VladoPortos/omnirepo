@@ -473,6 +473,36 @@ type ChangePasswordRequest struct {
 	New     string `json:"new"`
 }
 
+// DBHealth defines model for DBHealth.
+type DBHealth struct {
+	CanRunNow bool `json:"can_run_now"`
+	Driver    struct {
+		Label   *string            `json:"label,omitempty"`
+		Pragmas *map[string]string `json:"pragmas,omitempty"`
+	} `json:"driver"`
+	Integrity struct {
+		CheckedAt  *time.Time `json:"checked_at,omitempty"`
+		DurationMs *int64     `json:"duration_ms,omitempty"`
+		Status     string     `json:"status"`
+	} `json:"integrity"`
+	JournalMode     string  `json:"journal_mode"`
+	LastManualRunAt *string `json:"last_manual_run_at,omitempty"`
+	NextAvailableAt *string `json:"next_available_at,omitempty"`
+	Running         bool    `json:"running"`
+	Size            struct {
+		FreelistBytes *int64 `json:"freelist_bytes,omitempty"`
+		FreelistCount *int64 `json:"freelist_count,omitempty"`
+		LogicalBytes  *int64 `json:"logical_bytes,omitempty"`
+		OnDiskBytes   *int64 `json:"on_disk_bytes,omitempty"`
+		PageCount     *int64 `json:"page_count,omitempty"`
+		PageSize      *int64 `json:"page_size,omitempty"`
+	} `json:"size"`
+	Wal struct {
+		Bytes         *int64 `json:"bytes,omitempty"`
+		WarnOverBytes *int64 `json:"warn_over_bytes,omitempty"`
+	} `json:"wal"`
+}
+
 // DashboardResponse defines model for DashboardResponse.
 type DashboardResponse struct {
 	RecentActivity      *[]AuditEvent           `json:"recent_activity,omitempty"`
@@ -600,6 +630,15 @@ type GitTreeEntry struct {
 
 // GitTreeEntryType defines model for GitTreeEntry.Type.
 type GitTreeEntryType string
+
+// JobsSummary defines model for JobsSummary.
+type JobsSummary struct {
+	FailedLast24h   int        `json:"failed_last_24h"`
+	LastCompletedAt *time.Time `json:"last_completed_at"`
+	LastFailedAt    *time.Time `json:"last_failed_at"`
+	Queued          int        `json:"queued"`
+	Running         int        `json:"running"`
+}
 
 // LoginRequest defines model for LoginRequest.
 type LoginRequest struct {
@@ -763,6 +802,23 @@ type Scan struct {
 
 // ScanStatus defines model for Scan.Status.
 type ScanStatus string
+
+// ScanRow defines model for ScanRow.
+type ScanRow struct {
+	ArtifactId          string     `json:"artifact_id"`
+	ArtifactKind        string     `json:"artifact_kind"`
+	Attempts            int64      `json:"attempts"`
+	CreatedAt           time.Time  `json:"created_at"`
+	FinishedAt          *time.Time `json:"finished_at,omitempty"`
+	Id                  int64      `json:"id"`
+	LastError           *string    `json:"last_error,omitempty"`
+	RepoId              int64      `json:"repo_id"`
+	SbomPath            *string    `json:"sbom_path,omitempty"`
+	SeveritySummaryJson *string    `json:"severity_summary_json,omitempty"`
+	StartedAt           *time.Time `json:"started_at,omitempty"`
+	Status              string     `json:"status"`
+	TrivyDbVersion      *string    `json:"trivy_db_version,omitempty"`
+}
 
 // SearchResponse defines model for SearchResponse.
 type SearchResponse struct {
@@ -967,6 +1023,19 @@ type Vulnerability struct {
 
 // VulnerabilitySeverity defines model for Vulnerability.Severity.
 type VulnerabilitySeverity string
+
+// VulnerabilityRow defines model for VulnerabilityRow.
+type VulnerabilityRow struct {
+	CveId          string  `json:"cve_id"`
+	Description    *string `json:"description,omitempty"`
+	FixedVersion   string  `json:"fixed_version"`
+	Id             int64   `json:"id"`
+	PackageName    string  `json:"package_name"`
+	PackageVersion string  `json:"package_version"`
+	ScanId         int64   `json:"scan_id"`
+	Severity       string  `json:"severity"`
+	Title          string  `json:"title"`
+}
 
 // WipeResponse defines model for WipeResponse.
 type WipeResponse struct {

@@ -31,7 +31,12 @@ func TestDNFInstallFromOmniRepo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read fixture %s: %v", rpmPath, err)
 	}
-	pkgURL := fmt.Sprintf("http://%s/%s/rpm/%s/packages/sample.rpm", fx.host, fx.project, fx.repo)
+	// F-06.1 (wt3 batch 06) makes the RPM PUT handler enforce
+	// filename == "<name>-<version>-<release>.<arch>.rpm" (canonical
+	// NEVRA) to prevent metadata/disk drift. sample.rpm is the
+	// centos-release-7 fixture; use its NEVRA as the upload filename.
+	const canonicalName = "centos-release-7-2.1511.el7.centos.2.10.x86_64.rpm"
+	pkgURL := fmt.Sprintf("http://%s/%s/rpm/%s/packages/%s", fx.host, fx.project, fx.repo, canonicalName)
 	resp := fx.putWithAuth(t, pkgURL, body)
 	if resp.StatusCode/100 != 2 {
 		t.Fatalf("PUT %s: status=%d", pkgURL, resp.StatusCode)

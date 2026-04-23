@@ -1044,6 +1044,89 @@ components:
         status:
           type: string
 
+    # -- Scans --
+    ScanRow:
+      type: object
+      required: [id, repo_id, artifact_kind, artifact_id, status, attempts, created_at]
+      properties:
+        id: { type: integer, format: int64 }
+        repo_id: { type: integer, format: int64 }
+        artifact_kind: { type: string }
+        artifact_id: { type: string }
+        status: { type: string }
+        attempts: { type: integer, format: int64 }
+        last_error: { type: string }
+        severity_summary_json: { type: string }
+        sbom_path: { type: string }
+        trivy_db_version: { type: string }
+        created_at: { type: string, format: date-time }
+        started_at: { type: string, format: date-time, nullable: true }
+        finished_at: { type: string, format: date-time, nullable: true }
+
+    VulnerabilityRow:
+      type: object
+      required: [id, scan_id, cve_id, severity, package_name, package_version, fixed_version, title]
+      properties:
+        id: { type: integer, format: int64 }
+        scan_id: { type: integer, format: int64 }
+        cve_id: { type: string }
+        severity: { type: string }
+        package_name: { type: string }
+        package_version: { type: string }
+        fixed_version: { type: string }
+        title: { type: string }
+        description: { type: string }
+
+    # -- Admin: jobs summary (LOCKED D-06) --
+    JobsSummary:
+      type: object
+      required: [running, queued, failed_last_24h, last_completed_at, last_failed_at]
+      properties:
+        running: { type: integer }
+        queued: { type: integer }
+        failed_last_24h: { type: integer }
+        last_completed_at: { type: string, format: date-time, nullable: true }
+        last_failed_at: { type: string, format: date-time, nullable: true }
+
+    # -- Admin: db health (LOCKED per plan 10-02) --
+    DBHealth:
+      type: object
+      required: [integrity, size, wal, journal_mode, driver, running, can_run_now]
+      properties:
+        integrity:
+          type: object
+          required: [status]
+          properties:
+            status: { type: string }
+            checked_at: { type: string, format: date-time }
+            duration_ms: { type: integer, format: int64 }
+        size:
+          type: object
+          properties:
+            on_disk_bytes: { type: integer, format: int64 }
+            logical_bytes: { type: integer, format: int64 }
+            page_count: { type: integer, format: int64 }
+            page_size: { type: integer, format: int64 }
+            freelist_count: { type: integer, format: int64 }
+            freelist_bytes: { type: integer, format: int64 }
+        wal:
+          type: object
+          properties:
+            bytes: { type: integer, format: int64 }
+            warn_over_bytes: { type: integer, format: int64 }
+        journal_mode: { type: string }
+        driver:
+          type: object
+          properties:
+            label: { type: string }
+            pragmas:
+              type: object
+              additionalProperties: { type: string }
+        running: { type: boolean }
+        can_run_now: { type: boolean }
+        next_available_at: { type: string }
+        last_manual_run_at: { type: string }
+
   responses:
     ValidationError:
       description: Request failed validation
@@ -2967,5 +3050,229 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/DashboardResponse'
+        default:
+          $ref: '#/components/responses/ValidationError'
+
+  /dashboard/storage:
+    get:
+      operationId: getStorageDetail
+      tags: [dashboard]
+      summary: Per-repo storage breakdown for the Storage drill-down modal.
+      responses:
+        "200":
+          description: Storage breakdown
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        default:
+          $ref: '#/components/responses/ValidationError'
+
+  # ============================== MAINTENANCE ============================
+  /maintenance/status:
+    get:
+      operationId: getMaintenanceStatus
+      tags: [maintenance]
+      summary: Public read-only maintenance banner state for the SPA shell.
+      responses:
+        "200":
+          description: Maintenance state (enabled, message, since)
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  # ============================== SCANS (by id) ==========================
+  /scans/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
+    get:
+      operationId: getScanByID
+      tags: [scans]
+      summary: Fetch a scan by primary key (cross-repo).
+      responses:
+        "200":
+          description: Scan record
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScanRow'
+        "404":
+          $ref: '#/components/responses/NotFoundError'
+        default:
+          $ref: '#/components/responses/ValidationError'
+
+  /scans/{id}/vulnerabilities:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
+    get:
+      operationId: listScanVulnerabilities
+      tags: [scans]
+      summary: Vulnerabilities recorded against a scan.
+      responses:
+        "200":
+          description: Vulnerability rows
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/VulnerabilityRow'
+        "404":
+          $ref: '#/components/responses/NotFoundError'
+        default:
+          $ref: '#/components/responses/ValidationError'
+
+  /scans/{id}/sbom:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
+    get:
+      operationId: getScanSBOM
+      tags: [scans]
+      summary: CycloneDX SBOM for a scan (if emitted).
+      responses:
+        "200":
+          description: CycloneDX SBOM document
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "404":
+          $ref: '#/components/responses/NotFoundError'
+        default:
+          $ref: '#/components/responses/ValidationError'
+
+  # ============================== ADMIN (added in WT3) ===================
+  /admin/audit/facets:
+    get:
+      operationId: getAuditFacets
+      tags: [admin]
+      summary: DISTINCT event_kinds + actor_logins for the Audit filter dropdowns.
+      responses:
+        "200":
+          description: Facet sets
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        default:
+          $ref: '#/components/responses/ValidationError'
+
+  /admin/db/health:
+    get:
+      operationId: getDBHealth
+      tags: [admin]
+      summary: SQLite health snapshot — integrity status, size, WAL, driver.
+      responses:
+        "200":
+          description: DB health snapshot
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DBHealth'
+        "401":
+          $ref: '#/components/responses/PermissionError'
+        "403":
+          $ref: '#/components/responses/PermissionError'
+        default:
+          $ref: '#/components/responses/ValidationError'
+
+  /admin/db/health/check:
+    post:
+      operationId: triggerDBHealthCheck
+      tags: [admin]
+      summary: Enqueue a manual PRAGMA integrity_check. Rate-limited 1/hour.
+      responses:
+        "202":
+          description: Integrity check enqueued
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "409":
+          description: A check is already running
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorEnvelope'
+        "429":
+          description: Rate-limited (retry_after_seconds in details)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorEnvelope'
+        default:
+          $ref: '#/components/responses/ValidationError'
+
+  /admin/jobs/summary:
+    get:
+      operationId: getJobsSummary
+      tags: [admin]
+      summary: Background jobs card — running/queued counts and last-failure.
+      responses:
+        "200":
+          description: Jobs summary (LOCKED D-06 shape)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobsSummary'
+        "401":
+          $ref: '#/components/responses/PermissionError'
+        "403":
+          $ref: '#/components/responses/PermissionError'
+        default:
+          $ref: '#/components/responses/ValidationError'
+
+  /admin/trivy/db/history:
+    get:
+      operationId: listTrivyDBHistory
+      tags: [admin]
+      summary: Rotation history for the Trivy vulnerability DB.
+      responses:
+        "200":
+          description: History rows
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  additionalProperties: true
+        default:
+          $ref: '#/components/responses/ValidationError'
+
+  /admin/trivy/db/pull/status:
+    get:
+      operationId: getTrivyDBPullStatus
+      tags: [admin]
+      summary: Current progress of an in-flight Trivy DB pull.
+      responses:
+        "200":
+          description: Pull status
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
         default:
           $ref: '#/components/responses/ValidationError'

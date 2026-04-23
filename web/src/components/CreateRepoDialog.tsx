@@ -274,7 +274,7 @@ export function CreateRepoDialog({
               <p className="rounded-md border border-muted bg-muted/40 p-3 text-xs text-muted-foreground">
                 Docker repos do not support repo-level mirroring. To pull
                 an image from an external registry into this repo, use{' '}
-                <span className="font-medium">Pull external image</span>{' '}
+                <span className="font-semibold">Pull external image</span>{' '}
                 on the repo detail page after creating it.
               </p>
             )}

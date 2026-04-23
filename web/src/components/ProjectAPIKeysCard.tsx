@@ -110,7 +110,7 @@ export function ProjectAPIKeysCard({ projectName }: ProjectAPIKeysCardProps) {
                 className="flex items-center justify-between gap-3 text-sm"
               >
                 <div className="min-w-0">
-                  <p className="truncate font-medium">{k.name}</p>
+                  <p className="truncate font-semibold">{k.name}</p>
                   <p className="text-xs text-muted-foreground">
                     <code className="font-mono">{k.prefix}…</code> · created{' '}
                     {formatDate(k.created_at)}

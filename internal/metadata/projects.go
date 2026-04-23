@@ -75,6 +75,60 @@ func (r *ProjectsRepo) SoftDelete(ctx context.Context, id int64) error {
 	})
 }
 
+// Restore clears deleted_at for id. Idempotent for live rows.
+func (r *ProjectsRepo) Restore(ctx context.Context, id int64) error {
+	return r.db.WriteTx(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `UPDATE projects SET deleted_at=NULL WHERE id=?`, id)
+		if err != nil {
+			return fmt.Errorf("projects: restore %d: %w", id, err)
+		}
+		return nil
+	})
+}
+
+// HardDelete removes the row permanently. Callers are responsible for
+// cascading FK cleanup (repos, members, audit_log references remain
+// intact via ON DELETE SET NULL on audit_log.actor_user_id only; other
+// FKs rely on upstream callers ensuring no orphan children).
+func (r *ProjectsRepo) HardDelete(ctx context.Context, id int64) error {
+	return r.db.WriteTx(ctx, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM project_members WHERE project_id=?`, id); err != nil {
+			return fmt.Errorf("projects: hard delete members %d: %w", id, err)
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM projects WHERE id=?`, id); err != nil {
+			return fmt.Errorf("projects: hard delete %d: %w", id, err)
+		}
+		return nil
+	})
+}
+
+// ListDeleted returns every soft-deleted project, newest first. Powers
+// the admin Trash page project-restore flow.
+func (r *ProjectsRepo) ListDeleted(ctx context.Context) ([]Project, error) {
+	rows, err := r.db.Reader.QueryContext(ctx, `
+		SELECT id, name, description_md, created_at, deleted_at
+		FROM projects WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("projects: list deleted: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []Project
+	for rows.Next() {
+		var p Project
+		var deleted sql.NullTime
+		if err := rows.Scan(&p.ID, &p.Name, &p.DescriptionMD, &p.CreatedAt, &deleted); err != nil {
+			return nil, fmt.Errorf("projects: scan: %w", err)
+		}
+		if deleted.Valid {
+			t := deleted.Time
+			p.DeletedAt = &t
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
 // ListAll returns every live project, ordered by name.
 func (r *ProjectsRepo) ListAll(ctx context.Context) ([]Project, error) {
 	rows, err := r.db.Reader.QueryContext(ctx, `

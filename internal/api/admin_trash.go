@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -20,6 +21,12 @@ import (
 	"github.com/dxc-internal/omnirepo/internal/auth"
 	authmw "github.com/dxc-internal/omnirepo/internal/auth/middleware"
 )
+
+// projectTrashPrefix IDs soft-deleted projects in the Trash list. Picked to
+// sort (lexicographically) AFTER filesystem entries whose IDs start with a
+// unix timestamp digit. F-14.6: projects live in the DB, not the filesystem
+// trash, so we surface them with a distinct id namespace.
+const projectTrashPrefix = "project-"
 
 // mountAdminTrash installs trash management endpoints on r.
 func (d Deps) mountAdminTrash(r chi.Router) {
@@ -81,6 +88,33 @@ func (d Deps) handleListTrash(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	// Database-sourced trash: soft-deleted projects (F-14.6). Projects
+	// are soft-deleted by handleDeleteProject via Projects.SoftDelete
+	// but never entered the filesystem Trash, so they were previously
+	// unreachable from the Trash UI.
+	if d.Projects != nil {
+		deletedProjects, listErr := d.Projects.ListDeleted(r.Context())
+		if listErr == nil {
+			for _, p := range deletedProjects {
+				var deletedAt string
+				remaining := "—"
+				if p.DeletedAt != nil {
+					deletedAt = p.DeletedAt.UTC().Format(time.RFC3339)
+					remaining = formatRetention(defaultTrashRetention - now.Sub(*p.DeletedAt))
+				}
+				items = append(items, trashItem{
+					ID:                 projectTrashPrefix + strconv.FormatInt(p.ID, 10),
+					Kind:               "project",
+					Name:               p.Name,
+					OriginalLocation:   "/projects/" + p.Name,
+					DeletedAt:          deletedAt,
+					RetentionCountdown: remaining,
+					Source:             "database",
+				})
+			}
+		}
+	}
+
 	// Sort by deleted_at descending.
 	sort.Slice(items, func(i, j int) bool {
 		return items[i].DeletedAt > items[j].DeletedAt
@@ -124,6 +158,58 @@ func (d Deps) handleRestoreTrash(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	if id == "" {
 		writeJSONError(w, r, http.StatusBadRequest, ErrValidationFailed, "missing id")
+		return
+	}
+	// Database-sourced trash: soft-deleted project. F-14.6.
+	if strings.HasPrefix(id, projectTrashPrefix) {
+		if d.Projects == nil {
+			writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "projects not configured")
+			return
+		}
+		pid, convErr := strconv.ParseInt(strings.TrimPrefix(id, projectTrashPrefix), 10, 64)
+		if convErr != nil {
+			writeJSONError(w, r, http.StatusBadRequest, ErrValidationFailed, "invalid project id")
+			return
+		}
+		// Look up soft-deleted project so we know the name. Refuse the
+		// restore if a live project has since taken the same name —
+		// projects.name is UNIQUE WHERE deleted_at IS NULL and SQLite
+		// would reject the UPDATE with a transient-looking 500. Return
+		// 409 with an actionable message instead.
+		deleted, findErr := d.Projects.ListDeleted(r.Context())
+		if findErr != nil {
+			writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
+			return
+		}
+		var pname string
+		for _, p := range deleted {
+			if p.ID == pid {
+				pname = p.Name
+				break
+			}
+		}
+		if pname == "" {
+			writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "project not in trash")
+			return
+		}
+		if _, live := d.Projects.FindByName(r.Context(), pname); live == nil {
+			writeJSONError(w, r, http.StatusConflict, ErrConflict,
+				"a live project with name "+pname+" already exists; purge the trashed copy or rename the live project first")
+			return
+		}
+		if err := d.Projects.Restore(r.Context(), pid); err != nil {
+			writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "restore failed: "+err.Error())
+			return
+		}
+		if a, ok := auth.ActorFromContext(r.Context()); ok {
+			uid := a.ID
+			d.recordAudit(r, audit.Event{
+				Kind: audit.EvtProjectUpdated, ActorUserID: &uid,
+				TargetKind: "project", TargetID: strconv.FormatInt(pid, 10),
+				Outcome: "restored",
+			})
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 		return
 	}
 	if d.Trash == nil {
@@ -197,8 +283,16 @@ func (d Deps) handleRestoreTrash(w http.ResponseWriter, r *http.Request) {
 			childPath = filepath.Join(e.Path, firstContent)
 			dstPath = filepath.Join(d.DataRoot, "repos", firstContent)
 		}
+		// F-14.6 follow-up: detect destination collision up-front so the
+		// user gets an actionable 409 instead of a generic transient 500
+		// when a live item has since taken the same on-disk path.
+		if _, statErr := os.Stat(dstPath); statErr == nil {
+			writeJSONError(w, r, http.StatusConflict, ErrConflict,
+				"destination "+dstPath+" already exists; purge the live item or rename it before restoring")
+			return
+		}
 		if err := d.Trash.Restore(r.Context(), childPath, dstPath); err != nil {
-			writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "restore failed")
+			writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "restore failed: "+err.Error())
 			return
 		}
 
@@ -227,6 +321,32 @@ func (d Deps) handlePurgeTrash(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	if id == "" {
 		writeJSONError(w, r, http.StatusBadRequest, ErrValidationFailed, "missing id")
+		return
+	}
+	// Database-sourced trash: hard-delete project row. F-14.6.
+	if strings.HasPrefix(id, projectTrashPrefix) {
+		if d.Projects == nil {
+			writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "projects not configured")
+			return
+		}
+		pid, convErr := strconv.ParseInt(strings.TrimPrefix(id, projectTrashPrefix), 10, 64)
+		if convErr != nil {
+			writeJSONError(w, r, http.StatusBadRequest, ErrValidationFailed, "invalid project id")
+			return
+		}
+		if err := d.Projects.HardDelete(r.Context(), pid); err != nil {
+			writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "purge failed")
+			return
+		}
+		if a, ok := auth.ActorFromContext(r.Context()); ok {
+			uid := a.ID
+			d.recordAudit(r, audit.Event{
+				Kind: audit.EvtProjectDeleted, ActorUserID: &uid,
+				TargetKind: "project", TargetID: strconv.FormatInt(pid, 10),
+				Outcome: "purged",
+			})
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 		return
 	}
 	if d.Trash == nil {

@@ -26,6 +26,7 @@ package api
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -57,6 +58,21 @@ func (d Deps) mountAdminReset(r chi.Router) {
 // so the ApiErrorEnvelope contract is preserved (no naked stdlib error
 // helpers — grep-enforced).
 func (d Deps) handleAdminReset(w http.ResponseWriter, r *http.Request) {
+	// Destructive wipe with no DB audit trail (audit_log is itself wiped;
+	// see header comment). Emit a structured slog line BEFORE the wipe so
+	// an operator grepping server logs can reconstruct "who reset what
+	// when" even after the next reset removes whatever trace the first
+	// reset tried to leave.
+	actorID := int64(0)
+	actorLogin := ""
+	if a, ok := auth.ActorFromContext(r.Context()); ok {
+		actorID = a.ID
+		if u, err := d.Users.FindByID(r.Context(), a.ID); err == nil {
+			actorLogin = u.Login
+		}
+	}
+	slog.WarnContext(r.Context(), "admin.reset.triggered",
+		"actor_id", actorID, "actor_login", actorLogin)
 	if err := d.DB.Reset(r.Context()); err != nil {
 		httperr.Write(w, r, httperr.Internal("e2e.reset.failed", err))
 		return

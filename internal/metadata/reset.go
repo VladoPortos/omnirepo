@@ -66,13 +66,24 @@ var resetTables = []string{
 	// not a schema op).
 }
 
-// preservedSettingsKeys are the bootstrap-secret rows that MUST survive a
-// Reset. app.Run materialises in-memory handles for these at boot
-// (BootEnsureDockerJWTSecret / BootEnsureAEADKey); wiping the rows strands
-// any code path that reloads them.
+// preservedSettingsKeys are the rows that MUST survive a Reset.
+//
+//  1. Bootstrap secrets — app.Run materialises in-memory handles for
+//     these at boot (BootEnsureDockerJWTSecret / BootEnsureAEADKey); wiping
+//     the rows strands any code path that reloads them.
+//  2. Boot integrity-check metadata — RunBootIntegrityCheck writes these
+//     exactly once at startup (Phase 10 DBHEALTH-06, D-16). The DBHealth
+//     UI card reads them to render the "last checked" status; wiping
+//     leaves the card blank until the next server restart or manual
+//     integrity run. The dev-only /admin/_reset contract is "wipe per-test
+//     state" — boot metadata isn't per-test state, so preserve it.
 var preservedSettingsKeys = []any{
 	"docker_token_hmac_secret",
 	"upstream_creds_aead_key",
+	"db.integrity_check.status",
+	"db.integrity_check.checked_at",
+	"db.integrity_check.duration_ms",
+	"db.integrity_check.last_manual_at",
 }
 
 // Reset wipes every non-super-admin table in a single writer transaction,

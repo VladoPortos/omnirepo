@@ -171,6 +171,12 @@ func Mount(r chi.Router, d Deps) {
 	})
 
 	r.Route("/api/v1", func(r chi.Router) {
+		// F-15.2: chi's default 405 emits a zero-byte body, which breaks
+		// the envelope contract every other /api/v1 error path honours.
+		// Only wired under /api/v1 so protocol subrouters (OCI /v2, Git,
+		// raw PUT, etc.) keep their native shapes.
+		r.MethodNotAllowed(handleMethodNotAllowed)
+
 		// Unauthenticated: first-run setup probes + super-admin create.
 		// These must sit outside SessionOrAPIKey because there is no user
 		// to authenticate as until the setup endpoint has been called.

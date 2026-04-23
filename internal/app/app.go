@@ -181,10 +181,33 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 	}
 
 	// 3. Bootstrap (if path configured and file exists).
+	//
+	// F-15.5 (WT3 batch 15): API-created RPM/DEB repos trigger eager
+	// signing-key generation via the composedRepoCreateHook further
+	// down; bootstrap.json-created repos historically skipped that, so
+	// conformance tests seeded via bootstrap.json saw `GET /public-key.asc
+	// → 404`. Extend the bootstrap hook to call the same
+	// CreateRPMRepoHook / CreateDEBRepoHook helpers so both paths land
+	// the same signing-key + apt_suites state. Init the AEAD + signing-
+	// keys repo early (before bootstrap) since BootEnsureAEADKey needs
+	// its own writer tx — calling it from inside the bootstrap tx would
+	// deadlock against modernc/sqlite's single-writer lock.
 	if cfg.Bootstrap.Path != "" {
 		if _, serr := os.Stat(cfg.Bootstrap.Path); serr == nil {
+			bootAead, aerr := BootEnsureAEADKey(ctx, db, metadata.NewSettingsRepo(db))
+			if aerr != nil {
+				return fmt.Errorf("app.Run: bootstrap aead: %w", aerr)
+			}
+			bootSigningKeys := metadata.NewSigningKeysRepo(db, bootAead)
+			bootAptSuites := metadata.NewAptSuitesRepo(db)
 			gitRefsRepoBoot := metadata.NewGitRefsRepo(db)
 			bootHook := func(ctx context.Context, tx *sql.Tx, repoID int64, repoType, projectName, repoName string) (map[string]any, error) {
+				if _, err := CreateRPMRepoHook(ctx, tx, repoID, repoType, projectName, repoName, bootSigningKeys, cfg.Signing.GPGKeyBits, nil); err != nil {
+					return nil, err
+				}
+				if err := CreateDEBRepoHook(ctx, tx, repoID, repoType, bootAptSuites); err != nil {
+					return nil, err
+				}
 				if repoType == "git" {
 					repoPath := filepath.Join(cfg.DataRoot, "repos", projectName, "git", repoName+".git")
 					if err := gitpkg.InitBare(repoPath, "main"); err != nil {

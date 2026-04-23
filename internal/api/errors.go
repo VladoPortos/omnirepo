@@ -72,6 +72,15 @@ func writeJSONError(w http.ResponseWriter, r *http.Request, status int, code, de
 	httperr.Write(w, r, e)
 }
 
+// handleMethodNotAllowed is the /api/v1 router's MethodNotAllowed hook
+// (F-15.2). Without it, chi's default handler emits a zero-byte body,
+// which breaks the envelope contract every other /api/v1 error path
+// honours. Scoped to /api/v1 so protocol routers (OCI /v2, Git smart
+// HTTP, raw PUT, etc.) keep their native error shapes.
+func handleMethodNotAllowed(w http.ResponseWriter, r *http.Request) {
+	writeJSONError(w, r, http.StatusMethodNotAllowed, ErrValidationFailed, "Method not allowed for this route.")
+}
+
 // defaultMessageForStatus returns a developer-authored, user-facing
 // sentence for a given HTTP status. Used by writeJSONError when the
 // handler passed "" as detail — typically in 500 paths where the

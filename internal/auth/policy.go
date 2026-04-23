@@ -45,6 +45,11 @@ const (
 	// in step 2; everyone else gets ReasonSuperAdminRequired).
 	ActionTriggerGC Action = "gc.trigger"
 
+	// v1.5 Phase 1: DEV-only test state reset (CONTEXT D-02 belt-and-suspenders).
+	// Super-admin only; also gated by OMNIREPO_DEV=1 at mount time in
+	// internal/api/admin_reset.go so production binaries never expose the route.
+	ActionResetState Action = "e2e.reset"
+
 	// Phase 03 Plan 01 — per-protocol package uploads (D-34). These collapse
 	// to the same member-or-super-admin branch as ActionRepoRead/Write: a
 	// caller may upload RPM/APT/PyPI/Helm artifacts only if they're a member
@@ -105,6 +110,7 @@ var AllActions = []Action{
 	ActionManageUpstreamCreds,
 	ActionRepoRead,
 	ActionTriggerGC,
+	ActionResetState, // v1.5 Phase 1
 	ActionRPMUpload,
 	ActionDEBUpload,
 	ActionPyPIUpload,
@@ -248,7 +254,8 @@ func Can(ctx context.Context, actor Actor, action Action, target Target) (bool, 
 	case ActionCreateUser, ActionDeleteUser,
 		ActionCreateProject, ActionDeleteProject,
 		ActionUploadTLSCert, ActionApplyBootstrap,
-		ActionTriggerGC:
+		ActionTriggerGC,
+		ActionResetState:
 		// Only super-admins; we already returned above if actor was one.
 		return false, ReasonSuperAdminRequired
 

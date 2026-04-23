@@ -35,7 +35,13 @@ import {
 import { RepoPageLayout } from './RepoPageLayout';
 import { formatBytes, formatDate } from '@/lib/format';
 import { api, envelopeFromError, type ApiErrorEnvelope, ApiError } from '@/api/client';
-import { useRepoContent, useMe, useRepoScans, useRescanArtifact } from '@/api/queries';
+import {
+  useRepoContent,
+  useMe,
+  useRepoScans,
+  useRescanArtifact,
+  useDeleteDebPackage,
+} from '@/api/queries';
 import { ErrorEnvelopeRenderer } from '@/components/common/ErrorEnvelope';
 import {
   SyncNowButton,
@@ -76,6 +82,10 @@ export function AptRepoPage({ repo }: AptRepoPageProps) {
   const [componentFilter, setComponentFilter] = useState<string[]>([]);
   const [syncOpen, setSyncOpen] = useState(false);
   const [expandedID, setExpandedID] = useState<number | null>(null);
+  // F-06.3 row-delete confirm state.
+  const [pkgPendingDelete, setPkgPendingDelete] = useState<DebPackage | null>(null);
+  const [deleteError, setDeleteError] = useState<ApiErrorEnvelope | null>(null);
+  const deletePkgMut = useDeleteDebPackage(projectName ?? '', repo.name);
 
   // EMPTY-03 upload-permission gate — see DockerRepoPage for rationale.
   const { data: currentUser } = useMe();
@@ -432,6 +442,19 @@ export function AptRepoPage({ repo }: AptRepoPageProps) {
                     : undefined
                 }
                 downloadLabel="Download .deb"
+                onDelete={
+                  canUpload && row.storage_pool_path
+                    ? () => {
+                        setDeleteError(null);
+                        setPkgPendingDelete(row);
+                      }
+                    : undefined
+                }
+                deleteLabel="Delete .deb"
+                deletePending={
+                  deletePkgMut.isPending &&
+                  pkgPendingDelete?.id === row.id
+                }
               />
             )}
           />
@@ -464,6 +487,66 @@ export function AptRepoPage({ repo }: AptRepoPageProps) {
               }}
             >
               Sync
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* F-06.3 Delete-package confirm (wired to
+          DELETE /api/v1/projects/{name}/repos/deb/{repo}/pool/*). */}
+      <Dialog
+        open={!!pkgPendingDelete}
+        onOpenChange={(open) => {
+          if (!open) {
+            setPkgPendingDelete(null);
+            setDeleteError(null);
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete package?</DialogTitle>
+            <DialogDescription>
+              This moves{' '}
+              <code className="rounded bg-muted px-1 text-xs">
+                {pkgPendingDelete?.filename}
+              </code>{' '}
+              to the trash and regenerates Packages/Release. Restore from
+              Admin → Trash within the retention window.
+            </DialogDescription>
+          </DialogHeader>
+          {deleteError && (
+            <div className="py-2">
+              <ErrorEnvelopeRenderer envelope={deleteError} mode="inline" />
+            </div>
+          )}
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setPkgPendingDelete(null)}
+              disabled={deletePkgMut.isPending}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={async () => {
+                if (!pkgPendingDelete) return;
+                setDeleteError(null);
+                try {
+                  await deletePkgMut.mutateAsync(pkgPendingDelete.storage_pool_path);
+                  toast.success(`Deleted ${pkgPendingDelete.filename}`);
+                  setPkgPendingDelete(null);
+                  if (expandedID === pkgPendingDelete.id) {
+                    setExpandedID(null);
+                  }
+                } catch (err) {
+                  setDeleteError(envelopeFromError(err, 'Delete failed.'));
+                }
+              }}
+              disabled={deletePkgMut.isPending}
+            >
+              {deletePkgMut.isPending ? 'Deleting…' : 'Delete'}
             </Button>
           </DialogFooter>
         </DialogContent>

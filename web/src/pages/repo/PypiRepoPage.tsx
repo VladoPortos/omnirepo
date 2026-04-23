@@ -8,7 +8,7 @@ import { useState, useMemo } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import { ChevronDown, ChevronRight, Package, Terminal, ShieldAlert, RefreshCw, Loader2 } from 'lucide-react';
+import { ChevronDown, ChevronRight, Package, Terminal, ShieldAlert, RefreshCw, Loader2, Trash2 } from 'lucide-react';
 import { DataTable, type ColumnDef, type SortState } from '@/components/common/DataTable';
 import { ContentScanBadge } from '@/components/common/ContentScanBadge';
 import { Button } from '@/components/ui/button';
@@ -20,7 +20,21 @@ import { SeverityStrip } from '@/components/common/ArtifactDetail';
 import { RepoPageLayout } from './RepoPageLayout';
 import { formatBytes, formatDate } from '@/lib/format';
 import { api, envelopeFromError, type ApiErrorEnvelope, ApiError } from '@/api/client';
-import { useRepoContent, useMe, useRepoScans, useRescanArtifact } from '@/api/queries';
+import {
+  useRepoContent,
+  useMe,
+  useRepoScans,
+  useRescanArtifact,
+  useDeletePypiFile,
+} from '@/api/queries';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from '@/components/ui/dialog';
 import { ErrorEnvelopeRenderer } from '@/components/common/ErrorEnvelope';
 import {
   SyncNowButton,
@@ -68,6 +82,10 @@ export function PypiRepoPage({ repo }: PypiRepoPageProps) {
   const [filter, setFilter] = useState('');
   const [sort, setSort] = useState<SortState>({ column: 'normalized_name', direction: 'asc' });
   const [expandedProject, setExpandedProject] = useState<string | null>(null);
+  // F-07.2 row-delete state — one confirm dialog per file.
+  const [filePendingDelete, setFilePendingDelete] = useState<PypiFile | null>(null);
+  const [deleteError, setDeleteError] = useState<ApiErrorEnvelope | null>(null);
+  const deleteFileMut = useDeletePypiFile(projectName ?? '', repo.name);
 
   // EMPTY-03 upload-permission gate — see DockerRepoPage for rationale.
   const { data: currentUser } = useMe();
@@ -393,6 +411,23 @@ export function PypiRepoPage({ repo }: PypiRepoPageProps) {
                             Scan report
                           </Link>
                         )}
+                        {canUpload && (
+                          <button
+                            type="button"
+                            className="inline-flex size-6 items-center justify-center rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                            title="Delete file"
+                            onClick={() => {
+                              setDeleteError(null);
+                              setFilePendingDelete(f);
+                            }}
+                            disabled={
+                              deleteFileMut.isPending &&
+                              filePendingDelete?.id === f.id
+                            }
+                          >
+                            <Trash2 className="size-3" />
+                          </button>
+                        )}
                       </div>
                     </div>
                   ))}
@@ -423,6 +458,63 @@ export function PypiRepoPage({ repo }: PypiRepoPageProps) {
           />
         )}
       </div>
+
+      {/* F-07.2 Delete-file confirm (wired to
+          DELETE /api/v1/projects/{name}/repos/pypi/{repo}/packages/{filename}). */}
+      <Dialog
+        open={!!filePendingDelete}
+        onOpenChange={(open) => {
+          if (!open) {
+            setFilePendingDelete(null);
+            setDeleteError(null);
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete file?</DialogTitle>
+            <DialogDescription>
+              This moves{' '}
+              <code className="rounded bg-muted px-1 text-xs">
+                {filePendingDelete?.filename}
+              </code>{' '}
+              to the trash and regenerates the PEP 503 Simple index.
+              Restore from Admin → Trash within the retention window.
+            </DialogDescription>
+          </DialogHeader>
+          {deleteError && (
+            <div className="py-2">
+              <ErrorEnvelopeRenderer envelope={deleteError} mode="inline" />
+            </div>
+          )}
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setFilePendingDelete(null)}
+              disabled={deleteFileMut.isPending}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={async () => {
+                if (!filePendingDelete) return;
+                setDeleteError(null);
+                try {
+                  await deleteFileMut.mutateAsync(filePendingDelete.filename);
+                  toast.success(`Deleted ${filePendingDelete.filename}`);
+                  setFilePendingDelete(null);
+                } catch (err) {
+                  setDeleteError(envelopeFromError(err, 'Delete failed.'));
+                }
+              }}
+              disabled={deleteFileMut.isPending}
+            >
+              {deleteFileMut.isPending ? 'Deleting…' : 'Delete'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </RepoPageLayout>
   );
 }

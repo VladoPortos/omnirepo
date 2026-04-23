@@ -43,6 +43,7 @@ import type {
   SearchResponse,
   PaginatedResponse,
   SyncEnqueueResponse,
+  JobDetail,
   GitTreeEntry,
   GitFileContent,
   GitCommit,
@@ -258,6 +259,72 @@ export function useDeleteDockerTag(projectName: string, repoName: string) {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['repo-content', projectName, 'docker', repoName] });
       qc.invalidateQueries({ queryKey: ['repo-scans', projectName, 'docker', repoName] });
+    },
+  });
+}
+
+/**
+ * useDeleteRpmPackage / useDeleteDebPackage / useDeletePypiFile /
+ * useDeleteHelmChart — session-authed row-delete shims for the four
+ * protocol families (F-06.3 / F-07.2 / F-08.1). The protocol DELETE
+ * handlers are BasicOrAPIKey-only; these wrappers hit the REST mirror
+ * at /api/v1/projects/{name}/repos/<type>/{repo}/... where
+ * SessionOrAPIKey is active, so the browser session cookie works.
+ */
+export function useDeleteRpmPackage(projectName: string, repoName: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (filename: string) =>
+      api.del<void>(
+        `/projects/${enc(projectName)}/repos/rpm/${enc(repoName)}/packages/${enc(filename)}`,
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['repo-content', projectName, 'rpm', repoName] });
+      qc.invalidateQueries({ queryKey: ['repo-scans', projectName, 'rpm', repoName] });
+    },
+  });
+}
+
+export function useDeleteDebPackage(projectName: string, repoName: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (poolPath: string) =>
+      api.del<void>(
+        // poolPath is a slash-joined path like "main/n/nginx/nginx_1.24.0_amd64.deb";
+        // caller supplies it verbatim; each segment must already be safe for a URL.
+        `/projects/${enc(projectName)}/repos/deb/${enc(repoName)}/pool/${poolPath}`,
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['repo-content', projectName, 'deb', repoName] });
+      qc.invalidateQueries({ queryKey: ['repo-scans', projectName, 'deb', repoName] });
+    },
+  });
+}
+
+export function useDeletePypiFile(projectName: string, repoName: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (filename: string) =>
+      api.del<void>(
+        `/projects/${enc(projectName)}/repos/pypi/${enc(repoName)}/packages/${enc(filename)}`,
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['repo-content', projectName, 'pypi', repoName] });
+      qc.invalidateQueries({ queryKey: ['repo-scans', projectName, 'pypi', repoName] });
+    },
+  });
+}
+
+export function useDeleteHelmChart(projectName: string, repoName: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (filename: string) =>
+      api.del<void>(
+        `/projects/${enc(projectName)}/repos/helm/${enc(repoName)}/charts/${enc(filename)}`,
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['repo-content', projectName, 'helm', repoName] });
+      qc.invalidateQueries({ queryKey: ['repo-scans', projectName, 'helm', repoName] });
     },
   });
 }
@@ -1364,6 +1431,34 @@ export function useSyncRepo(
         queryKey: ['repo-content', projectName, repoType, repoName],
       });
     },
+  });
+}
+
+/**
+ * useSyncJobsList — F-06.8. GET
+ *   /projects/{name}/repos/{type}/{repo}/sync-jobs?limit=N
+ * Returns recent sync jobs newest-first. Drives the SyncHistoryDialog
+ * opened from SyncNowButton. The backend (`handleListSyncJobs`) only
+ * returns COALESCE-defaulted fields (progress_bytes, total_bytes,
+ * files_synced, current_step, last_error) so UI can render deterministic
+ * rows without null-guards. `enabled` lets the caller delay the fetch
+ * until the dialog opens.
+ */
+export function useSyncJobsList(
+  projectName: string,
+  repoType: string,
+  repoName: string,
+  opts: { enabled?: boolean; limit?: number } = {},
+) {
+  const { enabled = true, limit = 25 } = opts;
+  return useQuery<{ items: JobDetail[] }>({
+    queryKey: ['sync-jobs', projectName, repoType, repoName, limit],
+    queryFn: () =>
+      api.get<{ items: JobDetail[] }>(
+        `/projects/${enc(projectName)}/repos/${enc(repoType)}/${enc(repoName)}/sync-jobs?limit=${limit}`,
+      ),
+    enabled: enabled && !!projectName && !!repoName,
+    staleTime: 5_000,
   });
 }
 

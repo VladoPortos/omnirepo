@@ -28,7 +28,8 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
-import { Loader2, RefreshCw, Settings } from 'lucide-react';
+import { Clock, Loader2, RefreshCw, Settings } from 'lucide-react';
+import { SyncHistoryDialog } from '@/components/SyncHistoryDialog';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
 import { ErrorEnvelopeRenderer } from '@/components/common/ErrorEnvelope';
@@ -83,6 +84,10 @@ export function SyncNowButton({
 
   const isPolling = progress.isPolling;
   const disabled = mutation.isPending || isPolling;
+  // F-06.8: the "View history" button opens a read-only dialog listing
+  // recent sync jobs. Lazily enabled via SyncHistoryDialog's own
+  // useSyncJobsList `enabled` flag so we don't fetch until first open.
+  const [historyOpen, setHistoryOpen] = useState(false);
 
   // When the polled job terminates, invalidate content + repo caches
   // so the UI reflects newly-synced artifacts without a manual refresh.
@@ -218,6 +223,16 @@ export function SyncNowButton({
           )}
         </div>
         <div className="flex items-center gap-2 shrink-0">
+          {/* F-06.8: read-only sync-job history opens a dialog. */}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setHistoryOpen(true)}
+            title="View past sync jobs for this mirror"
+          >
+            <Clock className="mr-1.5 size-3.5" />
+            History
+          </Button>
           <Button
             variant="outline"
             size="sm"
@@ -298,6 +313,16 @@ export function SyncNowButton({
       {mutationError && (
         <ErrorEnvelopeRenderer envelope={mutationError} mode="inline" />
       )}
+
+      {/* F-06.8: mounted here so its state survives re-renders of the
+          parent card but does not affect layout when closed. */}
+      <SyncHistoryDialog
+        open={historyOpen}
+        onOpenChange={setHistoryOpen}
+        projectName={projectName}
+        repoType={repoType}
+        repoName={repoName}
+      />
     </div>
   );
 }

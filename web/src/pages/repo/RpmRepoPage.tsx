@@ -32,7 +32,13 @@ import { SnippetList } from '@/components/common/SnippetList';
 import { RepoPageLayout } from './RepoPageLayout';
 import { formatBytes, formatDate } from '@/lib/format';
 import { api, envelopeFromError, type ApiErrorEnvelope, ApiError } from '@/api/client';
-import { useRepoContentLoadMore, useMe, useRepoScans, useRescanArtifact } from '@/api/queries';
+import {
+  useRepoContentLoadMore,
+  useMe,
+  useRepoScans,
+  useRescanArtifact,
+  useDeleteRpmPackage,
+} from '@/api/queries';
 import { ErrorEnvelopeRenderer } from '@/components/common/ErrorEnvelope';
 import {
   SyncNowButton,
@@ -68,6 +74,10 @@ export function RpmRepoPage({ repo }: RpmRepoPageProps) {
   const [sort, setSort] = useState<SortState>({ column: 'name', direction: 'asc' });
   const [syncOpen, setSyncOpen] = useState(false);
   const [selectedPkg, setSelectedPkg] = useState<RpmPackage | null>(null);
+  // F-06.3 row-delete: same confirm-dialog pattern as DockerRepoPage.
+  const [pkgPendingDelete, setPkgPendingDelete] = useState<RpmPackage | null>(null);
+  const [deleteError, setDeleteError] = useState<ApiErrorEnvelope | null>(null);
+  const deletePkgMut = useDeleteRpmPackage(projectName ?? '', repo.name);
 
   // Fetch live packages from the repo-content endpoint (F-3).
   // EMPTY-03 upload-permission gate — see DockerRepoPage for rationale.
@@ -368,6 +378,19 @@ export function RpmRepoPage({ repo }: RpmRepoPageProps) {
                       : undefined
                   }
                   downloadLabel="Download RPM"
+                  onDelete={
+                    canUpload && row.filename
+                      ? () => {
+                          setDeleteError(null);
+                          setPkgPendingDelete(row);
+                        }
+                      : undefined
+                  }
+                  deleteLabel="Delete RPM"
+                  deletePending={
+                    deletePkgMut.isPending &&
+                    pkgPendingDelete?.filename === row.filename
+                  }
                 />
               )}
             />
@@ -424,6 +447,66 @@ export function RpmRepoPage({ repo }: RpmRepoPageProps) {
               }}
             >
               Sync
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* F-06.3 Delete-package confirm (wired to
+          DELETE /api/v1/projects/{name}/repos/rpm/{repo}/packages/{filename}). */}
+      <Dialog
+        open={!!pkgPendingDelete}
+        onOpenChange={(open) => {
+          if (!open) {
+            setPkgPendingDelete(null);
+            setDeleteError(null);
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete package?</DialogTitle>
+            <DialogDescription>
+              This moves{' '}
+              <code className="rounded bg-muted px-1 text-xs">
+                {pkgPendingDelete?.filename}
+              </code>{' '}
+              to the trash and regenerates repodata. The file can be restored
+              from Admin → Trash within the retention window.
+            </DialogDescription>
+          </DialogHeader>
+          {deleteError && (
+            <div className="py-2">
+              <ErrorEnvelopeRenderer envelope={deleteError} mode="inline" />
+            </div>
+          )}
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setPkgPendingDelete(null)}
+              disabled={deletePkgMut.isPending}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={async () => {
+                if (!pkgPendingDelete) return;
+                setDeleteError(null);
+                try {
+                  await deletePkgMut.mutateAsync(pkgPendingDelete.filename);
+                  toast.success(`Deleted ${pkgPendingDelete.filename}`);
+                  setPkgPendingDelete(null);
+                  if (selectedPkg?.id === pkgPendingDelete.id) {
+                    setSelectedPkg(null);
+                  }
+                } catch (err) {
+                  setDeleteError(envelopeFromError(err, 'Delete failed.'));
+                }
+              }}
+              disabled={deletePkgMut.isPending}
+            >
+              {deletePkgMut.isPending ? 'Deleting…' : 'Delete'}
             </Button>
           </DialogFooter>
         </DialogContent>

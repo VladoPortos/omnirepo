@@ -6,14 +6,23 @@
 
 import { useState, useMemo } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { ChevronDown, ChevronRight, Layers, ShieldAlert, Terminal } from 'lucide-react';
+import { ChevronDown, ChevronRight, Layers, ShieldAlert, Terminal, Trash2 } from 'lucide-react';
 import { DataTable, type ColumnDef, type SortState } from '@/components/common/DataTable';
 import { ContentScanBadge } from '@/components/common/ContentScanBadge';
 import { Button } from '@/components/ui/button';
 import { RefreshCw, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
-import { useRescanArtifact } from '@/api/queries';
-import { ApiError } from '@/api/client';
+import { useRescanArtifact, useDeleteHelmChart } from '@/api/queries';
+import { ApiError, envelopeFromError, type ApiErrorEnvelope } from '@/api/client';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from '@/components/ui/dialog';
+import { ErrorEnvelopeRenderer } from '@/components/common/ErrorEnvelope';
 import { InlineSearch } from '@/components/common/InlineSearch';
 import { Dropzone } from '@/components/common/Dropzone';
 import { EmptyState } from '@/components/common/EmptyState';
@@ -69,6 +78,10 @@ export function HelmRepoPage({ repo }: HelmRepoPageProps) {
   const [filter, setFilter] = useState('');
   const [sort, setSort] = useState<SortState>({ column: 'chart_name', direction: 'asc' });
   const [expandedChart, setExpandedChart] = useState<string | null>(null);
+  // F-08.1 row-delete state — confirm dialog per chart version.
+  const [chartPendingDelete, setChartPendingDelete] = useState<HelmChartVersion | null>(null);
+  const [deleteError, setDeleteError] = useState<ApiErrorEnvelope | null>(null);
+  const deleteChartMut = useDeleteHelmChart(projectName ?? '', repo.name);
 
   // EMPTY-03 upload-permission gate — see DockerRepoPage for rationale.
   const { data: currentUser } = useMe();
@@ -273,8 +286,19 @@ export function HelmRepoPage({ repo }: HelmRepoPageProps) {
           canUpload ? (
             <EmptyState
               icon={Terminal}
-              title="No artifacts yet"
-              description="Upload your first artifact using the snippet below."
+              title={
+                repo.is_mirror ? 'Mirror not yet synced' : 'No artifacts yet'
+              }
+              // F-08.3 (wt3 batch 15 follow-up): on a mirror repo the
+              // snippet below is pull-only (helm add repo, helm install).
+              // "Upload your first artifact using the snippet below" is
+              // misleading because uploads 403 on mirror repos. Mirror
+              // the RPM/APT fix from F-06.4.
+              description={
+                repo.is_mirror
+                  ? 'Click Sync now to pull from upstream, then use the snippet below to install from this mirror.'
+                  : 'Upload your first artifact using the snippet below.'
+              }
             >
               <SnippetList
                 repoType="helm"
@@ -288,7 +312,11 @@ export function HelmRepoPage({ repo }: HelmRepoPageProps) {
             <EmptyState
               icon={Terminal}
               title="No artifacts yet"
-              description="Ask a maintainer to upload an artifact."
+              description={
+                repo.is_mirror
+                  ? 'Ask a maintainer to sync this mirror from upstream.'
+                  : 'Ask a maintainer to upload an artifact.'
+              }
             />
           )
         ) : (
@@ -375,6 +403,23 @@ export function HelmRepoPage({ repo }: HelmRepoPageProps) {
                           )}
                           {rescanningID === v.id ? 'Rescanning…' : 'Rescan'}
                         </Button>
+                        {canUpload && (
+                          <button
+                            type="button"
+                            className="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                            title="Delete chart version"
+                            onClick={() => {
+                              setDeleteError(null);
+                              setChartPendingDelete(v);
+                            }}
+                            disabled={
+                              deleteChartMut.isPending &&
+                              chartPendingDelete?.id === v.id
+                            }
+                          >
+                            <Trash2 className="size-3.5" />
+                          </button>
+                        )}
                       </div>
                     </div>
                   ))}
@@ -405,6 +450,64 @@ export function HelmRepoPage({ repo }: HelmRepoPageProps) {
           />
         )}
       </div>
+
+      {/* F-08.1 Delete-chart confirm (wired to
+          DELETE /api/v1/projects/{name}/repos/helm/{repo}/charts/{filename}). */}
+      <Dialog
+        open={!!chartPendingDelete}
+        onOpenChange={(open) => {
+          if (!open) {
+            setChartPendingDelete(null);
+            setDeleteError(null);
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete chart version?</DialogTitle>
+            <DialogDescription>
+              This moves{' '}
+              <code className="rounded bg-muted px-1 text-xs">
+                {chartPendingDelete?.filename}
+              </code>{' '}
+              to the trash and regenerates{' '}
+              <code className="rounded bg-muted px-1 text-xs">index.yaml</code>.
+              Restore from Admin → Trash within the retention window.
+            </DialogDescription>
+          </DialogHeader>
+          {deleteError && (
+            <div className="py-2">
+              <ErrorEnvelopeRenderer envelope={deleteError} mode="inline" />
+            </div>
+          )}
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setChartPendingDelete(null)}
+              disabled={deleteChartMut.isPending}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={async () => {
+                if (!chartPendingDelete) return;
+                setDeleteError(null);
+                try {
+                  await deleteChartMut.mutateAsync(chartPendingDelete.filename);
+                  toast.success(`Deleted ${chartPendingDelete.filename}`);
+                  setChartPendingDelete(null);
+                } catch (err) {
+                  setDeleteError(envelopeFromError(err, 'Delete failed.'));
+                }
+              }}
+              disabled={deleteChartMut.isPending}
+            >
+              {deleteChartMut.isPending ? 'Deleting…' : 'Delete'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </RepoPageLayout>
   );
 }

@@ -8,7 +8,7 @@
 
 import type { ReactNode } from 'react';
 import { Link } from 'react-router-dom';
-import { Download, ShieldAlert } from 'lucide-react';
+import { Download, Loader2, ShieldAlert, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { formatBytes, formatDate } from '@/lib/format';
@@ -43,6 +43,18 @@ export interface ArtifactDetailProps {
   /** Absolute URL the Download button points at; omit to hide. */
   downloadURL?: string;
   downloadLabel?: string;
+  /**
+   * Row-level Delete button. When `onDelete` is set, a destructive
+   * button renders alongside Download and invokes the callback. The
+   * caller handles the confirm dialog and mutation state. Matches the
+   * Docker tag-delete UX pattern for RPM/DEB/PyPI/Helm row-delete
+   * (F-06.3 / F-07.2 / F-08.1).
+   */
+  onDelete?: () => void;
+  deleteLabel?: string;
+  deleteDisabled?: boolean;
+  /** When true, shows a spinner + "Deleting…" on the button. */
+  deletePending?: boolean;
 }
 
 const SEVERITY_ORDER: Array<keyof ArtifactDetailProps['severity'] extends
@@ -138,6 +150,10 @@ export function ArtifactDetail({
   scanReportURL,
   downloadURL,
   downloadLabel,
+  onDelete,
+  deleteLabel,
+  deleteDisabled,
+  deletePending,
 }: ArtifactDetailProps) {
   const allFields: ArtifactDetailField[] = [...fields];
   if (typeof sizeBytes === 'number' && sizeBytes > 0) {
@@ -186,17 +202,35 @@ export function ArtifactDetail({
           </div>
         </div>
       )}
-      {downloadURL && (
-        <div>
-          <Button
-            variant="outline"
-            size="sm"
-            nativeButton={false}
-            render={<a href={downloadURL} />}
-          >
-            <Download className="mr-1.5 size-4" />
-            {downloadLabel ?? 'Download'}
-          </Button>
+      {(downloadURL || onDelete) && (
+        <div className="flex flex-wrap gap-2">
+          {downloadURL && (
+            <Button
+              variant="outline"
+              size="sm"
+              nativeButton={false}
+              render={<a href={downloadURL} />}
+            >
+              <Download className="mr-1.5 size-4" />
+              {downloadLabel ?? 'Download'}
+            </Button>
+          )}
+          {onDelete && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={onDelete}
+              disabled={deleteDisabled || deletePending}
+              className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+            >
+              {deletePending ? (
+                <Loader2 className="mr-1.5 size-4 animate-spin" />
+              ) : (
+                <Trash2 className="mr-1.5 size-4" />
+              )}
+              {deletePending ? 'Deleting…' : deleteLabel ?? 'Delete'}
+            </Button>
+          )}
         </div>
       )}
     </div>

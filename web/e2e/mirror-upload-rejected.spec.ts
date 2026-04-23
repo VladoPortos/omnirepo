@@ -103,11 +103,20 @@ test.describe('Mirror upload rejection (Phase 8 / plan 08-06)', () => {
     // internal/protocol/deb/handler.go:147 — this is PUT /{project}/deb/{repo}/pool/*
     // (no /api/v1/ prefix, no /upload suffix). The wildcard accepts the
     // pool-layout filename Debian packages expect.
+    //
+    // The DEB PUT handler uses BasicOrAPIKey auth (NOT SessionOrAPIKey),
+    // so the page's session cookie doesn't authenticate the request —
+    // it'd return 401 before the MirrorGuard fires. Supply HTTP Basic
+    // explicitly so we exercise the guard path (F-15.4).
+    const basicAuth = Buffer.from(`admin:${ADMIN_PW}`).toString('base64');
     const resp = await page.request.put(
       `/${encodeURIComponent(project)}/deb/${encodeURIComponent(repo)}/pool/h/hello/hello_1.0_amd64.deb?suite=focal&component=main`,
       {
         data: Buffer.from('fake-deb-bytes'),
-        headers: { 'Content-Type': 'application/octet-stream' },
+        headers: {
+          'Content-Type': 'application/octet-stream',
+          Authorization: `Basic ${basicAuth}`,
+        },
       },
     );
     expect(resp.status()).toBe(403);

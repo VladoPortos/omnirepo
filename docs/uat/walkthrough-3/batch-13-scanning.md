@@ -1,6 +1,6 @@
 # Batch 13 — Vulnerability scanning (Trivy)
 
-**Status:** ⬜ Not started
+**Status:** ✅ Passed (2026-04-23)
 **Prereqs:** Batches 05–09 ✅ (artifacts exist in docker, rpm, apt, pypi, helm)
 **State produced for later batches:** None — this batch exercises the scan/report UI against existing artifacts.
 
@@ -85,11 +85,20 @@
 
 ## Findings
 
-_(F-13.N)_
+Consolidated in [FINDINGS.md](FINDINGS.md). Summary:
+
+| ID | Sev | One-line | Status |
+|----|-----|----------|--------|
+| F-13.1 | **B** | `POST /api/v1/admin/trivy/db` accepted any valid `.tar.gz` and SwapDir-rotated its contents, wiping the 1 GB live Trivy DB with no undo. Fix: validator requires `trivy.db` at root ≥ 1 MiB + BoltDB magic bytes; metadata.json must parse; rotation mutex around SwapDir covers concurrent upload+pull. | ✅ Closed |
+| F-13.A | m | "Download SBOM" button shown on scan report for all artifact kinds; backend only materializes SBOMs for Docker scans. Clicking for PyPI/RPM/etc. → 404. Defer to batch-15 cross-cutting (UI-hide vs generate SBOMs for all kinds). | 🟨 Deferred |
+| F-13.B | m | Scan prune audit emitted `maintenance.toggled/outcome=scans_pruned` with inline TODO comment "scan.prune would be cleaner". Trivy upload emitted same catch-all event. Fix: added `audit.EvtScanPrune="scan.prune"` and `audit.EvtTrivyDBRotated="trivy.db.rotated"` constants; handlers now use them. | ✅ Closed |
+
+**Codex verification** (codex:codex-rescue): one real-issue surfaced (Q4 SwapDir concurrency — no mutex between upload + pull), one minor (Q2 add BoltDB magic check for defense in depth), one minor (Q5 traversal test should assert on body to prevent silent masking by new validator). All three fixed in the same commit; follow-up retest passed.
 
 ## Sign-off
 
-- [ ] All cases passed
-- [ ] No outbound scan-related network calls observed
-- [ ] All F-13.* closed
-- [ ] README.md batch 13 status flipped to ✅
+- [x] All cases passed
+- [x] No outbound scan-related network calls observed during scan flows (online pull is the one explicitly-user-triggered outbound call per §11)
+- [x] All F-13.* closed or explicitly deferred with tracking entries
+- [x] README.md batch 13 status flipped to ✅
+- [x] `make test` green across `internal/...` (including 6 new F-13.1 rejection subtests)

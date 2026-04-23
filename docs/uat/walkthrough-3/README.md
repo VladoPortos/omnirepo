@@ -32,7 +32,7 @@ unless the batch explicitly asks for it.
 | 10 | [batch-10-git-hosting.md](batch-10-git-hosting.md) | Git hosting (non-mirror): clone/push/fetch, browse, blame, compare | ✅ |
 | 11 | [batch-11-git-mirror.md](batch-11-git-mirror.md) | **Git mirrors (NEW v1.3+)**: sync, LFS gate 501, receive-pack 403, badge | ✅ |
 | 12 | [batch-12-raw-s3.md](batch-12-raw-s3.md) | Raw blobs + S3 buckets + SigV4 + object CRUD | ✅ |
-| 13 | [batch-13-scanning.md](batch-13-scanning.md) | Trivy DB, rescan, SBOM, severity gates (all 5 protocols) | ⬜ |
+| 13 | [batch-13-scanning.md](batch-13-scanning.md) | Trivy DB, rescan, SBOM, severity gates (all 5 protocols) | ✅ |
 | 14 | [batch-14-admin.md](batch-14-admin.md) | TLS, audit log, trash/restore, GC, maintenance, **DB health (NEW)** | ⬜ |
 | 15 | [batch-15-cross-cutting.md](batch-15-cross-cutting.md) | Search, dashboard, API docs, error envelopes, a11y, console cleanliness | ⬜ |
 

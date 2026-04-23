@@ -22,13 +22,13 @@ const ONE_HUNDRED_MB = 104857600;
 
 async function bootstrapAdmin(request: APIRequestContext): Promise<void> {
   const first = await request.post('/api/v1/auth/login', {
-    data: { login: 'admin', password: 'changeme' },
+    data: { login: 'admin', password: 'AdminTest1!' },
   });
   if (first.ok()) {
     const body = await first.json();
     if (body.must_change_password) {
       await request.post('/api/v1/auth/change-password', {
-        data: { current: 'changeme', new: ADMIN_PW },
+        data: { current: 'AdminTest1!', new: ADMIN_PW },
       });
     }
   }

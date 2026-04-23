@@ -44,13 +44,13 @@ test.describe('SnippetPanel copy-to-clipboard (SNIPPET-09 / S-10)', () => {
     // Admin login bootstrap — copied verbatim from error-envelope.spec.ts
     // to preserve the first-login `must_change_password` handling.
     const resp = await request.post('/api/v1/auth/login', {
-      data: { login: 'admin', password: 'changeme' },
+      data: { login: 'admin', password: 'AdminTest1!' },
     });
     if (resp.ok()) {
       const body = await resp.json();
       if (body.must_change_password) {
         await request.post('/api/v1/auth/change-password', {
-          data: { current: 'changeme', new: 'AdminTest1!' },
+          data: { current: 'AdminTest1!', new: 'AdminTest1!' },
         });
         await request.post('/api/v1/auth/login', {
           data: { login: 'admin', password: 'AdminTest1!' },

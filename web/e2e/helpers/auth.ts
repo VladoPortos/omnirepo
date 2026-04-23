@@ -1,0 +1,84 @@
+/**
+ * Shared admin-auth helpers for Playwright specs.
+ *
+ * Prior to F-15.4 (post-v1.4), every spec carried its own inline
+ * `loginAsAdmin` / `changePasswordIfNeeded` helpers hardcoding
+ * `password: 'changeme'`. The actual seeded password — set by
+ * `global-setup.ts` via the first-run `/api/v1/setup/superadmin`
+ * endpoint — is `AdminTest1!` with `must_change_password=0`. Every spec
+ * failed on the first login attempt before ever reaching the
+ * now-defunct change-password dance.
+ *
+ * Single source of truth here. Spec files must not hardcode credentials.
+ */
+
+import { expect, type APIRequestContext, type Page } from '@playwright/test';
+
+export const ADMIN_LOGIN = 'admin';
+
+// Matches global-setup.ts seed. See that file's comment for the reasoning
+// behind seeding with must_change_password=0 (short-circuits the legacy
+// bootstrap dance for every spec that doesn't specifically test it).
+export const ADMIN_PASSWORD = 'AdminTest1!';
+
+/**
+ * UI sign-in flow. After this returns successfully, `page` carries a
+ * valid session cookie and is not on `/login`.
+ *
+ * Intentionally stricter than the pre-v1.4 inline helpers:
+ * if the server redirects to /change-password (unexpected under the
+ * must_change_password=0 seed), the caller's `await expect(page).not
+ * .toHaveURL(/\/login/)` still passes — specs that need to differentiate
+ * should check page.url() themselves.
+ */
+export async function adminLoginUI(page: Page): Promise<void> {
+  await page.goto('/login');
+  await page.fill('input#login', ADMIN_LOGIN);
+  await page.fill('input#password', ADMIN_PASSWORD);
+  await page.click('button[type="submit"]');
+  await expect(page).not.toHaveURL(/\/login$/, { timeout: 10_000 });
+}
+
+/**
+ * API sign-in flow. Attaches a session cookie to `request`'s jar so
+ * subsequent calls inherit the admin actor. No return value — caller
+ * just needs the side effect on the context.
+ */
+export async function adminLoginAPI(
+  request: APIRequestContext,
+): Promise<void> {
+  const resp = await request.post('/api/v1/auth/login', {
+    data: { login: ADMIN_LOGIN, password: ADMIN_PASSWORD },
+  });
+  expect(
+    resp.ok(),
+    `admin API login failed: ${resp.status()} ${await resp.text()}`,
+  ).toBeTruthy();
+}
+
+/**
+ * Create a secondary user via `POST /admin/users` and return the server
+ * -generated one-time password. The endpoint hard-codes
+ * must_change_password=true on every creation path, so the returned
+ * credentials are exactly what a spec needs to exercise the forced-
+ * change-password flow that the pre-seeded admin bypasses.
+ *
+ * Caller must ensure `request` already has the admin session cookie
+ * (call `adminLoginAPI` first).
+ */
+export async function createForcedChangeUser(
+  request: APIRequestContext,
+  login: string,
+  email: string,
+): Promise<string> {
+  const resp = await request.post('/api/v1/admin/users', {
+    data: { login, email },
+  });
+  expect(
+    resp.ok(),
+    `create user failed: ${resp.status()} ${await resp.text()}`,
+  ).toBeTruthy();
+  const body = (await resp.json()) as { one_time_password: string };
+  expect(body.one_time_password, 'server returned no one_time_password').toBeTruthy();
+  return body.one_time_password;
+}

@@ -32,13 +32,13 @@ async function loginAndForcePasswordChangeIfNeeded(
   request: import('@playwright/test').APIRequestContext,
 ) {
   const resp = await request.post('/api/v1/auth/login', {
-    data: { login: 'admin', password: 'changeme' },
+    data: { login: 'admin', password: 'AdminTest1!' },
   });
   if (resp.ok()) {
     const body = await resp.json();
     if (body.must_change_password) {
       await request.post('/api/v1/auth/change-password', {
-        data: { current: 'changeme', new: ADMIN_PASSWORD },
+        data: { current: 'AdminTest1!', new: ADMIN_PASSWORD },
       });
       await request.post('/api/v1/auth/login', {
         data: { login: 'admin', password: ADMIN_PASSWORD },

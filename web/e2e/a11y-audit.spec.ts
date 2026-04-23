@@ -25,13 +25,13 @@ import AxeBuilder from '@axe-core/playwright';
 test.describe('WCAG AA audit (broad)', () => {
   test.beforeEach(async ({ request }) => {
     const resp = await request.post('/api/v1/auth/login', {
-      data: { login: 'admin', password: 'changeme' },
+      data: { login: 'admin', password: 'AdminTest1!' },
     });
     if (resp.ok()) {
       const body = await resp.json();
       if (body.must_change_password) {
         await request.post('/api/v1/auth/change-password', {
-          data: { current: 'changeme', new: 'AdminTest1!' },
+          data: { current: 'AdminTest1!', new: 'AdminTest1!' },
         });
         await request.post('/api/v1/auth/login', {
           data: { login: 'admin', password: 'AdminTest1!' },

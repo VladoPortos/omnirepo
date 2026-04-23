@@ -8,12 +8,12 @@ import { test, expect } from '@playwright/test';
 test.describe('Search page', () => {
   test.beforeEach(async ({ request }) => {
     const resp = await request.post('/api/v1/auth/login', {
-      data: { login: 'admin', password: 'changeme' },
+      data: { login: 'admin', password: 'AdminTest1!' },
     });
     const body = await resp.json();
     if (body.must_change_password) {
       await request.post('/api/v1/auth/change-password', {
-        data: { current: 'changeme', new: 'SearchTest1!' },
+        data: { current: 'AdminTest1!', new: 'SearchTest1!' },
       });
       await request.post('/api/v1/auth/login', {
         data: { login: 'admin', password: 'SearchTest1!' },
@@ -35,7 +35,7 @@ test.describe('Search page', () => {
 
     if (page.url().includes('/login')) {
       await page.fill('input#login', 'admin');
-      await page.fill('input#password', 'changeme');
+      await page.fill('input#password', 'AdminTest1!');
       await page.click('button[type="submit"]');
       await page.waitForTimeout(2000);
     }
@@ -58,7 +58,7 @@ test.describe('Search page', () => {
 
     if (page.url().includes('/login')) {
       await page.fill('input#login', 'admin');
-      await page.fill('input#password', 'changeme');
+      await page.fill('input#password', 'AdminTest1!');
       await page.click('button[type="submit"]');
       await page.waitForTimeout(2000);
     }
@@ -89,7 +89,7 @@ test.describe('Search page', () => {
 
     if (page.url().includes('/login')) {
       await page.fill('input#login', 'admin');
-      await page.fill('input#password', 'changeme');
+      await page.fill('input#password', 'AdminTest1!');
       await page.click('button[type="submit"]');
       await page.waitForTimeout(2000);
     }

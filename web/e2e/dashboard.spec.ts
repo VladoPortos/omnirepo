@@ -1,87 +1,46 @@
 /**
  * Dashboard E2E tests.
- * Verifies the dashboard renders with storage gauge, repo count,
- * user count, and quick action buttons.
+ *
+ * Post-v1.4 (F-15.4): uses the shared adminLoginUI helper and tightens
+ * the heading locator to `getByRole('heading')` so it doesn't collide
+ * with the sidebar's "Dashboard" nav link.
  */
 
 import { test, expect } from '@playwright/test';
+import { adminLoginUI } from './helpers/auth';
 
 test.describe('Dashboard page', () => {
-  test.beforeEach(async ({ request }) => {
-    // Login via API to get session cookie
-    await request.post('/api/v1/auth/login', {
-      data: { login: 'admin', password: 'changeme' },
-    });
+  test.beforeEach(async ({ page }) => {
+    await adminLoginUI(page);
+    await expect(page).not.toHaveURL(/\/change-password/, { timeout: 10_000 });
   });
 
   test('renders dashboard heading', async ({ page }) => {
     await page.goto('/');
-    // May redirect to /login or /change-password if not authenticated
-    // For E2E against a fresh server, just verify the page loads
-    await page.waitForTimeout(2000);
-
-    // If redirected to login, authenticate inline
-    if (page.url().includes('/login')) {
-      await page.fill('input#login', 'admin');
-      await page.fill('input#password', 'changeme');
-      await page.click('button[type="submit"]');
-      await page.waitForTimeout(2000);
-    }
-
-    // If on change-password, the user has MCP flag
-    if (page.url().includes('/change-password')) {
-      // Skip dashboard test for MCP users -- need password change first
-      test.skip();
-      return;
-    }
-
-    await expect(page.getByText('Dashboard')).toBeVisible({ timeout: 10000 });
+    await expect(
+      page.getByRole('heading', { name: 'Dashboard' }),
+    ).toBeVisible({ timeout: 10_000 });
   });
 
   test('shows stat cards', async ({ page }) => {
     await page.goto('/');
-    await page.waitForTimeout(2000);
-
-    if (page.url().includes('/login')) {
-      await page.fill('input#login', 'admin');
-      await page.fill('input#password', 'changeme');
-      await page.click('button[type="submit"]');
-      await page.waitForTimeout(2000);
-    }
-
-    if (page.url().includes('/change-password')) {
-      test.skip();
-      return;
-    }
-
-    // Storage gauge card
     await expect(
       page.getByText(/storage|repositories|users/i).first(),
-    ).toBeVisible({ timeout: 10000 });
+    ).toBeVisible({ timeout: 10_000 });
   });
 
   test('quick action buttons are visible', async ({ page }) => {
     await page.goto('/');
-    await page.waitForTimeout(2000);
-
-    if (page.url().includes('/login')) {
-      await page.fill('input#login', 'admin');
-      await page.fill('input#password', 'changeme');
-      await page.click('button[type="submit"]');
-      await page.waitForTimeout(2000);
-    }
-
-    if (page.url().includes('/change-password')) {
-      test.skip();
-      return;
-    }
-
-    // Quick action buttons
+    // Wait for the dashboard heading to render so we know the SPA mounted.
     await expect(
-      page.getByRole('link', { name: /create project/i }),
-    ).toBeVisible({ timeout: 10000 });
-    await expect(
-      page.getByRole('link', { name: /upload artifact/i }),
-    ).toBeVisible({ timeout: 10000 });
+      page.getByRole('heading', { name: 'Dashboard' }),
+    ).toBeVisible({ timeout: 10_000 });
+    // DashboardPage renders Create Project via a base-ui Button with
+    // `render={<Link />}` — the resulting DOM shape has historically
+    // flipped between `role="link"` and `role="button"` depending on
+    // base-ui defaults, so the spec matches on visible text instead.
+    await expect(page.getByText('Create Project')).toBeVisible({
+      timeout: 10_000,
+    });
   });
 });

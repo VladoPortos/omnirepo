@@ -569,7 +569,7 @@ func (d Deps) handleScanPrune(w http.ResponseWriter, r *http.Request) {
 	if actor.ID != 0 {
 		uid := actor.ID
 		d.recordAudit(r, audit.Event{
-			Kind:        audit.EvtMaintenanceToggled, // closest existing kind; scan.prune would be cleaner
+			Kind:        audit.EvtScanPrune,
 			ActorUserID: &uid,
 			TargetKind:  "repo",
 			TargetID:    strconv.FormatInt(repo.ID, 10),

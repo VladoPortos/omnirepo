@@ -5,10 +5,12 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"io"
 	"mime/multipart"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/dxc-internal/omnirepo/internal/api"
@@ -58,10 +60,13 @@ func TestAdminTrivy_DBUpload(t *testing.T) {
 	_, pw := seedTestUser(t, s.db, "root", "r@x", true, false)
 	cookie, _, _ := s.login(t, "root", pw)
 
-	// Create a fake tar.gz with a single file.
+	// Real Trivy release tarballs ship trivy.db + metadata.json at the
+	// root and the DB file is ≥ 100 MiB in practice. Pack a ≥ 1 MiB
+	// payload at the canonical root path so the F-13.1 validator accepts
+	// the upload.
 	tarBuf := createFakeTarGz(t, map[string]string{
-		"metadata.json": `{"version": 2}`,
-		"db/trivy.db":   "fake-db-content",
+		"metadata.json": `{"Version": 2, "UpdatedAt": "2026-04-22T00:00:00Z"}`,
+		"trivy.db":      fakeTrivyDBBytes(2<<20), // 2 MiB
 	})
 
 	// Upload via multipart.
@@ -83,21 +88,106 @@ func TestAdminTrivy_DBUpload(t *testing.T) {
 		t.Fatalf("upload code=%d", resp.StatusCode)
 	}
 
-	// Verify trivy_db_meta row was inserted.
-	var source string
+	// Verify trivy_db_meta row was inserted with the metadata-derived
+	// version, not the upload filename.
+	var source, version string
 	err = s.db.Reader.QueryRowContext(context.Background(),
-		`SELECT source FROM trivy_db_meta ORDER BY id DESC LIMIT 1`).Scan(&source)
+		`SELECT source, version FROM trivy_db_meta ORDER BY id DESC LIMIT 1`).Scan(&source, &version)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if source != "uploaded" {
 		t.Fatalf("source=%q want uploaded", source)
 	}
+	if !strings.HasPrefix(version, "schema=2") {
+		t.Fatalf("version=%q want schema=2 prefix from metadata.json", version)
+	}
 
 	// Verify files exist on disk.
 	dbDir := filepath.Join(s.dataRoot, "trivy", "db")
 	if _, err := os.Stat(dbDir); err != nil {
 		t.Fatalf("DB dir missing after upload: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dbDir, "trivy.db")); err != nil {
+		t.Fatalf("trivy.db missing at root after swap: %v", err)
+	}
+}
+
+// F-13.1 — uploading a valid .tar.gz that doesn't contain a Trivy DB
+// (anyone's random backup archive) used to SwapDir-wipe the live scanner.
+// The handler must reject the upload and leave any existing DB dir
+// untouched.
+func TestAdminTrivy_DBUpload_RejectsNonTrivyArchive(t *testing.T) {
+	s := newTestServer(t)
+	_, pw := seedTestUser(t, s.db, "root", "r@x", true, false)
+	cookie, _, _ := s.login(t, "root", pw)
+
+	dbDir := filepath.Join(s.dataRoot, "trivy", "db")
+	if err := os.MkdirAll(dbDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	sentinel := filepath.Join(dbDir, "existing-db-sentinel")
+	if err := os.WriteFile(sentinel, []byte("live-db-marker"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct {
+		name  string
+		files map[string]string
+	}{
+		{"no trivy.db at root", map[string]string{
+			"metadata.json": `{"Version": 2}`,
+			"db/trivy.db":   fakeTrivyDBBytes(2<<20),
+		}},
+		{"trivy.db too small", map[string]string{
+			"metadata.json": `{"Version": 2}`,
+			"trivy.db":      "tiny",
+		}},
+		{"empty archive", map[string]string{}},
+		{"only metadata.json", map[string]string{
+			"metadata.json": `{"Version": 2}`,
+		}},
+		{"bad metadata.json", map[string]string{
+			"metadata.json": `not valid json`,
+			"trivy.db":      fakeTrivyDBBytes(2<<20),
+		}},
+		// Codex batch-13 Q2: a 2 MiB non-BoltDB file passes the size
+		// floor + filename check. Without the magic-byte sniff it would
+		// be swapped in and later blow up inside the scanner. Fake the
+		// magic-bytes-stripped body so only verifyBoltDBMagic rejects it.
+		{"no BoltDB magic", map[string]string{
+			"metadata.json": `{"Version": 2}`,
+			"trivy.db":      strings.Repeat("a", 2<<20),
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tarBuf := createFakeTarGz(t, tc.files)
+
+			var body bytes.Buffer
+			w := multipart.NewWriter(&body)
+			part, _ := w.CreateFormFile("db", "not-really-a-trivy-db.tar.gz")
+			_, _ = part.Write(tarBuf)
+			_ = w.Close()
+
+			req, _ := http.NewRequest("POST", s.ts.URL+"/api/v1/admin/trivy/db", &body)
+			req.Header.Set("Content-Type", w.FormDataContentType())
+			req.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: cookie})
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = resp.Body.Close() }()
+			if resp.StatusCode != http.StatusUnprocessableEntity {
+				t.Fatalf("expected 422, got %d", resp.StatusCode)
+			}
+
+			// Live DB untouched — sentinel file survives every rejected
+			// upload attempt.
+			if _, err := os.Stat(sentinel); err != nil {
+				t.Fatalf("live DB sentinel was removed despite rejected upload (%s): %v", tc.name, err)
+			}
+		})
 	}
 }
 
@@ -125,6 +215,16 @@ func TestAdminTrivy_DBUpload_PathTraversal(t *testing.T) {
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusUnprocessableEntity {
 		t.Fatalf("expected 422 for path traversal, got %d", resp.StatusCode)
+	}
+	// Codex batch-13 Q5: the F-13.1 shape validator runs after the
+	// traversal guard. Without this body check a regression in the
+	// traversal guard could be silently masked by the later
+	// "missing trivy.db" validator returning the same 422. Assert the
+	// specific traversal-guard message to keep that path exercised.
+	bodyBytes, _ := io.ReadAll(resp.Body)
+	bodyStr := string(bodyBytes)
+	if !strings.Contains(bodyStr, "path traversal") && !strings.Contains(bodyStr, "path escape") {
+		t.Fatalf("422 did not come from the traversal guard: body=%s", bodyStr)
 	}
 }
 
@@ -160,8 +260,8 @@ func TestAdminTrivy_DBHistory_AfterUpload(t *testing.T) {
 	cookie, _, _ := s.login(t, "root", pw)
 
 	tarBuf := createFakeTarGz(t, map[string]string{
-		"metadata.json": `{"version": 2}`,
-		"db/trivy.db":   "fake-db-content",
+		"metadata.json": `{"Version": 2, "UpdatedAt": "2026-04-22T00:00:00Z"}`,
+		"trivy.db":      fakeTrivyDBBytes(2<<20),
 	})
 	var body bytes.Buffer
 	w := multipart.NewWriter(&body)
@@ -255,6 +355,23 @@ func TestAdminTrivy_NonSuperAdmin403(t *testing.T) {
 	}
 }
 
+// fakeTrivyDBBytes returns a byte slice that passes the F-13.1 validator
+// — size ≥ minTrivyDBBytes AND bytes[16:20] == BoltDB magic. The rest is
+// zero-fill; the scanner itself is never invoked in these tests so we
+// don't need a full BoltDB file.
+func fakeTrivyDBBytes(size int) string {
+	if size < 20 {
+		size = 20
+	}
+	b := make([]byte, size)
+	// offset 16: little-endian BoltDB magic {0xED, 0xDA, 0x0C, 0xED}
+	b[16] = 0xed
+	b[17] = 0xda
+	b[18] = 0x0c
+	b[19] = 0xed
+	return string(b)
+}
+
 // createFakeTarGz builds a tar.gz in memory with the given file contents.
 func createFakeTarGz(t *testing.T, files map[string]string) []byte {
 	t.Helper()
@@ -322,8 +439,11 @@ func TestAdminTrivy_HonorsCustomDBDir(t *testing.T) {
 	}
 
 	// Upload: the new DB should land at customDB, not the legacy default.
+	// Needs a realistic tarball shape so the F-13.1 validator accepts it.
 	tarBuf := createFakeTarGz(t, map[string]string{
-		"new-marker": "v2",
+		"metadata.json": `{"Version": 2}`,
+		"trivy.db":      fakeTrivyDBBytes(2<<20),
+		"new-marker":    "v2",
 	})
 	var upBody bytes.Buffer
 	w := multipart.NewWriter(&upBody)

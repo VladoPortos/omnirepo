@@ -9,9 +9,12 @@ package api
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
 	"context"
 	"database/sql"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -33,6 +36,119 @@ import (
 	authmw "github.com/dxc-internal/omnirepo/internal/auth/middleware"
 	"github.com/dxc-internal/omnirepo/internal/storage"
 )
+
+// minTrivyDBBytes is the lower-bound size check applied to the extracted
+// trivy.db file before the live DB is rotated in. F-13.1 — the upload
+// handler previously accepted any valid .tar.gz and SwapDir-rotated its
+// contents into place, so uploading an innocuous archive (a backup, a
+// documentation tarball) wiped the scanner with no undo path. Every real
+// Trivy release ships a BoltDB file well over a hundred megabytes; 1 MiB
+// is a wide margin under that floor while still rejecting every accidental
+// non-Trivy upload we tested.
+const minTrivyDBBytes int64 = 1 << 20
+
+// boltDBMagic is the 4-byte magic at offset 16 of every BoltDB file, in
+// little-endian on-disk form. Checking it before SwapDir is cheap defense
+// in depth on top of the size + filename guard — a 1 MiB non-BoltDB file
+// would still pass the rest of the validator but fail catastrophically
+// the first time the scanner tried to open it, with no clear rollback.
+var boltDBMagic = []byte{0xed, 0xda, 0x0c, 0xed}
+
+// trivyRotateMu serializes writes to the live Trivy DB directory across
+// all admin endpoints (upload + online pull). Two concurrent SwapDir
+// calls would race on the rename-aside / rename-in steps and could
+// transiently leave the scanner pointing at a missing dir or orphan a
+// backup dir. `trivyPullJob` already prevents pull+pull overlap, but it
+// does not coordinate with upload. A single package-level mutex held
+// from pre-swap-validation through SwapDir covers every rotation path.
+var trivyRotateMu sync.Mutex
+
+// trivyMetadata is the subset of Trivy's metadata.json we read to surface
+// the actual DB version in trivy_db_meta. Unused fields are intentionally
+// omitted — Trivy adds keys between minor releases and we don't want to
+// reject future tarballs just because they ship extra metadata.
+type trivyMetadata struct {
+	Version      int    `json:"Version"`
+	NextUpdate   string `json:"NextUpdate"`
+	UpdatedAt    string `json:"UpdatedAt"`
+	DownloadedAt string `json:"DownloadedAt"`
+}
+
+// validateExtractedTrivyDB returns an error describing why dir is not a
+// usable Trivy DB. The extracted metadata (when present and parseable) is
+// also returned so the caller can stamp a meaningful version string on
+// the trivy_db_meta row instead of the upload filename.
+//
+// Enforced shape (matches github.com/aquasecurity/trivy-db release tarballs):
+//   - trivy.db regular file at the root, ≥ minTrivyDBBytes.
+//   - metadata.json, if present, must parse as JSON.
+func validateExtractedTrivyDB(dir string) (*trivyMetadata, error) {
+	dbPath := filepath.Join(dir, "trivy.db")
+	info, err := os.Stat(dbPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, errors.New("tarball does not contain trivy.db at the root")
+		}
+		return nil, errors.New("tarball trivy.db: stat failed")
+	}
+	if !info.Mode().IsRegular() {
+		return nil, errors.New("tarball trivy.db is not a regular file")
+	}
+	if info.Size() < minTrivyDBBytes {
+		return nil, fmt.Errorf("tarball trivy.db is too small to be a Trivy database (%d bytes)", info.Size())
+	}
+	// Cheap BoltDB magic-byte sniff — defence in depth on top of the
+	// size + filename checks. A file that passes the size floor but is
+	// not actually a BoltDB database would fail deep inside the scanner
+	// on first use with no clear rotation path.
+	if err := verifyBoltDBMagic(dbPath); err != nil {
+		return nil, err
+	}
+
+	mdPath := filepath.Join(dir, "metadata.json")
+	if _, err := os.Stat(mdPath); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			// metadata.json is conventional but not strictly required by
+			// the scanner; accept tarballs without it.
+			return nil, nil
+		}
+		return nil, errors.New("tarball metadata.json: stat failed")
+	}
+	raw, err := os.ReadFile(mdPath)
+	if err != nil {
+		return nil, errors.New("tarball metadata.json: read failed")
+	}
+	var md trivyMetadata
+	if err := json.Unmarshal(raw, &md); err != nil {
+		return nil, errors.New("tarball metadata.json is not valid JSON")
+	}
+	return &md, nil
+}
+
+// verifyBoltDBMagic reads the first 20 bytes of path and checks for the
+// BoltDB magic number at offset 16. Real BoltDB files (which Trivy uses)
+// write the magic into the first page header at that fixed offset. A
+// mismatch means either the file is too small to be a DB or it's the
+// wrong file type — in either case we refuse to rotate it in.
+func verifyBoltDBMagic(path string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return errors.New("tarball trivy.db: open failed")
+	}
+	defer func() { _ = f.Close() }()
+	buf := make([]byte, 20)
+	n, err := io.ReadFull(f, buf)
+	if err != nil || n != len(buf) {
+		return errors.New("tarball trivy.db: short read on header")
+	}
+	// The on-disk BoltDB page header stores the magic in little-endian
+	// byte order; compare raw bytes rather than decoding a uint32 so the
+	// check doesn't depend on endianness of the host.
+	if !bytes.Equal(buf[16:20], boltDBMagic) {
+		return errors.New("tarball trivy.db is not a valid BoltDB file")
+	}
+	return nil
+}
 
 // trivyPullJob tracks an in-flight Trivy DB pull so the frontend can poll
 // progress instead of waiting on a long-lived request that just spins.
@@ -263,17 +379,43 @@ func (d Deps) handleTrivyDBUpload(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// F-13.1: verify the extracted tarball actually contains a Trivy DB
+	// before SwapDir deletes the live scanner state. Without this gate an
+	// operator could rotate any innocuous .tar.gz into place (a backup,
+	// an HTML docs archive, etc.) and destroy the scanner with no undo —
+	// SwapDir's "restore on failure" only fires for rename failures, not
+	// for logically-wrong-but-valid tarballs.
+	md, verr := validateExtractedTrivyDB(tmpDir)
+	if verr != nil {
+		writeJSONError(w, r, http.StatusUnprocessableEntity, ErrValidationFailed, verr.Error())
+		return
+	}
+
 	// Atomic swap: rename-aside old dir, rename-in new dir, remove old on
 	// success. Audit finding #6: the previous implementation RemoveAll'd the
 	// old DB before the rename, which could leave the scanner with no DB at
 	// all if the rename then failed. SwapDir restores the old dir on failure.
+	//
+	// Codex batch-13 Q4: serialize every rotation through trivyRotateMu so
+	// a concurrent upload + online-pull cannot interleave rename-aside and
+	// rename-in steps on the same dbDir.
 	dbDir := d.trivyDBDir()
-	if err := storage.SwapDir(tmpDir, dbDir); err != nil {
+	trivyRotateMu.Lock()
+	err = storage.SwapDir(tmpDir, dbDir)
+	trivyRotateMu.Unlock()
+	if err != nil {
 		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "atomic swap failed")
 		return
 	}
 
-	// Insert trivy_db_meta row.
+	// Insert trivy_db_meta row. Prefer the DB's own schema version string
+	// pulled from metadata.json when available — the upload filename is a
+	// weak proxy (operators often rename downloads) and telling the UI
+	// "Version: db.tar.gz" is actively unhelpful.
+	version := hdr.Filename
+	if md != nil && md.Version != 0 {
+		version = fmt.Sprintf("schema=%d updated=%s", md.Version, md.UpdatedAt)
+	}
 	now := time.Now().UTC().Format(time.RFC3339)
 	var userID *int64
 	if a, ok := auth.ActorFromContext(r.Context()); ok && a.ID != 0 {
@@ -283,7 +425,7 @@ func (d Deps) handleTrivyDBUpload(w http.ResponseWriter, r *http.Request) {
 		_, err := tx.ExecContext(r.Context(), `
 			INSERT INTO trivy_db_meta(version, source, size_bytes, applied_at, applied_by)
 			VALUES (?, 'uploaded', ?, ?, ?)
-		`, hdr.Filename, totalSize, now, userID)
+		`, version, totalSize, now, userID)
 		return err
 	})
 
@@ -291,13 +433,15 @@ func (d Deps) handleTrivyDBUpload(w http.ResponseWriter, r *http.Request) {
 	if a, ok := auth.ActorFromContext(r.Context()); ok {
 		uid := a.ID
 		d.recordAudit(r, audit.Event{
-			Kind:        audit.EvtMaintenanceToggled, // reuse; could add EvtTrivyDBUploaded
+			Kind:        audit.EvtTrivyDBRotated,
 			ActorUserID: &uid,
 			TargetKind:  "trivy_db",
 			TargetID:    hdr.Filename,
 			Outcome:     "uploaded",
 			Details: map[string]any{
 				"size_bytes": totalSize,
+				"source":     "uploaded",
+				"version":    version,
 			},
 		})
 	}
@@ -432,10 +576,16 @@ func (d Deps) runTrivyDBPull(userID *int64) {
 	}
 
 	dbDir := d.trivyDBDir()
-	if err := storage.SwapDir(srcDB, dbDir); err != nil {
+	// Codex batch-13 Q4: serialize with the upload path through
+	// trivyRotateMu so a simultaneous operator-initiated upload cannot
+	// interleave its SwapDir with the pull's.
+	trivyRotateMu.Lock()
+	swapErr := storage.SwapDir(srcDB, dbDir)
+	trivyRotateMu.Unlock()
+	if swapErr != nil {
 		slog.ErrorContext(bgCtx, "trivy.pull.swap_failed",
-			"err", err, "src", srcDB, "dst", dbDir)
-		finish("failed to install downloaded DB: " + err.Error())
+			"err", swapErr, "src", srcDB, "dst", dbDir)
+		finish("failed to install downloaded DB: " + swapErr.Error())
 		return
 	}
 

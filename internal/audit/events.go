@@ -86,6 +86,15 @@ const (
 	EvtScanFinished    EventKind = "scan.finished"
 	EvtScanFailed      EventKind = "scan.failed"
 	EvtScanGateBlocked EventKind = "scan.gate.blocked"
+	EvtScanPrune       EventKind = "scan.prune"
+
+	// Phase 05-03 / SCAN-09 — admin-triggered Trivy DB rotation. Emitted
+	// by the upload (operator-supplied tarball) and pull (online fetch)
+	// admin endpoints after SwapDir completes. Details_json carries the
+	// source ("uploaded" | "online-pulled"), size_bytes, and trivy_db_meta
+	// id so downstream alerting can correlate the rotation with any scan
+	// failures that follow.
+	EvtTrivyDBRotated EventKind = "trivy.db.rotated"
 
 	// Phase 2 Plan 12 — admin-triggered GC (D-37, D-38, OPS-06, SCAN-12).
 	// gc.triggered is emitted by the REST endpoint at enqueue time

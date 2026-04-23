@@ -205,10 +205,14 @@ test.describe('Mirror config settings card (Phase 8 / plan 08-04)', () => {
     // the value as a CopyInline <code> block with "URL is immutable"
     // helper text. MirrorConfigSection is invoked with hideUrl=true
     // in RepoSettingsTab so the duplicate Input never renders.
-    await expect(page.getByText('Upstream URL')).toBeVisible();
+    // "Upstream URL" appears in both the Label and downstream sections,
+    // so match on the immutability helper text which is unique to
+    // RepoSettingsTab's readonly-display path.
     await expect(
       page.getByText('URL is immutable — delete and recreate the repo to change.'),
     ).toBeVisible();
+    // And confirm no editable input exists at the mirror-url id.
+    await expect(page.locator('input#mirror-url')).toHaveCount(0);
   });
 
   test('non-mirror repo: Mirror config card is absent', async ({

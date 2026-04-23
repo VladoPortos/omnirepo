@@ -300,7 +300,7 @@ export function ProjectDetailPage() {
                 </div>
               </CardHeader>
               <CardContent>
-                {project.members.length === 0 ? (
+                {project.members.filter((m) => m.login !== me?.login).length === 0 ? (
                   <EmptyState
                     icon={Users}
                     title="No teammates yet"

@@ -152,13 +152,7 @@ test.describe('EmptyState surfaces (EMPTY-01..06, 08)', () => {
     await bootstrapAdmin(request);
   });
 
-  // EMPTY-05 is currently untestable — TLSPage branches on
-  // `currentCert ?` but the server always returns the self-signed
-  // default as a TLSCertInfo, so the EmptyState never renders on a
-  // fresh install. Intent per spec §E-05 + title copy: render
-  // EmptyState when currentCert.source !== 'uploaded'. Product fix
-  // tracked separately (outside F-15.4 e2e-modernization scope).
-  test.skip('EMPTY-05: no uploaded TLS cert', async ({ page }) => {
+  test('EMPTY-05: no uploaded TLS cert', async ({ page }) => {
     await uiLoginAdmin(page);
     await page.goto('/admin/tls');
     await assertEmptyState(
@@ -215,13 +209,7 @@ test.describe('EmptyState surfaces (EMPTY-01..06, 08)', () => {
     await assertEmptyState(page, 'No projects yet', 'Create project');
   });
 
-  // EMPTY-02 is currently untestable — ProjectDetailPage branches on
-  // `members.length === 0` but the admin is always a member of
-  // projects they create (auto-owner), so a "single-member project"
-  // stays length=1 and the EmptyState never renders. Intent per spec
-  // title "No teammates yet" (= 0 other members): condition should be
-  // `members.length <= 1`. Product fix tracked separately.
-  test.skip('EMPTY-02: zero teammates on a single-member project', async ({
+  test('EMPTY-02: zero teammates on a single-member project', async ({
     page,
     request,
   }) => {

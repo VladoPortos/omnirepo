@@ -14,6 +14,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/url"
 	"path"
 	"strings"
 	"time"
@@ -26,6 +27,16 @@ import (
 	"github.com/dxc-internal/omnirepo/internal/httpx"
 	"github.com/dxc-internal/omnirepo/internal/metadata"
 	"github.com/dxc-internal/omnirepo/internal/storage"
+)
+
+// Raw path length caps (F-12.2). Linux PATH_MAX is 4096 and NAME_MAX per
+// segment is 255. Use conservative values well under the kernel limits so a
+// pathological request returns a 400 validation error rather than letting the
+// rename syscall fail with ENAMETOOLONG, which the handler would otherwise
+// surface as a 500.
+const (
+	maxRawPathBytes        = 1024
+	maxRawPathSegmentBytes = 255
 )
 
 // SeverityGateFn lets 02-09 plug in the block_on_severity gate without
@@ -203,7 +214,32 @@ type resolved struct {
 // resolveRepoAndPath validates the project/repo URL params, looks up the repo
 // row, validates the rest path, and returns the resolved triple. Writes a
 // 404 to w on miss and returns ok=false.
+//
+// requirePath:
+//   - true for PUT / DELETE (the URL must name a specific file).
+//   - false for GET / HEAD (empty = repo-root directory listing).
+//
+// The third arg (pre-wrapper) is the method-derived write-strictness flag,
+// supplied via the wrapper below so call sites stay readable.
 func (h *Handler) resolveRepoAndPath(w http.ResponseWriter, r *http.Request, requirePath bool) (resolved, bool) {
+	// The boolean routing is:
+	//   PUT    → strict (write).
+	//   DELETE → lenient (backward-compat: legacy rows whose path contains
+	//            literal "%2e%2e" must remain deletable; percent-decoded
+	//            traversal never escapes the repo dir because filepath.Join
+	//            does not URL-decode, so the defense-in-depth path.Clean
+	//            check and explicit-dot-segment check still cover the
+	//            escape scenario).
+	//   GET    → lenient (same reasoning: serves already-stored blobs).
+	//   HEAD   → lenient (same reasoning).
+	strict := r.Method == http.MethodPut
+	return h.resolveRepoAndPathWithMode(w, r, requirePath, strict)
+}
+
+// resolveRepoAndPathWithMode is the lower-level helper used by both the
+// request-method-driven resolveRepoAndPath above and, indirectly, by tests
+// that need to force a strictness level.
+func (h *Handler) resolveRepoAndPathWithMode(w http.ResponseWriter, r *http.Request, requirePath, strict bool) (resolved, bool) {
 	projectName := chi.URLParam(r, "project")
 	repoName := chi.URLParam(r, "repo")
 	rest := chi.URLParam(r, "*")
@@ -234,7 +270,7 @@ func (h *Handler) resolveRepoAndPath(w http.ResponseWriter, r *http.Request, req
 
 	// Validate the rest path. "" is allowed (repo-root listing) when
 	// requirePath is false.
-	cleaned, perr := validateRawPath(checkRest)
+	cleaned, perr := validateRawPath(checkRest, strict)
 	if perr != nil {
 		// Allow empty path only for non-required (GET listing).
 		if checkRest == "" && !requirePath {
@@ -258,9 +294,23 @@ func (h *Handler) resolveRepoAndPath(w http.ResponseWriter, r *http.Request, req
 //   - leading slashes are stripped
 //   - empty input or input that cleans to "" → error
 //   - any segment that is "", ".", or ".." → error
+//   - per-segment length ≤ 255 bytes, total path length ≤ 1024 bytes
+//     (F-12.2: Linux NAME_MAX / PATH_MAX guards so a pathological filename
+//     surfaces as a clean 400 instead of a 500 from the rename syscall.)
 //   - NUL byte anywhere → error
 //   - cleaned path must not start with "/" (post-trim) — defense in depth
-func validateRawPath(raw string) (string, error) {
+//
+// strict adds one extra rule, applied only on write paths (PUT):
+//   - any segment whose percent-decoded form is "", ".", or ".." → error,
+//     and malformed percent-encoding → error
+//     (F-12.1: chi leaves `%2e%2e` literally in the wildcard param, so the
+//     pre-decode dotted-segment check would pass and the filesystem would
+//     store a file named `%2e%2e`. Writes reject that up-front. Reads
+//     (strict=false) do NOT apply this rule so legacy rows whose stored
+//     path contains a literal `%2e%2e` segment remain GET/HEAD/DELETEable;
+//     no filesystem escape is possible on reads because filepath.Join does
+//     not URL-decode and path.Clean below would reject any decoded "..").
+func validateRawPath(raw string, strict bool) (string, error) {
 	if raw == "" {
 		return "", errors.New("empty path")
 	}
@@ -271,11 +321,29 @@ func validateRawPath(raw string) (string, error) {
 	if p == "" {
 		return "", errors.New("empty path after trim")
 	}
+	if len(p) > maxRawPathBytes {
+		return "", errors.New("path too long")
+	}
 	// Reject explicit traversal first — path.Clean would silently collapse
 	// "a/../b" to "b", which is NOT what we want.
 	for _, seg := range strings.Split(p, "/") {
+		if len(seg) > maxRawPathSegmentBytes {
+			return "", errors.New("path segment too long")
+		}
 		if seg == "" || seg == ".." || seg == "." {
 			return "", errors.New("invalid path segment")
+		}
+		if strict {
+			decoded, derr := url.PathUnescape(seg)
+			if derr != nil {
+				return "", errors.New("invalid percent-encoding")
+			}
+			if decoded == "" || decoded == ".." || decoded == "." {
+				return "", errors.New("invalid path segment")
+			}
+			if strings.ContainsRune(decoded, '\x00') {
+				return "", errors.New("nul byte in path segment")
+			}
 		}
 	}
 	// Ensure path.Clean is a no-op on the already-segmented input. If it

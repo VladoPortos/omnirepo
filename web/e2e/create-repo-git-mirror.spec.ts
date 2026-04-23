@@ -22,27 +22,11 @@
  */
 
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
+import { adminLoginAPI, resetServerState } from './helpers/auth';
 
 test.use({ viewport: { width: 1440, height: 900 } });
 
 const ADMIN_PW = 'AdminTest1!';
-
-async function bootstrapAdmin(request: APIRequestContext): Promise<void> {
-  const first = await request.post('/api/v1/auth/login', {
-    data: { login: 'admin', password: 'AdminTest1!' },
-  });
-  if (first.ok()) {
-    const body = await first.json();
-    if (body.must_change_password) {
-      await request.post('/api/v1/auth/change-password', {
-        data: { current: 'AdminTest1!', new: ADMIN_PW },
-      });
-    }
-  }
-  await request.post('/api/v1/auth/login', {
-    data: { login: 'admin', password: ADMIN_PW },
-  });
-}
 
 async function uiLoginAdmin(page: Page): Promise<void> {
   await page.goto('/login');
@@ -62,7 +46,8 @@ async function seedProject(
 
 test.describe('Create repo: Git mirror (Phase 11 / plan 11-09)', () => {
   test.beforeEach(async ({ request }) => {
-    await bootstrapAdmin(request);
+    await adminLoginAPI(request);
+    await resetServerState(request);
   });
 
   test('Git mirror happy path: LFS warning + no filter widget + POST body shape', async ({

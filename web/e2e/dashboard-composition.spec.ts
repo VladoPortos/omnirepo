@@ -21,7 +21,8 @@
  * session.
  */
 
-import { test, expect, type Page, type APIRequestContext } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
+import { adminLoginAPI, resetServerState } from './helpers/auth';
 
 test.use({ viewport: { width: 1366, height: 768 } });
 
@@ -34,32 +35,10 @@ const NON_ADMIN_EMAIL = `${NON_ADMIN_LOGIN}@example.invalid`;
 const NON_ADMIN_PW = 'NonAdmin1!';
 
 /**
- * bootstrapAdmin — drive the change-password-on-first-login dance via
- * the REST API. Idempotent: if the admin already changed their password
- * to ADMIN_PW on a previous run, the second login call succeeds and the
- * must_change_password branch is skipped.
- */
-async function bootstrapAdmin(request: APIRequestContext): Promise<void> {
-  const first = await request.post('/api/v1/auth/login', {
-    data: { login: 'admin', password: 'AdminTest1!' },
-  });
-  if (first.ok()) {
-    const body = await first.json();
-    if (body.must_change_password) {
-      await request.post('/api/v1/auth/change-password', {
-        data: { current: 'AdminTest1!', new: ADMIN_PW },
-      });
-    }
-  }
-  // Final ensured session is under ADMIN_PW.
-  await request.post('/api/v1/auth/login', {
-    data: { login: 'admin', password: ADMIN_PW },
-  });
-}
-
-/**
- * uiLogin — walk the UI login form. Used after we already changed the
- * password via bootstrapAdmin so we land on /dashboard.
+ * uiLogin — walk the UI login form. Used after beforeEach's
+ * adminLoginAPI + resetServerState so we land on /dashboard (for the
+ * super-admin branch) or drive the must_change_password wall for a
+ * freshly-seeded non-admin user.
  */
 async function uiLogin(page: Page, login: string, password: string): Promise<void> {
   await page.goto('/login');
@@ -87,12 +66,14 @@ async function uiLogin(page: Page, login: string, password: string): Promise<voi
 }
 
 test.describe('DashboardPage Composition row (Phase 7 D-01..D-06)', () => {
+  test.beforeEach(async ({ request }) => {
+    await adminLoginAPI(request);
+    await resetServerState(request);
+  });
+
   test('super-admin sees all 6 composition cards at 1366×768', async ({
     page,
-    request,
   }) => {
-    await bootstrapAdmin(request);
-
     // Drive the UI login so the browser has a cookie-authenticated
     // session (APIRequestContext cookies aren't automatically shared
     // with the BrowserContext).
@@ -146,9 +127,9 @@ test.describe('DashboardPage Composition row (Phase 7 D-01..D-06)', () => {
     request,
   }) => {
     // Seed a fresh non-super-admin via the admin API (uses the
-    // super-admin session). If the user already exists from a prior
-    // run, POST returns 409 — we ignore that and proceed.
-    await bootstrapAdmin(request);
+    // super-admin session established by beforeEach adminLoginAPI +
+    // resetServerState). After reset, the user list is empty, so the
+    // POST below is guaranteed to create rather than 409.
     const createResp = await request.post('/api/v1/admin/users', {
       data: { login: NON_ADMIN_LOGIN, email: NON_ADMIN_EMAIL },
     });

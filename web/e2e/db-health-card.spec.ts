@@ -22,7 +22,8 @@
  * Auth bootstrap mirrors dashboard-composition.spec.ts.
  */
 
-import { test, expect, type APIRequestContext, type Page } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
+import { adminLoginAPI, resetServerState } from './helpers/auth';
 
 test.use({ viewport: { width: 1366, height: 768 } });
 
@@ -31,23 +32,6 @@ const CARD_TITLE = 'SQLite Health';
 
 /** 100 MB — matches plan 10-02's wal.warn_over_bytes constant. */
 const ONE_HUNDRED_MB = 104857600;
-
-async function bootstrapAdmin(request: APIRequestContext): Promise<void> {
-  const first = await request.post('/api/v1/auth/login', {
-    data: { login: 'admin', password: 'AdminTest1!' },
-  });
-  if (first.ok()) {
-    const body = await first.json();
-    if (body.must_change_password) {
-      await request.post('/api/v1/auth/change-password', {
-        data: { current: 'AdminTest1!', new: ADMIN_PW },
-      });
-    }
-  }
-  await request.post('/api/v1/auth/login', {
-    data: { login: 'admin', password: ADMIN_PW },
-  });
-}
 
 async function uiLoginAdmin(page: Page): Promise<void> {
   await page.goto('/login');
@@ -123,7 +107,8 @@ async function mockDBHealth(
 
 test.describe('DBHealthCard (Phase 10 C-7, super-admin only)', () => {
   test.beforeEach(async ({ request }) => {
-    await bootstrapAdmin(request);
+    await adminLoginAPI(request);
+    await resetServerState(request);
   });
 
   test('healthy render shows SQLite Health card with OK badge', async ({

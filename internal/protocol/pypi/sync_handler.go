@@ -195,6 +195,14 @@ func (h *SyncHandler) Handle(ctx context.Context, payload string, projectID, rep
 			if !isInstallableExt(f.Filename) {
 				continue
 			}
+			// F-07.6 (post-v1.4): the filename becomes the last path
+			// segment under {proj}/pypi/{repo}/packages/ and the key the
+			// simple-index uses for href generation. Reject hostile shapes
+			// (path separators, control chars, quotes) before they touch
+			// PathStore or the DB.
+			if !isSafeMirrorFilename(f.Filename) {
+				continue
+			}
 			// Idempotency by filename — matches pypi_files UNIQUE(repo_id, filename) (D-15).
 			if existing, ferr := h.deps.PyPIFiles.FindByFilename(ctx, repoID, f.Filename); ferr == nil && existing != nil {
 				continue
@@ -314,6 +322,46 @@ func (h *SyncHandler) fetchAndCommit(ctx context.Context, projectName string, re
 	if existing, ferr := h.deps.PyPIFiles.FindByFilename(ctx, repo.ID, f.Filename); ferr == nil && existing != nil {
 		return 0, nil
 	}
+
+	// F-07.5 (post-v1.4): route through the canonical PEP 427 / PEP 625
+	// parsers in parse.go rather than inline string-splitting. The pre-
+	// v1.4 inline sdist split used LastIndex("-") which mis-attributed
+	// dashed pre-release suffixes (`foo-1.0.0-rc1.tar.gz` → version="rc1")
+	// and polluted the simple-index grouping.
+	//
+	// Parse runs BEFORE the download so a malformed upstream filename
+	// fails fast without wasting bandwidth or leaving an orphaned blob
+	// on disk (Codex review flagged the post-Put parse-failure path as
+	// a storage leak). isInstallableExt already filters the legacy
+	// bdist forms the inline split used to trip on, so reaching here
+	// with an unparseable filename means the upstream is malformed.
+	//
+	// Heuristic caveat (Q1, deferred): parseSdistFilename splits at the
+	// first `-` followed by a digit. A hypothetical name ending in
+	// `-<digit>...` (e.g. `f-2do-1.0.0.tar.gz`) would mis-attribute the
+	// `-2do` segment to the version. Not observed on real PyPI in 2026
+	// and a full fix requires embedding a PEP 440 validator — tracked
+	// for a future follow-up.
+	var (
+		kind    string
+		version string
+	)
+	if strings.HasSuffix(strings.ToLower(f.Filename), ".whl") {
+		kind = "wheel"
+		_, v, perr := parseWheelFilename(f.Filename)
+		if perr != nil {
+			return 0, fmt.Errorf("pypi_sync: %w", perr)
+		}
+		version = v
+	} else {
+		kind = "sdist"
+		_, v, perr := parseSdistFilename(f.Filename)
+		if perr != nil {
+			return 0, fmt.Errorf("pypi_sync: %w", perr)
+		}
+		version = v
+	}
+
 	body, size, dgst, err := downloadAndHashWithProgress(ctx, h.deps.HTTPClient, f.URL, creds, progress, step, accumulatedDone, totalBytes)
 	if err != nil {
 		return 0, fmt.Errorf("pypi_sync: download %s: %w", f.Filename, err)
@@ -326,24 +374,6 @@ func (h *SyncHandler) fetchAndCommit(ctx context.Context, projectName string, re
 	storageKey := strings.Join([]string{projectName, "pypi", repo.Name, "packages", f.Filename}, "/")
 	if _, err := h.deps.Path.Put(ctx, storageKey, openBytesReader(body)); err != nil {
 		return 0, fmt.Errorf("pypi_sync: store %s: %w", f.Filename, err)
-	}
-
-	kind := "wheel"
-	version := ""
-	if strings.HasSuffix(f.Filename, ".whl") {
-		// Filename: name-version-...
-		parts := strings.SplitN(f.Filename, "-", 3)
-		if len(parts) >= 2 {
-			version = parts[1]
-		}
-	} else {
-		kind = "sdist"
-		// For sdists: name-version.tar.gz
-		base := strings.TrimSuffix(strings.TrimSuffix(strings.TrimSuffix(f.Filename, ".gz"), ".tar"), ".zip")
-		idx := strings.LastIndex(base, "-")
-		if idx > 0 {
-			version = base[idx+1:]
-		}
 	}
 
 	if err := h.deps.DB.WriteTx(ctx, func(tx *sql.Tx) error {

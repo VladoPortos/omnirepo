@@ -338,3 +338,44 @@ func isInstallableExt(filename string) bool {
 		return false
 	}
 }
+
+// maxMirrorFilenameLen caps the accepted filename length below ext4's
+// 255-byte NAME_MAX so PathStore.Put fails at the allowlist boundary with
+// a clear error rather than late at the syscall with ENAMETOOLONG. No
+// real-world PyPI artefact comes close — the longest observable wheels
+// on pypi.org sit well under 180 characters.
+const maxMirrorFilenameLen = 200
+
+// isSafeMirrorFilename gates upstream-fed filenames before they ever
+// become a path segment under {proj}/pypi/{repo}/packages/. The allowlist
+// is intentionally narrow: PEP 427 wheels and PEP 625 sdists only use
+// letters, digits, dot, underscore, and hyphen. Anything else (slashes,
+// control chars, quotes, angle brackets, null bytes) is either a
+// directory-separator attack, a header-injection attempt, or a typo
+// from a hostile upstream.
+//
+// F-07.6 (post-v1.4): pypi_sync ingest path previously passed upstream
+// filenames through to PathStore verbatim. The web side escapes them
+// for display, but a malicious mirror could still engineer
+// Content-Disposition-influencing bytes if we ever served the file with
+// an attachment header. Rejecting at ingest is the cheaper defence.
+func isSafeMirrorFilename(name string) bool {
+	if name == "" || len(name) > maxMirrorFilenameLen {
+		return false
+	}
+	if name[0] == '.' || name[0] == '-' {
+		return false
+	}
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		switch {
+		case c >= 'A' && c <= 'Z':
+		case c >= 'a' && c <= 'z':
+		case c >= '0' && c <= '9':
+		case c == '.' || c == '_' || c == '-':
+		default:
+			return false
+		}
+	}
+	return true
+}

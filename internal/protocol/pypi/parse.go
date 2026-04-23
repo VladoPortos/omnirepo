@@ -185,11 +185,17 @@ func ParseSdistAs(sdistPath, canonicalFilename string) (*File, error) {
 // parseWheelFilename extracts (name, version) from a PEP 427 wheel
 // filename: {distribution}-{version}(-{build})?-{python}-{abi}-{platform}.whl.
 // Minimum 5 dash-separated segments after stripping .whl.
+//
+// The extension match is case-insensitive — `isInstallableExt` accepts
+// uppercase `.WHL` from legacy upstreams, so the parser must too or the
+// two layers disagree and the mirror path fails late (Codex review Q5,
+// post-v1.4). PEP 427 mandates lowercase but we've seen real mirrors
+// serve uppercase for DOS-legacy reasons.
 func parseWheelFilename(base string) (string, string, error) {
-	if !strings.HasSuffix(base, ".whl") {
+	if len(base) < 4 || !strings.EqualFold(base[len(base)-4:], ".whl") {
 		return "", "", fmt.Errorf("pypi: wheel filename must end in .whl: %s", base)
 	}
-	stem := strings.TrimSuffix(base, ".whl")
+	stem := base[:len(base)-4]
 	parts := strings.Split(stem, "-")
 	if len(parts) < 5 {
 		return "", "", fmt.Errorf("pypi: malformed wheel filename: %s", base)
@@ -199,6 +205,17 @@ func parseWheelFilename(base string) (string, string, error) {
 
 // parseSdistFilename extracts (name, version) from an sdist archive
 // filename: {name}-{version}.{tar.gz|tgz|zip}.
+//
+// The split is the FIRST `-` whose right-hand neighbour is a digit. A PEP
+// 440 version must begin with a digit (epoch or release segment), so the
+// leftmost `-<digit>` boundary is the unambiguous name/version split even
+// when the name contains hyphens (`zope-interface-5.5.2`) or the version
+// contains a dashed pre-release suffix (`foo-1.0.0-rc1`).
+//
+// Using LastIndex("-") — the pre-v1.4 implementation — mis-attributed
+// `1.0.0-rc1` style versions to the version slot as `rc1` and pushed the
+// leading release segment into the name, polluting Simple-index grouping
+// and scan-result cards (F-07.5, post-v1.4).
 func parseSdistFilename(base string) (string, string, error) {
 	stem := base
 	switch {
@@ -211,11 +228,12 @@ func parseSdistFilename(base string) (string, string, error) {
 	default:
 		return "", "", fmt.Errorf("pypi: unsupported sdist extension: %s", base)
 	}
-	i := strings.LastIndex(stem, "-")
-	if i < 1 || i == len(stem)-1 {
-		return "", "", fmt.Errorf("pypi: malformed sdist filename: %s", base)
+	for i := 1; i < len(stem)-1; i++ {
+		if stem[i] == '-' && stem[i+1] >= '0' && stem[i+1] <= '9' {
+			return stem[:i], stem[i+1:], nil
+		}
 	}
-	return stem[:i], stem[i+1:], nil
+	return "", "", fmt.Errorf("pypi: malformed sdist filename: %s", base)
 }
 
 // readSdistPKGINFOFromTarGz opens path as a gzipped tar archive, finds the

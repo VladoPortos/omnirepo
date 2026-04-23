@@ -954,12 +954,24 @@ func (d Deps) handleTLSUpload(w http.ResponseWriter, r *http.Request) {
 	if keyFinal == "" {
 		keyFinal = filepath.Join(d.DataRoot, "certs", "server.key")
 	}
+	uploadedBy := ""
+	if a, ok := auth.ActorFromContext(r.Context()); ok {
+		uploadedBy = a.Login
+	}
 	layout := omrtls.UploadLayout{
 		CertPath:   certFinal,
 		KeyPath:    keyFinal,
 		HistoryDir: filepath.Join(d.DataRoot, "certs", "uploaded"),
+		UploadedBy: uploadedBy,
 	}
 	if err := omrtls.ApplyUploadAt(r.Context(), certBytes, keyBytes, layout, d.Holder); err != nil {
+		if a, ok := auth.ActorFromContext(r.Context()); ok {
+			uid := a.ID
+			d.recordAudit(r, audit.Event{
+				Kind: audit.EvtTLSCertUploadFailed, ActorUserID: &uid, TargetKind: "tls",
+				Outcome: "error", Details: map[string]any{"reason": err.Error()},
+			})
+		}
 		writeJSONError(w, r, http.StatusUnprocessableEntity, ErrValidationFailed, err.Error())
 		return
 	}

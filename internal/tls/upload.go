@@ -16,6 +16,10 @@ type UploadLayout struct {
 	CertPath   string // final live cert destination
 	KeyPath    string // final live key destination
 	HistoryDir string // parent directory for timestamped rollback archives
+	// UploadedBy is recorded as a sidecar `uploaded_by` file in the history
+	// entry. Empty string is allowed (pre-auth callers / tests) — history
+	// display falls back to blank in that case.
+	UploadedBy string
 }
 
 // ApplyUpload is a thin compatibility wrapper that derives the historical
@@ -101,6 +105,11 @@ func ApplyUploadAt(ctx context.Context, certPEM, keyPEM []byte, layout UploadLay
 	}
 	if err := os.WriteFile(filepath.Join(histDir, "server.key"), keyPEM, 0o600); err != nil {
 		return stageFail(fmt.Errorf("tls: apply upload: write history key: %w", err))
+	}
+	if layout.UploadedBy != "" {
+		if err := os.WriteFile(filepath.Join(histDir, "uploaded_by"), []byte(layout.UploadedBy), 0o644); err != nil {
+			return stageFail(fmt.Errorf("tls: apply upload: write uploaded_by: %w", err))
+		}
 	}
 
 	// 4. Promote staged files. If the cert rename fails, we haven't touched

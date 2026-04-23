@@ -602,6 +602,7 @@ export interface TLSCertInfo {
   not_after: string;
   serial: string;
   fingerprint_sha256: string;
+  dns_names?: string[];
   source: 'self-signed' | 'uploaded';
 }
 

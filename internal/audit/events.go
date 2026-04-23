@@ -33,6 +33,7 @@ const (
 	EvtRepoDeleted         EventKind = "repo.deleted"
 	EvtRepoWiped           EventKind = "repo.wiped"
 	EvtTLSCertUploaded     EventKind = "tls.cert.uploaded"
+	EvtTLSCertUploadFailed EventKind = "tls.cert.upload.failed"
 	EvtBootstrapApplied    EventKind = "bootstrap.applied"
 	EvtMaintenanceToggled  EventKind = "maintenance.toggled"
 

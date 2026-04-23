@@ -39,8 +39,20 @@ function useTLSHistory() {
 function useTLSUpload() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (body: { cert_pem: string; key_pem: string }) =>
-      api.post<void>('/admin/tls/upload', body),
+    mutationFn: (body: { cert: string; key: string }) => {
+      const fd = new FormData();
+      fd.append(
+        'cert',
+        new Blob([body.cert], { type: 'application/x-pem-file' }),
+        'cert.pem',
+      );
+      fd.append(
+        'key',
+        new Blob([body.key], { type: 'application/x-pem-file' }),
+        'key.pem',
+      );
+      return api.postForm<void>('/admin/tls/upload', fd);
+    },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['admin', 'tls'] });
       toast.success('Certificate uploaded and hot-swapped successfully.');
@@ -80,7 +92,7 @@ export default function TLSPage() {
       return;
     }
     try {
-      await uploadMutation.mutateAsync({ cert_pem: certPem, key_pem: keyPem });
+      await uploadMutation.mutateAsync({ cert: certPem, key: keyPem });
       setCertPem('');
       setKeyPem('');
     } catch (err) {
@@ -154,7 +166,14 @@ export default function TLSPage() {
                 <p className="font-medium">{currentCert.issuer}</p>
               </div>
               <div>
-                <span className="text-xs text-muted-foreground">Expiry Date</span>
+                <span className="text-xs text-muted-foreground">Not Before</span>
+                <p className="flex items-center gap-2 font-medium">
+                  <Clock className="size-3.5" />
+                  {formatDate(currentCert.not_before)}
+                </p>
+              </div>
+              <div>
+                <span className="text-xs text-muted-foreground">Not After</span>
                 <p className="flex items-center gap-2 font-medium">
                   <Clock className="size-3.5" />
                   {formatDate(currentCert.not_after)}
@@ -173,6 +192,20 @@ export default function TLSPage() {
                   </Badge>
                 </p>
               </div>
+              {currentCert.dns_names && currentCert.dns_names.length > 0 && (
+                <div className="col-span-full">
+                  <span className="text-xs text-muted-foreground">
+                    Subject Alternative Names
+                  </span>
+                  <p className="flex flex-wrap gap-1.5 mt-1">
+                    {currentCert.dns_names.map((n) => (
+                      <Badge key={n} variant="outline" className="font-mono text-xs">
+                        {n}
+                      </Badge>
+                    ))}
+                  </p>
+                </div>
+              )}
               <div className="col-span-full">
                 <span className="text-xs text-muted-foreground flex items-center gap-1">
                   <Fingerprint className="size-3" />

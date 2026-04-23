@@ -218,6 +218,15 @@ class ApiClient {
     return this.handleResponse<T>(res);
   }
 
+  async postForm<T>(path: string, form: FormData): Promise<T> {
+    const res = await fetch(this.baseUrl + path, {
+      method: 'POST',
+      credentials: 'include',
+      body: form,
+    });
+    return this.handleResponse<T>(res);
+  }
+
   async patch<T>(path: string, body: unknown): Promise<T> {
     const res = await fetch(this.baseUrl + path, {
       method: 'PATCH',

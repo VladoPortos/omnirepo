@@ -71,9 +71,13 @@ func (d Deps) handleTLSHistory(w http.ResponseWriter, r *http.Request) {
 		if leaf == nil {
 			continue
 		}
+		uploadedBy := ""
+		if sidecar, err := os.ReadFile(filepath.Join(uploadDir, entry.Name(), "uploaded_by")); err == nil {
+			uploadedBy = string(sidecar)
+		}
 		items = append(items, tlsHistoryEntry{
 			UploadedAt:        info.ModTime().UTC().Format(time.RFC3339),
-			UploadedBy:        "", // Not currently recorded per-upload; audit log holds this.
+			UploadedBy:        uploadedBy,
 			Subject:           leaf.Subject.CommonName,
 			FingerprintSHA256: sha256Hex(leaf.Raw),
 		})

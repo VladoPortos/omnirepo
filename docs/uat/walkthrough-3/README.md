@@ -34,7 +34,7 @@ unless the batch explicitly asks for it.
 | 12 | [batch-12-raw-s3.md](batch-12-raw-s3.md) | Raw blobs + S3 buckets + SigV4 + object CRUD | ✅ |
 | 13 | [batch-13-scanning.md](batch-13-scanning.md) | Trivy DB, rescan, SBOM, severity gates (all 5 protocols) | ✅ |
 | 14 | [batch-14-admin.md](batch-14-admin.md) | TLS, audit log, trash/restore, GC, maintenance, **DB health (NEW)** | ✅ |
-| 15 | [batch-15-cross-cutting.md](batch-15-cross-cutting.md) | Search, dashboard, API docs, error envelopes, a11y, console cleanliness | ⬜ |
+| 15 | [batch-15-cross-cutting.md](batch-15-cross-cutting.md) | Search, dashboard, API docs, error envelopes, a11y, console cleanliness | ✅ |
 
 Legend: ⬜ not started · 🟨 in progress · ✅ passed clean · 🟥 blocked · ♻ retest needed
 

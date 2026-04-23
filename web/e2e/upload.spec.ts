@@ -4,24 +4,16 @@
  */
 
 import { test, expect } from '@playwright/test';
+import { adminLoginAPI, resetServerState } from './helpers/auth';
 
 test.describe('Upload page', () => {
   test.beforeEach(async ({ request }) => {
-    // Login as admin
-    const resp = await request.post('/api/v1/auth/login', {
-      data: { login: 'admin', password: 'AdminTest1!' },
-    });
-    const body = await resp.json();
-    if (body.must_change_password) {
-      await request.post('/api/v1/auth/change-password', {
-        data: { current: 'AdminTest1!', new: 'UploadTest1!' },
-      });
-      await request.post('/api/v1/auth/login', {
-        data: { login: 'admin', password: 'UploadTest1!' },
-      });
-    }
+    await adminLoginAPI(request);
+    await resetServerState(request);
 
-    // Create project and raw repo via API
+    // Create project and raw repo via API AFTER the reset so the rows
+    // survive into the test body (resetServerState wipes every
+    // non-bootstrap table row).
     await request.post('/api/v1/projects', {
       data: { name: 'upload-test' },
     });

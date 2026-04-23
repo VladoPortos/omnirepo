@@ -22,6 +22,7 @@
  */
 
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
+import { adminLoginAPI, resetServerState } from './helpers/auth';
 
 test.use({ viewport: { width: 1440, height: 900 } });
 
@@ -32,26 +33,11 @@ const ADMIN_PW = 'AdminTest1!';
 // top-to-bottom.
 // -----------------------------------------------------------------------
 
-async function bootstrapAdmin(request: APIRequestContext): Promise<void> {
-  const first = await request.post('/api/v1/auth/login', {
-    data: { login: 'admin', password: 'AdminTest1!' },
-  });
-  if (first.ok()) {
-    const body = await first.json();
-    if (body.must_change_password) {
-      await request.post('/api/v1/auth/change-password', {
-        data: { current: 'AdminTest1!', new: ADMIN_PW },
-      });
-    }
-  }
-  await request.post('/api/v1/auth/login', {
-    data: { login: 'admin', password: ADMIN_PW },
-  });
-}
-
 /**
- * uiLoginAdmin — drives the UI login form as the super-admin. Assumes
- * bootstrapAdmin already normalised the password to ADMIN_PW.
+ * uiLoginAdmin — drives the UI login form as the super-admin. Pairs
+ * with the beforeEach-level adminLoginAPI + resetServerState from
+ * ./helpers/auth for the BrowserContext cookie (the API request jar is
+ * separate from the page's).
  */
 async function uiLoginAdmin(page: Page): Promise<void> {
   await page.goto('/login');
@@ -149,7 +135,8 @@ export async function assertEmptyState(
 
 test.describe('EmptyState surfaces (EMPTY-01..06, 08)', () => {
   test.beforeEach(async ({ request }) => {
-    await bootstrapAdmin(request);
+    await adminLoginAPI(request);
+    await resetServerState(request);
   });
 
   test('EMPTY-05: no uploaded TLS cert', async ({ page }) => {

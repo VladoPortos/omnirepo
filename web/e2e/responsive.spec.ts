@@ -15,25 +15,14 @@
  */
 
 import { test, expect } from '@playwright/test';
+import { adminLoginAPI, resetServerState } from './helpers/auth';
 
 test.use({ viewport: { width: 1366, height: 768 } });
 
 test.describe('1366x768 horizontal-scroll gate', () => {
   test.beforeEach(async ({ request }) => {
-    const resp = await request.post('/api/v1/auth/login', {
-      data: { login: 'admin', password: 'AdminTest1!' },
-    });
-    if (resp.ok()) {
-      const body = await resp.json();
-      if (body.must_change_password) {
-        await request.post('/api/v1/auth/change-password', {
-          data: { current: 'AdminTest1!', new: 'AdminTest1!' },
-        });
-        await request.post('/api/v1/auth/login', {
-          data: { login: 'admin', password: 'AdminTest1!' },
-        });
-      }
-    }
+    await adminLoginAPI(request);
+    await resetServerState(request);
   });
 
   // Six admin-surface routes. ProjectsPage + admin/* pages are where

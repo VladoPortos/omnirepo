@@ -21,6 +21,7 @@
  */
 
 import { test, expect } from '@playwright/test';
+import { adminLoginAPI, resetServerState } from './helpers/auth';
 
 const STORY_URL = '/_dev/error-class-story';
 const CLASSES = [
@@ -32,20 +33,8 @@ const CLASSES = [
 
 test.describe('ErrorEnvelopeRenderer', () => {
   test.beforeEach(async ({ request }) => {
-    const resp = await request.post('/api/v1/auth/login', {
-      data: { login: 'admin', password: 'AdminTest1!' },
-    });
-    if (resp.ok()) {
-      const body = await resp.json();
-      if (body.must_change_password) {
-        await request.post('/api/v1/auth/change-password', {
-          data: { current: 'AdminTest1!', new: 'AdminTest1!' },
-        });
-        await request.post('/api/v1/auth/login', {
-          data: { login: 'admin', password: 'AdminTest1!' },
-        });
-      }
-    }
+    await adminLoginAPI(request);
+    await resetServerState(request);
   });
 
   test('all 4 classes render in inline mode with ARIA role', async ({ page }) => {

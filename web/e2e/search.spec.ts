@@ -4,23 +4,15 @@
  */
 
 import { test, expect } from '@playwright/test';
+import { adminLoginAPI, resetServerState } from './helpers/auth';
 
 test.describe('Search page', () => {
   test.beforeEach(async ({ request }) => {
-    const resp = await request.post('/api/v1/auth/login', {
-      data: { login: 'admin', password: 'AdminTest1!' },
-    });
-    const body = await resp.json();
-    if (body.must_change_password) {
-      await request.post('/api/v1/auth/change-password', {
-        data: { current: 'AdminTest1!', new: 'SearchTest1!' },
-      });
-      await request.post('/api/v1/auth/login', {
-        data: { login: 'admin', password: 'SearchTest1!' },
-      });
-    }
+    await adminLoginAPI(request);
+    await resetServerState(request);
 
-    // Seed data for search
+    // Seed data for search AFTER the reset so the rows survive into the
+    // test body (resetServerState wipes every non-bootstrap table row).
     await request.post('/api/v1/projects', {
       data: { name: 'search-proj' },
     });

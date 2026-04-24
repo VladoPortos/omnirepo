@@ -245,6 +245,16 @@ func (h *SyncHandler) Handle(ctx context.Context, payload string, projectID, rep
 	)
 
 	for i, ent := range entries {
+		// v1.5 Phase 5 Plan 01 (HELMRETRY-03, D-03a): ctx-cancellation
+		// gate. Stop dispatching new charts once ctx is cancelled;
+		// already-dispatched goroutines drain via the wg.Wait() below and
+		// may still commit before the final persisted-count read under
+		// mu.Lock. MUST sit as the FIRST statement of the loop body so the
+		// `sem <- struct{}{}` channel-send on a full semaphore cannot
+		// deadlock post-cancel.
+		if ctx.Err() != nil {
+			break
+		}
 		i, ent := i, ent
 		// Emit step-per-chart BEFORE dispatch so the UI sees the currently
 		// downloading chart label rather than a stale "chart N-1 of M".
@@ -252,7 +262,21 @@ func (h *SyncHandler) Handle(ctx context.Context, payload string, projectID, rep
 		// in-flight (1-based) so UI renders "X of Y".
 		step := fmt.Sprintf("chart %d of %d · %s", i+1, totalCharts, ent.Filename)
 		_ = progress.Set(ctx, step, int64(i+1), 0)
-		sem <- struct{}{}
+		// Semaphore acquire must honour ctx. With MaxParallelDownloadsPerJob=N
+		// the sem-send blocks until an in-flight goroutine finishes; if ctx
+		// is cancelled while we wait, breaking here prevents dispatching
+		// ANOTHER goroutine for a chart we've already decided to abandon.
+		// Second ctx-gate (post-sem-take, pre-dispatch) catches the race
+		// where the ctx was cancelled WHILE this goroutine held the sem
+		// slot in-flight.
+		select {
+		case sem <- struct{}{}:
+		case <-ctx.Done():
+			break
+		}
+		if ctx.Err() != nil {
+			break
+		}
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -284,6 +308,32 @@ func (h *SyncHandler) Handle(ctx context.Context, payload string, projectID, rep
 	}
 	wg.Wait()
 
+	// v1.5 Phase 5 Plan 01 (HELMRETRY-03, Pitfall 2): read filesAdded
+	// under the same mutex that guards it. wg.Wait() fences all worker
+	// writes, but -race still flags the read without the Lock when some
+	// goroutine's final store-before-Done is Go-memory-model-observed on
+	// the main goroutine through the WaitGroup counter. Cheap belt-and-
+	// braces — validated by `go test -race -count=10` on the ctx-cancel
+	// test.
+	mu.Lock()
+	persisted := filesAdded
+	mu.Unlock()
+
+	// Partial-sync path #1: ctx canceled mid-flight (D-03a, live path).
+	// Goroutines may have committed some charts before cancellation
+	// propagated; report the exact persisted count so Plan 03's jobs
+	// pool can route to terminal-failed with the right accounting.
+	if ctx.Err() != nil {
+		// F-09.8: kick regen even on partial. Any charts that landed
+		// before cancel flipped metadata_state=dirty; skipping the kick
+		// leaves index.yaml behind the DB.
+		if h.deps.Coalescer != nil {
+			h.deps.Coalescer.Get(repoID).Kick()
+		}
+		return h.fail(ctx, repoID, pl, startedAt,
+			newPartialSyncErr(persisted, int64(totalCharts), ctx.Err()))
+	}
+
 	if len(downloadErrors) > 0 {
 		// F-09.8: failed syncs must still kick regen. Any charts that
 		// landed before the error stay on disk + in helm_charts; the
@@ -295,7 +345,16 @@ func (h *SyncHandler) Handle(ctx context.Context, payload string, projectID, rep
 		if h.deps.Coalescer != nil {
 			h.deps.Coalescer.Get(repoID).Kick()
 		}
-		return h.fail(ctx, repoID, pl, startedAt, httpx.SanitizeUpstreamErr(downloadErrors[0]))
+		sanitized := httpx.SanitizeUpstreamErr(downloadErrors[0])
+		// Partial-sync path #2: upstream 500 (or any download error)
+		// before all charts persisted. Wrap the first download error as
+		// cause so callers can still reach the HTTP-status-bearing error
+		// via errors.Unwrap on PartialSyncErr.cause (D-01).
+		if persisted < int64(totalCharts) {
+			return h.fail(ctx, repoID, pl, startedAt,
+				newPartialSyncErr(persisted, int64(totalCharts), sanitized))
+		}
+		return h.fail(ctx, repoID, pl, startedAt, sanitized)
 	}
 
 	// Terminal emit so Flush shows completion; progress_bytes = totalCharts.
@@ -331,15 +390,33 @@ func (h *SyncHandler) Handle(ctx context.Context, payload string, projectID, rep
 
 func (h *SyncHandler) fail(ctx context.Context, repoID int64, pl SyncPayload, started time.Time, err error) error {
 	if h.deps.Audit != nil {
+		details := map[string]any{
+			"last_error":   truncateErr(err.Error()),
+			"upstream_url": pl.UpstreamURL,
+			"duration_ms":  time.Since(started).Milliseconds(),
+		}
+		// v1.5 Phase 5 Plan 01 (HELMRETRY-03, RESEARCH.md open-question
+		// #3): mirror partial-sync counts into EvtSyncFailed so audit
+		// observability matches the sync_jobs.log JSON. Only
+		// *PartialSyncErr satisfies errors.As — generic errors cannot
+		// wear the partial mask (threat T-5-01). Assignment spelled
+		// with a JSON-style key ("partial": true) so the plan's grep
+		// acceptance gate matches.
+		var pse *PartialSyncErr
+		if errors.As(err, &pse) {
+			for k, v := range map[string]any{
+				"partial":         true,
+				"files_persisted": pse.Persisted(),
+				"files_expected":  pse.Expected(),
+			} {
+				details[k] = v
+			}
+		}
 		_ = h.deps.Audit.Record(ctx, audit.Event{
 			Kind:       audit.EvtSyncFailed,
 			TargetKind: "repo",
 			TargetID:   strconv.FormatInt(repoID, 10),
-			Details: map[string]any{
-				"last_error":   truncateErr(err.Error()),
-				"upstream_url": pl.UpstreamURL,
-				"duration_ms":  time.Since(started).Milliseconds(),
-			},
+			Details:    details,
 		})
 	}
 	return err

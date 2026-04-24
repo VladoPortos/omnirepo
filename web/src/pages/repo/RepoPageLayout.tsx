@@ -25,6 +25,8 @@ import {
 import { SnippetPanel } from '@/components/common/SnippetPanel';
 import { RepoScanResults } from '@/components/common/RepoScanResults';
 import { usePatchRepo, useDeleteRepo } from '@/api/queries';
+import { useRoleFor } from '@/hooks/useAuth';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { formatBytes } from '@/lib/format';
 import { ApiError } from '@/api/client';
 import type { Repo, RepoType, BlockSeverity } from '@/api/types';
@@ -79,6 +81,9 @@ export function RepoPageLayout({ repo, children, scanContent }: RepoPageLayoutPr
   const [deleteOpen, setDeleteOpen] = useState(false);
   const patchRepo = usePatchRepo();
   const deleteRepo = useDeleteRepo();
+  // RBAC-06: Settings tab gating — viewers see inputs disabled, destructive buttons hidden.
+  const myRole = useRoleFor(projectName ?? '');
+  const isMaintainer = myRole === 'maintainer';
 
   const hostname = window.location.host;
   const typeLabel = TYPE_LABELS[repo.type] ?? repo.type;
@@ -159,6 +164,12 @@ export function RepoPageLayout({ repo, children, scanContent }: RepoPageLayoutPr
 
         <TabsContent value="settings">
           <div className="max-w-2xl space-y-6 py-4">
+            {!isMaintainer && (
+              <p className="rounded-md bg-muted px-3 py-2 text-sm text-muted-foreground">
+                Settings are read-only. Maintainer role required to make changes.
+              </p>
+            )}
+
             {/* Auto-scan toggle */}
             <div className="flex items-center justify-between">
               <div>
@@ -167,10 +178,29 @@ export function RepoPageLayout({ repo, children, scanContent }: RepoPageLayoutPr
                   Automatically scan new artifacts for vulnerabilities on upload.
                 </p>
               </div>
-              <Switch
-                checked={repo.auto_scan}
-                onCheckedChange={(checked: boolean) => handleToggle('auto_scan', checked)}
-              />
+              {isMaintainer ? (
+                <Switch
+                  checked={repo.auto_scan}
+                  onCheckedChange={(checked: boolean) => handleToggle('auto_scan', checked)}
+                />
+              ) : (
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <span
+                        className="inline-block rounded-md focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                        tabIndex={0}
+                        role="button"
+                        aria-disabled="true"
+                        aria-label="Auto-scan — Maintainer role required"
+                      >
+                        <Switch checked={repo.auto_scan} disabled />
+                      </span>
+                    }
+                  />
+                  <TooltipContent>Maintainer role required</TooltipContent>
+                </Tooltip>
+              )}
             </div>
 
             <Separator />
@@ -183,14 +213,25 @@ export function RepoPageLayout({ repo, children, scanContent }: RepoPageLayoutPr
               </p>
               <div className="flex gap-2">
                 {(['none', 'low', 'medium', 'high', 'critical'] as BlockSeverity[]).map((sev) => (
-                  <Button
-                    key={sev}
-                    variant={repo.block_on_severity === sev ? 'default' : 'outline'}
-                    size="sm"
-                    onClick={() => handleBlockSeverity(sev)}
-                  >
-                    {sev === 'none' ? 'None' : sev.charAt(0).toUpperCase() + sev.slice(1)}
-                  </Button>
+                  isMaintainer ? (
+                    <Button
+                      key={sev}
+                      variant={repo.block_on_severity === sev ? 'default' : 'outline'}
+                      size="sm"
+                      onClick={() => handleBlockSeverity(sev)}
+                    >
+                      {sev === 'none' ? 'None' : sev.charAt(0).toUpperCase() + sev.slice(1)}
+                    </Button>
+                  ) : (
+                    <Button
+                      key={sev}
+                      variant={repo.block_on_severity === sev ? 'default' : 'outline'}
+                      size="sm"
+                      disabled
+                    >
+                      {sev === 'none' ? 'None' : sev.charAt(0).toUpperCase() + sev.slice(1)}
+                    </Button>
+                  )
                 ))}
               </div>
             </div>
@@ -205,42 +246,63 @@ export function RepoPageLayout({ repo, children, scanContent }: RepoPageLayoutPr
                   Allow unauthenticated read access to this repository.
                 </p>
               </div>
-              <Switch
-                checked={repo.public_read}
-                onCheckedChange={(checked: boolean) => handleToggle('public_read', checked)}
-              />
+              {isMaintainer ? (
+                <Switch
+                  checked={repo.public_read}
+                  onCheckedChange={(checked: boolean) => handleToggle('public_read', checked)}
+                />
+              ) : (
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <span
+                        className="inline-block rounded-md focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                        tabIndex={0}
+                        role="button"
+                        aria-disabled="true"
+                        aria-label="Public read — Maintainer role required"
+                      >
+                        <Switch checked={repo.public_read} disabled />
+                      </span>
+                    }
+                  />
+                  <TooltipContent>Maintainer role required</TooltipContent>
+                </Tooltip>
+              )}
             </div>
 
             <Separator />
 
-            {/* Danger zone */}
-            <div className="space-y-4 rounded-lg border border-destructive/30 p-4">
-              <h3 className="text-sm font-semibold text-destructive">Danger Zone</h3>
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm font-medium">Wipe all contents</p>
-                  <p className="text-xs text-muted-foreground">
-                    Remove all artifacts. Repository structure is preserved.
-                  </p>
+            {/* Danger zone — hidden entirely for viewers (UI-SPEC Surface 7: hide destructive) */}
+            {isMaintainer && (
+              <div className="space-y-4 rounded-lg border border-destructive/30 p-4">
+                <h3 className="text-sm font-semibold text-destructive">Danger Zone</h3>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-medium">Wipe all contents</p>
+                    <p className="text-xs text-muted-foreground">
+                      Remove all artifacts. Repository structure is preserved.
+                    </p>
+                  </div>
+                  <Button variant="destructive" size="sm" onClick={() => setWipeOpen(true)}>
+                    <Trash2 className="mr-1.5 size-4" />
+                    Wipe
+                  </Button>
                 </div>
-                <Button variant="destructive" size="sm" onClick={() => setWipeOpen(true)}>
-                  <Trash2 className="mr-1.5 size-4" />
-                  Wipe
-                </Button>
-              </div>
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm font-medium">Delete repository</p>
-                  <p className="text-xs text-muted-foreground">
-                    Permanently delete this repository and all data.
-                  </p>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-medium">Delete repository</p>
+                    <p className="text-xs text-muted-foreground">
+                      Permanently delete this repository and all data.
+                    </p>
+                  </div>
+                  <Button variant="destructive" size="sm" onClick={() => setDeleteOpen(true)}>
+                    <Trash2 className="mr-1.5 size-4" />
+                    Delete
+                  </Button>
                 </div>
-                <Button variant="destructive" size="sm" onClick={() => setDeleteOpen(true)}>
-                  <Trash2 className="mr-1.5 size-4" />
-                  Delete
-                </Button>
               </div>
-            </div>
+            )}
           </div>
         </TabsContent>
       </Tabs>

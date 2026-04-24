@@ -22,7 +22,8 @@ import { BlameViewer } from '@/components/git/BlameViewer';
 import { CommitLog } from '@/components/git/CommitLog';
 import { CommitDetail } from '@/components/git/CommitDetail';
 import { BranchCompare } from '@/components/git/BranchCompare';
-import { useGitRefs, useGitTree, useGitBlob, useMe } from '@/api/queries';
+import { useGitRefs, useGitTree, useGitBlob } from '@/api/queries';
+import { useRoleFor } from '@/hooks/useAuth';
 import type { Repo, GitTreeEntry } from '@/api/types';
 
 interface GitRepoPageProps {
@@ -41,9 +42,10 @@ export function GitRepoPage({ repo }: GitRepoPageProps) {
   const [viewingCommit, setViewingCommit] = useState<string | null>(null);
 
   // Fetch refs
-  // EMPTY-03 upload-permission gate — see DockerRepoPage for rationale.
-  const { data: currentUser } = useMe();
-  const canUpload = !!currentUser;
+  // RBAC-06: role-aware upload permission gate.
+  const myRole = useRoleFor(projectName ?? '');
+  const isMaintainer = myRole === 'maintainer';
+  const canUpload = isMaintainer;
 
   const { data: refsData, isLoading: refsLoading } = useGitRefs(
     projectName!,

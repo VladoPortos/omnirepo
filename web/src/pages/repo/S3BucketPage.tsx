@@ -50,8 +50,8 @@ import {
   useBucket,
   useBucketObjects,
   useDeleteBucket,
-  useMe,
 } from '@/api/queries';
+import { useRoleFor } from '@/hooks/useAuth';
 import { formatBytes, formatDate } from '@/lib/format';
 import { envelopeFromError, type ApiErrorEnvelope } from '@/api/client';
 import { ErrorEnvelopeRenderer } from '@/components/common/ErrorEnvelope';
@@ -123,9 +123,10 @@ export function S3BucketPage() {
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteError, setDeleteError] = useState<ApiErrorEnvelope | null>(null);
 
-  // EMPTY-03 upload-permission gate — see DockerRepoPage for rationale.
-  const { data: currentUser } = useMe();
-  const canUpload = !!currentUser;
+  // RBAC-06: role-aware upload permission gate.
+  const myRole = useRoleFor(name ?? '');
+  const isMaintainer = myRole === 'maintainer';
+  const canUpload = isMaintainer;
   const hostname = window.location.host;
 
   const bucketQ = useBucket(name, bucket);
@@ -192,18 +193,20 @@ export function S3BucketPage() {
             Endpoint: <code className="font-mono">/s3/{bucket}</code>
           </p>
         </div>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="text-destructive hover:bg-destructive/10"
-          onClick={() => {
-            setDeleteError(null);
-            setDeleteOpen(true);
-          }}
-        >
-          <Trash2 className="mr-1.5 size-4" />
-          Delete Bucket
-        </Button>
+        {isMaintainer && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="text-destructive hover:bg-destructive/10"
+            onClick={() => {
+              setDeleteError(null);
+              setDeleteOpen(true);
+            }}
+          >
+            <Trash2 className="mr-1.5 size-4" />
+            Delete Bucket
+          </Button>
+        )}
       </div>
 
       {/* Stats */}

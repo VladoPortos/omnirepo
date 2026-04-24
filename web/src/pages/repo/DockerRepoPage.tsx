@@ -44,13 +44,13 @@ import {
 import { RepoPageLayout } from './RepoPageLayout';
 import { formatBytes, formatDate } from '@/lib/format';
 import {
-  useMe,
   useRepoContent,
   useRepoScans,
   useRescanArtifact,
   usePromoteDockerTag,
   useDeleteDockerTag,
 } from '@/api/queries';
+import { useRoleFor } from '@/hooks/useAuth';
 import { api, ApiError, envelopeFromError, type ApiErrorEnvelope } from '@/api/client';
 import { ErrorEnvelopeRenderer } from '@/components/common/ErrorEnvelope';
 import { CloneImageDialog } from '@/components/CloneImageDialog';
@@ -101,17 +101,13 @@ export function DockerRepoPage({ repo }: DockerRepoPageProps) {
   const deleteTagMut = useDeleteDockerTag(projectName ?? '', repo.name);
 
 
-  // EMPTY-03 upload-permission gate. v1.0 ships flat project membership
-  // (any member = full access) — if the user can see this authenticated
-  // page, they are a project member (or super-admin) and can push to it.
-  // Conservatively fall back to super-admin for unauthenticated edge
-  // cases; a future role-aware permission resolver can replace this.
-  const { data: currentUser } = useMe();
-  const canUpload = !!currentUser;
-  // EMPTY-04 (Phase 7): triggers rescan on the FIRST artifact when the repo
-  // has artifacts but no scans yet (RESEARCH Open Question §1 option (b)).
-  // A repo-level "scan all" endpoint is deferred to v1.2 alongside HEALTH.
-  const canScan = !!currentUser?.is_super_admin || canUpload;
+  // RBAC-06: role-aware upload/scan permission gates.
+  // Super-admins and project maintainers can upload/scan; viewers cannot.
+  // useRoleFor returns 'maintainer' for super-admins (see useAuth.ts).
+  const myRole = useRoleFor(projectName ?? '');
+  const isMaintainer = myRole === 'maintainer';
+  const canUpload = isMaintainer;
+  const canScan = isMaintainer;
 
   const hostname = window.location.host;
 
@@ -379,7 +375,7 @@ export function DockerRepoPage({ repo }: DockerRepoPageProps) {
                 label: 'Run first scan',
                 onClick: () => rescanMutation.mutate(),
                 disabled: !canScan || rescanMutation.isPending,
-                disabledHint: 'Requires maintainer role on this repo',
+                disabledHint: 'Maintainer role required',
               }}
             />
             {rescanError && (

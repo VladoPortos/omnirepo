@@ -31,7 +31,8 @@ import { SeverityStrip } from '@/components/common/ArtifactDetail';
 import { RepoPageLayout } from './RepoPageLayout';
 import { formatBytes, formatDate } from '@/lib/format';
 import { api } from '@/api/client';
-import { useRepoContent, useMe } from '@/api/queries';
+import { useRepoContent } from '@/api/queries';
+import { useRoleFor } from '@/hooks/useAuth';
 import {
   SyncNowButton,
   formatFilterSummary,
@@ -83,9 +84,10 @@ export function HelmRepoPage({ repo }: HelmRepoPageProps) {
   const [deleteError, setDeleteError] = useState<ApiErrorEnvelope | null>(null);
   const deleteChartMut = useDeleteHelmChart(projectName ?? '', repo.name);
 
-  // EMPTY-03 upload-permission gate — see DockerRepoPage for rationale.
-  const { data: currentUser } = useMe();
-  const canUpload = !!currentUser;
+  // RBAC-06: role-aware upload permission gate.
+  const myRole = useRoleFor(projectName ?? '');
+  const isMaintainer = myRole === 'maintainer';
+  const canUpload = isMaintainer;
   const hostname = window.location.host;
 
   const { data: contentRows } = useRepoContent(projectName ?? '', 'helm', repo.name);

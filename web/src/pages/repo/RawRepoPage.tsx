@@ -38,7 +38,8 @@ import {
 import { RepoPageLayout } from './RepoPageLayout';
 import { formatBytes, formatDate } from '@/lib/format';
 import { api, ApiError } from '@/api/client';
-import { useRepoContent, useMe, useRescanArtifact } from '@/api/queries';
+import { useRepoContent, useRescanArtifact } from '@/api/queries';
+import { useRoleFor } from '@/hooks/useAuth';
 import type { Repo } from '@/api/types';
 
 interface RawFileEntry {
@@ -66,9 +67,10 @@ export function RawRepoPage({ repo }: RawRepoPageProps) {
   const [sort, setSort] = useState<SortState>({ column: 'name', direction: 'asc' });
   const [expandedPath, setExpandedPath] = useState<string | null>(null);
 
-  // EMPTY-03 upload-permission gate — see DockerRepoPage for rationale.
-  const { data: currentUser } = useMe();
-  const canUpload = !!currentUser;
+  // RBAC-06: role-aware upload permission gate.
+  const myRole = useRoleFor(projectName ?? '');
+  const isMaintainer = myRole === 'maintainer';
+  const canUpload = isMaintainer;
   const hostname = window.location.host;
 
   const { data: contentRows } = useRepoContent(projectName ?? '', 'raw', repo.name);

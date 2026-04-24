@@ -34,11 +34,11 @@ import { formatBytes, formatDate } from '@/lib/format';
 import { api, envelopeFromError, type ApiErrorEnvelope, ApiError } from '@/api/client';
 import {
   useRepoContentLoadMore,
-  useMe,
   useRepoScans,
   useRescanArtifact,
   useDeleteRpmPackage,
 } from '@/api/queries';
+import { useRoleFor } from '@/hooks/useAuth';
 import { ErrorEnvelopeRenderer } from '@/components/common/ErrorEnvelope';
 import {
   SyncNowButton,
@@ -79,14 +79,11 @@ export function RpmRepoPage({ repo }: RpmRepoPageProps) {
   const [deleteError, setDeleteError] = useState<ApiErrorEnvelope | null>(null);
   const deletePkgMut = useDeleteRpmPackage(projectName ?? '', repo.name);
 
-  // Fetch live packages from the repo-content endpoint (F-3).
-  // EMPTY-03 upload-permission gate — see DockerRepoPage for rationale.
-  const { data: currentUser } = useMe();
-  const canUpload = !!currentUser;
-  // EMPTY-04 (Phase 7): triggers rescan on the FIRST artifact when the repo
-  // has artifacts but no scans yet (RESEARCH Open Question §1 option (b)).
-  // A repo-level "scan all" endpoint is deferred to v1.2 alongside HEALTH.
-  const canScan = !!currentUser?.is_super_admin || canUpload;
+  // RBAC-06: role-aware upload/scan permission gates.
+  const myRole = useRoleFor(projectName ?? '');
+  const isMaintainer = myRole === 'maintainer';
+  const canUpload = isMaintainer;
+  const canScan = isMaintainer;
   const hostname = window.location.host;
 
   const {
@@ -286,7 +283,7 @@ export function RpmRepoPage({ repo }: RpmRepoPageProps) {
                 label: 'Run first scan',
                 onClick: () => rescanMutation.mutate(),
                 disabled: !canScan || rescanMutation.isPending,
-                disabledHint: 'Requires maintainer role on this repo',
+                disabledHint: 'Maintainer role required',
               }}
             />
             {rescanError && (

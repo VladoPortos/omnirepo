@@ -218,6 +218,8 @@ func TestEveryStateChangingActionEmitsEvent(t *testing.T) {
 		// audit sink exactly like their predecessors.
 		audit.EvtOciTagRebound,
 		audit.EvtMirrorSyncLFSDetected,
+		// v1.5 Phase 2 — RBAC role-change event.
+		audit.EvtMemberRoleChanged,
 	}
 	for _, k := range kinds {
 		if err := l.Record(ctx, audit.Event{Kind: k, Outcome: "ok"}); err != nil {

@@ -83,6 +83,29 @@ func TestPhase3EventKindsDistinctAndCount(t *testing.T) {
 	}
 }
 
+// AllRBACPhase2EventKinds enumerates the v1.5 Phase 2 RBAC event kinds.
+// Separate slice because AllPhase1EventKinds count is locked at 23 per
+// TestAllEventKindsDistinctAndCount (RESEARCH Pitfall 4).
+var AllRBACPhase2EventKinds = []audit.EventKind{
+	audit.EvtMemberRoleChanged,
+}
+
+func TestRBACPhase2EventKindsDistinctAndCount(t *testing.T) {
+	if got, want := len(AllRBACPhase2EventKinds), 1; got != want {
+		t.Fatalf("RBAC Phase2 EventKind count = %d, want %d", got, want)
+	}
+	seen := make(map[audit.EventKind]struct{}, len(AllRBACPhase2EventKinds))
+	for _, k := range AllRBACPhase2EventKinds {
+		if k == "" {
+			t.Fatalf("empty RBAC Phase2 EventKind in enumeration")
+		}
+		if _, dup := seen[k]; dup {
+			t.Fatalf("duplicate RBAC Phase2 EventKind: %q", k)
+		}
+		seen[k] = struct{}{}
+	}
+}
+
 func TestAllEventKindsDistinctAndCount(t *testing.T) {
 	if got := len(AllPhase1EventKinds); got != 23 {
 		t.Fatalf("EventKind count = %d, want 23", got)

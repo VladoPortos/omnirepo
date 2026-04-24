@@ -145,6 +145,16 @@ func authenticateAPIKey(ctx context.Context, d Deps, bearer string) (auth.Actor,
 		pid := *row.OwnerProjectID
 		actor.ProjectScope = &pid
 		actor.OwnerKind = auth.OwnerKindProject
+		// Thread the minted role into the policy layer so viewer project
+		// keys are gated correctly. NULL role is a pre-v1.5 backfilled key;
+		// those rows are defaulted to "maintainer" (D-24) at the app layer
+		// to preserve legacy publishing behavior. ResolveMembership reads
+		// APIKeyRole when ProjectScope is set.
+		if row.Role != nil {
+			actor.APIKeyRole = *row.Role
+		} else {
+			actor.APIKeyRole = "maintainer"
+		}
 	default:
 		return auth.Actor{}, false
 	}

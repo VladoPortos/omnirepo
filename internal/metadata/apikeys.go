@@ -11,6 +11,14 @@ import (
 // APIKey mirrors one row of the api_keys table. OwnerKind is always "user" or
 // "project" (CHECK constraint in schema); exactly one of OwnerUserID /
 // OwnerProjectID is non-nil.
+//
+// Role is populated from the api_keys.role column (v1.5 Phase 2). For
+// user-owned keys it is always nil (the key inherits role from the owner's
+// current project_members rows resolved at request time). For project-owned
+// keys it is "maintainer" or "viewer" — the role baked in at mint time
+// (D-23 / D-25 / D-27). The middleware threads this into Actor.APIKeyRole so
+// the policy engine can gate writes correctly for viewer-minted project
+// tokens.
 type APIKey struct {
 	ID             int64
 	OwnerKind      string // "user" | "project"
@@ -19,6 +27,7 @@ type APIKey struct {
 	Name           string
 	TokenPrefix    string
 	TokenSHA256    string
+	Role           *string // nil for user-owned keys; "maintainer" | "viewer" for project-owned
 	LastUsedAt     *time.Time
 	CreatedAt      time.Time
 	RevokedAt      *time.Time
@@ -81,15 +90,16 @@ func (r *APIKeysRepo) create(ctx context.Context, kind string, userID, projectID
 func (r *APIKeysRepo) FindByPrefixSha(ctx context.Context, prefix, sha256hex string) (*APIKey, error) {
 	row := r.db.Reader.QueryRowContext(ctx, `
 		SELECT id, owner_kind, owner_user_id, owner_project_id, name, token_prefix, token_sha256,
-		       last_used_at, created_at, revoked_at
+		       role, last_used_at, created_at, revoked_at
 		FROM api_keys
 		WHERE token_prefix=? AND token_sha256=? AND revoked_at IS NULL
 	`, prefix, sha256hex)
 	var k APIKey
 	var userID, projectID sql.NullInt64
+	var role sql.NullString
 	var lastUsed, revoked sql.NullTime
 	if err := row.Scan(&k.ID, &k.OwnerKind, &userID, &projectID, &k.Name, &k.TokenPrefix, &k.TokenSHA256,
-		&lastUsed, &k.CreatedAt, &revoked); err != nil {
+		&role, &lastUsed, &k.CreatedAt, &revoked); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrNotFound
 		}
@@ -102,6 +112,10 @@ func (r *APIKeysRepo) FindByPrefixSha(ctx context.Context, prefix, sha256hex str
 	if projectID.Valid {
 		v := projectID.Int64
 		k.OwnerProjectID = &v
+	}
+	if role.Valid {
+		v := role.String
+		k.Role = &v
 	}
 	if lastUsed.Valid {
 		t := lastUsed.Time
@@ -120,15 +134,16 @@ func (r *APIKeysRepo) FindByPrefixSha(ctx context.Context, prefix, sha256hex str
 func (r *APIKeysRepo) FindByID(ctx context.Context, id int64) (*APIKey, error) {
 	row := r.db.Reader.QueryRowContext(ctx, `
 		SELECT id, owner_kind, owner_user_id, owner_project_id, name, token_prefix, token_sha256,
-		       last_used_at, created_at, revoked_at
+		       role, last_used_at, created_at, revoked_at
 		FROM api_keys
 		WHERE id=? AND revoked_at IS NULL
 	`, id)
 	var k APIKey
 	var userID, projectID sql.NullInt64
+	var role sql.NullString
 	var lastUsed, revoked sql.NullTime
 	if err := row.Scan(&k.ID, &k.OwnerKind, &userID, &projectID, &k.Name, &k.TokenPrefix, &k.TokenSHA256,
-		&lastUsed, &k.CreatedAt, &revoked); err != nil {
+		&role, &lastUsed, &k.CreatedAt, &revoked); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrNotFound
 		}
@@ -141,6 +156,10 @@ func (r *APIKeysRepo) FindByID(ctx context.Context, id int64) (*APIKey, error) {
 	if projectID.Valid {
 		v := projectID.Int64
 		k.OwnerProjectID = &v
+	}
+	if role.Valid {
+		v := role.String
+		k.Role = &v
 	}
 	if lastUsed.Valid {
 		t := lastUsed.Time
@@ -158,7 +177,7 @@ func (r *APIKeysRepo) FindByID(ctx context.Context, id int64) (*APIKey, error) {
 func (r *APIKeysRepo) ListByUser(ctx context.Context, userID int64) ([]APIKey, error) {
 	rows, err := r.db.Reader.QueryContext(ctx, `
 		SELECT id, owner_kind, owner_user_id, owner_project_id, name, token_prefix, token_sha256,
-		       last_used_at, created_at, revoked_at
+		       role, last_used_at, created_at, revoked_at
 		FROM api_keys
 		WHERE owner_kind='user' AND owner_user_id=? AND revoked_at IS NULL
 		ORDER BY created_at DESC
@@ -171,9 +190,10 @@ func (r *APIKeysRepo) ListByUser(ctx context.Context, userID int64) ([]APIKey, e
 	for rows.Next() {
 		var k APIKey
 		var userID2, projectID sql.NullInt64
+		var role sql.NullString
 		var lastUsed, revoked sql.NullTime
 		if err := rows.Scan(&k.ID, &k.OwnerKind, &userID2, &projectID, &k.Name, &k.TokenPrefix, &k.TokenSHA256,
-			&lastUsed, &k.CreatedAt, &revoked); err != nil {
+			&role, &lastUsed, &k.CreatedAt, &revoked); err != nil {
 			return nil, fmt.Errorf("api_keys: list scan: %w", err)
 		}
 		if userID2.Valid {
@@ -183,6 +203,10 @@ func (r *APIKeysRepo) ListByUser(ctx context.Context, userID int64) ([]APIKey, e
 		if projectID.Valid {
 			v := projectID.Int64
 			k.OwnerProjectID = &v
+		}
+		if role.Valid {
+			v := role.String
+			k.Role = &v
 		}
 		if lastUsed.Valid {
 			t := lastUsed.Time
@@ -203,7 +227,7 @@ func (r *APIKeysRepo) ListByUser(ctx context.Context, userID int64) ([]APIKey, e
 func (r *APIKeysRepo) ListByProject(ctx context.Context, projectID int64) ([]APIKey, error) {
 	rows, err := r.db.Reader.QueryContext(ctx, `
 		SELECT id, owner_kind, owner_user_id, owner_project_id, name, token_prefix, token_sha256,
-		       last_used_at, created_at, revoked_at
+		       role, last_used_at, created_at, revoked_at
 		FROM api_keys
 		WHERE owner_kind='project' AND owner_project_id=? AND revoked_at IS NULL
 		ORDER BY created_at DESC
@@ -216,9 +240,10 @@ func (r *APIKeysRepo) ListByProject(ctx context.Context, projectID int64) ([]API
 	for rows.Next() {
 		var k APIKey
 		var userID, projectID2 sql.NullInt64
+		var role sql.NullString
 		var lastUsed, revoked sql.NullTime
 		if err := rows.Scan(&k.ID, &k.OwnerKind, &userID, &projectID2, &k.Name, &k.TokenPrefix, &k.TokenSHA256,
-			&lastUsed, &k.CreatedAt, &revoked); err != nil {
+			&role, &lastUsed, &k.CreatedAt, &revoked); err != nil {
 			return nil, fmt.Errorf("api_keys: list scan: %w", err)
 		}
 		if userID.Valid {
@@ -228,6 +253,10 @@ func (r *APIKeysRepo) ListByProject(ctx context.Context, projectID int64) ([]API
 		if projectID2.Valid {
 			v := projectID2.Int64
 			k.OwnerProjectID = &v
+		}
+		if role.Valid {
+			v := role.String
+			k.Role = &v
 		}
 		if lastUsed.Valid {
 			t := lastUsed.Time

@@ -26,7 +26,7 @@ func TestMigration034_AddsProjectMembersRole(t *testing.T) {
 		var cid int
 		var name, colType string
 		var notNull int
-		var dfltValue, pk interface{}
+		var dfltValue, pk any
 		if err := rows.Scan(&cid, &name, &colType, &notNull, &dfltValue, &pk); err != nil {
 			t.Fatalf("scan pragma row: %v", err)
 		}
@@ -123,7 +123,7 @@ func TestMigration034_AddsApiKeysRole(t *testing.T) {
 		var cid int
 		var name, colType string
 		var notNull int
-		var dfltValue, pk interface{}
+		var dfltValue, pk any
 		if err := rows.Scan(&cid, &name, &colType, &notNull, &dfltValue, &pk); err != nil {
 			t.Fatalf("scan pragma row: %v", err)
 		}

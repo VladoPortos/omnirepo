@@ -106,6 +106,29 @@ func TestRBACPhase2EventKindsDistinctAndCount(t *testing.T) {
 	}
 }
 
+// AllPyPIFixPhase3EventKinds enumerates the v1.5 Phase 3 additions.
+// Separate slice per v1.5 convention (precedent: AllRBACPhase2EventKinds)
+// so future v1.5 phases don't blur milestone boundaries.
+var AllPyPIFixPhase3EventKinds = []audit.EventKind{
+	audit.EvtSyncFileSkipped,
+}
+
+func TestPyPIFixPhase3EventKindsDistinctAndCount(t *testing.T) {
+	if got, want := len(AllPyPIFixPhase3EventKinds), 1; got != want {
+		t.Fatalf("PyPIFix Phase3 EventKind count = %d, want %d", got, want)
+	}
+	seen := make(map[audit.EventKind]struct{}, len(AllPyPIFixPhase3EventKinds))
+	for _, k := range AllPyPIFixPhase3EventKinds {
+		if k == "" {
+			t.Fatalf("empty PyPIFix Phase3 EventKind in enumeration")
+		}
+		if _, dup := seen[k]; dup {
+			t.Fatalf("duplicate PyPIFix Phase3 EventKind: %q", k)
+		}
+		seen[k] = struct{}{}
+	}
+}
+
 func TestAllEventKindsDistinctAndCount(t *testing.T) {
 	if got := len(AllPhase1EventKinds); got != 23 {
 		t.Fatalf("EventKind count = %d, want 23", got)

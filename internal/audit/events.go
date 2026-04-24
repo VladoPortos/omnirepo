@@ -136,6 +136,23 @@ const (
 	EvtSyncFinished EventKind = "sync.finished"
 	EvtSyncFailed   EventKind = "sync.failed"
 
+	// v1.5 Phase 3 — PyPI parser hardening (D-11, D-13).
+	// Generic cross-protocol skip event emitted when the sync loop
+	// rejects an upstream file before download. Phase 3 scope ships
+	// two reason enum values:
+	//   - "pep440_invalid"  — filename's version slot failed
+	//     pep440.Validate (sdist multi-candidate scan exhausted OR
+	//     wheel positional parts[1] malformed)
+	//   - "unsupported_ext" — filename has no .tar.gz/.tgz/.zip/.whl
+	//     suffix (reserved; today these are filtered earlier by
+	//     isInstallableExt without an audit row)
+	// target_kind="repo", target_id=repo_id as decimal string.
+	// details_json: {filename, reason, protocol, upstream_url, repo_id}.
+	// Future phases (Phase 7 drift purge, potential RPM/APT hardening)
+	// MAY emit this same kind with a different protocol + reason; the
+	// event is deliberately not PyPI-specific.
+	EvtSyncFileSkipped EventKind = "sync.file_skipped"
+
 	// Phase 4 Plan 05 — S3 access-key management (D-02, T-04-05-06).
 	// "create" carries {project, id, label, access_key_id} — never the
 	// plaintext secret. "revoke" carries {project, id, access_key_id}.

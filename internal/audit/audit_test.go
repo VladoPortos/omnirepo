@@ -220,6 +220,10 @@ func TestEveryStateChangingActionEmitsEvent(t *testing.T) {
 		audit.EvtMirrorSyncLFSDetected,
 		// v1.5 Phase 2 — RBAC role-change event.
 		audit.EvtMemberRoleChanged,
+		// v1.5 Phase 3 — PyPI parser hardening (PYPIFIX-04). Emitted by
+		// internal/protocol/pypi/sync_handler.go when an upstream
+		// filename fails pep440.Validate at the collect pass.
+		audit.EvtSyncFileSkipped,
 	}
 	for _, k := range kinds {
 		if err := l.Record(ctx, audit.Event{Kind: k, Outcome: "ok"}); err != nil {

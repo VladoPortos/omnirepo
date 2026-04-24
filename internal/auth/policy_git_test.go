@@ -7,10 +7,10 @@ import (
 	"github.com/dxc-internal/omnirepo/internal/auth"
 )
 
-// Test 7: member can read git repo.
+// Test 7: member can read git repo (viewer role sufficient for reads).
 func TestPolicyGitRepoRead_MemberAllowed(t *testing.T) {
 	actor := auth.Actor{ID: 10, Kind: auth.ActorKindUser}
-	ctx := auth.WithProjectMembership(context.Background(), []int64{42})
+	ctx := auth.WithProjectMembership(context.Background(), map[int64]string{42: "maintainer"})
 
 	ok, reason := auth.Can(ctx, actor, auth.ActionGitRepoRead, auth.Target{Kind: "repo", ProjectID: 42, RepoID: 1})
 	if !ok {
@@ -18,21 +18,21 @@ func TestPolicyGitRepoRead_MemberAllowed(t *testing.T) {
 	}
 }
 
-// Test 8: member can write git repo.
+// Test 8: maintainer can write git repo (v1.5 Phase 2: write requires maintainer role).
 func TestPolicyGitRepoWrite_MemberAllowed(t *testing.T) {
 	actor := auth.Actor{ID: 10, Kind: auth.ActorKindUser}
-	ctx := auth.WithProjectMembership(context.Background(), []int64{42})
+	ctx := auth.WithProjectMembership(context.Background(), map[int64]string{42: "maintainer"})
 
 	ok, reason := auth.Can(ctx, actor, auth.ActionGitRepoWrite, auth.Target{Kind: "repo", ProjectID: 42, RepoID: 1})
 	if !ok {
-		t.Fatalf("member write denied: %q", reason)
+		t.Fatalf("maintainer write denied: %q", reason)
 	}
 }
 
 // Test 9: non-member denied.
 func TestPolicyGitRepoRead_NonMemberDenied(t *testing.T) {
 	actor := auth.Actor{ID: 11, Kind: auth.ActorKindUser}
-	ctx := auth.WithProjectMembership(context.Background(), []int64{99})
+	ctx := auth.WithProjectMembership(context.Background(), map[int64]string{99: "maintainer"})
 
 	ok, reason := auth.Can(ctx, actor, auth.ActionGitRepoRead, auth.Target{Kind: "repo", ProjectID: 42, RepoID: 1})
 	if ok || reason != auth.ReasonNotAProjectMember {
@@ -40,7 +40,7 @@ func TestPolicyGitRepoRead_NonMemberDenied(t *testing.T) {
 	}
 }
 
-// Test 10: project-scoped API key can write in own project.
+// Test 10: project-scoped API key can write in own project (maintainer role in ctx).
 func TestPolicyGitRepoWrite_ProjectAPIKeySameProject(t *testing.T) {
 	pid := int64(42)
 	actor := auth.Actor{
@@ -48,7 +48,7 @@ func TestPolicyGitRepoWrite_ProjectAPIKeySameProject(t *testing.T) {
 		OwnerKind:    auth.OwnerKindProject,
 		ProjectScope: &pid,
 	}
-	ctx := auth.WithProjectMembership(context.Background(), []int64{42})
+	ctx := auth.WithProjectMembership(context.Background(), map[int64]string{42: "maintainer"})
 
 	ok, reason := auth.Can(ctx, actor, auth.ActionGitRepoWrite, auth.Target{Kind: "repo", ProjectID: 42, RepoID: 1})
 	if !ok {
@@ -64,7 +64,7 @@ func TestPolicyGitRepoWrite_ProjectAPIKeyCrossProject(t *testing.T) {
 		OwnerKind:    auth.OwnerKindProject,
 		ProjectScope: &pid,
 	}
-	ctx := auth.WithProjectMembership(context.Background(), []int64{99})
+	ctx := auth.WithProjectMembership(context.Background(), map[int64]string{99: "maintainer"})
 
 	ok, reason := auth.Can(ctx, actor, auth.ActionGitRepoWrite, auth.Target{Kind: "repo", ProjectID: 42, RepoID: 1})
 	if ok || reason != auth.ReasonNotAProjectMember {

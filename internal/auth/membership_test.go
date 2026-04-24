@@ -23,6 +23,19 @@ func (s *stubLister) ListProjectIDsForUser(_ context.Context, userID int64) ([]i
 	return s.ids, s.err
 }
 
+func (s *stubLister) ListProjectRolesForUser(_ context.Context, userID int64) (map[int64]string, error) {
+	s.called = true
+	s.seen = userID
+	if s.err != nil {
+		return nil, s.err
+	}
+	out := make(map[int64]string, len(s.ids))
+	for _, id := range s.ids {
+		out[id] = "maintainer" // tests default to maintainer unless a specific test overrides
+	}
+	return out, nil
+}
+
 // memberOf reads the membership set out of ctx via the same path Can uses.
 // Since isMemberOfProject is unexported, we observe its behaviour by calling
 // auth.Can indirectly — but that's coupling to policy. Instead, pair

@@ -84,6 +84,10 @@ const (
 	// Project-scoped API keys count as members of their bound project.
 	ActionGitRepoRead  Action = "git:repo:read"
 	ActionGitRepoWrite Action = "git:repo:write"
+
+	// v1.5 Phase 2 — role-change action (D-15). Distinct from
+	// ActionAddProjectMember so a future policy tweak can't silently widen.
+	ActionChangeProjectMemberRole Action = "project.member.role.change"
 )
 
 // AllActions enumerates every Action constant in the package. Downstream
@@ -122,6 +126,7 @@ var AllActions = []Action{
 	ActionManageProjectAPIKeys,
 	ActionGitRepoRead,
 	ActionGitRepoWrite,
+	ActionChangeProjectMemberRole, // v1.5 Phase 2
 }
 
 // Target is the object the actor is operating on.
@@ -145,10 +150,14 @@ const (
 	ReasonPasswordChangeRequired = "password-change-required"
 	ReasonSuperAdminRequired     = "super_admin_required"
 	ReasonNotAProjectMember      = "not_a_project_member"
-	ReasonNotSelf                = "not_self"
-	ReasonUnknownAction          = "unknown_action"
-	ReasonRequiresAuth           = "requires_auth"
-	ReasonAnonymousPublicRead    = "anonymous_public_read"
+	// v1.5 Phase 2 — distinct from ReasonNotAProjectMember: a viewer IS a member
+	// but is denied for role. UI reads this to render "maintainer role required"
+	// copy rather than "you are not a member".
+	ReasonNotAMaintainer      = "not_a_maintainer"
+	ReasonNotSelf             = "not_self"
+	ReasonUnknownAction       = "unknown_action"
+	ReasonRequiresAuth        = "requires_auth"
+	ReasonAnonymousPublicRead = "anonymous_public_read"
 )
 
 // membershipCtxKey is the unexported ctx key for stashing a membership set.
@@ -161,30 +170,30 @@ const (
 // immediately before dispatching to Can.
 type membershipCtxKey struct{}
 
-// WithProjectMembership returns ctx annotated with the projects that the
-// current actor is a member of. Pass a non-nil slice (possibly empty).
-func WithProjectMembership(ctx context.Context, projectIDs []int64) context.Context {
-	set := make(map[int64]struct{}, len(projectIDs))
-	for _, id := range projectIDs {
-		set[id] = struct{}{}
-	}
-	return context.WithValue(ctx, membershipCtxKey{}, set)
+// WithProjectMembership returns ctx annotated with the (project_id → role)
+// map for this actor. Pass a non-nil map (possibly empty).
+//
+// v1.5 Phase 2: signature changed from []int64 to map[int64]string to carry
+// the actor's role (maintainer|viewer) alongside membership. Read with
+// memberRoleOfProject.
+func WithProjectMembership(ctx context.Context, projectRoles map[int64]string) context.Context {
+	return context.WithValue(ctx, membershipCtxKey{}, projectRoles)
 }
 
-// isMemberOfProject returns true when ctx carries a membership set that
-// contains projectID. Returns false if the set is absent or does not contain
-// projectID. The "absent set" case means Can denies conservatively.
-func isMemberOfProject(ctx context.Context, projectID int64) bool {
+// memberRoleOfProject returns the actor's role in projectID and whether they
+// are a member. Returns ("", false) when the project is not in the map or
+// the ctx value is absent.
+func memberRoleOfProject(ctx context.Context, projectID int64) (role string, member bool) {
 	v := ctx.Value(membershipCtxKey{})
 	if v == nil {
-		return false
+		return "", false
 	}
-	set, ok := v.(map[int64]struct{})
+	m, ok := v.(map[int64]string)
 	if !ok {
-		return false
+		return "", false
 	}
-	_, member := set[projectID]
-	return member
+	role, member = m[projectID]
+	return
 }
 
 // Can returns (allowed, reason).
@@ -259,57 +268,87 @@ func Can(ctx context.Context, actor Actor, action Action, target Target) (bool, 
 		// Only super-admins; we already returned above if actor was one.
 		return false, ReasonSuperAdminRequired
 
+	// maintainer-required branch (D-20): 15 write actions (excluding S3BucketWrite
+	// which has its own case below due to the S3-key actor bypass).
+	// Viewers (IS a member, role != "maintainer") get ReasonNotAMaintainer.
+	// Non-members (absent from map) get ReasonNotAProjectMember.
 	case ActionCreateRepo, ActionDeleteRepo,
 		ActionUpdateRepo, ActionWipeRepo,
 		ActionAddProjectMember, ActionRemoveProjectMember,
+		ActionChangeProjectMemberRole,
 		ActionManageUpstreamCreds, ActionManageS3Keys,
 		ActionManageProjectAPIKeys,
 		ActionRPMUpload, ActionDEBUpload,
-		ActionPyPIUpload, ActionHelmUpload:
-		if target.ProjectID != 0 && isMemberOfProject(ctx, target.ProjectID) {
-			return true, ""
+		ActionPyPIUpload, ActionHelmUpload,
+		ActionGitRepoWrite:
+		role, member := memberRoleOfProject(ctx, target.ProjectID)
+		if !member {
+			return false, ReasonNotAProjectMember
 		}
-		return false, ReasonNotAProjectMember
+		if role != "maintainer" {
+			return false, ReasonNotAMaintainer
+		}
+		return true, ""
 
-	// Phase 04 Plan 05 — S3 bucket actions (D-07, D-08).
-	// S3-key actors are project-scoped: key.ProjectScope must match
-	// target.ProjectID. Session/API-key actors use project membership.
-	case ActionS3BucketRead, ActionS3BucketWrite:
+	// Phase 04 Plan 05 — S3 bucket admin (D-07).
+	// Super-admin already handled above in step 2.
+	case ActionS3BucketAdmin:
+		return false, ReasonSuperAdminRequired
+
+	// S3 read/write: S3-key actors use their project scope directly (D-08).
+	// For session/API-key actors: read is member-any-role; write requires maintainer.
+	case ActionS3BucketRead:
 		if actor.Kind == ActorKindS3Key && actor.ProjectScope != nil {
 			if target.ProjectID != 0 && *actor.ProjectScope == target.ProjectID {
 				return true, ""
 			}
 			return false, ReasonNotAProjectMember
 		}
-		if target.ProjectID != 0 && isMemberOfProject(ctx, target.ProjectID) {
-			return true, ""
+		if target.ProjectID != 0 {
+			if _, member := memberRoleOfProject(ctx, target.ProjectID); member {
+				return true, ""
+			}
 		}
 		return false, ReasonNotAProjectMember
 
-	case ActionS3BucketAdmin:
-		// Super-admin already handled above in step 2.
-		return false, ReasonSuperAdminRequired
+	case ActionS3BucketWrite:
+		// S3-key actors are implicitly maintainer for their bound project.
+		if actor.Kind == ActorKindS3Key && actor.ProjectScope != nil {
+			if target.ProjectID != 0 && *actor.ProjectScope == target.ProjectID {
+				return true, ""
+			}
+			return false, ReasonNotAProjectMember
+		}
+		// Session/API-key actors: write requires maintainer role (D-20).
+		role, member := memberRoleOfProject(ctx, target.ProjectID)
+		if !member {
+			return false, ReasonNotAProjectMember
+		}
+		if role != "maintainer" {
+			return false, ReasonNotAMaintainer
+		}
+		return true, ""
 
-	// Phase 04 Plan 09 — Git repo actions (D-30). Same membership gate as
-	// package uploads. Project-scoped API keys are treated as members of
-	// their bound project via the membership set populated upstream.
-	case ActionGitRepoRead, ActionGitRepoWrite:
-		if target.ProjectID != 0 && isMemberOfProject(ctx, target.ProjectID) {
-			return true, ""
+	// member-any-role: Git read (viewers allowed).
+	case ActionGitRepoRead:
+		if target.ProjectID != 0 {
+			if _, member := memberRoleOfProject(ctx, target.ProjectID); member {
+				return true, ""
+			}
 		}
 		return false, ReasonNotAProjectMember
 
+	// member-any-role: generic repo read (viewers allowed).
+	// Anonymous actors are already handled at the top of Can (step 0).
+	// A repo target with PublicRead=true is readable by any authenticated actor.
 	case ActionRepoRead:
-		// Authenticated project members may always read their repos.
-		// Anonymous actors are already handled at the top of Can (step 0).
-		// A repo target with PublicRead=true is also readable by any
-		// authenticated actor (whether they're a member or not) — the
-		// flag is a superset permission, not a restriction.
 		if target.PublicRead {
 			return true, ""
 		}
-		if target.ProjectID != 0 && isMemberOfProject(ctx, target.ProjectID) {
-			return true, ""
+		if target.ProjectID != 0 {
+			if _, member := memberRoleOfProject(ctx, target.ProjectID); member {
+				return true, ""
+			}
 		}
 		return false, ReasonNotAProjectMember
 

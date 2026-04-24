@@ -10,7 +10,7 @@ import (
 func TestMustChangePasswordEnforcedAcrossAllActions(t *testing.T) {
 	mcpActor := auth.Actor{ID: 1, Login: "alice", MustChangePassword: true}
 	saActor := auth.Actor{ID: 2, Login: "root", IsSuperAdmin: true}
-	ctx := auth.WithProjectMembership(context.Background(), []int64{42})
+	ctx := auth.WithProjectMembership(context.Background(), map[int64]string{42: "maintainer"})
 
 	for _, action := range auth.AllActions {
 		// MCP user: only ChangeOwnPassword + Logout bypass the wall.
@@ -63,7 +63,7 @@ func TestNonMemberDeniedProjectScopedActions(t *testing.T) {
 
 func TestMemberAllowedProjectScopedActions(t *testing.T) {
 	user := auth.Actor{ID: 3, Login: "bob"}
-	ctx := auth.WithProjectMembership(context.Background(), []int64{10})
+	ctx := auth.WithProjectMembership(context.Background(), map[int64]string{10: "maintainer"})
 	for _, action := range []auth.Action{
 		auth.ActionCreateRepo, auth.ActionDeleteRepo,
 		auth.ActionAddProjectMember, auth.ActionRemoveProjectMember,
@@ -140,8 +140,9 @@ func TestAllActionsSliceMatchesConstants(t *testing.T) {
 	// Sanity check: every Action constant appears in AllActions. The sum of
 	// these constants should equal len(AllActions). Phase 3 Plan 01 adds
 	// four package-upload actions (RPM/DEB/PyPI/Helm). v1.5 Phase 1 adds
-	// ActionResetState (DEV-only super-admin-gated state wipe).
-	want := 32
+	// ActionResetState (DEV-only super-admin-gated state wipe). v1.5 Phase 2
+	// adds ActionChangeProjectMemberRole.
+	want := 33
 	if len(auth.AllActions) != want {
 		t.Fatalf("AllActions length: %d, want %d", len(auth.AllActions), want)
 	}
@@ -162,8 +163,8 @@ func TestPackageUploadActionsMemberOnly(t *testing.T) {
 	member := auth.Actor{ID: 10, Kind: auth.ActorKindUser}
 	outsider := auth.Actor{ID: 11, Kind: auth.ActorKindUser}
 	anon := auth.Actor{Kind: auth.ActorKindAnonymous}
-	ctxMember := auth.WithProjectMembership(context.Background(), []int64{42})
-	ctxOutsider := auth.WithProjectMembership(context.Background(), []int64{99})
+	ctxMember := auth.WithProjectMembership(context.Background(), map[int64]string{42: "maintainer"})
+	ctxOutsider := auth.WithProjectMembership(context.Background(), map[int64]string{99: "maintainer"})
 
 	for _, action := range []auth.Action{
 		auth.ActionRPMUpload,
@@ -221,10 +222,11 @@ func TestS3BucketActions_S3KeyActor(t *testing.T) {
 
 func TestS3BucketActions_SessionActor(t *testing.T) {
 	// Authenticated session actor uses project membership for S3 actions (D-07).
+	// v1.5 Phase 2: S3BucketWrite requires maintainer; S3BucketRead allows any member.
 	member := auth.Actor{ID: 10, Kind: auth.ActorKindUser}
 	outsider := auth.Actor{ID: 11, Kind: auth.ActorKindUser}
-	ctxMember := auth.WithProjectMembership(context.Background(), []int64{42})
-	ctxOutsider := auth.WithProjectMembership(context.Background(), []int64{99})
+	ctxMember := auth.WithProjectMembership(context.Background(), map[int64]string{42: "maintainer"})
+	ctxOutsider := auth.WithProjectMembership(context.Background(), map[int64]string{99: "maintainer"})
 
 	for _, action := range []auth.Action{auth.ActionS3BucketRead, auth.ActionS3BucketWrite} {
 		ok, reason := auth.Can(ctxMember, member, action, auth.Target{Kind: "repo", ProjectID: 42})
@@ -242,8 +244,8 @@ func TestS3BucketActions_SessionActor(t *testing.T) {
 func TestManageS3Keys_MembershipGated(t *testing.T) {
 	member := auth.Actor{ID: 10, Kind: auth.ActorKindUser}
 	outsider := auth.Actor{ID: 11, Kind: auth.ActorKindUser}
-	ctxMember := auth.WithProjectMembership(context.Background(), []int64{42})
-	ctxOutsider := auth.WithProjectMembership(context.Background(), []int64{99})
+	ctxMember := auth.WithProjectMembership(context.Background(), map[int64]string{42: "maintainer"})
+	ctxOutsider := auth.WithProjectMembership(context.Background(), map[int64]string{99: "maintainer"})
 
 	ok, reason := auth.Can(ctxMember, member, auth.ActionManageS3Keys, auth.Target{Kind: "project", ProjectID: 42})
 	if !ok {

@@ -88,7 +88,7 @@ func TestAnonymousMCPShortCircuitNotReached(t *testing.T) {
 
 func TestAuthenticatedMemberCanReadRepo(t *testing.T) {
 	user := auth.Actor{ID: 3, Login: "bob"}
-	ctx := auth.WithProjectMembership(context.Background(), []int64{10})
+	ctx := auth.WithProjectMembership(context.Background(), map[int64]string{10: "maintainer"})
 	target := auth.Target{Kind: "repo", ProjectID: 10, RepoID: 5}
 	ok, reason := auth.Can(ctx, user, auth.ActionRepoRead, target)
 	if !ok || reason != "" {

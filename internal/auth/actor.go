@@ -69,6 +69,13 @@ type Actor struct {
 	// Pitfall P5: Can() short-circuits every action except
 	// ActionChangeOwnPassword / ActionLogout when this is true.
 	MustChangePassword bool
+
+	// APIKeyRole is the minted role for project-scoped API keys (D-23 / D-26).
+	// Set by the auth middleware when loading the api_keys row (non-empty only
+	// when Kind == ActorKindAPIKey and ProjectScope != nil). Empty for user-owned
+	// keys and user actors — their role derives from project_members at request
+	// time via ResolveMembership.
+	APIKeyRole string
 }
 
 // ctxKey is the unexported context key for Actor.

@@ -3,6 +3,7 @@ package api_test
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"testing"
 
 	"github.com/dxc-internal/omnirepo/internal/api"
@@ -393,4 +394,104 @@ func rbacProjectID(t *testing.T, db *metadata.DB, name string) int64 {
 		t.Fatalf("rbacProjectID(%q): %v", name, err)
 	}
 	return p.ID
+}
+
+// rbacQueryAuditDetails reads the most-recent audit_log row matching kind+project
+// and returns its details_json as a parsed map. Fails the test if no row found.
+func rbacQueryAuditDetails(t *testing.T, db *metadata.DB, kind, projectName string) map[string]any {
+	t.Helper()
+	var raw string
+	err := db.Reader.QueryRowContext(context.Background(),
+		`SELECT details_json FROM audit_log
+		 WHERE event_kind=? AND target_kind='project' AND target_id=?
+		 ORDER BY id DESC LIMIT 1`,
+		kind, projectName,
+	).Scan(&raw)
+	if err != nil {
+		t.Fatalf("rbacQueryAuditDetails(%q, %q): %v", kind, projectName, err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal([]byte(raw), &m); err != nil {
+		t.Fatalf("rbacQueryAuditDetails: unmarshal details_json: %v", err)
+	}
+	return m
+}
+
+// TestHandleAddMember_AuditHasRoleField verifies that POST /members with
+// role=viewer emits a member.added audit row with details_json.role == "viewer" (D-12).
+func TestHandleAddMember_AuditHasRoleField(t *testing.T) {
+	s := newTestServer(t)
+	seedTestUser(t, s.db, "super", "s@x", true, false)
+	seedTestUser(t, s.db, "alice", "a@x", false, false)
+	cookie, _, _ := s.login(t, "super", "pw-super")
+
+	s.do(t, "POST", "/api/v1/projects", cookie, api.CreateProjectRequest{Name: "p-audit-add"})
+
+	resp, body := s.do(t, "POST", "/api/v1/projects/p-audit-add/members/alice", cookie, map[string]string{"role": "viewer"})
+	if resp.StatusCode != 200 {
+		t.Fatalf("add member: status=%d body=%v", resp.StatusCode, body)
+	}
+
+	details := rbacQueryAuditDetails(t, s.db, "member.added", "p-audit-add")
+	if details["user"] != "alice" {
+		t.Fatalf("audit member.added: user=%v, want 'alice'", details["user"])
+	}
+	if details["role"] != "viewer" {
+		t.Fatalf("audit member.added: role=%v, want 'viewer'", details["role"])
+	}
+}
+
+// TestHandlePatchMember_AuditEmit_RecordsOldAndNewRole verifies that PATCH
+// demoting a maintainer to viewer emits member.role_changed with all three
+// D-11 keys: user, old_role, new_role. Missing old_role is a D-11 violation.
+func TestHandlePatchMember_AuditEmit_RecordsOldAndNewRole(t *testing.T) {
+	s := newTestServer(t)
+	seedTestUser(t, s.db, "super", "s@x", true, false)
+	seedTestUser(t, s.db, "maint1", "m1@x", false, false)
+	seedTestUser(t, s.db, "maint2", "m2@x", false, false)
+	cookie, _, _ := s.login(t, "super", "pw-super")
+
+	s.do(t, "POST", "/api/v1/projects", cookie, api.CreateProjectRequest{Name: "p-audit-patch"})
+	// Add two maintainers so demotion of one is allowed by last-maintainer guard.
+	s.do(t, "POST", "/api/v1/projects/p-audit-patch/members/maint1", cookie, map[string]string{"role": "maintainer"})
+	s.do(t, "POST", "/api/v1/projects/p-audit-patch/members/maint2", cookie, map[string]string{"role": "maintainer"})
+
+	// Demote maint1 to viewer.
+	resp, body := s.do(t, "PATCH", "/api/v1/projects/p-audit-patch/members/maint1", cookie, map[string]string{"role": "viewer"})
+	if resp.StatusCode != 200 {
+		t.Fatalf("PATCH status=%d body=%v", resp.StatusCode, body)
+	}
+
+	details := rbacQueryAuditDetails(t, s.db, "member.role_changed", "p-audit-patch")
+	if details["user"] != "maint1" {
+		t.Fatalf("audit member.role_changed: user=%v, want 'maint1'", details["user"])
+	}
+	if details["old_role"] != "maintainer" {
+		t.Fatalf("audit member.role_changed: old_role=%v, want 'maintainer' (D-11 violation)", details["old_role"])
+	}
+	if details["new_role"] != "viewer" {
+		t.Fatalf("audit member.role_changed: new_role=%v, want 'viewer'", details["new_role"])
+	}
+}
+
+// TestHandleAddMember_AuditDefaultRole verifies POST with empty body emits
+// member.added with details_json.role == "viewer" (D-02 application default).
+func TestHandleAddMember_AuditDefaultRole(t *testing.T) {
+	s := newTestServer(t)
+	seedTestUser(t, s.db, "super", "s@x", true, false)
+	seedTestUser(t, s.db, "bob", "b@x", false, false)
+	cookie, _, _ := s.login(t, "super", "pw-super")
+
+	s.do(t, "POST", "/api/v1/projects", cookie, api.CreateProjectRequest{Name: "p-audit-default"})
+
+	// POST with nil body — no role specified, should default to viewer.
+	resp, body := s.do(t, "POST", "/api/v1/projects/p-audit-default/members/bob", cookie, nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("add member no-body: status=%d body=%v", resp.StatusCode, body)
+	}
+
+	details := rbacQueryAuditDetails(t, s.db, "member.added", "p-audit-default")
+	if details["role"] != "viewer" {
+		t.Fatalf("audit member.added default: role=%v, want 'viewer' (D-02)", details["role"])
+	}
 }

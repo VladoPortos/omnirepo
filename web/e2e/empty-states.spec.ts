@@ -22,7 +22,7 @@
  */
 
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
-import { adminLoginAPI, resetServerState } from './helpers/auth';
+import { adminLoginAPI, resetServerState, seedUserWithProjectRole } from './helpers/auth';
 
 test.use({ viewport: { width: 1440, height: 900 } });
 
@@ -83,29 +83,8 @@ async function seedDockerRepoWithOneArtifact(
   return { project, name: repo };
 }
 
-/**
- * seedUserWithProjectRole — creates a non-super-admin user. v1.0 ships flat
- * project membership (any member = full access), so "role" granularity
- * reduces to project-membership vs super-admin in the current codebase.
- * The UI's canScan resolver for EMPTY-04 currently defaults to
- * `currentUser?.is_super_admin`, which means a freshly-seeded non-admin
- * user that is NOT added to the project membership will see the CTA as
- * disabled — which is the non-maintainer variant the plan exercises.
- * Returns the one-time password for UI login.
- */
-async function seedUserWithProjectRole(
-  request: APIRequestContext,
-  login: string,
-  _role: 'viewer' | 'maintainer' | 'admin',
-  _projectName: string,
-): Promise<string | null> {
-  const resp = await request.post('/api/v1/admin/users', {
-    data: { login, email: `${login}@e2e.test` },
-  });
-  if (!resp.ok()) return null;
-  const body = await resp.json();
-  return body.one_time_password ?? null;
-}
+// seedUserWithProjectRole is imported from ./helpers/auth (real implementation
+// added in Phase 2 Plan 07 — creates user + POSTs to /members/{login} with role).
 
 /** assertEmptyState — UI-SPEC E-08 helper. */
 export async function assertEmptyState(
@@ -298,16 +277,10 @@ test.describe('EmptyState surfaces (EMPTY-01..06, 08)', () => {
     await expect(cta).toBeEnabled();
   });
 
-  // EMPTY-04 non-maintainer is currently untestable against v1.0's
-  // flat membership model — DockerRepoPage.tsx sets
-  // `canScan = is_super_admin || !!currentUser`, so any authenticated
-  // user lands on the enabled-CTA branch. The disabled-CTA path only
-  // fires for unauthenticated visitors, but those can't see the repo
-  // page at all (auth gate redirects to /login before DockerRepoPage
-  // mounts). Product fix requires `canScan = super_admin || is
-  // _maintainer_of_project` with an actual maintainer/viewer split.
-  // Tracked separately.
-  test.skip('EMPTY-04: never-scanned repo (non-maintainer) renders disabled CTA + tooltip', async ({
+  // EMPTY-04: Phase 2 Plan 07 — non-maintainer viewer sees disabled Scan CTA.
+  // seedUserWithProjectRole now posts the real role to /members/{login}, and
+  // canScan uses useRoleFor() so viewers see the disabled path.
+  test('EMPTY-04: never-scanned repo (non-maintainer) renders disabled CTA + tooltip', async ({
     page,
     request,
   }) => {
@@ -329,8 +302,8 @@ test.describe('EmptyState surfaces (EMPTY-01..06, 08)', () => {
       return;
     }
 
-    // F-T18: content is a RepoContentPage — mirror the fix in the
-    // maintainer variant above.
+    // Route intercept: simulate one artifact + zero scans so the EMPTY-04
+    // surface renders (artifacts.length > 0 && scansCount === 0).
     await page.route(
       `**/api/v1/projects/${encodeURIComponent(repo.project)}/repos/docker/${encodeURIComponent(repo.name)}/content**`,
       (route) =>
@@ -364,8 +337,7 @@ test.describe('EmptyState surfaces (EMPTY-01..06, 08)', () => {
         }),
     );
 
-    // Log in as the non-admin through the UI so cookies settle, driving
-    // the must_change_password wall (the API mints a one-time password).
+    // Log in as the viewer — passwordLogin handles must_change_password redirect.
     await page.context().clearCookies();
     await page.goto('/login');
     await page.fill('input#login', login);
@@ -373,9 +345,6 @@ test.describe('EmptyState surfaces (EMPTY-01..06, 08)', () => {
     await page.click('button[type="submit"]');
     await page.waitForLoadState('networkidle');
     if (page.url().includes('/change-password')) {
-      // ChangePasswordPage uses hyphenated IDs (current-password /
-      // new-password / confirm-password) — the pre-v1.4 underscore
-      // locators are stale (F-15.4 UI-drift).
       const newPw = `${otp}x`;
       await page.fill('input#current-password', otp);
       await page.fill('input#new-password', newPw);
@@ -385,14 +354,16 @@ test.describe('EmptyState surfaces (EMPTY-01..06, 08)', () => {
     }
 
     await page.goto(`/projects/${repo.project}/docker/${repo.name}`);
+    // The EmptyState wraps the disabled button in a span with aria-disabled.
+    // Locate by aria-label which includes the button name.
     const es = page.getByTestId('empty-state');
-    const cta = es.getByRole('button', { name: 'Run first scan' });
-    await expect(cta).toBeDisabled();
-    // base-ui Tooltip shows on hover; delay depends on app setup. Hover
-    // the wrapping span so pointer events fire on the disabled button.
-    await cta.hover({ force: true });
+    // The disabled span wrapper has aria-label="Run first scan"
+    const ctaSpan = es.locator('[aria-disabled="true"]');
+    await expect(ctaSpan).toBeVisible();
+    // Hover to trigger tooltip
+    await ctaSpan.hover({ force: true });
     await expect(page.getByRole('tooltip')).toContainText(
-      'Requires maintainer role',
+      'Maintainer role required',
     );
   });
 });

@@ -1,5 +1,5 @@
 /**
- * Shared admin-auth helpers for Playwright specs.
+ * Shared admin-auth + seed helpers for Playwright specs.
  *
  * Prior to F-15.4 (post-v1.4), every spec carried its own inline
  * `loginAsAdmin` / `changePasswordIfNeeded` helpers hardcoding
@@ -118,4 +118,91 @@ export async function resetServerState(
   // Super-admin's session was wiped; re-authenticate so the next call
   // inherits a live cookie.
   await adminLoginAPI(request);
+}
+
+/**
+ * seedUserWithProjectRole — creates a user via the admin API and adds them
+ * to the given project with the specified role. Returns the one-time
+ * password (OTP) from the admin user-creation endpoint, or null if either
+ * step fails.
+ *
+ * Preconditions: `request` must carry a super-admin session cookie
+ * (call `adminLoginAPI` first). The project must already exist.
+ *
+ * The returned OTP is the user's initial password. New users land in the
+ * must_change_password=true state — callers that need a live session for
+ * the created user should use `passwordLogin` which handles the
+ * change-password redirect automatically.
+ */
+export async function seedUserWithProjectRole(
+  request: APIRequestContext,
+  login: string,
+  role: 'viewer' | 'maintainer',
+  projectName: string,
+): Promise<string | null> {
+  // Step 1: create the user.
+  const createResp = await request.post('/api/v1/admin/users', {
+    data: { login, email: `${login}@e2e.test` },
+  });
+  if (!createResp.ok()) {
+    return null;
+  }
+  const body = await createResp.json() as { one_time_password?: string };
+  const otp = body.one_time_password;
+  if (!otp) {
+    return null;
+  }
+
+  // Step 2: add user to project with the requested role.
+  const addResp = await request.post(
+    `/api/v1/projects/${encodeURIComponent(projectName)}/members/${encodeURIComponent(login)}`,
+    { data: { role } },
+  );
+  if (!addResp.ok()) {
+    return null;
+  }
+
+  return otp;
+}
+
+/**
+ * passwordLogin — establish a non-super-admin session on the given page.
+ *
+ * Newly-seeded users land in must_change_password=true state. This helper
+ * detects the /change-password redirect and completes the flow by setting
+ * a new password derived from the OTP (appends "x" to avoid reuse checks).
+ * After this call, `page` carries a valid session cookie for the given user
+ * and is NOT on /login or /change-password.
+ *
+ * Returns true on success, false if the login or change-password step failed.
+ *
+ * Note: credentials are not logged; the OTP is only held in test scope and
+ * discarded after the session cookie is set (T-V2-02 mitigated).
+ */
+export async function passwordLogin(
+  page: Page,
+  login: string,
+  password: string,
+): Promise<boolean> {
+  await page.context().clearCookies();
+  await page.goto('/login');
+  await page.fill('input#login', login);
+  await page.fill('input#password', password);
+  await page.click('button[type="submit"]');
+  await page.waitForLoadState('networkidle');
+
+  // Handle must_change_password redirect.
+  if (page.url().includes('/change-password')) {
+    const newPw = `${password}x`;
+    await page.fill('input#current-password', password);
+    await page.fill('input#new-password', newPw);
+    await page.fill('input#confirm-password', newPw);
+    await page.click('button[type="submit"]');
+    await page.waitForLoadState('networkidle');
+    // After change-password succeeds, the session holds the user's identity.
+    // Return whether we actually left the change-password page.
+    return !page.url().includes('/change-password') && !page.url().includes('/login');
+  }
+
+  return !page.url().includes('/login');
 }

@@ -23,8 +23,10 @@ import {
   DialogTitle,
   DialogFooter,
 } from '@/components/ui/dialog';
+import { Badge } from '@/components/ui/badge';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { TypeBadge } from '@/components/common/TypeBadge';
+import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip';
 import { CreateRepoDialog } from '@/components/CreateRepoDialog';
 import { ProjectAPIKeysCard } from '@/components/ProjectAPIKeysCard';
 import {
@@ -36,6 +38,7 @@ import {
   useDeleteBucket,
   useAddProjectMember,
   useRemoveProjectMember,
+  useUpdateProjectMemberRole,
   useAdminUserList,
   useMe,
 } from '@/api/queries';
@@ -46,6 +49,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { useRoleFor } from '@/hooks/useAuth';
 import { formatBytes, formatDate } from '@/lib/format';
 import { bucketNameSeemsValid } from '@/lib/validators';
 import {
@@ -54,7 +58,7 @@ import {
   type ApiErrorEnvelope,
 } from '@/api/client';
 import { ErrorEnvelopeRenderer } from '@/components/common/ErrorEnvelope';
-import type { RepoType, ProjectRepo, ProjectBucket } from '@/api/types';
+import type { RepoType, ProjectRepo, ProjectBucket, ProjectMember } from '@/api/types';
 
 const REPO_TYPES: { value: RepoType; label: string }[] = [
   { value: 'docker', label: 'Docker' },
@@ -92,6 +96,8 @@ export function ProjectDetailPage() {
   const [memberLogin, setMemberLogin] = useState('');
   const [memberError, setMemberError] = useState<ApiErrorEnvelope | null>(null);
   const [removeTarget, setRemoveTarget] = useState<{ login: string } | null>(null);
+  const [addMemberRole, setAddMemberRole] = useState<'maintainer' | 'viewer'>('viewer');
+  const [demoteTarget, setDemoteTarget] = useState<{ login: string; isSelf: boolean } | null>(null);
   const { data: me } = useMe();
   // /admin/users is super-admin-only — gating the picker fetch prevents
   // non-admin project members from flooding the console with 403s on
@@ -101,6 +107,11 @@ export function ProjectDetailPage() {
   const { data: userListData } = useAdminUserList({ enabled: canListUsers });
   const addMember = useAddProjectMember(name);
   const removeMember = useRemoveProjectMember(name);
+  const updateRole = useUpdateProjectMemberRole(name);
+
+  // Role of the current user in this project (super-admins map to 'maintainer').
+  const myRole = useRoleFor(name);
+  const isMaintainer = myRole === 'maintainer';
   const qc = useQueryClient();
   // openAddMember invalidates the cached users list so the picker sees
   // accounts added since this page mounted (F-8: the underlying hook is
@@ -116,6 +127,22 @@ export function ProjectDetailPage() {
       qc.invalidateQueries({ queryKey: ['admin', 'users', 'list'] });
     }
   }, [qc, canListUsers]);
+
+  // Last-maintainer guard: count only members with role==='maintainer'.
+  const maintainerCount = useMemo(
+    () => (project?.members ?? []).filter((m) => m.role === 'maintainer').length,
+    [project],
+  );
+  const isLastMaintainerRow = (m: ProjectMember) =>
+    m.role === 'maintainer' && maintainerCount === 1;
+
+  /** Map a role-update error to a user-facing message. */
+  function roleErrorMessage(err: unknown): string {
+    const env = envelopeFromError(err, 'Failed to update role.');
+    if (env.code === 'codeRBACLastMaintainer') return env.message;
+    if (env.code === 'auth.not_a_maintainer') return 'Maintainer role required for this action.';
+    return env.message;
+  }
 
   // Group repos by type
   const reposByType = useMemo(() => {
@@ -290,13 +317,15 @@ export function ProjectDetailPage() {
                     <Users className="size-4 text-muted-foreground" />
                     <CardTitle>Members</CardTitle>
                   </div>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={openAddMember}
-                  >
-                    Add Member
-                  </Button>
+                  {isMaintainer && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={openAddMember}
+                    >
+                      Add Member
+                    </Button>
+                  )}
                 </div>
               </CardHeader>
               <CardContent>
@@ -305,10 +334,11 @@ export function ProjectDetailPage() {
                     icon={Users}
                     title="No teammates yet"
                     description="Add a teammate so someone else can publish to this project."
-                    primaryCTA={{
-                      label: 'Add member',
-                      onClick: openAddMember,
-                    }}
+                    primaryCTA={
+                      isMaintainer
+                        ? { label: 'Add member', onClick: openAddMember }
+                        : { label: 'Add member', disabled: true, disabledHint: 'Maintainer role required for this action.' }
+                    }
                   />
                 ) : (
                   <div className="space-y-2">
@@ -330,16 +360,87 @@ export function ProjectDetailPage() {
                             </p>
                           </div>
                         </div>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="text-destructive hover:bg-destructive/10"
-                          onClick={() => setRemoveTarget({ login: m.login })}
-                          title={`Remove ${m.login}`}
-                          aria-label={`Remove ${m.login}`}
-                        >
-                          <Trash2 className="size-4" />
-                        </Button>
+                        {isMaintainer ? (
+                          <div className="flex items-center gap-2">
+                            {/* Role badge */}
+                            {m.role === 'maintainer' ? (
+                              <Badge variant="default">Maintainer</Badge>
+                            ) : (
+                              <Badge variant="secondary">Viewer</Badge>
+                            )}
+                            {/* Role select */}
+                            <Select
+                              value={m.role}
+                              onValueChange={(val) => {
+                                if (val === m.role) return;
+                                if (val === 'viewer') {
+                                  setDemoteTarget({ login: m.login, isSelf: m.login === me?.login });
+                                } else {
+                                  updateRole.mutate(
+                                    { login: m.login, role: 'maintainer' },
+                                    {
+                                      onSuccess: () => toast.success('Role updated.'),
+                                      onError: (err) => toast.error(roleErrorMessage(err)),
+                                    },
+                                  );
+                                }
+                              }}
+                            >
+                              <SelectTrigger size="sm">
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="maintainer">Maintainer</SelectItem>
+                                <SelectItem value="viewer" disabled={isLastMaintainerRow(m)}>Viewer</SelectItem>
+                              </SelectContent>
+                            </Select>
+                            {/* Trash button — disabled+tooltip for last maintainer */}
+                            {isLastMaintainerRow(m) ? (
+                              <Tooltip>
+                                <TooltipTrigger
+                                  render={
+                                    <span
+                                      className="inline-block rounded-md focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                                      tabIndex={0}
+                                      role="button"
+                                      aria-disabled="true"
+                                      aria-label={`Cannot remove ${m.login} — last maintainer`}
+                                    >
+                                      <Button
+                                        variant="ghost"
+                                        size="sm"
+                                        className="text-destructive hover:bg-destructive/10"
+                                        disabled
+                                        tabIndex={-1}
+                                      >
+                                        <Trash2 className="size-4" />
+                                      </Button>
+                                    </span>
+                                  }
+                                />
+                                <TooltipContent>Promote another member to maintainer first.</TooltipContent>
+                              </Tooltip>
+                            ) : (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="text-destructive hover:bg-destructive/10"
+                                onClick={() => setRemoveTarget({ login: m.login })}
+                                aria-label={`Remove ${m.login}`}
+                              >
+                                <Trash2 className="size-4" />
+                              </Button>
+                            )}
+                          </div>
+                        ) : (
+                          <div className="flex items-center">
+                            {m.role === 'maintainer' ? (
+                              <Badge variant="default">Maintainer</Badge>
+                            ) : (
+                              <Badge variant="secondary">Viewer</Badge>
+                            )}
+                          </div>
+                        )}
                       </div>
                     ))}
                   </div>
@@ -348,7 +449,7 @@ export function ProjectDetailPage() {
             </Card>
 
             {/* Add Member dialog */}
-            <Dialog open={memberOpen} onOpenChange={setMemberOpen}>
+            <Dialog open={memberOpen} onOpenChange={(open) => { setMemberOpen(open); if (!open) { setMemberError(null); setAddMemberRole('viewer'); } }}>
               <DialogContent>
                 <DialogHeader>
                   <DialogTitle>Add member to {project.name}</DialogTitle>
@@ -383,6 +484,21 @@ export function ProjectDetailPage() {
                       only users who can be explicitly assigned.
                     </p>
                   </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="add-member-role">Role</Label>
+                    <Select
+                      value={addMemberRole}
+                      onValueChange={(v) => setAddMemberRole(v as 'maintainer' | 'viewer')}
+                    >
+                      <SelectTrigger id="add-member-role" className="w-full">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="viewer">Viewer</SelectItem>
+                        <SelectItem value="maintainer">Maintainer</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
                 </div>
                 <DialogFooter>
                   <Button variant="outline" onClick={() => setMemberOpen(false)}>
@@ -392,9 +508,10 @@ export function ProjectDetailPage() {
                     disabled={!memberLogin || addMember.isPending}
                     onClick={async () => {
                       try {
-                        await addMember.mutateAsync({ login: memberLogin });
+                        await addMember.mutateAsync({ login: memberLogin, role: addMemberRole });
                         toast.success(`${memberLogin} added to ${project.name}.`);
                         setMemberOpen(false);
+                        setAddMemberRole('viewer');
                       } catch (err) {
                         setMemberError(
                           envelopeFromError(err, 'Failed to add member.'),
@@ -403,6 +520,48 @@ export function ProjectDetailPage() {
                     }}
                   >
                     {addMember.isPending ? 'Adding…' : 'Add Member'}
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+
+            {/* Demote confirmation dialog */}
+            <Dialog open={!!demoteTarget} onOpenChange={(open) => !open && setDemoteTarget(null)}>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>
+                    {demoteTarget?.isSelf
+                      ? 'Give up maintainer access?'
+                      : `Change ${demoteTarget?.login} to Viewer?`}
+                  </DialogTitle>
+                </DialogHeader>
+                <p className="py-2 text-sm text-muted-foreground">
+                  {demoteTarget?.isSelf
+                    ? 'You will lose write access to this project. Another maintainer or a super-admin will need to promote you back.'
+                    : 'They will lose write access to this project. Maintainers can promote them back anytime.'}
+                </p>
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setDemoteTarget(null)}>
+                    Cancel
+                  </Button>
+                  <Button
+                    variant="default"
+                    disabled={updateRole.isPending}
+                    onClick={() => {
+                      if (!demoteTarget) return;
+                      updateRole.mutate(
+                        { login: demoteTarget.login, role: 'viewer' },
+                        {
+                          onSuccess: () => {
+                            toast.success('Role updated.');
+                            setDemoteTarget(null);
+                          },
+                          onError: (err) => toast.error(roleErrorMessage(err)),
+                        },
+                      );
+                    }}
+                  >
+                    {updateRole.isPending ? 'Saving…' : 'Confirm'}
                   </Button>
                 </DialogFooter>
               </DialogContent>

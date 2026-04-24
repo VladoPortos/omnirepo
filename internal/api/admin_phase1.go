@@ -233,6 +233,9 @@ func Mount(r chi.Router, d Deps) {
 				Post("/projects/{name}/members/{login}", d.handleAddMember)
 			r.With(authmw.RequireCanWith(auth.ActionRemoveProjectMember, d.resolveProjectTargetFromURL)).
 				Delete("/projects/{name}/members/{login}", d.handleRemoveMember)
+			// PATCH role change — ActionChangeProjectMemberRole gate is re-checked
+			// inline by handlePatchMember (allows super-admin bypass + viewer 403).
+			r.Patch("/projects/{name}/members/{login}", d.handlePatchMember)
 
 			// Repos (project-scoped).
 			r.With(authmw.RequireCanWith(auth.ActionCreateRepo, d.resolveProjectTargetFromURL)).
@@ -705,6 +708,34 @@ func (d Deps) handleDeleteProject(w http.ResponseWriter, r *http.Request) {
 func (d Deps) handleAddMember(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
 	login := chi.URLParam(r, "login")
+
+	// Parse optional role body (D-14). Empty body or missing role → default "viewer" (D-02).
+	// We use ReadAll + conditional Unmarshal so an absent or zero-byte body never
+	// triggers the writeJSONError path inside decodeJSONBody (which would write
+	// response headers before we can send the real response).
+	var req struct {
+		Role string `json:"role"`
+	}
+	raw, _ := io.ReadAll(io.LimitReader(r.Body, maxAdminJSONBodyBytes+1))
+	if int64(len(raw)) > maxAdminJSONBodyBytes {
+		writeJSONError(w, r, http.StatusRequestEntityTooLarge, ErrValidationFailed, "request body too large")
+		return
+	}
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &req); err != nil {
+			writeJSONError(w, r, http.StatusBadRequest, ErrValidationFailed, "invalid JSON")
+			return
+		}
+	}
+	role := req.Role
+	if role == "" {
+		role = "viewer" // D-02: new inserts default to viewer
+	}
+	if role != "maintainer" && role != "viewer" {
+		writeFieldValidationError(w, r, ErrValidationFailed, "role", "must be 'maintainer' or 'viewer'")
+		return
+	}
+
 	p, err := d.Projects.FindByName(r.Context(), name)
 	if err != nil {
 		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "project")
@@ -715,14 +746,18 @@ func (d Deps) handleAddMember(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "user")
 		return
 	}
-	if err := d.Members.Add(r.Context(), p.ID, u.ID, "viewer"); err != nil {
+	if err := d.Members.Add(r.Context(), p.ID, u.ID, role); err != nil {
 		// PK-conflict → 409.
 		writeJSONError(w, r, http.StatusConflict, ErrConflict, "already a member")
 		return
 	}
 	if a, ok := auth.ActorFromContext(r.Context()); ok {
 		uid := a.ID
-		d.recordAudit(r, audit.Event{Kind: audit.EvtMemberAdded, ActorUserID: &uid, TargetKind: "project", TargetID: p.Name, Details: map[string]any{"user": u.Login}})
+		d.recordAudit(r, audit.Event{
+			Kind: audit.EvtMemberAdded, ActorUserID: &uid,
+			TargetKind: "project", TargetID: p.Name,
+			Details: map[string]any{"user": u.Login, "role": role}, // D-12 enrichment
+		})
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
@@ -740,6 +775,28 @@ func (d Deps) handleRemoveMember(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "user")
 		return
 	}
+
+	// Last-maintainer guard (D-06). Super-admin actors bypass because they can
+	// always rescue the project; auth.Can's step-2 super-admin bypass means
+	// we reach this path for non-super-admins AND for super-admins that were
+	// explicitly permitted. Use IsSuperAdmin to skip the guard for super-admins.
+	actor, _ := auth.ActorFromContext(r.Context())
+	if !actor.IsSuperAdmin {
+		// Only relevant if the target is currently a maintainer.
+		if targetRole, found := d.Members.GetRole(r.Context(), p.ID, u.ID); found && targetRole == "maintainer" {
+			n, cErr := d.Members.CountMaintainers(r.Context(), p.ID)
+			if cErr != nil {
+				writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
+				return
+			}
+			if n <= 1 {
+				writeJSONError(w, r, http.StatusConflict, ErrRBACLastMaintainer,
+					"cannot remove/demote last maintainer; promote another member first")
+				return
+			}
+		}
+	}
+
 	if err := d.Members.Remove(r.Context(), p.ID, u.ID); err != nil {
 		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
@@ -747,6 +804,96 @@ func (d Deps) handleRemoveMember(w http.ResponseWriter, r *http.Request) {
 	if a, ok := auth.ActorFromContext(r.Context()); ok {
 		uid := a.ID
 		d.recordAudit(r, audit.Event{Kind: audit.EvtMemberRemoved, ActorUserID: &uid, TargetKind: "project", TargetID: p.Name, Details: map[string]any{"user": u.Login}})
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// handlePatchMember changes the role of an existing project member.
+// PATCH /api/v1/projects/{name}/members/{login}
+// Requires ActionChangeProjectMemberRole (maintainer or super-admin).
+// Enforces last-maintainer guard (D-06) when demoting to viewer.
+// Emits EvtMemberRoleChanged with details_json {user, old_role, new_role} per D-11.
+func (d Deps) handlePatchMember(w http.ResponseWriter, r *http.Request) {
+	name := chi.URLParam(r, "name")
+	login := chi.URLParam(r, "login")
+
+	var req struct {
+		Role string `json:"role"`
+	}
+	if !decodeJSONBody(w, r, maxAdminJSONBodyBytes, &req) {
+		return
+	}
+	if req.Role != "maintainer" && req.Role != "viewer" {
+		writeFieldValidationError(w, r, ErrValidationFailed, "role", "must be 'maintainer' or 'viewer'")
+		return
+	}
+
+	actor, ok := auth.ActorFromContext(r.Context())
+	if !ok {
+		writeJSONError(w, r, http.StatusUnauthorized, ErrUnauthenticated, "")
+		return
+	}
+	p, err := d.Projects.FindByName(r.Context(), name)
+	if err != nil {
+		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "project")
+		return
+	}
+
+	// Auth gate (D-15): ActionChangeProjectMemberRole requires maintainer or super-admin.
+	if allowed, reason := auth.Can(r.Context(), actor,
+		auth.ActionChangeProjectMemberRole,
+		auth.Target{Kind: "project", ProjectID: p.ID}); !allowed {
+		writeJSONError(w, r, http.StatusForbidden, ErrForbidden, reason)
+		return
+	}
+
+	u, err := d.Users.FindByLogin(r.Context(), login)
+	if err != nil {
+		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "user")
+		return
+	}
+
+	// D-11: capture old_role BEFORE UpdateRole so audit can record it.
+	// GetRole returns ("", false) when the target is not a member.
+	currentRole, found := d.Members.GetRole(r.Context(), p.ID, u.ID)
+	if !found {
+		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "member")
+		return
+	}
+
+	// Last-maintainer guard (D-06, D-07): only relevant when demoting a current maintainer.
+	if req.Role == "viewer" && !actor.IsSuperAdmin && currentRole == "maintainer" {
+		n, cErr := d.Members.CountMaintainers(r.Context(), p.ID)
+		if cErr != nil {
+			writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
+			return
+		}
+		if n <= 1 {
+			writeJSONError(w, r, http.StatusConflict, ErrRBACLastMaintainer,
+				"cannot remove/demote last maintainer; promote another member first")
+			return
+		}
+	}
+
+	if err := d.Members.UpdateRole(r.Context(), p.ID, u.ID, req.Role); err != nil {
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
+		return
+	}
+
+	// D-11 audit emission: exactly three keys — user, old_role, new_role.
+	if a, ok2 := auth.ActorFromContext(r.Context()); ok2 {
+		uid := a.ID
+		d.recordAudit(r, audit.Event{
+			Kind:       audit.EvtMemberRoleChanged,
+			ActorUserID: &uid,
+			TargetKind: "project",
+			TargetID:   p.Name,
+			Details: map[string]any{
+				"user":     u.Login,
+				"old_role": currentRole,
+				"new_role": req.Role,
+			},
+		})
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }

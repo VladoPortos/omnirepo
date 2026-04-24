@@ -176,6 +176,14 @@ const (
 	EvtIntegrityCheckCompleted EventKind = "admin.integrity_check.completed"
 	EvtIntegrityCheckFailed    EventKind = "admin.integrity_check.failed"
 
+	// v1.5 Phase 2 — RBAC maintainer/viewer split (D-11).
+	// Emitted after a successful PATCH /projects/{name}/members/{login}.
+	// details_json: {"user": "<login>", "old_role": "...", "new_role": "..."}.
+	// target_kind="project", target_id=<project_name> (matches member.added shape).
+	// NOTE: AllRBACPhase2EventKinds slice + audit_test.go roster updates are Plan 05.
+	// This constant is added here in Plan 03 to keep handlePatchMember compilable.
+	EvtMemberRoleChanged EventKind = "member.role_changed"
+
 	// Phase 11 — Mirror infrastructure widening (OCIHELM-04, GITMIRROR-08).
 	//
 	// EvtOciTagRebound: emitted by internal/protocol/helm/sync_handler.go

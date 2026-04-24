@@ -109,7 +109,7 @@ func setupS3KeyFixture(t *testing.T) *s3KeyFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := membersRepo.Add(ctx, projID, aliceID); err != nil {
+	if err := membersRepo.Add(ctx, projID, aliceID, "maintainer"); err != nil {
 		t.Fatal(err)
 	}
 

@@ -439,7 +439,7 @@ func (rf *restFixture) doPullExternal(actor auth.Actor, body any) *httptest.Resp
 	ctx := auth.WithActor(req.Context(), actor)
 	// Attach membership for user actors so auth.Can project-scoped checks pass.
 	if actor.Kind == auth.ActorKindUser && actor.ID != 0 {
-		ctx = auth.WithProjectMembership(ctx, []int64{rf.projectID})
+		ctx = auth.WithProjectMembership(ctx, map[int64]string{rf.projectID: "maintainer"})
 	}
 	req = req.WithContext(ctx)
 

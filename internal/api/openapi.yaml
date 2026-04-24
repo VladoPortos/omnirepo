@@ -1614,6 +1614,20 @@ paths:
           required: true
           schema:
             type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                role:
+                  type: string
+                  enum: [maintainer, viewer]
+                  default: viewer
+                  description: >
+                    Role to assign. Defaults to "viewer" when omitted (D-02).
+                    Returns 422 codeValidationFailed for any other value.
       responses:
         "200":
           description: Member added
@@ -1621,11 +1635,84 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/StatusOK'
+        "422":
+          description: Invalid role value
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorEnvelope'
+        default:
+          $ref: '#/components/responses/ValidationError'
+    patch:
+      operationId: changeProjectMemberRole
+      tags: [members]
+      summary: Change a project member's role
+      description: >
+        Changes the role of an existing project member. Requires maintainer or
+        super-admin. Returns 409 with code rbac.last_maintainer (codeRBACLastMaintainer)
+        if the action would leave zero maintainers; super-admin callers bypass
+        this guard (D-06). Emits member.role_changed audit event with
+        details_json {user, old_role, new_role} (D-11).
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: login
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [role]
+              properties:
+                role:
+                  type: string
+                  enum: [maintainer, viewer]
+                  description: New role for the member.
+      responses:
+        "200":
+          description: Role updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusOK'
+        "403":
+          description: Caller is not a maintainer or super-admin
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorEnvelope'
+        "409":
+          description: >
+            Last-maintainer protection — code rbac.last_maintainer
+            (codeRBACLastMaintainer). Cannot demote/remove the last human
+            maintainer; promote another member first.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorEnvelope'
+        "422":
+          description: Invalid role value — code validation.failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorEnvelope'
         default:
           $ref: '#/components/responses/ValidationError'
     delete:
       operationId: removeProjectMember
       tags: [members]
+      description: >
+        Removes a member from the project. Returns 409 with code
+        rbac.last_maintainer (codeRBACLastMaintainer) if the target is
+        the last maintainer and the caller is not a super-admin (D-06).
       parameters:
         - name: name
           in: path
@@ -1644,6 +1731,14 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/StatusOK'
+        "409":
+          description: >
+            Last-maintainer protection — code rbac.last_maintainer
+            (codeRBACLastMaintainer).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorEnvelope'
         default:
           $ref: '#/components/responses/ValidationError'
 

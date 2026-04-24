@@ -164,7 +164,7 @@ func newHelmMirrorFixture(t *testing.T) *helmMirrorFixture {
 	if _, err := reposRepo.Create(context.Background(), pid, "helm", "mirror", "", nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := members.Add(context.Background(), pid, uid); err != nil {
+	if err := members.Add(context.Background(), pid, uid, "maintainer"); err != nil {
 		t.Fatal(err)
 	}
 

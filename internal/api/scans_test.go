@@ -96,7 +96,7 @@ func seedScanProject(t *testing.T, s *testServer, userID int64, repoType string)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := metadata.NewMembersRepo(s.db).Add(ctx, pid, userID); err != nil {
+	if err := metadata.NewMembersRepo(s.db).Add(ctx, pid, userID, "maintainer"); err != nil {
 		t.Fatal(err)
 	}
 	return "scanproj", "img", pid, rid

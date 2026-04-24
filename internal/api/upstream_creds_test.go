@@ -124,10 +124,10 @@ func setupUpstreamCredFixture(t *testing.T) *credFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := membersRepo.Add(ctx, projAID, aliceID); err != nil {
+	if err := membersRepo.Add(ctx, projAID, aliceID, "maintainer"); err != nil {
 		t.Fatal(err)
 	}
-	if err := membersRepo.Add(ctx, projBID, bobID); err != nil {
+	if err := membersRepo.Add(ctx, projBID, bobID, "maintainer"); err != nil {
 		t.Fatal(err)
 	}
 

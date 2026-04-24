@@ -112,7 +112,7 @@ func setupS3BucketFixture(t *testing.T) *s3BucketFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := membersRepo.Add(ctx, projID, aliceID); err != nil {
+	if err := membersRepo.Add(ctx, projID, aliceID, "maintainer"); err != nil {
 		t.Fatal(err)
 	}
 	// A second project alice is NOT a member of.

@@ -24,6 +24,7 @@ import (
 // projectAPIKeyCreateRequest is the POST body.
 type projectAPIKeyCreateRequest struct {
 	Name string `json:"name"`
+	Role string `json:"role"` // v1.5 Phase 2: "maintainer"|"viewer"; defaults to "maintainer" (D-25)
 }
 
 // projectAPIKeyCreateResponse is the shown-once response. Secret is
@@ -119,6 +120,18 @@ func (d Deps) handleCreateProjectAPIKey(w http.ResponseWriter, r *http.Request) 
 		writeJSONError(w, r, http.StatusUnprocessableEntity, ErrValidationFailed, "name too long")
 		return
 	}
+
+	// v1.5 Phase 2 (D-25): project-owned keys carry an explicit role.
+	// Default to "maintainer" (CI-publish friendliness); callers pass
+	// "viewer" for read-only scraper tokens.
+	role := req.Role
+	if role == "" {
+		role = "maintainer"
+	}
+	if role != "maintainer" && role != "viewer" {
+		writeFieldValidationError(w, r, ErrValidationFailed, "role", "must be 'maintainer' or 'viewer'")
+		return
+	}
 	// Same duplicate-name guard as the user-scoped twin (F-03.4 wt3): names
 	// are the primary way pipelines are identified in the UI table.
 	existing, err := d.APIKeys.ListByProject(r.Context(), projectID)
@@ -138,7 +151,7 @@ func (d Deps) handleCreateProjectAPIKey(w http.ResponseWriter, r *http.Request) 
 		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
 	}
-	id, err := d.APIKeys.CreateProjectKey(r.Context(), projectID, name, key.Prefix, key.SHA256)
+	id, err := d.APIKeys.CreateProjectKeyWithRole(r.Context(), projectID, name, key.Prefix, key.SHA256, role)
 	if err != nil {
 		// Partial unique index idx_apikeys_project_live_name
 		// (migration 028) backstops the racy app-layer check above.

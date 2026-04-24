@@ -123,7 +123,11 @@ func (p *promoteFixture) doPromote(actor auth.Actor, req oci.PromoteRequest, mem
 		bytes.NewReader(buf))
 	ctx := auth.WithActor(httpReq.Context(), actor)
 	if len(memberships) > 0 {
-		ctx = auth.WithProjectMembership(ctx, memberships)
+		m := make(map[int64]string, len(memberships))
+		for _, pid := range memberships {
+			m[pid] = "maintainer"
+		}
+		ctx = auth.WithProjectMembership(ctx, m)
 	}
 	httpReq = httpReq.WithContext(ctx)
 	rr := httptest.NewRecorder()

@@ -128,7 +128,7 @@ func newManifestFixture(t *testing.T, autoScan bool) *manifestFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := members.Add(context.Background(), pid, uid); err != nil {
+	if err := members.Add(context.Background(), pid, uid, "maintainer"); err != nil {
 		t.Fatal(err)
 	}
 

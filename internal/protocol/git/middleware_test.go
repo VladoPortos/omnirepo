@@ -110,7 +110,7 @@ func TestResolveRepoFromURL_UnknownProject(t *testing.T) {
 
 func TestRequireGitPermission_MemberRead(t *testing.T) {
 	actor := auth.Actor{ID: 10, Kind: auth.ActorKindUser}
-	ctx := auth.WithProjectMembership(context.Background(), []int64{42})
+	ctx := auth.WithProjectMembership(context.Background(), map[int64]string{42: "maintainer"})
 	ctx = auth.WithActor(ctx, actor)
 
 	repo := &metadata.Repo{ID: 1, ProjectID: 42}
@@ -134,7 +134,7 @@ func TestRequireGitPermission_MemberRead(t *testing.T) {
 
 func TestRequireGitPermission_MemberWrite(t *testing.T) {
 	actor := auth.Actor{ID: 10, Kind: auth.ActorKindUser}
-	ctx := auth.WithProjectMembership(context.Background(), []int64{42})
+	ctx := auth.WithProjectMembership(context.Background(), map[int64]string{42: "maintainer"})
 	ctx = auth.WithActor(ctx, actor)
 
 	repo := &metadata.Repo{ID: 1, ProjectID: 42}
@@ -158,7 +158,7 @@ func TestRequireGitPermission_MemberWrite(t *testing.T) {
 
 func TestRequireGitPermission_NonMemberDenied(t *testing.T) {
 	actor := auth.Actor{ID: 11, Kind: auth.ActorKindUser}
-	ctx := auth.WithProjectMembership(context.Background(), []int64{99}) // member of 99, not 42
+	ctx := auth.WithProjectMembership(context.Background(), map[int64]string{99: "maintainer"}) // member of 99, not 42
 	ctx = auth.WithActor(ctx, actor)
 
 	repo := &metadata.Repo{ID: 1, ProjectID: 42}
@@ -187,7 +187,7 @@ func TestRequireGitPermission_ProjectAPIKeyWrite(t *testing.T) {
 		OwnerKind:    auth.OwnerKindProject,
 		ProjectScope: &pid,
 	}
-	ctx := auth.WithProjectMembership(context.Background(), []int64{42})
+	ctx := auth.WithProjectMembership(context.Background(), map[int64]string{42: "maintainer"})
 	ctx = auth.WithActor(ctx, actor)
 
 	repo := &metadata.Repo{ID: 1, ProjectID: 42}
@@ -217,7 +217,7 @@ func TestRequireGitPermission_ProjectAPIKeyCrossProject(t *testing.T) {
 		ProjectScope: &pid,
 	}
 	// Project scope is 99, but repo belongs to 42
-	ctx := auth.WithProjectMembership(context.Background(), []int64{99})
+	ctx := auth.WithProjectMembership(context.Background(), map[int64]string{99: "maintainer"})
 	ctx = auth.WithActor(ctx, actor)
 
 	repo := &metadata.Repo{ID: 1, ProjectID: 42}

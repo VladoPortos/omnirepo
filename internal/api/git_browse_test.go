@@ -114,7 +114,7 @@ func TestGitBrowse_TreeEndpoint(t *testing.T) {
 
 	ctx := context.Background()
 	pid, _ := s.deps.Projects.Create(ctx, "gitproj", "")
-	_ = s.deps.Members.Add(ctx, pid, rootID)
+	_ = s.deps.Members.Add(ctx, pid, rootID, "maintainer")
 	_, _ = s.deps.Repos.Create(ctx, pid, "git", "myrepo", "", nil, nil, nil)
 
 	// Create the bare repo on disk.
@@ -142,7 +142,7 @@ func TestGitBrowse_BlobEndpoint(t *testing.T) {
 
 	ctx := context.Background()
 	pid, _ := s.deps.Projects.Create(ctx, "gitproj2", "")
-	_ = s.deps.Members.Add(ctx, pid, rootID)
+	_ = s.deps.Members.Add(ctx, pid, rootID, "maintainer")
 	_, _ = s.deps.Repos.Create(ctx, pid, "git", "myrepo", "", nil, nil, nil)
 
 	repoPath := filepath.Join(s.dataRoot, "repos", "gitproj2", "git", "myrepo.git")
@@ -177,7 +177,7 @@ func TestGitBrowse_CommitsEndpoint(t *testing.T) {
 
 	ctx := context.Background()
 	pid, _ := s.deps.Projects.Create(ctx, "gitproj3", "")
-	_ = s.deps.Members.Add(ctx, pid, rootID)
+	_ = s.deps.Members.Add(ctx, pid, rootID, "maintainer")
 	_, _ = s.deps.Repos.Create(ctx, pid, "git", "myrepo", "", nil, nil, nil)
 
 	repoPath := filepath.Join(s.dataRoot, "repos", "gitproj3", "git", "myrepo.git")
@@ -222,7 +222,7 @@ func TestGitBrowse_RefsMatchOpenAPIContract(t *testing.T) {
 
 	ctx := context.Background()
 	pid, _ := s.deps.Projects.Create(ctx, "refproj", "")
-	_ = s.deps.Members.Add(ctx, pid, rootID)
+	_ = s.deps.Members.Add(ctx, pid, rootID, "maintainer")
 	repoID, _ := s.deps.Repos.Create(ctx, pid, "git", "refrepo", "", nil, nil, nil)
 
 	// Post-ReceivePack normally populates git_refs; seed it directly so we
@@ -299,7 +299,7 @@ func TestGitBrowse_RefWithSlash(t *testing.T) {
 
 	ctx := context.Background()
 	pid, _ := s.deps.Projects.Create(ctx, "slashed", "")
-	_ = s.deps.Members.Add(ctx, pid, rootID)
+	_ = s.deps.Members.Add(ctx, pid, rootID, "maintainer")
 	_, _ = s.deps.Repos.Create(ctx, pid, "git", "myrepo", "", nil, nil, nil)
 
 	repoPath := filepath.Join(s.dataRoot, "repos", "slashed", "git", "myrepo.git")

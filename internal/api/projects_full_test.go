@@ -17,7 +17,7 @@ func TestProjectsFull_ListPaginated(t *testing.T) {
 	ctx := context.Background()
 	for i := 0; i < 3; i++ {
 		pid, _ := s.deps.Projects.Create(ctx, "proj-"+string(rune('a'+i)), "")
-		_ = s.deps.Members.Add(ctx, pid, rootID)
+		_ = s.deps.Members.Add(ctx, pid, rootID, "maintainer")
 	}
 
 	resp, body := s.do(t, "GET", "/api/v1/projects?limit=2", cookie, nil)
@@ -44,8 +44,8 @@ func TestProjectsFull_ListWithMemberCount(t *testing.T) {
 
 	ctx := context.Background()
 	pid, _ := s.deps.Projects.Create(ctx, "teamproj", "")
-	_ = s.deps.Members.Add(ctx, pid, rootID)
-	_ = s.deps.Members.Add(ctx, pid, aliceID)
+	_ = s.deps.Members.Add(ctx, pid, rootID, "maintainer")
+	_ = s.deps.Members.Add(ctx, pid, aliceID, "maintainer")
 	_, _ = s.deps.Repos.Create(ctx, pid, "docker", "repo1", "", nil, nil, nil)
 
 	resp, body := s.do(t, "GET", "/api/v1/projects", cookie, nil)
@@ -80,7 +80,7 @@ func TestProjectsFull_GetDetail(t *testing.T) {
 
 	ctx := context.Background()
 	pid, _ := s.deps.Projects.Create(ctx, "detail-proj", "some desc")
-	_ = s.deps.Members.Add(ctx, pid, rootID)
+	_ = s.deps.Members.Add(ctx, pid, rootID, "maintainer")
 	_, _ = s.deps.Repos.Create(ctx, pid, "rpm", "centos-repo", "rpm stuff", nil, nil, nil)
 
 	resp, body := s.do(t, "GET", "/api/v1/projects/detail-proj", cookie, nil)
@@ -112,11 +112,11 @@ func TestProjectsFull_ActivityIncludesAPIKeyEvents(t *testing.T) {
 
 	ctx := context.Background()
 	pid, _ := s.deps.Projects.Create(ctx, "keyproj", "")
-	_ = s.deps.Members.Add(ctx, pid, rootID)
+	_ = s.deps.Members.Add(ctx, pid, rootID, "maintainer")
 
 	// Another project's api-key event must NOT leak into keyproj's activity.
 	otherPID, _ := s.deps.Projects.Create(ctx, "otherproj", "")
-	_ = s.deps.Members.Add(ctx, otherPID, rootID)
+	_ = s.deps.Members.Add(ctx, otherPID, rootID, "maintainer")
 
 	mustInsert := func(kind, targetKind, targetID, projectSlug string) {
 		t.Helper()

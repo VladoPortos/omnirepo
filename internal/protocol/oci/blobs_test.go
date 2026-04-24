@@ -133,7 +133,7 @@ func newBlobFixture(t *testing.T) *blobFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := members.Add(context.Background(), pid, uid); err != nil {
+	if err := members.Add(context.Background(), pid, uid, "maintainer"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -598,7 +598,7 @@ func TestBlobUpload_OversizedChunk(t *testing.T) {
 	uid, _ := users.Create(context.Background(), "pusher", "u@e.com", pwHash, false, false)
 	pid, _ := projects.Create(context.Background(), "proj", "x")
 	_, _ = repos.Create(context.Background(), pid, "docker", "app", "", nil, nil, nil)
-	_ = members.Add(context.Background(), pid, uid)
+	_ = members.Add(context.Background(), pid, uid, "maintainer")
 
 	handler := oci.New(oci.Deps{
 		DB:            db,
@@ -819,7 +819,7 @@ func TestBlobMount_ForbiddenSourceRead_StillFallsBack(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := f.members.Add(context.Background(), otherPID, su.ID); err != nil {
+	if err := f.members.Add(context.Background(), otherPID, su.ID, "maintainer"); err != nil {
 		t.Fatal(err)
 	}
 

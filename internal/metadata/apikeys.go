@@ -36,23 +36,33 @@ type APIKeysRepo struct{ db *DB }
 // NewAPIKeysRepo constructs a repo bound to db.
 func NewAPIKeysRepo(db *DB) *APIKeysRepo { return &APIKeysRepo{db: db} }
 
-// CreateUserKey inserts an api_keys row owned by userID.
+// CreateUserKey inserts an api_keys row owned by userID (role stays NULL —
+// user-owned keys inherit role from project_members at request time).
 func (r *APIKeysRepo) CreateUserKey(ctx context.Context, userID int64, name, prefix, sha256hex string) (int64, error) {
-	return r.create(ctx, "user", &userID, nil, name, prefix, sha256hex)
+	return r.create(ctx, "user", &userID, nil, name, prefix, sha256hex, nil)
 }
 
-// CreateProjectKey inserts an api_keys row owned by projectID.
+// CreateProjectKey inserts an api_keys row owned by projectID with no role
+// (legacy/backfill path — role column stays NULL for callers that don't care).
+// New code should prefer CreateProjectKeyWithRole to set the role explicitly.
 func (r *APIKeysRepo) CreateProjectKey(ctx context.Context, projectID int64, name, prefix, sha256hex string) (int64, error) {
-	return r.create(ctx, "project", nil, &projectID, name, prefix, sha256hex)
+	return r.create(ctx, "project", nil, &projectID, name, prefix, sha256hex, nil)
 }
 
-func (r *APIKeysRepo) create(ctx context.Context, kind string, userID, projectID *int64, name, prefix, sha256hex string) (int64, error) {
+// CreateProjectKeyWithRole inserts a project-owned api_keys row with an
+// explicit role ("maintainer" or "viewer"). Called by MintProjectAPIKey so
+// project-scoped tokens carry a minted role (D-23 / D-25).
+func (r *APIKeysRepo) CreateProjectKeyWithRole(ctx context.Context, projectID int64, name, prefix, sha256hex, role string) (int64, error) {
+	return r.create(ctx, "project", nil, &projectID, name, prefix, sha256hex, &role)
+}
+
+func (r *APIKeysRepo) create(ctx context.Context, kind string, userID, projectID *int64, name, prefix, sha256hex string, role *string) (int64, error) {
 	var id int64
 	err := r.db.WriteTx(ctx, func(tx *sql.Tx) error {
 		res, execErr := tx.ExecContext(ctx, `
-			INSERT INTO api_keys(owner_kind, owner_user_id, owner_project_id, name, token_prefix, token_sha256)
-			VALUES (?, ?, ?, ?, ?, ?)
-		`, kind, userID, projectID, name, prefix, sha256hex)
+			INSERT INTO api_keys(owner_kind, owner_user_id, owner_project_id, name, token_prefix, token_sha256, role)
+			VALUES (?, ?, ?, ?, ?, ?, ?)
+		`, kind, userID, projectID, name, prefix, sha256hex, role)
 		if execErr != nil {
 			return fmt.Errorf("api_keys: create %s %q: %w", kind, name, execErr)
 		}

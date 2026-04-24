@@ -31,6 +31,12 @@ const (
 	ErrValidationFailed       = "validation_failed"
 	ErrConflict               = "conflict"
 	ErrInternal               = "internal"
+
+	// ErrRBACLastMaintainer is returned (409) when a PATCH or DELETE would
+	// leave a project with zero human maintainers. Already in dotted form so
+	// it passes through normalizeLegacyCode unchanged (^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$).
+	// Spec name: codeRBACLastMaintainer (D-06, openapi.yaml enum).
+	ErrRBACLastMaintainer = "rbac.last_maintainer"
 )
 
 // writeJSON emits an arbitrary JSON body with a status code. Used for

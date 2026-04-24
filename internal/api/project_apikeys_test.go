@@ -152,7 +152,7 @@ func TestProjectAPIKeys_RevokeCrossProject_Returns404(t *testing.T) {
 	if len(memberIDs) == 0 {
 		t.Fatal("alice missing from project membership")
 	}
-	if err := members.Add(ctx, otherID, memberIDs[0]); err != nil {
+	if err := members.Add(ctx, otherID, memberIDs[0], "maintainer"); err != nil {
 		t.Fatal(err)
 	}
 

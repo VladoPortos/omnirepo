@@ -20,7 +20,10 @@ func TestChallenge_IgnoresXForwardedProto(t *testing.T) {
 
 	req, _ := http.NewRequest("GET", f.srv.URL+"/v2/nope/docker/nope/manifests/latest", nil)
 	req.Header.Set("X-Forwarded-Proto", "https")
-	resp, _ := http.DefaultClient.Do(req)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
 	defer resp.Body.Close()
 
 	got := resp.Header.Get("WWW-Authenticate")
@@ -36,7 +39,10 @@ func TestChallenge_IgnoresXForwardedProto(t *testing.T) {
 func TestVerifyBearer_NoAuthHeader_Challenges(t *testing.T) {
 	f := newOCIFixture(t)
 
-	resp, _ := http.Get(f.srv.URL + "/v2/nope/docker/nope/manifests/latest")
+	resp, err := http.Get(f.srv.URL + "/v2/nope/docker/nope/manifests/latest")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusUnauthorized {
@@ -54,7 +60,10 @@ func TestVerifyBearer_MalformedBearer_Challenges(t *testing.T) {
 
 	req, _ := http.NewRequest("GET", f.srv.URL+"/v2/nope/docker/nope/manifests/latest", nil)
 	req.Header.Set("Authorization", "Bearer not-a-real-jwt")
-	resp, _ := http.DefaultClient.Do(req)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusUnauthorized {
@@ -68,7 +77,10 @@ func TestVerifyBearer_EmptyBearer_Challenges(t *testing.T) {
 
 	req, _ := http.NewRequest("GET", f.srv.URL+"/v2/nope/docker/nope/manifests/latest", nil)
 	req.Header.Set("Authorization", "Bearer ")
-	resp, _ := http.DefaultClient.Do(req)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusUnauthorized {
@@ -90,7 +102,10 @@ func TestRouteIsolation(t *testing.T) {
 	srv := httptest.NewServer(r2)
 	t.Cleanup(srv.Close)
 
-	resp, _ := http.Get(srv.URL + "/")
+	resp, err := http.Get(srv.URL + "/")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("root: %d", resp.StatusCode)

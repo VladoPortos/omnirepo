@@ -307,7 +307,10 @@ func TestProtectedRoute_BadSignatureBearer_401(t *testing.T) {
 
 	req, _ := http.NewRequest("GET", twinSrv.URL+"/v2/token", nil)
 	req.Header.Set("Authorization", basicAuth(f.login, f.password))
-	resp, _ := http.DefaultClient.Do(req)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
 	var p struct {
 		Token string `json:"token"`
 	}
@@ -317,7 +320,10 @@ func TestProtectedRoute_BadSignatureBearer_401(t *testing.T) {
 	// Now present that token to OUR fixture (different secret).
 	req2, _ := http.NewRequest("GET", f.srv.URL+"/v2/_catalog", nil)
 	req2.Header.Set("Authorization", "Bearer "+p.Token)
-	resp2, _ := http.DefaultClient.Do(req2)
+	resp2, err := http.DefaultClient.Do(req2)
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
 	defer resp2.Body.Close()
 	if resp2.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("bad-signature JWT: status %d; want 401", resp2.StatusCode)
@@ -335,7 +341,10 @@ func TestAlgConfusion_NoneAlg_Rejected(t *testing.T) {
 
 	req, _ := http.NewRequest("GET", f.srv.URL+"/v2/_catalog", nil)
 	req.Header.Set("Authorization", "Bearer "+badJWT)
-	resp, _ := http.DefaultClient.Do(req)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("alg=none: status %d; want 401", resp.StatusCode)

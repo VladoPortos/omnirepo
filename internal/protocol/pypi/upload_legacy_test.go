@@ -207,6 +207,64 @@ func TestUpload_ConcurrentFirstUploads_ExactlyOneWins(t *testing.T) {
 	}
 }
 
+// TestUpload_AcceptsNonPEP440Filename — v1.5 Phase 3 Plan 03 (PYPIFIX-04 D-18).
+//
+// Locks the upload-path non-change documented in 03-CONTEXT.md D-17: the
+// legacy twine upload handler (upload_legacy.go) does NOT call
+// pep440.Validate on the filename, so internal publishers can still ship
+// artifacts whose dashed filename shape isn't PEP 440 (common for nightly
+// / snapshot / pre-tag internal releases) as long as the in-archive
+// PKG-INFO carries a valid Name + Version. Plan 02 added the Validate
+// gate inside parseSdistFilename, but ParseSdistAs (parse.go:134-183)
+// intentionally falls back to PKG-INFO metadata when the filename parse
+// fails — which is the code path this test exercises.
+//
+// If a future refactor tightens the upload path to require a PEP-440-
+// parseable filename, this test will fail — the guard is intentional
+// per 03-CONTEXT.md §Upload path (explicit non-change).
+func TestUpload_AcceptsNonPEP440Filename(t *testing.T) {
+	f := newHandlerFixture(t)
+	_, repoID := f.seedRepo("proj1", "permissive-upload", true, false)
+
+	// makeSdistBytes builds an in-memory tar.gz with PKG-INFO carrying
+	// Name + Version. Filename "foo-nightly.tar.gz" fails
+	// parseSdistFilename (candidate "nightly" fails pep440.Validate) but
+	// ParseSdistAs reads PKG-INFO and uses "0.0.dev0" as the Version.
+	sdist := makeSdistBytes(t, "foo", "0.0.dev0")
+
+	resp := twineUpload(
+		t, f.srv.URL,
+		"proj1", "permissive-upload",
+		"foo-nightly.tar.gz",
+		sdist,
+		"sdist",
+		f.basicAuth(),
+	)
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("upload status = %d, want 200/201; body=%s", resp.StatusCode, body)
+	}
+
+	row, err := f.pypiRepo.FindByFilename(context.Background(), repoID, "foo-nightly.tar.gz")
+	if err != nil {
+		t.Fatalf("find row: %v", err)
+	}
+	if row == nil {
+		t.Fatalf("no pypi_files row inserted for verbatim filename \"foo-nightly.tar.gz\"")
+	}
+	if row.Filename != "foo-nightly.tar.gz" {
+		t.Errorf("row.Filename = %q, want foo-nightly.tar.gz (verbatim)", row.Filename)
+	}
+	if row.Version != "0.0.dev0" {
+		t.Errorf("row.Version = %q, want 0.0.dev0 (from PKG-INFO, not from filename slot)", row.Version)
+	}
+	if row.ProjectNormalized != "foo" {
+		t.Errorf("row.ProjectNormalized = %q, want foo", row.ProjectNormalized)
+	}
+}
+
 // TestDeletePackage_MirrorRepoReturns403 — plan 08-06 Codex rescue Q3a.
 // DELETE /pypi/<repo>/packages/<filename> is a mutating operation and
 // must be rejected on mirror-flagged repos by MirrorGuardFixed. Before

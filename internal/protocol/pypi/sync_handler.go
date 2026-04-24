@@ -12,6 +12,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -33,6 +34,15 @@ import (
 	"github.com/dxc-internal/omnirepo/internal/protocol/regen"
 	"github.com/dxc-internal/omnirepo/internal/storage"
 )
+
+// errParseSkip marks a fetchAndCommit error as originating from a filename
+// parse failure (PEP 440 Validate gate in parseSdistFilename /
+// parseWheelFilename). The outer sync loop recognises this sentinel via
+// errors.Is and emits EvtSyncFileSkipped + continues rather than failing
+// the whole sync (v1.5 Phase 3 Plan 03, D-10..D-14). Package-local +
+// unexported so no other error path can wear this mask by accident
+// (T-03-03-04 accept).
+var errParseSkip = errors.New("pypi_sync: parse skip")
 
 // SyncJobKind is the sync_jobs.kind value routed to SyncHandler.Handle.
 const SyncJobKind = "pypi_sync"
@@ -236,6 +246,31 @@ func (h *SyncHandler) Handle(ctx context.Context, payload string, projectID, rep
 			mu.Lock()
 			defer mu.Unlock()
 			if derr != nil {
+				// v1.5 Phase 3 (PYPIFIX-04, D-10..D-14): filename parse
+				// failures from fetchAndCommit carry the errParseSkip
+				// sentinel so the outer loop can emit EvtSyncFileSkipped
+				// and continue rather than failing the whole sync. Non-
+				// parse errors (HTTP, disk, tx, digest-mismatch) fall
+				// through to downloadErrors unchanged.
+				if errors.Is(derr, errParseSkip) {
+					if h.deps.Audit != nil {
+						// Best-effort emit per D-14 + D-33 convention —
+						// audit failure must never mask a sync outcome.
+						_ = h.deps.Audit.Record(ctx, audit.Event{
+							Kind:       audit.EvtSyncFileSkipped,
+							TargetKind: "repo",
+							TargetID:   strconv.FormatInt(repo.ID, 10),
+							Details: map[string]any{
+								"filename":     tf.file.Filename,
+								"reason":       reasonFromErr(derr),
+								"protocol":     "pypi",
+								"upstream_url": tf.file.URL,
+								"repo_id":      repo.ID,
+							},
+						})
+					}
+					return
+				}
 				downloadErrors = append(downloadErrors, derr)
 				return
 			}
@@ -323,25 +358,16 @@ func (h *SyncHandler) fetchAndCommit(ctx context.Context, projectName string, re
 		return 0, nil
 	}
 
-	// F-07.5 (post-v1.4): route through the canonical PEP 427 / PEP 625
-	// parsers in parse.go rather than inline string-splitting. The pre-
-	// v1.4 inline sdist split used LastIndex("-") which mis-attributed
-	// dashed pre-release suffixes (`foo-1.0.0-rc1.tar.gz` → version="rc1")
-	// and polluted the simple-index grouping.
-	//
-	// Parse runs BEFORE the download so a malformed upstream filename
-	// fails fast without wasting bandwidth or leaving an orphaned blob
-	// on disk (Codex review flagged the post-Put parse-failure path as
-	// a storage leak). isInstallableExt already filters the legacy
-	// bdist forms the inline split used to trip on, so reaching here
-	// with an unparseable filename means the upstream is malformed.
-	//
-	// Heuristic caveat (Q1, deferred): parseSdistFilename splits at the
-	// first `-` followed by a digit. A hypothetical name ending in
-	// `-<digit>...` (e.g. `f-2do-1.0.0.tar.gz`) would mis-attribute the
-	// `-2do` segment to the version. Not observed on real PyPI in 2026
-	// and a full fix requires embedding a PEP 440 validator — tracked
-	// for a future follow-up.
+	// Filenames flow through parseWheelFilename / parseSdistFilename
+	// (parse.go) which Validate the version slot against pep440.go. The
+	// parse runs BEFORE the download so a malformed upstream filename
+	// never triggers an HTTP GET or leaves an orphan blob on disk
+	// (D-10; Codex review flagged the post-Put parse-failure path as a
+	// storage leak in v1.4). Validation failures are wrapped with the
+	// errParseSkip sentinel so the outer loop emits EvtSyncFileSkipped
+	// and continues rather than failing the whole sync
+	// (v1.5 Phase 3, D-10..D-14). isInstallableExt already filters the
+	// legacy bdist forms earlier in the collect pass.
 	var (
 		kind    string
 		version string
@@ -350,14 +376,14 @@ func (h *SyncHandler) fetchAndCommit(ctx context.Context, projectName string, re
 		kind = "wheel"
 		_, v, perr := parseWheelFilename(f.Filename)
 		if perr != nil {
-			return 0, fmt.Errorf("pypi_sync: %w", perr)
+			return 0, fmt.Errorf("%w: %w", errParseSkip, perr)
 		}
 		version = v
 	} else {
 		kind = "sdist"
 		_, v, perr := parseSdistFilename(f.Filename)
 		if perr != nil {
-			return 0, fmt.Errorf("pypi_sync: %w", perr)
+			return 0, fmt.Errorf("%w: %w", errParseSkip, perr)
 		}
 		version = v
 	}
@@ -467,4 +493,39 @@ func truncateErr(s string) string {
 		return s
 	}
 	return s[:max] + "...[truncated]"
+}
+
+// reasonFromErr maps an errParseSkip-wrapped error to the audit reason
+// enum documented alongside EvtSyncFileSkipped (internal/audit/events.go).
+//
+// Phase 3 ships two values:
+//   - "pep440_invalid"  — filename's version slot failed pep440.Validate
+//     (produced by parseSdistFilename exhausting all -<digit> boundaries
+//     or by parseWheelFilename's parts[1] failing Validate). Error shapes:
+//     "pypi: malformed sdist filename: <base>" or
+//     "pypi: malformed wheel filename: <base>".
+//   - "unsupported_ext" — sdist filename has no .tar.gz/.tgz/.zip suffix.
+//     Error shape: "pypi: unsupported sdist extension: <base>". Today
+//     this path is filtered earlier by isInstallableExt in the collect
+//     pass so the reason is unlikely to surface; documented here so the
+//     enum stays consistent with the declared event contract.
+//
+// Unknown shapes conservatively return "pep440_invalid" — the parse
+// layer only produces these three shapes today, so an unknown shape
+// indicates a new parser error path that should surface via the most
+// specific reason until the enum is widened (D-13).
+func reasonFromErr(err error) string {
+	if err == nil {
+		return "pep440_invalid"
+	}
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "pypi: unsupported sdist extension:"):
+		return "unsupported_ext"
+	case strings.Contains(msg, "pypi: malformed sdist filename:"),
+		strings.Contains(msg, "pypi: malformed wheel filename:"):
+		return "pep440_invalid"
+	default:
+		return "pep440_invalid"
+	}
 }

@@ -3,8 +3,18 @@ package metadata
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 )
+
+// ErrLastMaintainer is returned by RemoveGuarded and UpdateRoleGuarded when
+// the operation would leave the project without any human maintainer. Callers
+// (handleRemoveMember, handlePatchMember) should translate this to a 409
+// codeRBACLastMaintainer response per D-06.
+//
+// Super-admin callers bypass the guard by calling Remove / UpdateRole directly
+// — they can always rescue a zero-maintainer project.
+var ErrLastMaintainer = errors.New("members: last maintainer")
 
 // MembersRepo owns CRUD on project_members.
 //
@@ -162,6 +172,10 @@ func (r *MembersRepo) ListProjectRolesForUser(ctx context.Context, userID int64)
 }
 
 // Remove deletes the row; no error if the row is absent.
+//
+// Non-super-admin callers enforcing the last-maintainer guard (D-06) MUST use
+// RemoveGuarded instead — Remove does not check the guard and would let a
+// concurrent pair of deletes race to zero maintainers.
 func (r *MembersRepo) Remove(ctx context.Context, projectID, userID int64) error {
 	return r.db.WriteTx(ctx, func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `
@@ -172,6 +186,94 @@ func (r *MembersRepo) Remove(ctx context.Context, projectID, userID int64) error
 		}
 		return nil
 	})
+}
+
+// RemoveGuarded deletes (projectID, userID) atomically with the
+// last-maintainer guard (D-06). The read-role, count-maintainers, and DELETE
+// all run inside a single WriteTx, so two concurrent removes cannot both pass
+// the count==2 guard and drop the project to zero maintainers.
+//
+// Returns ErrLastMaintainer when removing the row would leave zero human
+// maintainers. Returns nil (idempotent) when the row is absent. Super-admin
+// callers should use Remove directly — they bypass the guard.
+func (r *MembersRepo) RemoveGuarded(ctx context.Context, projectID, userID int64) error {
+	return r.db.WriteTx(ctx, func(tx *sql.Tx) error {
+		var currentRole string
+		err := tx.QueryRowContext(ctx, `
+			SELECT role FROM project_members WHERE project_id=? AND user_id=?
+		`, projectID, userID).Scan(&currentRole)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil // Remove is idempotent — absent rows are a no-op.
+		}
+		if err != nil {
+			return fmt.Errorf("members: remove-guarded read (%d,%d): %w", projectID, userID, err)
+		}
+		if currentRole == "maintainer" {
+			var n int
+			if err := tx.QueryRowContext(ctx, `
+				SELECT COUNT(*) FROM project_members pm
+				JOIN users u ON u.id = pm.user_id
+				WHERE pm.project_id = ? AND pm.role = 'maintainer' AND u.deleted_at IS NULL
+			`, projectID).Scan(&n); err != nil {
+				return fmt.Errorf("members: remove-guarded count (%d): %w", projectID, err)
+			}
+			if n <= 1 {
+				return ErrLastMaintainer
+			}
+		}
+		if _, err := tx.ExecContext(ctx, `
+			DELETE FROM project_members WHERE project_id=? AND user_id=?
+		`, projectID, userID); err != nil {
+			return fmt.Errorf("members: remove-guarded delete (%d,%d): %w", projectID, userID, err)
+		}
+		return nil
+	})
+}
+
+// UpdateRoleGuarded sets (projectID, userID) to newRole atomically with the
+// last-maintainer guard (D-06). Returns the prior role (for audit emission
+// per D-11) and ErrLastMaintainer when the change would drop the project to
+// zero maintainers (demoting the final maintainer to viewer).
+//
+// Returns sql.ErrNoRows when the member does not exist.
+//
+// Super-admin callers should use UpdateRole directly — they bypass the guard.
+func (r *MembersRepo) UpdateRoleGuarded(ctx context.Context, projectID, userID int64, newRole string) (oldRole string, err error) {
+	err = r.db.WriteTx(ctx, func(tx *sql.Tx) error {
+		if err := tx.QueryRowContext(ctx, `
+			SELECT role FROM project_members WHERE project_id=? AND user_id=?
+		`, projectID, userID).Scan(&oldRole); err != nil {
+			return err // sql.ErrNoRows propagates; caller returns 404.
+		}
+		// Only check the guard when demoting a current maintainer to viewer.
+		// Promotions and no-op changes (maintainer→maintainer, viewer→viewer)
+		// cannot reduce the count.
+		if oldRole == "maintainer" && newRole == "viewer" {
+			var n int
+			if err := tx.QueryRowContext(ctx, `
+				SELECT COUNT(*) FROM project_members pm
+				JOIN users u ON u.id = pm.user_id
+				WHERE pm.project_id = ? AND pm.role = 'maintainer' AND u.deleted_at IS NULL
+			`, projectID).Scan(&n); err != nil {
+				return fmt.Errorf("members: update-guarded count (%d): %w", projectID, err)
+			}
+			if n <= 1 {
+				return ErrLastMaintainer
+			}
+		}
+		res, err := tx.ExecContext(ctx, `
+			UPDATE project_members SET role=? WHERE project_id=? AND user_id=?
+		`, newRole, projectID, userID)
+		if err != nil {
+			return fmt.Errorf("members: update-guarded (%d,%d): %w", projectID, userID, err)
+		}
+		n, _ := res.RowsAffected()
+		if n == 0 {
+			return sql.ErrNoRows
+		}
+		return nil
+	})
+	return oldRole, err
 }
 
 // IsMember returns true if (projectID, userID) exists.

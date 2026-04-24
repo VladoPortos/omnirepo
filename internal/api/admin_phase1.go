@@ -543,7 +543,11 @@ func (d Deps) handleMe(w http.ResponseWriter, r *http.Request) {
 	// absent (omitempty) rather than failing the whole /me response.
 	if !u.IsSuperAdmin {
 		if roles, rerr := d.Members.ListProjectRolesByNameForUser(r.Context(), u.ID); rerr == nil {
-			resp.ProjectRoles = roles
+			typed := make(map[string]MeResponseProjectRoles, len(roles))
+			for name, role := range roles {
+				typed[name] = MeResponseProjectRoles(role)
+			}
+			resp.ProjectRoles = &typed
 		}
 	}
 	writeJSON(w, http.StatusOK, resp)
@@ -786,29 +790,26 @@ func (d Deps) handleRemoveMember(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Last-maintainer guard (D-06). Super-admin actors bypass because they can
-	// always rescue the project; auth.Can's step-2 super-admin bypass means
-	// we reach this path for non-super-admins AND for super-admins that were
-	// explicitly permitted. Use IsSuperAdmin to skip the guard for super-admins.
+	// always rescue the project. Non-super-admins go through RemoveGuarded,
+	// which runs the role read, maintainer count, and DELETE inside a single
+	// WriteTx — two concurrent removes cannot both see count==2 and both
+	// succeed dropping the project to zero maintainers.
 	actor, _ := auth.ActorFromContext(r.Context())
-	if !actor.IsSuperAdmin {
-		// Only relevant if the target is currently a maintainer.
-		if targetRole, found := d.Members.GetRole(r.Context(), p.ID, u.ID); found && targetRole == "maintainer" {
-			n, cErr := d.Members.CountMaintainers(r.Context(), p.ID)
-			if cErr != nil {
-				writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
-				return
-			}
-			if n <= 1 {
+	if actor.IsSuperAdmin {
+		if err := d.Members.Remove(r.Context(), p.ID, u.ID); err != nil {
+			writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
+			return
+		}
+	} else {
+		if err := d.Members.RemoveGuarded(r.Context(), p.ID, u.ID); err != nil {
+			if errors.Is(err, metadata.ErrLastMaintainer) {
 				writeJSONError(w, r, http.StatusConflict, ErrRBACLastMaintainer,
 					"cannot remove/demote last maintainer; promote another member first")
 				return
 			}
+			writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
+			return
 		}
-	}
-
-	if err := d.Members.Remove(r.Context(), p.ID, u.ID); err != nil {
-		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
-		return
 	}
 	if a, ok := auth.ActorFromContext(r.Context()); ok {
 		uid := a.ID
@@ -862,31 +863,39 @@ func (d Deps) handlePatchMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// D-11: capture old_role BEFORE UpdateRole so audit can record it.
-	// GetRole returns ("", false) when the target is not a member.
-	currentRole, found := d.Members.GetRole(r.Context(), p.ID, u.ID)
-	if !found {
-		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "member")
-		return
-	}
-
-	// Last-maintainer guard (D-06, D-07): only relevant when demoting a current maintainer.
-	if req.Role == "viewer" && !actor.IsSuperAdmin && currentRole == "maintainer" {
-		n, cErr := d.Members.CountMaintainers(r.Context(), p.ID)
-		if cErr != nil {
+	// D-06 + D-11: read current role and update atomically. For non-super-admin
+	// callers, UpdateRoleGuarded wraps SELECT role + maintainer count + UPDATE
+	// in a single WriteTx so two concurrent demote requests cannot both pass
+	// the count>1 check and both drop the project to zero maintainers.
+	// Super-admins bypass the guard via UpdateRole; they can always rescue.
+	var currentRole string
+	if actor.IsSuperAdmin {
+		role, found := d.Members.GetRole(r.Context(), p.ID, u.ID)
+		if !found {
+			writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "member")
+			return
+		}
+		currentRole = role
+		if err := d.Members.UpdateRole(r.Context(), p.ID, u.ID, req.Role); err != nil {
 			writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 			return
 		}
-		if n <= 1 {
+	} else {
+		oldRole, err := d.Members.UpdateRoleGuarded(r.Context(), p.ID, u.ID, req.Role)
+		if errors.Is(err, sql.ErrNoRows) {
+			writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "member")
+			return
+		}
+		if errors.Is(err, metadata.ErrLastMaintainer) {
 			writeJSONError(w, r, http.StatusConflict, ErrRBACLastMaintainer,
 				"cannot remove/demote last maintainer; promote another member first")
 			return
 		}
-	}
-
-	if err := d.Members.UpdateRole(r.Context(), p.ID, u.ID, req.Role); err != nil {
-		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
-		return
+		if err != nil {
+			writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
+			return
+		}
+		currentRole = oldRole
 	}
 
 	// D-11 audit emission: exactly three keys — user, old_role, new_role.

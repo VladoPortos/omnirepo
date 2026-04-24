@@ -3,6 +3,8 @@ package metadata_test
 import (
 	"context"
 	"database/sql"
+	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -322,4 +324,250 @@ func containsAny(s string, subs ...string) bool {
 		}
 	}
 	return false
+}
+
+// TestMembersRepo_UpdateRoleGuarded_AtomicDemote verifies that two concurrent
+// demote requests on a 2-maintainer project cannot both succeed. Exactly one
+// returns ErrLastMaintainer and the project ends with exactly 1 maintainer.
+// This closes the TOCTOU window that the separate CountMaintainers + UpdateRole
+// code path would have left open.
+func TestMembersRepo_UpdateRoleGuarded_AtomicDemote(t *testing.T) {
+	t.Parallel()
+	db := sqlitetest.New(t)
+	ctx := context.Background()
+	pid := seedProject(t, db, "proj-guarded-race")
+	alice := seedUser(t, db, "alice-guarded")
+	bob := seedUser(t, db, "bob-guarded")
+
+	m := metadata.NewMembersRepo(db)
+	if err := m.Add(ctx, pid, alice, "maintainer"); err != nil {
+		t.Fatalf("Add alice: %v", err)
+	}
+	if err := m.Add(ctx, pid, bob, "maintainer"); err != nil {
+		t.Fatalf("Add bob: %v", err)
+	}
+
+	// Two concurrent demote attempts.
+	var wg sync.WaitGroup
+	var errA, errB error
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		_, errA = m.UpdateRoleGuarded(ctx, pid, alice, "viewer")
+	}()
+	go func() {
+		defer wg.Done()
+		_, errB = m.UpdateRoleGuarded(ctx, pid, bob, "viewer")
+	}()
+	wg.Wait()
+
+	// Exactly one must fail with ErrLastMaintainer. Writer pool has
+	// SetMaxOpenConns(1) + _txlock=immediate so the two WriteTx calls serialize;
+	// the second one sees count=1 inside its tx and returns ErrLastMaintainer.
+	lastMaintainerErrs := 0
+	successes := 0
+	if errors.Is(errA, metadata.ErrLastMaintainer) {
+		lastMaintainerErrs++
+	} else if errA == nil {
+		successes++
+	} else {
+		t.Fatalf("unexpected errA: %v", errA)
+	}
+	if errors.Is(errB, metadata.ErrLastMaintainer) {
+		lastMaintainerErrs++
+	} else if errB == nil {
+		successes++
+	} else {
+		t.Fatalf("unexpected errB: %v", errB)
+	}
+	if lastMaintainerErrs != 1 || successes != 1 {
+		t.Fatalf("concurrent demote: got %d last-maintainer, %d success (want 1/1) — errA=%v errB=%v",
+			lastMaintainerErrs, successes, errA, errB)
+	}
+
+	// Final count must be exactly 1 maintainer.
+	n, err := m.CountMaintainers(ctx, pid)
+	if err != nil {
+		t.Fatalf("CountMaintainers: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("final maintainer count = %d, want 1", n)
+	}
+}
+
+// TestMembersRepo_UpdateRoleGuarded_HappyPath verifies a valid demote succeeds
+// and returns the prior role for D-11 audit emission.
+func TestMembersRepo_UpdateRoleGuarded_HappyPath(t *testing.T) {
+	t.Parallel()
+	db := sqlitetest.New(t)
+	ctx := context.Background()
+	pid := seedProject(t, db, "proj-guarded-happy")
+	alice := seedUser(t, db, "alice-happy")
+	bob := seedUser(t, db, "bob-happy")
+
+	m := metadata.NewMembersRepo(db)
+	_ = m.Add(ctx, pid, alice, "maintainer")
+	_ = m.Add(ctx, pid, bob, "maintainer")
+
+	oldRole, err := m.UpdateRoleGuarded(ctx, pid, bob, "viewer")
+	if err != nil {
+		t.Fatalf("UpdateRoleGuarded: %v", err)
+	}
+	if oldRole != "maintainer" {
+		t.Fatalf("oldRole = %q, want 'maintainer'", oldRole)
+	}
+}
+
+// TestMembersRepo_UpdateRoleGuarded_LastMaintainer verifies that demoting the
+// sole maintainer returns ErrLastMaintainer and leaves the role unchanged.
+func TestMembersRepo_UpdateRoleGuarded_LastMaintainer(t *testing.T) {
+	t.Parallel()
+	db := sqlitetest.New(t)
+	ctx := context.Background()
+	pid := seedProject(t, db, "proj-guarded-last")
+	alice := seedUser(t, db, "alice-last")
+
+	m := metadata.NewMembersRepo(db)
+	_ = m.Add(ctx, pid, alice, "maintainer")
+
+	_, err := m.UpdateRoleGuarded(ctx, pid, alice, "viewer")
+	if !errors.Is(err, metadata.ErrLastMaintainer) {
+		t.Fatalf("want ErrLastMaintainer, got %v", err)
+	}
+	// Role must be unchanged.
+	role, found := m.GetRole(ctx, pid, alice)
+	if !found || role != "maintainer" {
+		t.Fatalf("role after blocked demote = (%q,%v), want ('maintainer', true)", role, found)
+	}
+}
+
+// TestMembersRepo_RemoveGuarded_AtomicRemove verifies two concurrent removes
+// cannot both drop a 2-maintainer project to zero maintainers.
+func TestMembersRepo_RemoveGuarded_AtomicRemove(t *testing.T) {
+	t.Parallel()
+	db := sqlitetest.New(t)
+	ctx := context.Background()
+	pid := seedProject(t, db, "proj-guarded-rmrace")
+	alice := seedUser(t, db, "alice-rmrace")
+	bob := seedUser(t, db, "bob-rmrace")
+
+	m := metadata.NewMembersRepo(db)
+	_ = m.Add(ctx, pid, alice, "maintainer")
+	_ = m.Add(ctx, pid, bob, "maintainer")
+
+	var wg sync.WaitGroup
+	var errA, errB error
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		errA = m.RemoveGuarded(ctx, pid, alice)
+	}()
+	go func() {
+		defer wg.Done()
+		errB = m.RemoveGuarded(ctx, pid, bob)
+	}()
+	wg.Wait()
+
+	lastMaintainerErrs := 0
+	successes := 0
+	for _, e := range []error{errA, errB} {
+		switch {
+		case errors.Is(e, metadata.ErrLastMaintainer):
+			lastMaintainerErrs++
+		case e == nil:
+			successes++
+		default:
+			t.Fatalf("unexpected err: %v", e)
+		}
+	}
+	if lastMaintainerErrs != 1 || successes != 1 {
+		t.Fatalf("concurrent remove: got %d last-maintainer, %d success (want 1/1)", lastMaintainerErrs, successes)
+	}
+	n, _ := m.CountMaintainers(ctx, pid)
+	if n != 1 {
+		t.Fatalf("final count = %d, want 1", n)
+	}
+}
+
+// TestMembersRepo_RemoveGuarded_LastMaintainer blocks removing the last
+// maintainer with ErrLastMaintainer.
+func TestMembersRepo_RemoveGuarded_LastMaintainer(t *testing.T) {
+	t.Parallel()
+	db := sqlitetest.New(t)
+	ctx := context.Background()
+	pid := seedProject(t, db, "proj-guarded-rmlast")
+	alice := seedUser(t, db, "alice-rmlast")
+
+	m := metadata.NewMembersRepo(db)
+	_ = m.Add(ctx, pid, alice, "maintainer")
+
+	err := m.RemoveGuarded(ctx, pid, alice)
+	if !errors.Is(err, metadata.ErrLastMaintainer) {
+		t.Fatalf("want ErrLastMaintainer, got %v", err)
+	}
+	// Member must still exist.
+	_, found := m.GetRole(ctx, pid, alice)
+	if !found {
+		t.Fatal("member was removed despite ErrLastMaintainer")
+	}
+}
+
+// TestMembersRepo_RemoveGuarded_ViewerNoGuard verifies removing a viewer does
+// not trip the guard even when no maintainers exist (invariant: the "last
+// maintainer" guard only applies to maintainer rows, not viewers).
+func TestMembersRepo_RemoveGuarded_ViewerNoGuard(t *testing.T) {
+	t.Parallel()
+	db := sqlitetest.New(t)
+	ctx := context.Background()
+	pid := seedProject(t, db, "proj-guarded-rmviewer")
+	alice := seedUser(t, db, "alice-rmviewer")
+
+	m := metadata.NewMembersRepo(db)
+	_ = m.Add(ctx, pid, alice, "viewer")
+
+	if err := m.RemoveGuarded(ctx, pid, alice); err != nil {
+		t.Fatalf("RemoveGuarded viewer: %v", err)
+	}
+	if _, found := m.GetRole(ctx, pid, alice); found {
+		t.Fatal("viewer row still present after RemoveGuarded")
+	}
+}
+
+// TestMembersRepo_UpdateRoleGuarded_Promote verifies promoting viewer→maintainer
+// never trips the guard (promotions cannot reduce maintainer count).
+func TestMembersRepo_UpdateRoleGuarded_Promote(t *testing.T) {
+	t.Parallel()
+	db := sqlitetest.New(t)
+	ctx := context.Background()
+	pid := seedProject(t, db, "proj-guarded-promote")
+	alice := seedUser(t, db, "alice-promote")
+
+	m := metadata.NewMembersRepo(db)
+	_ = m.Add(ctx, pid, alice, "viewer")
+
+	oldRole, err := m.UpdateRoleGuarded(ctx, pid, alice, "maintainer")
+	if err != nil {
+		t.Fatalf("UpdateRoleGuarded promote: %v", err)
+	}
+	if oldRole != "viewer" {
+		t.Fatalf("oldRole = %q, want 'viewer'", oldRole)
+	}
+	role, _ := m.GetRole(ctx, pid, alice)
+	if role != "maintainer" {
+		t.Fatalf("role after promote = %q, want 'maintainer'", role)
+	}
+}
+
+// TestMembersRepo_UpdateRoleGuarded_NotFound verifies sql.ErrNoRows for absent members.
+func TestMembersRepo_UpdateRoleGuarded_NotFound(t *testing.T) {
+	t.Parallel()
+	db := sqlitetest.New(t)
+	ctx := context.Background()
+	pid := seedProject(t, db, "proj-guarded-nf")
+
+	m := metadata.NewMembersRepo(db)
+	_, err := m.UpdateRoleGuarded(ctx, pid, 99999, "viewer")
+	if !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("want sql.ErrNoRows, got %v", err)
+	}
 }

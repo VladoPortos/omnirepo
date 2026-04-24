@@ -103,6 +103,60 @@ func (e GitTreeEntryType) Valid() bool {
 	}
 }
 
+// Defines values for MeResponseProjectRoles.
+const (
+	MeResponseProjectRolesMaintainer MeResponseProjectRoles = "maintainer"
+	MeResponseProjectRolesViewer     MeResponseProjectRoles = "viewer"
+)
+
+// Valid indicates whether the value is a known member of the MeResponseProjectRoles enum.
+func (e MeResponseProjectRoles) Valid() bool {
+	switch e {
+	case MeResponseProjectRolesMaintainer:
+		return true
+	case MeResponseProjectRolesViewer:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ProjectMembersRole.
+const (
+	ProjectMembersRoleMaintainer ProjectMembersRole = "maintainer"
+	ProjectMembersRoleViewer     ProjectMembersRole = "viewer"
+)
+
+// Valid indicates whether the value is a known member of the ProjectMembersRole enum.
+func (e ProjectMembersRole) Valid() bool {
+	switch e {
+	case ProjectMembersRoleMaintainer:
+		return true
+	case ProjectMembersRoleViewer:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ProjectAPIKeyCreateRole.
+const (
+	ProjectAPIKeyCreateRoleMaintainer ProjectAPIKeyCreateRole = "maintainer"
+	ProjectAPIKeyCreateRoleViewer     ProjectAPIKeyCreateRole = "viewer"
+)
+
+// Valid indicates whether the value is a known member of the ProjectAPIKeyCreateRole enum.
+func (e ProjectAPIKeyCreateRole) Valid() bool {
+	switch e {
+	case ProjectAPIKeyCreateRoleMaintainer:
+		return true
+	case ProjectAPIKeyCreateRoleViewer:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for RepoBlockOnSeverity.
 const (
 	RepoBlockOnSeverityCritical RepoBlockOnSeverity = "critical"
@@ -325,6 +379,42 @@ func (e VulnerabilitySeverity) Valid() bool {
 	case MEDIUM:
 		return true
 	case UNKNOWN:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ChangeProjectMemberRoleJSONBodyRole.
+const (
+	ChangeProjectMemberRoleJSONBodyRoleMaintainer ChangeProjectMemberRoleJSONBodyRole = "maintainer"
+	ChangeProjectMemberRoleJSONBodyRoleViewer     ChangeProjectMemberRoleJSONBodyRole = "viewer"
+)
+
+// Valid indicates whether the value is a known member of the ChangeProjectMemberRoleJSONBodyRole enum.
+func (e ChangeProjectMemberRoleJSONBodyRole) Valid() bool {
+	switch e {
+	case ChangeProjectMemberRoleJSONBodyRoleMaintainer:
+		return true
+	case ChangeProjectMemberRoleJSONBodyRoleViewer:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AddProjectMemberJSONBodyRole.
+const (
+	Maintainer AddProjectMemberJSONBodyRole = "maintainer"
+	Viewer     AddProjectMemberJSONBodyRole = "viewer"
+)
+
+// Valid indicates whether the value is a known member of the AddProjectMemberJSONBodyRole enum.
+func (e AddProjectMemberJSONBodyRole) Valid() bool {
+	switch e {
+	case Maintainer:
+		return true
+	case Viewer:
 		return true
 	default:
 		return false
@@ -665,18 +755,19 @@ type MaintenanceToggle struct {
 
 // MeResponse defines model for MeResponse.
 type MeResponse struct {
-	AvatarSeed         *string           `json:"avatar_seed,omitempty"`
-	Email              string            `json:"email"`
-	Id                 int64             `json:"id"`
-	IsSuperAdmin       bool              `json:"is_super_admin"`
-	Login              string            `json:"login"`
-	MustChangePassword bool              `json:"must_change_password"`
-	// ProjectRoles maps project name → caller's role ("maintainer" or
-	// "viewer"). Omitted for super-admin callers (they bypass via
-	// IsSuperAdmin) and for unauthenticated callers. Populated by
-	// handleMe via MembersRepo.ListProjectRolesByNameForUser (D-16).
-	ProjectRoles       map[string]string `json:"project_roles,omitempty"`
+	AvatarSeed         *string `json:"avatar_seed,omitempty"`
+	Email              string  `json:"email"`
+	Id                 int64   `json:"id"`
+	IsSuperAdmin       bool    `json:"is_super_admin"`
+	Login              string  `json:"login"`
+	MustChangePassword bool    `json:"must_change_password"`
+
+	// ProjectRoles Map of project name → caller's role in that project ("maintainer" or "viewer"). Omitted or empty for super-admin callers (they use is_super_admin for gating). Only projects the caller is a member of appear (D-16).
+	ProjectRoles *map[string]MeResponseProjectRoles `json:"project_roles,omitempty"`
 }
+
+// MeResponseProjectRoles defines model for MeResponse.ProjectRoles.
+type MeResponseProjectRoles string
 
 // MeUpdateRequest defines model for MeUpdateRequest.
 type MeUpdateRequest struct {
@@ -700,7 +791,43 @@ type Project struct {
 	CreatedAt     *time.Time `json:"created_at,omitempty"`
 	DescriptionMd *string    `json:"description_md,omitempty"`
 	Id            *int64     `json:"id,omitempty"`
-	Name          *string    `json:"name,omitempty"`
+
+	// Members Members of the project (only present on the detail response).
+	Members *[]struct {
+		Email string `json:"email"`
+		Login string `json:"login"`
+
+		// Role Role of this member in the project. "maintainer" has full write access; "viewer" has read-only access (D-17).
+		Role   ProjectMembersRole `json:"role"`
+		UserId int64              `json:"user_id"`
+	} `json:"members,omitempty"`
+	Name *string `json:"name,omitempty"`
+}
+
+// ProjectMembersRole Role of this member in the project. "maintainer" has full write access; "viewer" has read-only access (D-17).
+type ProjectMembersRole string
+
+// ProjectAPIKeyCreate Request body for POST /projects/{name}/api-keys. `role` is optional and
+// defaults to "maintainer" at the application layer (D-25). Minting a
+// project-scoped key with role="viewer" lets CI pipelines publish with
+// the correct least-privilege role (D-23 / D-26).
+type ProjectAPIKeyCreate struct {
+	Name string                   `json:"name"`
+	Role *ProjectAPIKeyCreateRole `json:"role,omitempty"`
+}
+
+// ProjectAPIKeyCreateRole defines model for ProjectAPIKeyCreate.Role.
+type ProjectAPIKeyCreateRole string
+
+// ProjectAPIKeyCreateResponse Shown-once response for POST /projects/{name}/api-keys. `secret` is
+// returned on this call only — the caller must store it immediately; it
+// cannot be retrieved again.
+type ProjectAPIKeyCreateResponse struct {
+	CreatedAt time.Time `json:"created_at"`
+	Id        int64     `json:"id"`
+	Name      string    `json:"name"`
+	Prefix    string    `json:"prefix"`
+	Secret    string    `json:"secret"`
 }
 
 // ProjectCreate defines model for ProjectCreate.
@@ -1117,6 +1244,24 @@ type GetProjectActivityParams struct {
 	Cursor *CursorParam `form:"cursor,omitempty" json:"cursor,omitempty"`
 }
 
+// ChangeProjectMemberRoleJSONBody defines parameters for ChangeProjectMemberRole.
+type ChangeProjectMemberRoleJSONBody struct {
+	// Role New role for the member.
+	Role ChangeProjectMemberRoleJSONBodyRole `json:"role"`
+}
+
+// ChangeProjectMemberRoleJSONBodyRole defines parameters for ChangeProjectMemberRole.
+type ChangeProjectMemberRoleJSONBodyRole string
+
+// AddProjectMemberJSONBody defines parameters for AddProjectMember.
+type AddProjectMemberJSONBody struct {
+	// Role Role to assign. Defaults to "viewer" when omitted (D-02). Returns 422 codeValidationFailed for any other value.
+	Role *AddProjectMemberJSONBodyRole `json:"role,omitempty"`
+}
+
+// AddProjectMemberJSONBodyRole defines parameters for AddProjectMember.
+type AddProjectMemberJSONBodyRole string
+
 // ListReposParams defines parameters for ListRepos.
 type ListReposParams struct {
 	Limit  *LimitParam  `form:"limit,omitempty" json:"limit,omitempty"`
@@ -1196,7 +1341,13 @@ type CreateMyS3KeyJSONRequestBody = S3KeyCreate
 type CreateProjectJSONRequestBody = ProjectCreate
 
 // CreateProjectAPIKeyJSONRequestBody defines body for CreateProjectAPIKey for application/json ContentType.
-type CreateProjectAPIKeyJSONRequestBody = APIKeyCreate
+type CreateProjectAPIKeyJSONRequestBody = ProjectAPIKeyCreate
+
+// ChangeProjectMemberRoleJSONRequestBody defines body for ChangeProjectMemberRole for application/json ContentType.
+type ChangeProjectMemberRoleJSONRequestBody ChangeProjectMemberRoleJSONBody
+
+// AddProjectMemberJSONRequestBody defines body for AddProjectMember for application/json ContentType.
+type AddProjectMemberJSONRequestBody AddProjectMemberJSONBody
 
 // CreateRepoJSONRequestBody defines body for CreateRepo for application/json ContentType.
 type CreateRepoJSONRequestBody = RepoCreate

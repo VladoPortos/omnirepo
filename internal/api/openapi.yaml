@@ -900,6 +900,42 @@ components:
         label:
           type: string
 
+    ProjectAPIKeyCreate:
+      description: |
+        Request body for POST /projects/{name}/api-keys. `role` is optional and
+        defaults to "maintainer" at the application layer (D-25). Minting a
+        project-scoped key with role="viewer" lets CI pipelines publish with
+        the correct least-privilege role (D-23 / D-26).
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+        role:
+          type: string
+          enum: [maintainer, viewer]
+
+    ProjectAPIKeyCreateResponse:
+      description: |
+        Shown-once response for POST /projects/{name}/api-keys. `secret` is
+        returned on this call only — the caller must store it immediately; it
+        cannot be retrieved again.
+      type: object
+      required: [id, name, prefix, secret, created_at]
+      properties:
+        id:
+          type: integer
+          format: int64
+        name:
+          type: string
+        prefix:
+          type: string
+        secret:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
     APIKeyCreateResponse:
       type: object
       properties:
@@ -1439,14 +1475,14 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/APIKeyCreate'
+              $ref: '#/components/schemas/ProjectAPIKeyCreate'
       responses:
         "201":
           description: Project API key created (secret shown once)
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/APIKeyCreateResponse'
+                $ref: '#/components/schemas/ProjectAPIKeyCreateResponse'
         default:
           $ref: '#/components/responses/ValidationError'
 

@@ -139,27 +139,41 @@ export async function seedUserWithProjectRole(
   login: string,
   role: 'viewer' | 'maintainer',
   projectName: string,
-): Promise<string | null> {
-  // Step 1: create the user.
+): Promise<string> {
+  // Step 1: create the user. Fail loudly on any non-2xx — a silent null
+  // return would leave the test with a stale login that's not actually a
+  // project member, masking real failures (Codex Q8).
   const createResp = await request.post('/api/v1/admin/users', {
     data: { login, email: `${login}@e2e.test` },
   });
   if (!createResp.ok()) {
-    return null;
+    const body = await createResp.text().catch(() => '');
+    throw new Error(
+      `seedUserWithProjectRole: admin user create for ${login} failed ` +
+      `(status=${createResp.status()}): ${body}`,
+    );
   }
   const body = await createResp.json() as { one_time_password?: string };
   const otp = body.one_time_password;
   if (!otp) {
-    return null;
+    throw new Error(
+      `seedUserWithProjectRole: admin user create for ${login} did not return ` +
+      `one_time_password — cannot complete seeding flow`,
+    );
   }
 
-  // Step 2: add user to project with the requested role.
+  // Step 2: add user to project with the requested role. Fail loudly on
+  // non-2xx so the test surfaces the real cause instead of a silent null.
   const addResp = await request.post(
     `/api/v1/projects/${encodeURIComponent(projectName)}/members/${encodeURIComponent(login)}`,
     { data: { role } },
   );
   if (!addResp.ok()) {
-    return null;
+    const body = await addResp.text().catch(() => '');
+    throw new Error(
+      `seedUserWithProjectRole: add ${login} to project ${projectName} ` +
+      `with role=${role} failed (status=${addResp.status()}): ${body}`,
+    );
   }
 
   return otp;

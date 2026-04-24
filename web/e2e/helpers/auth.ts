@@ -198,7 +198,12 @@ export async function passwordLogin(
     await page.fill('input#new-password', newPw);
     await page.fill('input#confirm-password', newPw);
     await page.click('button[type="submit"]');
-    await page.waitForLoadState('networkidle');
+    // Wait for navigation away from /change-password. networkidle alone is
+    // insufficient — the button enters "Updating..." disabled state before the
+    // redirect fires, so the idle window can close while we're still on the page.
+    await page.waitForURL((url) => !url.pathname.includes('/change-password'), {
+      timeout: 10_000,
+    }).catch(() => {/* fall through to URL check below */});
     // After change-password succeeds, the session holds the user's identity.
     // Return whether we actually left the change-password page.
     return !page.url().includes('/change-password') && !page.url().includes('/login');

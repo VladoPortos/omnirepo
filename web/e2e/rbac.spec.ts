@@ -51,13 +51,13 @@ test.describe('RBAC — maintainer/viewer split (RBAC-01..07)', () => {
     await page.waitForLoadState('networkidle');
 
     await page.goto(`/projects/${projectName}`);
-    // Wait for Members card to load
-    await expect(page.getByText('bob')).toBeVisible({ timeout: 10_000 });
+    // Wait for Members card to load — use exact to avoid matching bob@e2e.test
+    await expect(page.getByText('bob', { exact: true })).toBeVisible({ timeout: 10_000 });
 
     // bob's row should have a Viewer badge
-    // Find the div containing 'bob' text and look for the badge in its row.
+    // Anchor on p.font-medium to avoid strict-mode violation from the email paragraph.
     const bobRow = page.locator('.flex.items-center.justify-between', {
-      has: page.getByText('bob', { exact: true }),
+      has: page.locator('p.font-medium', { hasText: /^bob$/ }),
     }).first();
     await expect(bobRow.getByText('Viewer', { exact: true })).toBeVisible();
   });
@@ -80,11 +80,11 @@ test.describe('RBAC — maintainer/viewer split (RBAC-01..07)', () => {
     await page.waitForLoadState('networkidle');
 
     await page.goto(`/projects/${projectName}`);
-    await expect(page.getByText('bob')).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText('bob', { exact: true })).toBeVisible({ timeout: 10_000 });
 
     // Find bob's row and open the Role select (combobox).
     const bobRow = page.locator('.flex.items-center.justify-between', {
-      has: page.getByText('bob', { exact: true }),
+      has: page.locator('p.font-medium', { hasText: /^bob$/ }),
     }).first();
     await bobRow.getByRole('combobox').click();
 
@@ -116,10 +116,10 @@ test.describe('RBAC — maintainer/viewer split (RBAC-01..07)', () => {
     await page.waitForLoadState('networkidle');
 
     await page.goto(`/projects/${projectName}`);
-    await expect(page.getByText('bob')).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText('bob', { exact: true })).toBeVisible({ timeout: 10_000 });
 
     const bobRow = page.locator('.flex.items-center.justify-between', {
-      has: page.getByText('bob', { exact: true }),
+      has: page.locator('p.font-medium', { hasText: /^bob$/ }),
     }).first();
     await bobRow.getByRole('combobox').click();
     await page.getByRole('option', { name: 'Viewer', exact: true }).click();
@@ -163,21 +163,24 @@ test.describe('RBAC — maintainer/viewer split (RBAC-01..07)', () => {
     await page.waitForLoadState('networkidle');
 
     await page.goto(`/projects/${projectName}`);
-    await expect(page.getByText('alice')).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText('alice', { exact: true })).toBeVisible({ timeout: 10_000 });
 
     // Alice's row: Trash button should be disabled (aria-disabled="true" on wrapper span).
     const aliceRow = page.locator('.flex.items-center.justify-between', {
-      has: page.getByText('alice', { exact: true }),
+      has: page.locator('p.font-medium', { hasText: /^alice$/ }),
     }).first();
 
     // The disabled trash wrapper has an aria-label containing "Cannot remove alice".
     const trashWrap = aliceRow.locator('[aria-disabled="true"]');
     await expect(trashWrap).toBeVisible({ timeout: 5_000 });
 
-    // Hover to trigger tooltip.
+    // Hover to trigger tooltip. Base UI tooltips render via Portal so
+    // getByRole('tooltip') is unreliable in headless mode — use the
+    // data-slot attribute that TooltipContent sets.
     await trashWrap.hover({ force: true });
-    await expect(page.getByRole('tooltip')).toContainText(
+    await expect(page.locator('[data-slot="tooltip-content"]')).toContainText(
       'Promote another member to maintainer first.',
+      { timeout: 5_000 },
     );
 
     // Role Select: Viewer option should be disabled (data-disabled attribute from Base UI).
@@ -208,11 +211,11 @@ test.describe('RBAC — maintainer/viewer split (RBAC-01..07)', () => {
     expect(ok).toBe(true);
 
     await page.goto(`/projects/${projectName}`);
-    await expect(page.getByText('alice')).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText('alice', { exact: true })).toBeVisible({ timeout: 10_000 });
 
     // Find alice's own row.
     const aliceRow = page.locator('.flex.items-center.justify-between', {
-      has: page.getByText('alice', { exact: true }),
+      has: page.locator('p.font-medium', { hasText: /^alice$/ }),
     }).first();
 
     // Open alice's role Select and choose Viewer (self-demote).

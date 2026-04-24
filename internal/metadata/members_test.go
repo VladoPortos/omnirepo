@@ -19,7 +19,7 @@ func TestMembersRepo_AddIsMemberRemove(t *testing.T) {
 	if err != nil || ok {
 		t.Fatalf("expected not member, got ok=%v err=%v", ok, err)
 	}
-	if err := m.Add(ctx, pid, uid); err != nil {
+	if err := m.Add(ctx, pid, uid, "maintainer"); err != nil {
 		t.Fatal(err)
 	}
 	ok, err = m.IsMember(ctx, pid, uid)
@@ -44,10 +44,10 @@ func TestMembersRepo_ListProjectIDsForUser(t *testing.T) {
 	uid := seedUser(t, db, "bob")
 
 	m := metadata.NewMembersRepo(db)
-	if err := m.Add(ctx, p1, uid); err != nil {
+	if err := m.Add(ctx, p1, uid, "maintainer"); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.Add(ctx, p3, uid); err != nil {
+	if err := m.Add(ctx, p3, uid, "maintainer"); err != nil {
 		t.Fatal(err)
 	}
 	_ = p2

@@ -660,8 +660,10 @@ func (d Deps) handleCreateProject(w http.ResponseWriter, r *http.Request) {
 		if insErr != nil {
 			return insErr
 		}
-		if hasActor && actor.ID != 0 {
-			if err := d.Members.AddInTx(r.Context(), tx, id, actor.ID); err != nil {
+		if hasActor && actor.ID != 0 && !actor.IsSuperAdmin {
+			// D-04: super-admin creators are NOT auto-added to project_members.
+			// D-05: non-super-admin creator gets role='maintainer' so they can manage their project.
+			if err := d.Members.AddInTx(r.Context(), tx, id, actor.ID, "maintainer"); err != nil {
 				return err
 			}
 		}
@@ -713,7 +715,7 @@ func (d Deps) handleAddMember(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "user")
 		return
 	}
-	if err := d.Members.Add(r.Context(), p.ID, u.ID); err != nil {
+	if err := d.Members.Add(r.Context(), p.ID, u.ID, "viewer"); err != nil {
 		// PK-conflict → 409.
 		writeJSONError(w, r, http.StatusConflict, ErrConflict, "already a member")
 		return

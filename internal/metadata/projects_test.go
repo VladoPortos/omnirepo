@@ -52,7 +52,7 @@ func TestProjectsRepo_CreateInTxRollsBackWithMembers(t *testing.T) {
 			return insErr
 		}
 		// userID=9999 does not exist — FK violation aborts the tx.
-		return members.AddInTx(ctx, tx, id, 9999)
+		return members.AddInTx(ctx, tx, id, 9999, "maintainer")
 	})
 	if err == nil {
 		t.Fatal("expected tx error from FK failure")

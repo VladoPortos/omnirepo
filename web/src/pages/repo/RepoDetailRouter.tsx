@@ -17,12 +17,14 @@ import { GitRepoPage } from './GitRepoPage';
 
 export function RepoDetailRouter() {
   const { name, type, repo } = useParams<{ name: string; type: string; repo: string }>();
-  // S3 "repos" are buckets and live in a separate table; redirect to the
-  // dedicated bucket route so the useRepo below doesn't 404.
+  // useRepo must run unconditionally before any early return — react-hooks/rules-of-hooks.
+  // S3 "repos" are buckets in a separate table; the query result is discarded
+  // when type === 's3' because the Navigate below redirects immediately.
+  const { data, isLoading, isError } = useRepo(name!, type!, repo!);
+
   if (type === 's3') {
     return <Navigate to={`/projects/${name}/s3/${repo}`} replace />;
   }
-  const { data, isLoading, isError } = useRepo(name!, type!, repo!);
 
   if (isLoading) return <RepoSkeleton />;
   if (isError || !data) return <NotFoundPage />;

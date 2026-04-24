@@ -49,6 +49,7 @@ import {
   useDeleteUpstreamCred,
   useUpstreamCreds,
 } from '@/api/queries';
+import { useRoleFor } from '@/hooks/useAuth';
 import type { UpstreamCred } from '@/api/types';
 import { UpstreamCredDialog } from './UpstreamCredDialog';
 
@@ -58,6 +59,8 @@ export interface UpstreamCredsTabProps {
 
 export function UpstreamCredsTab({ projectName }: UpstreamCredsTabProps) {
   const q = useUpstreamCreds(projectName);
+  const myRole = useRoleFor(projectName);
+  const isMaintainer = myRole === 'maintainer';
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<UpstreamCred | undefined>(undefined);
@@ -134,7 +137,7 @@ export function UpstreamCredsTab({ projectName }: UpstreamCredsTabProps) {
             clone-external.
           </p>
         </div>
-        {creds.length > 0 ? (
+        {creds.length > 0 && isMaintainer ? (
           <Button onClick={openCreate}>Add credential</Button>
         ) : null}
       </div>
@@ -144,7 +147,11 @@ export function UpstreamCredsTab({ projectName }: UpstreamCredsTabProps) {
           icon={Key}
           title="No upstream credentials"
           description="Add a credential to authenticate mirror syncs and Docker clones against private upstream archives."
-          primaryCTA={{ label: 'Add credential', onClick: openCreate }}
+          primaryCTA={
+            isMaintainer
+              ? { label: 'Add credential', onClick: openCreate }
+              : { label: 'Add credential', disabled: true, disabledHint: 'Maintainer role required for this action.' }
+          }
         />
       ) : (
         <Table>
@@ -167,26 +174,28 @@ export function UpstreamCredsTab({ projectName }: UpstreamCredsTabProps) {
                   {new Date(c.created_at).toLocaleDateString()}
                 </TableCell>
                 <TableCell className="text-right">
-                  <div className="inline-flex gap-1">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => openEdit(c)}
-                    >
-                      Edit
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="destructive"
-                      onClick={() => {
-                        setDeleteError(null);
-                        delMutation.reset();
-                        setDeleting(c);
-                      }}
-                    >
-                      Delete
-                    </Button>
-                  </div>
+                  {isMaintainer && (
+                    <div className="inline-flex gap-1">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => openEdit(c)}
+                      >
+                        Edit
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="destructive"
+                        onClick={() => {
+                          setDeleteError(null);
+                          delMutation.reset();
+                          setDeleting(c);
+                        }}
+                      >
+                        Delete
+                      </Button>
+                    </div>
+                  )}
                 </TableCell>
               </TableRow>
             ))}

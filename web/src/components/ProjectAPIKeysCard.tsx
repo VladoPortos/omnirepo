@@ -20,6 +20,7 @@ import {
   useProjectAPIKeys,
   useRevokeProjectAPIKey,
 } from '@/api/queries';
+import { useRoleFor } from '@/hooks/useAuth';
 import type { APIKey } from '@/api/types';
 
 export interface ProjectAPIKeysCardProps {
@@ -39,6 +40,8 @@ export function ProjectAPIKeysCard({ projectName }: ProjectAPIKeysCardProps) {
   const { data, isLoading } = useProjectAPIKeys(projectName);
   const createKey = useCreateProjectAPIKey(projectName);
   const revokeKey = useRevokeProjectAPIKey(projectName);
+  const myRole = useRoleFor(projectName);
+  const isMaintainer = myRole === 'maintainer';
 
   const [showCreate, setShowCreate] = useState(false);
   const [keyName, setKeyName] = useState('');
@@ -81,16 +84,18 @@ export function ProjectAPIKeysCard({ projectName }: ProjectAPIKeysCardProps) {
             <KeyRound className="size-4 text-muted-foreground" />
             <CardTitle>Project API Keys</CardTitle>
           </div>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => {
-              setKeyName('');
-              setShowCreate(true);
-            }}
-          >
-            Mint Token
-          </Button>
+          {isMaintainer && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                setKeyName('');
+                setShowCreate(true);
+              }}
+            >
+              Mint Token
+            </Button>
+          )}
         </div>
       </CardHeader>
       <CardContent>
@@ -119,16 +124,18 @@ export function ProjectAPIKeysCard({ projectName }: ProjectAPIKeysCardProps) {
                       : ' · never used'}
                   </p>
                 </div>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="text-destructive hover:bg-destructive/10"
-                  onClick={() => setRevokeTarget(k)}
-                  aria-label={`Revoke ${k.name}`}
-                  title="Revoke token"
-                >
-                  <Trash2 className="size-4" />
-                </Button>
+                {isMaintainer && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="text-destructive hover:bg-destructive/10"
+                    onClick={() => setRevokeTarget(k)}
+                    aria-label={`Revoke ${k.name}`}
+                    title="Revoke token"
+                  >
+                    <Trash2 className="size-4" />
+                  </Button>
+                )}
               </div>
             ))}
           </div>

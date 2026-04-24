@@ -90,8 +90,13 @@ const REPO_TYPES: { value: RepoType; label: string }[] = [
 // Phase 11 / D-13 widens the set to include 'git' (HTTPS+PAT mirror via
 // go-git/v6 PlainCloneContext + FetchContext, all-refs, see
 // internal/protocol/git/sync_handler.go).
-// eslint-disable-next-line prettier/prettier
-const MIRROR_PROTOCOLS: ReadonlyArray<RepoType> = ['deb','rpm','pypi','helm','git'];
+const MIRROR_PROTOCOLS: ReadonlyArray<RepoType> = [
+  'deb',
+  'rpm',
+  'pypi',
+  'helm',
+  'git',
+];
 
 function isMirrorProtocol(
   t: RepoType,

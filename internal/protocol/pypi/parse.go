@@ -234,14 +234,19 @@ func parseWheelFilename(base string) (string, string, error) {
 // like `f-2do-1.0.0` to `(f, 2do-1.0.0)`; the multi-candidate Validate
 // scan closes that gap.
 func parseSdistFilename(base string) (string, string, error) {
+	// Extension match mirrors parseWheelFilename (.whl via EqualFold) and
+	// isInstallableExt (ToLower) — a hostile/legacy upstream may ship an
+	// uppercase FOO-1.0.0.TAR.GZ; rejecting it here when the other two
+	// layers already accepted it creates a late-stage sync failure with a
+	// confusing error trail (Codex Q2, post-v1.5 Phase 3).
 	stem := base
-	switch {
-	case strings.HasSuffix(stem, ".tar.gz"):
-		stem = strings.TrimSuffix(stem, ".tar.gz")
-	case strings.HasSuffix(stem, ".tgz"):
-		stem = strings.TrimSuffix(stem, ".tgz")
-	case strings.HasSuffix(stem, ".zip"):
-		stem = strings.TrimSuffix(stem, ".zip")
+	switch l := len(stem); {
+	case l >= 7 && strings.EqualFold(stem[l-7:], ".tar.gz"):
+		stem = stem[:l-7]
+	case l >= 4 && strings.EqualFold(stem[l-4:], ".tgz"):
+		stem = stem[:l-4]
+	case l >= 4 && strings.EqualFold(stem[l-4:], ".zip"):
+		stem = stem[:l-4]
 	default:
 		return "", "", fmt.Errorf("pypi: unsupported sdist extension: %s", base)
 	}

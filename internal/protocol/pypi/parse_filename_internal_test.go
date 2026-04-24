@@ -70,6 +70,14 @@ func TestParseSdistFilename(t *testing.T) {
 		// boundary is the "-" at index 4 with candidate "1.0.0".
 		{"1pkg-1.0.0.tar.gz", "1pkg", "1.0.0", false},
 
+		// Case-insensitive extension match — mirrors isInstallableExt
+		// (ToLower) and parseWheelFilename (EqualFold) so a hostile or
+		// legacy upstream shipping uppercase doesn't fail late at the
+		// sdist split (Codex Q2, post-v1.5 Phase 3).
+		{"foo-1.0.0.TAR.GZ", "foo", "1.0.0", false},
+		{"foo-1.0.0.TGZ", "foo", "1.0.0", false},
+		{"foo-1.0.0.Zip", "foo", "1.0.0", false},
+
 		// Degenerate inputs.
 		{"foo.tar.gz", "", "", true},     // no dash → no split
 		{"-1.0.tar.gz", "", "", true},    // empty name

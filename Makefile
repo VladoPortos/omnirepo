@@ -7,6 +7,7 @@ BENCH_WORKERS ?= 16
 	vendor lint seed lint-protocol-redaction \
 	check-contrast lint-typography lint-spacing-carveout lint-axe-devdep \
 	lint-reset-beforeEach \
+	lint-go-vet-oci \
 	lint-docs \
 	conformance conformance-oci conformance-rpm conformance-deb \
 	conformance-pypi conformance-helm conformance-s3 conformance-git \
@@ -16,7 +17,7 @@ BENCH_WORKERS ?= 16
 build:
 	$(GO) build -mod=vendor -o bin/omnirepo ./cmd/omnirepo
 
-test: lint-protocol-redaction check-contrast lint-typography lint-spacing-carveout lint-axe-devdep lint-reset-beforeEach lint-docs
+test: lint-protocol-redaction check-contrast lint-typography lint-spacing-carveout lint-axe-devdep lint-reset-beforeEach lint-docs lint-go-vet-oci
 	$(GO) test -mod=vendor ./...
 	$(MAKE) test-airgap
 
@@ -289,6 +290,15 @@ lint-reset-beforeEach:
 		exit 1; \
 	fi; \
 	echo "lint-reset-beforeEach: clean"
+
+# lint-go-vet-oci (v1.5 Phase 4 / TECHDEBT-01): narrow go vet gate for the
+# OCI subtree. Intentionally scoped to ./internal/protocol/oci/... only —
+# the wider tree carries ~300 pre-existing golangci-lint findings that are
+# deferred per v1.5 scope. Lifts to wider subtrees as future phases clean
+# them.
+lint-go-vet-oci:
+	@$(GO) vet ./internal/protocol/oci/...
+	@echo "lint-go-vet-oci: clean"
 
 # lint-spacing-carveout (VISUAL-05): the 6px copy-button inset (right-1.5 /
 # top-1.5) was originally grandfathered to the v1.0 SnippetPanel and

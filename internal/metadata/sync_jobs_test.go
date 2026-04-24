@@ -569,3 +569,76 @@ func TestSyncJobsRepo_CountRepoInflightTx(t *testing.T) {
 		t.Fatalf("same-tx enqueue+count n=%d; want 1 (race-closing guarantee)", n)
 	}
 }
+
+// --------------------------------------------------------------------------
+// Phase 5 Plan 02 (HELMRETRY-03) — helm partial-sync terminal writers.
+// --------------------------------------------------------------------------
+
+// TestSyncJobsRepo_MarkPermanentlyFailedWithLog proves the D-04 atomicity
+// invariant: a reader observing status='failed' on a row written by
+// MarkPermanentlyFailedWithLog ALWAYS observes the populated log column
+// too. The assertion is a SINGLE SELECT for status/last_error/log in one
+// Scan — any non-atomic implementation (two sequential UPDATEs) would
+// leave a visible window where status is flipped but log is still empty,
+// and the scan below would fail for the log assertion.
+func TestSyncJobsRepo_MarkPermanentlyFailedWithLog(t *testing.T) {
+	t.Parallel()
+	db := sqlitetest.New(t)
+	jobs := metadata.NewSyncJobsRepo(db)
+	ctx := context.Background()
+
+	var id int64
+	if err := db.WriteTx(ctx, func(tx *sql.Tx) error {
+		var err error
+		id, err = jobs.Enqueue(ctx, tx, "helm_sync", 0, 0, "{}")
+		return err
+	}); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	// Move to running — mirrors the live-path state at the moment Pool
+	// decides to terminally fail the job.
+	if _, _, err := jobs.LeaseOne(ctx, "worker-A"); err != nil {
+		t.Fatalf("lease: %v", err)
+	}
+
+	const logJSON = `{"partial":true,"files_persisted":2,"files_expected":3}`
+	if err := db.WriteTx(ctx, func(tx *sql.Tx) error {
+		return jobs.MarkPermanentlyFailedWithLog(ctx, tx, id, "sync failed", logJSON)
+	}); err != nil {
+		t.Fatalf("mark_perm_failed_with_log: %v", err)
+	}
+
+	// SINGLE read of all three columns in one Scan — this is the
+	// atomicity assertion. If the implementation split the SET into two
+	// UPDATE statements, a well-timed reader between them would see
+	// status='failed' with log still empty; that window must not exist.
+	var (
+		status  string
+		lastErr sql.NullString
+		logCol  sql.NullString
+	)
+	if err := db.Reader.QueryRow(
+		`SELECT status, last_error, log FROM sync_jobs WHERE id=?`,
+		id,
+	).Scan(&status, &lastErr, &logCol); err != nil {
+		t.Fatalf("select: %v", err)
+	}
+	if status != "failed" {
+		t.Fatalf("status=%q want failed", status)
+	}
+	if !lastErr.Valid || lastErr.String != "sync failed" {
+		t.Fatalf("last_error=%q valid=%v; want 'sync failed'", lastErr.String, lastErr.Valid)
+	}
+	if !logCol.Valid || logCol.String != logJSON {
+		t.Fatalf("log=%q valid=%v; want %q", logCol.String, logCol.Valid, logJSON)
+	}
+
+	// Sub-case: call against a non-existent id. The WHERE doesn't match;
+	// RowsAffected is zero but the method must not error — no-op is the
+	// correct terminal-writer semantic.
+	if err := db.WriteTx(ctx, func(tx *sql.Tx) error {
+		return jobs.MarkPermanentlyFailedWithLog(ctx, tx, 99999, "ghost", `{"partial":true}`)
+	}); err != nil {
+		t.Fatalf("no-op on missing id: %v", err)
+	}
+}

@@ -277,6 +277,35 @@ func (p *Pool) handle(ctx context.Context, j *JobView) {
 // markFailed decides between transient retry (MarkFailed) and permanent
 // termination (MarkPermanentlyFailed) based on attempts+1 vs MaxAttempts.
 func (p *Pool) markFailed(ctx context.Context, j *JobView, herr error) {
+	// v1.5 Phase 5 HELMRETRY-03 (D-01, D-03a, D-04) — helm partial-sync
+	// errors terminate at status='failed' BYPASSING the retry ladder,
+	// and the 3-field partial-log JSON is written in the SAME UPDATE as
+	// the status flip (D-04 atomicity, Plan 02 MarkPermanentlyFailedWithLog).
+	//
+	// This branch runs BEFORE the ctx.Err() shutdown bail below
+	// (Pitfall 1 Option A): graceful-shutdown ctx-cancel is the most
+	// common trigger of a partial sync, so losing the terminal write on
+	// cancel would leave the row stuck 'running' until boot recovery.
+	// If ctx is already cancelled we swap in context.Background() for
+	// the DB write so the metadata writer pool (separate lifecycle) can
+	// still commit. Boot recovery (Plan 04) is the safety net if the DB
+	// is itself mid-close.
+	var pse PartialSyncError
+	if j.Kind == HelmSyncKind && errors.As(herr, &pse) {
+		logJSON := buildPartialLogJSON(pse.Persisted(), pse.Expected())
+		safeErr := sanitizeJobError(herr)
+		writeCtx := ctx
+		if ctx.Err() != nil {
+			writeCtx = context.Background()
+		}
+		if derr := p.db.WriteTx(writeCtx, func(tx *sql.Tx) error {
+			return p.repo.MarkPermanentlyFailedWithLog(writeCtx, tx, j.ID, safeErr, logJSON)
+		}); derr != nil {
+			slog.Error("jobs.markpermfailed_withlog.err", "pool", p.name, "id", j.ID, "err", derr)
+		}
+		return
+	}
+
 	nextAttempts := int(j.Attempts) + 1
 	// If ctx is already canceled (shutdown drain), don't try to update
 	// the row — boot recovery will handle it next boot. Using a fresh

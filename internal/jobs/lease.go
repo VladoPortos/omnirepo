@@ -45,6 +45,15 @@ type LeaseRepo interface {
 	// MarkPermanentlyFailed sets status='failed' (terminal, no more
 	// retries). Runs inside tx.
 	MarkPermanentlyFailed(ctx context.Context, tx *sql.Tx, id int64, errStr string) error
+
+	// MarkPermanentlyFailedWithLog sets status='failed' AND populates
+	// the log column atomically in ONE UPDATE. Used by the Phase 5
+	// helm partial-sync live path (HELMRETRY-03, D-04) — see
+	// Pool.markFailed §helm branch. For adapters whose backing table
+	// has no log column (e.g. scans), the implementation falls back
+	// to MarkPermanentlyFailed (the helm branch never routes scan
+	// rows so logJSON is unreachable through this path in practice).
+	MarkPermanentlyFailedWithLog(ctx context.Context, tx *sql.Tx, id int64, errStr, logJSON string) error
 }
 
 // syncJobsAdapter wraps *metadata.SyncJobsRepo to satisfy LeaseRepo.
@@ -79,6 +88,13 @@ func (a *syncJobsAdapter) MarkFailed(ctx context.Context, tx *sql.Tx, id int64, 
 
 func (a *syncJobsAdapter) MarkPermanentlyFailed(ctx context.Context, tx *sql.Tx, id int64, errStr string) error {
 	return a.r.MarkPermanentlyFailed(ctx, tx, id, errStr)
+}
+
+// MarkPermanentlyFailedWithLog routes to the Plan 05-02 atomic terminal
+// writer that sets status='failed' + log in ONE UPDATE. Used by the
+// Phase 5 helm partial-sync live path (HELMRETRY-03, D-04).
+func (a *syncJobsAdapter) MarkPermanentlyFailedWithLog(ctx context.Context, tx *sql.Tx, id int64, errStr, logJSON string) error {
+	return a.r.MarkPermanentlyFailedWithLog(ctx, tx, id, errStr, logJSON)
 }
 
 // scansAdapter wraps *metadata.ScansRepo to satisfy LeaseRepo. Scan rows'
@@ -132,5 +148,15 @@ func (a *scansAdapter) MarkFailed(ctx context.Context, tx *sql.Tx, id int64, err
 }
 
 func (a *scansAdapter) MarkPermanentlyFailed(ctx context.Context, tx *sql.Tx, id int64, errStr string) error {
+	return a.r.MarkPermanentlyFailed(ctx, tx, id, errStr)
+}
+
+// MarkPermanentlyFailedWithLog — scans has no log column, so logJSON is
+// ignored and we fall back to MarkPermanentlyFailed. The helm-sync
+// branch in Pool.markFailed only fires for kind='helm_sync', which
+// never lands on the scan pool; this method exists solely so
+// scansAdapter continues to satisfy the extended LeaseRepo interface.
+func (a *scansAdapter) MarkPermanentlyFailedWithLog(ctx context.Context, tx *sql.Tx, id int64, errStr, logJSON string) error {
+	_ = logJSON
 	return a.r.MarkPermanentlyFailed(ctx, tx, id, errStr)
 }

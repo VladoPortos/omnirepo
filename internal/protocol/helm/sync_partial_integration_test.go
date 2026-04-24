@@ -84,7 +84,11 @@ type partialSyncFixture struct {
 // Kick() actually rebuilds <repoDir>/index.yaml from the .tgz files on
 // disk. The D-11 convergence assertion (index.yaml lists all 3 charts
 // after the second sync) depends on this wiring.
-func newHelmPartialSyncFixture(t *testing.T) *partialSyncFixture {
+// newHelmPartialSyncFixture builds the 3-chart + 500-on-#3 harness.
+// maxParallel=1 is the serialized dispatch path; maxParallel>1 exercises
+// the chart-dispatch goroutine loop with real concurrency (Codex Q5
+// follow-up — locks filesAdded/mutex bookkeeping under parallel fetches).
+func newHelmPartialSyncFixture(t *testing.T, maxParallel int) *partialSyncFixture {
 	t.Helper()
 	db := sqlitetest.New(t)
 
@@ -220,7 +224,7 @@ generated: "2026-04-20T00:00:00Z"
 		Coalescer:  registry,
 		HTTPClient: srv.Client(),
 		RepoRoot:   repoRoot,
-		Cfg:        config.SyncConfig{MaxParallelDownloadsPerJob: 1},
+		Cfg:        config.SyncConfig{MaxParallelDownloadsPerJob: maxParallel},
 		SyncJobs:   metadata.NewSyncJobsRepo(db),
 	})
 
@@ -259,7 +263,21 @@ func (f *partialSyncFixture) waitForIndexYAML(t *testing.T) string {
 // TestHelmSync_PartialThenConverges is the combined HELMRETRY-01 +
 // HELMRETRY-02 proof. See file-level doc comment for the scenario.
 func TestHelmSync_PartialThenConverges(t *testing.T) {
-	f := newHelmPartialSyncFixture(t)
+	runPartialThenConverges(t, 1)
+}
+
+// TestHelmSync_PartialThenConverges_Parallel exercises the same scenario
+// under MaxParallelDownloadsPerJob=4 so the chart-dispatch goroutine loop
+// handles real concurrency alongside the partial-error return. Codex Q5
+// follow-up: the serialized path alone doesn't prove the filesAdded /
+// mu.Lock() bookkeeping is race-clean under parallel fetches.
+func TestHelmSync_PartialThenConverges_Parallel(t *testing.T) {
+	runPartialThenConverges(t, 4)
+}
+
+func runPartialThenConverges(t *testing.T, maxParallel int) {
+	t.Helper()
+	f := newHelmPartialSyncFixture(t, maxParallel)
 	ctx := context.Background()
 	helmCharts := metadata.NewHelmChartsRepo(f.db)
 

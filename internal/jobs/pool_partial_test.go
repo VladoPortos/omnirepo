@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -39,7 +40,11 @@ func TestPool_HelmPartialSync_TerminalFailed(t *testing.T) {
 	var calls int64
 	handler := func(ctx context.Context, j *jobs.JobView) error {
 		atomic.AddInt64(&calls, 1)
-		return &stubPartialErr{persisted: 2, expected: 3}
+		// Codex Q4 follow-up: wrap the partial error so errors.As must
+		// traverse the Unwrap chain (not just the outer type). Proves the
+		// interface-target discovery works through fmt.Errorf("%w") layers,
+		// which is how the real helm handler returns wrapped cancel causes.
+		return fmt.Errorf("pool: %w", &stubPartialErr{persisted: 2, expected: 3})
 	}
 
 	cfg := testCfg(1)

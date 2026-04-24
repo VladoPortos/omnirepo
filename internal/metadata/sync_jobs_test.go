@@ -642,3 +642,86 @@ func TestSyncJobsRepo_MarkPermanentlyFailedWithLog(t *testing.T) {
 		t.Fatalf("no-op on missing id: %v", err)
 	}
 }
+
+// TestSyncJobsRepo_RecoverStaleByKind_HelmOnly proves the D-02 scope
+// boundary: RecoverStaleByKind terminates ONLY stale running rows
+// whose kind matches the filter. Non-matching kinds (e.g. pypi_sync)
+// stay in 'running' state and retain the existing RecoverStale
+// retry semantics wired elsewhere. Two rows are seeded — one helm,
+// one pypi — both stale; the call targets helm_sync with
+// terminalStatus='failed' and a partial-log JSON.
+func TestSyncJobsRepo_RecoverStaleByKind_HelmOnly(t *testing.T) {
+	t.Parallel()
+	db := sqlitetest.New(t)
+	jobs := metadata.NewSyncJobsRepo(db)
+	ctx := context.Background()
+
+	// Seed TWO stale running rows via raw SQL so leased_at can be set to
+	// 11 minutes ago deterministically (Enqueue+LeaseOne would use
+	// CURRENT_TIMESTAMP, which would not be stale).
+	if _, err := db.Writer.ExecContext(ctx, `
+		INSERT INTO sync_jobs(kind, status, leased_by, leased_at)
+		VALUES ('helm_sync','running','w1',datetime('now','-11 minutes'))
+	`); err != nil {
+		t.Fatalf("seed helm row: %v", err)
+	}
+	if _, err := db.Writer.ExecContext(ctx, `
+		INSERT INTO sync_jobs(kind, status, leased_by, leased_at)
+		VALUES ('pypi_sync','running','w2',datetime('now','-11 minutes'))
+	`); err != nil {
+		t.Fatalf("seed pypi row: %v", err)
+	}
+
+	const logJSON = `{"partial":true,"files_persisted":null,"files_expected":null}`
+	var n int
+	if err := db.WriteTx(ctx, func(tx *sql.Tx) error {
+		var err error
+		n, err = jobs.RecoverStaleByKind(
+			ctx, tx,
+			time.Now().Add(-10*time.Minute),
+			"helm_sync",
+			"failed",
+			logJSON,
+		)
+		return err
+	}); err != nil {
+		t.Fatalf("recover_stale_by_kind: %v", err)
+	}
+
+	if n != 1 {
+		t.Fatalf("rows affected=%d want 1 (only helm row should match kind filter)", n)
+	}
+
+	// Helm row: terminally failed with log + last_error populated.
+	var (
+		helmStatus, helmLastErr string
+		helmLog                 string
+	)
+	if err := db.Reader.QueryRow(
+		`SELECT status, last_error, log FROM sync_jobs WHERE kind='helm_sync'`,
+	).Scan(&helmStatus, &helmLastErr, &helmLog); err != nil {
+		t.Fatalf("select helm row: %v", err)
+	}
+	if helmStatus != "failed" {
+		t.Fatalf("helm status=%q want failed", helmStatus)
+	}
+	if helmLog != logJSON {
+		t.Fatalf("helm log=%q want %q", helmLog, logJSON)
+	}
+	if helmLastErr != "stale running row terminated at boot" {
+		t.Fatalf("helm last_error=%q want sentinel", helmLastErr)
+	}
+
+	// Pypi row: UNTOUCHED — scope boundary proof (D-02). This is the
+	// load-bearing assertion: if the kind filter were missing from the
+	// WHERE clause, this row would also have flipped to 'failed'.
+	var pypiStatus string
+	if err := db.Reader.QueryRow(
+		`SELECT status FROM sync_jobs WHERE kind='pypi_sync'`,
+	).Scan(&pypiStatus); err != nil {
+		t.Fatalf("select pypi row: %v", err)
+	}
+	if pypiStatus != "running" {
+		t.Fatalf("pypi status=%q want running (untouched)", pypiStatus)
+	}
+}

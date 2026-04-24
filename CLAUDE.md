@@ -47,6 +47,7 @@ OmniRepo is a self-hosted, internal artifact repository server — a focused, si
 - **Tech stack**: SQLite via `modernc.org/sqlite` (pure Go, cross-compile-friendly) for metadata.
 - **Tech stack**: chi for HTTP routing; gocloud.dev/blob deliberately NOT used — local FS only.
 - **Runtime air-gap**: zero outbound network calls without explicit user action. Trivy DB updates only via tarball upload or admin button.
+- **No in-process schedulers**: OmniRepo has no internal cron, timers, or time-based job firers. Sync is triggered only by (a) the "Sync now" button in the UI, or (b) an external scheduler (crontab, systemd timer, Kubernetes CronJob, etc.) hitting the `/sync` REST endpoint — the worked example lives at `docs/operations/scheduled-sync.md` (shipped in v1.4). Proposals to add in-process cron (e.g. the SCHEDSYNC phase that was removed from v1.5 on 2026-04-24) are out of scope — adding a scheduler goroutine, a cron parser, next-run state, UI surface, and audit events gives negligible benefit over a one-line crontab entry and expands the failure surface.
 - **Licensing**: every dependency must be Apache-2.0-compatible (corporate constraint). MinIO (AGPLv3) explicitly excluded; gofakes3 (MIT) used instead.
 - **Persistence**: one mounted volume at `/var/lib/omnirepo/`; everything mutable lives there.
 - **Security**: argon2id password hashing; HTTPS with self-signed cert by default; admin-uploaded certs hot-reload without restart.

@@ -54,18 +54,49 @@ async function uiLogin(page: Page, login: string, password: string): Promise<voi
     await page.fill('input#current-password', password);
     await page.fill('input#new-password', password + 'x');
     await page.fill('input#confirm-password', password + 'x');
-    await page.click('button[type="submit"]');
-    await page.waitForLoadState('networkidle');
-    // Log back in with the new password so cookies settle.
+    // The submit click fires a fetch; navigating the page before the
+    // fetch resolves cancels it in the browser, which shows up as
+    // `metadata: begin write tx: context canceled` on the server.
+    // Wait for the success response BEFORE any subsequent navigation.
+    await Promise.all([
+      page.waitForResponse(
+        (resp) =>
+          resp.url().includes('/api/v1/auth/change-password') &&
+          resp.request().method() === 'POST',
+      ),
+      page.click('button[type="submit"]'),
+    ]);
+    // Known pre-v1.5 SPA race: useMe() cache may still report
+    // must_change_password=true briefly after the mutation succeeds,
+    // so MustChangePasswordGuard can bounce the user straight back to
+    // /change-password even though the server cleared the flag. Force
+    // a hard reload of /login to discard the stale React Query cache,
+    // then log in with the new password so the in-memory user state
+    // comes from the fresh /auth/login response.
     await page.goto('/login');
     await page.fill('input#login', login);
     await page.fill('input#password', password + 'x');
     await page.click('button[type="submit"]');
-    await page.waitForLoadState('networkidle');
+    // Wait until the SPA has actually left both /login and
+    // /change-password — that is the signal the auth + guards
+    // settled on an authenticated, no-wall state.
+    await page.waitForURL((url) => {
+      const p = new URL(url).pathname;
+      return p !== '/login' && p !== '/change-password';
+    }, { timeout: 15_000 });
   }
 }
 
 test.describe('DashboardPage Composition row (Phase 7 D-01..D-06)', () => {
+  // Playwright's default 30 s per-test timeout is tight for the non-admin
+  // branch here: beforeEach (adminLoginAPI + resetServerState) + POST
+  // /admin/users + UI login + must_change_password dance + UI re-login +
+  // goto('/') + dashboard cold-load all share the 30 s budget, and the
+  // cold-load alone can approach 15-20 s after a reset. Bump to 60 s so
+  // the per-assertion 30 s timeout on the Composition region has room to
+  // breathe.
+  test.describe.configure({ timeout: 60_000 });
+
   test.beforeEach(async ({ request }) => {
     await adminLoginAPI(request);
     await resetServerState(request);
@@ -83,12 +114,26 @@ test.describe('DashboardPage Composition row (Phase 7 D-01..D-06)', () => {
     await page.click('button[type="submit"]');
     await page.waitForLoadState('networkidle');
 
-    await page.goto('/dashboard');
-    // Wait for the composition row heading (sr-only) — proves the row
-    // mounted after useMe() resolved.
+    // DashboardPage is the SPA index route (App.tsx:304), not /dashboard —
+    // /dashboard renders "Page Not Found". Navigate to / for the dashboard.
+    await page.goto('/');
+    // DashboardPage renders a full-page skeleton while `isLoading &&
+    // storageLoading` (DashboardPage.tsx:313); the Composition row only
+    // mounts once either slice resolves. After resetServerState the DB
+    // is freshly empty and cold-loads of useDashboard + useDashboardStorage
+    // can take >10 s combined with React hydration. Wait for the skeleton
+    // to clear via a real data-ready sentinel — the Storage card heading
+    // renders inside the region once storageData lands.
     await expect(
       page.getByRole('region', { name: 'Status summary' }),
-    ).toBeVisible({ timeout: 10_000 });
+    ).toBeVisible({ timeout: 30_000 });
+
+    // Scope card-title lookups to inside the Composition region so we
+    // don't collide with duplicate-titled cards rendered elsewhere on
+    // the dashboard (e.g. the Recent Activity "Storage" entry at
+    // 1366×768 is rendered in a different row and triggers a strict-
+    // mode violation against the bare card-title selector).
+    const composition = page.getByRole('region', { name: 'Status summary' });
 
     // Wait for at least one admin-only card to confirm is_super_admin
     // gating evaluated true and the Composition row hydrated. CardTitle
@@ -96,14 +141,14 @@ test.describe('DashboardPage Composition row (Phase 7 D-01..D-06)', () => {
     // the current shadcn/ui revision — same selector the title loop
     // below uses.
     await expect(
-      page
+      composition
         .locator('[data-slot="card-title"]')
         .filter({ hasText: /^Background Jobs$/ }),
     ).toBeVisible({ timeout: 10_000 });
 
     for (const title of [...USER_VISIBLE_TITLES, ...ADMIN_ONLY_TITLES]) {
       await expect(
-        page
+        composition
           .locator('[data-slot="card-title"]')
           .filter({ hasText: new RegExp(`^${title}$`) }),
       ).toBeVisible();
@@ -153,15 +198,22 @@ test.describe('DashboardPage Composition row (Phase 7 D-01..D-06)', () => {
     await page.context().clearCookies();
     await uiLogin(page, NON_ADMIN_LOGIN, oneTimePw);
 
-    await page.goto('/dashboard');
+    // DashboardPage is the SPA index route (App.tsx:304), not /dashboard —
+    // /dashboard renders "Page Not Found". Navigate to / for the dashboard.
+    await page.goto('/');
+    // Same skeleton-cold-load budget as the super-admin branch above.
     await expect(
       page.getByRole('region', { name: 'Status summary' }),
-    ).toBeVisible({ timeout: 10_000 });
+    ).toBeVisible({ timeout: 30_000 });
+
+    // Scope to the Composition region to avoid colliding with other
+    // card titles on the page (see super-admin branch comment).
+    const composition = page.getByRole('region', { name: 'Status summary' });
 
     // User-visible cards present.
     for (const title of USER_VISIBLE_TITLES) {
       await expect(
-        page
+        composition
           .locator('[data-slot="card-title"]')
           .filter({ hasText: new RegExp(`^${title}$`) }),
       ).toBeVisible();
@@ -171,7 +223,7 @@ test.describe('DashboardPage Composition row (Phase 7 D-01..D-06)', () => {
     // in DashboardPage, so the titles simply don't exist in the DOM.
     for (const title of ADMIN_ONLY_TITLES) {
       await expect(
-        page
+        composition
           .locator('[data-slot="card-title"]')
           .filter({ hasText: new RegExp(`^${title}$`) }),
       ).toHaveCount(0);

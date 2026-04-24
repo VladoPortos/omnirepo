@@ -466,10 +466,12 @@ func (d Deps) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 	}
 	hash, err := auth.HashPassword(req.New)
 	if err != nil {
+		slog.ErrorContext(r.Context(), "auth.change_password.hash_failed", "user_id", a.ID, "err", err)
 		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
 	}
 	if err := d.Users.UpdatePasswordHash(r.Context(), a.ID, hash); err != nil {
+		slog.ErrorContext(r.Context(), "auth.change_password.update_failed", "user_id", a.ID, "err", err)
 		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
 	}

@@ -43,13 +43,40 @@ func TestParseSdistFilename(t *testing.T) {
 		// PEP 440 epoch segment still starts with a digit.
 		{"foo-1!2.0.tar.gz", "foo", "1!2.0", false},
 
+		// PYPIFIX-02 (Phase 03): multi-candidate scan with pep440.Validate
+		// gate. See .planning/phases/03-pypi-parser-hardening/03-CONTEXT.md
+		// D-19 for the rationale behind each row.
+		//
+		// F-07.5 Q1: first boundary "f-" has candidate "2do-1.0.0" which
+		// fails Validate; second boundary "f-2do-" has candidate "1.0.0"
+		// which passes. Leftmost-valid wins → ("f-2do", "1.0.0").
+		{"f-2do-1.0.0.tar.gz", "f-2do", "1.0.0", false},
+		// First boundary "py-" has candidate "3-thing-1.0.0" — starts with
+		// "3" but the trailing "-thing-1.0.0" doesn't match PEP 440 so it
+		// fails Validate. Second boundary's candidate "1.0.0" passes.
+		{"py3-thing-1.0.0.tar.gz", "py3-thing", "1.0.0", false},
+		// Local version: "1.0.0+local" passes Validate on the first valid
+		// boundary.
+		{"foo-1.0.0+local.tar.gz", "foo", "1.0.0+local", false},
+		// Alphabetic segment "abc" does not create a false boundary (no
+		// digit follows the first "-"). Scan finds the "-<digit>" boundary
+		// after "abc" and the candidate "1.0.0" passes Validate.
+		{"foo-abc-1.0.0.tar.gz", "foo-abc", "1.0.0", false},
+		// Only "-<digit>" boundary's candidate is "2do" which fails
+		// Validate; no other boundary; error.
+		{"foo-2do.tar.gz", "", "", true},
+		// PEP 503 permits digit-leading names. The scan starts at i=1 so
+		// the leading '1' is part of the name and the first candidate
+		// boundary is the "-" at index 4 with candidate "1.0.0".
+		{"1pkg-1.0.0.tar.gz", "1pkg", "1.0.0", false},
+
 		// Degenerate inputs.
-		{"foo.tar.gz", "", "", true},           // no dash → no split
-		{"-1.0.tar.gz", "", "", true},          // empty name
-		{"foo-.tar.gz", "", "", true},          // empty version
-		{"foo-abc.tar.gz", "", "", true},       // version must start with digit
-		{"foo-1.0.0.tar", "", "", true},        // unsupported ext
-		{"foo-1.0.0", "", "", true},            // no ext
+		{"foo.tar.gz", "", "", true},     // no dash → no split
+		{"-1.0.tar.gz", "", "", true},    // empty name
+		{"foo-.tar.gz", "", "", true},    // empty version
+		{"foo-abc.tar.gz", "", "", true}, // version must start with digit
+		{"foo-1.0.0.tar", "", "", true},  // unsupported ext
+		{"foo-1.0.0", "", "", true},      // no ext
 	}
 
 	for _, c := range cases {
@@ -91,7 +118,13 @@ func TestParseWheelFilename(t *testing.T) {
 		{"REQUESTS-2.33.1-PY3-NONE-ANY.WHL", "REQUESTS", "2.33.1", false},
 		{"foo-1.0.0-py3-none-any.Whl", "foo", "1.0.0", false},
 
-		{"foo-1.0.0.whl", "", "", true},   // only 2 segments
+		// PYPIFIX-02 (Phase 03): Validate gate on parts[1] — malformed
+		// version slot now returns an error (previously returned
+		// parts[0], parts[1] with no version-shape check).
+		{"foo-notaver-py3-none-any.whl", "", "", true},
+		{"foo-1.0.0.dev1-py3-none-any.whl", "foo", "1.0.0.dev1", false},
+
+		{"foo-1.0.0.whl", "", "", true},    // only 2 segments
 		{"foo-1.0.0.tar.gz", "", "", true}, // wrong ext
 		{"foo.whl", "", "", true},
 	}

@@ -138,6 +138,43 @@ func (r *SyncJobsRepo) MarkPermanentlyFailed(ctx context.Context, tx *sql.Tx, id
 	return nil
 }
 
+// MarkPermanentlyFailedWithLog flips status='failed' AND populates the
+// log column atomically in a single UPDATE statement. Used by the
+// Phase 5 helm partial-sync live-path (HELMRETRY-03, D-04): the pool's
+// markFailed helm branch calls this after recognising a PartialSyncErr
+// so the sync_jobs row carries the partial-progress JSON
+// ({"partial":true,"files_persisted":N,"files_expected":M}) in the
+// same write that flips the terminal status.
+//
+// Atomicity invariant (D-04): any reader observing status='failed' on
+// a row written by this method ALWAYS observes the populated log
+// column too — they are set in ONE tx.ExecContext call, so no
+// intermediate two-UPDATE window can expose status-without-log.
+// Enforced by TestSyncJobsRepo_MarkPermanentlyFailedWithLog via a
+// single SELECT status, last_error, log ... Scan(...) call.
+//
+// leased_by / leased_at are intentionally NOT cleared (unlike
+// RecoverStale): this is a terminal write, so stale lease values
+// become informative residue for post-mortem debugging (which worker
+// was running, when it started).
+func (r *SyncJobsRepo) MarkPermanentlyFailedWithLog(
+	ctx context.Context, tx *sql.Tx,
+	id int64, errMsg, logJSON string,
+) error {
+	_, err := tx.ExecContext(ctx, `
+		UPDATE sync_jobs
+		SET status='failed',
+		    last_error = ?,
+		    log        = ?,
+		    updated_at = CURRENT_TIMESTAMP
+		WHERE id = ?
+	`, errMsg, logJSON, id)
+	if err != nil {
+		return fmt.Errorf("sync_jobs: mark_perm_failed_with_log %d: %w", id, err)
+	}
+	return nil
+}
+
 // SetProgress persists the (step, done, total) triple for a running job.
 // Runs against the writer pool without a caller-supplied tx — progress
 // writes are fire-and-forget from the protocol handlers and must not

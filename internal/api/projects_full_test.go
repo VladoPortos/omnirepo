@@ -178,3 +178,60 @@ func TestProjectsFull_NonMemberDenied(t *testing.T) {
 		t.Fatalf("expected 403, got %d", resp.StatusCode)
 	}
 }
+
+// TestHandleGetProject_MemberRoles verifies GET /projects/{name} response
+// members[] entries each carry a "role" field matching the DB state (D-17).
+func TestHandleGetProject_MemberRoles(t *testing.T) {
+	s := newTestServer(t)
+	_, _ = seedTestUser(t, s.db, "super", "s@x", true, false)
+	aliceID, _ := seedTestUser(t, s.db, "alice", "a@x", false, false)
+	bobID, _ := seedTestUser(t, s.db, "bob", "b@x", false, false)
+	superCookie, _, _ := s.login(t, "super", "pw-super")
+	aliceCookie, _, _ := s.login(t, "alice", "pw-alice")
+
+	ctx := context.Background()
+	pid, _ := s.deps.Projects.Create(ctx, "role-proj", "")
+	// alice = maintainer, bob = viewer
+	_ = s.deps.Members.Add(ctx, pid, aliceID, "maintainer")
+	_ = s.deps.Members.Add(ctx, pid, bobID, "viewer")
+
+	// login as alice (a project member) to fetch project detail
+	_ = superCookie
+	resp, body := s.do(t, "GET", "/api/v1/projects/role-proj", aliceCookie, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /projects/role-proj: status=%d body=%v", resp.StatusCode, body)
+	}
+
+	rawMembers, ok := body["members"].([]any)
+	if !ok {
+		t.Fatalf("members missing or wrong type; body=%v", body)
+	}
+	if len(rawMembers) != 2 {
+		t.Fatalf("expected 2 members, got %d: %v", len(rawMembers), rawMembers)
+	}
+
+	// Build a map login → role from the response.
+	roleByLogin := make(map[string]string)
+	for _, raw := range rawMembers {
+		m, ok := raw.(map[string]any)
+		if !ok {
+			t.Fatalf("member entry not an object: %v", raw)
+		}
+		login, _ := m["login"].(string)
+		role, _ := m["role"].(string)
+		if login == "" {
+			t.Fatalf("member entry missing login: %v", m)
+		}
+		if role == "" {
+			t.Fatalf("member entry missing role: %v", m)
+		}
+		roleByLogin[login] = role
+	}
+
+	if roleByLogin["alice"] != "maintainer" {
+		t.Fatalf("alice role=%q, want 'maintainer'; all roles=%v", roleByLogin["alice"], roleByLogin)
+	}
+	if roleByLogin["bob"] != "viewer" {
+		t.Fatalf("bob role=%q, want 'viewer'; all roles=%v", roleByLogin["bob"], roleByLogin)
+	}
+}

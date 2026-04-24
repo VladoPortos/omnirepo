@@ -665,12 +665,17 @@ type MaintenanceToggle struct {
 
 // MeResponse defines model for MeResponse.
 type MeResponse struct {
-	AvatarSeed         *string `json:"avatar_seed,omitempty"`
-	Email              string  `json:"email"`
-	Id                 int64   `json:"id"`
-	IsSuperAdmin       bool    `json:"is_super_admin"`
-	Login              string  `json:"login"`
-	MustChangePassword bool    `json:"must_change_password"`
+	AvatarSeed         *string           `json:"avatar_seed,omitempty"`
+	Email              string            `json:"email"`
+	Id                 int64             `json:"id"`
+	IsSuperAdmin       bool              `json:"is_super_admin"`
+	Login              string            `json:"login"`
+	MustChangePassword bool              `json:"must_change_password"`
+	// ProjectRoles maps project name → caller's role ("maintainer" or
+	// "viewer"). Omitted for super-admin callers (they bypass via
+	// IsSuperAdmin) and for unauthenticated callers. Populated by
+	// handleMe via MembersRepo.ListProjectRolesByNameForUser (D-16).
+	ProjectRoles       map[string]string `json:"project_roles,omitempty"`
 }
 
 // MeUpdateRequest defines model for MeUpdateRequest.

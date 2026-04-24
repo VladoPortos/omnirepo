@@ -106,6 +106,34 @@ func (r *MembersRepo) CountMaintainers(ctx context.Context, projectID int64) (in
 	return n, nil
 }
 
+// ListProjectRolesByNameForUser returns a map of projectName → role for every
+// non-deleted project the user is a member of. Returns a non-nil empty map
+// (not error) when the user has no memberships. Used by handleMe to populate
+// the project_roles field without an N+1 lookup (the JOIN provides names
+// directly). Policy enforcement uses ListProjectRolesForUser (id-keyed);
+// serialisation uses this method.
+func (r *MembersRepo) ListProjectRolesByNameForUser(ctx context.Context, userID int64) (map[string]string, error) {
+	rows, err := r.db.Reader.QueryContext(ctx, `
+		SELECT p.name, pm.role
+		FROM project_members pm
+		JOIN projects p ON p.id = pm.project_id
+		WHERE pm.user_id=? AND p.deleted_at IS NULL
+	`, userID)
+	if err != nil {
+		return nil, fmt.Errorf("members: list roles by name for user %d: %w", userID, err)
+	}
+	defer func() { _ = rows.Close() }()
+	out := make(map[string]string)
+	for rows.Next() {
+		var name, role string
+		if err := rows.Scan(&name, &role); err != nil {
+			return nil, fmt.Errorf("members: scan: %w", err)
+		}
+		out[name] = role
+	}
+	return out, rows.Err()
+}
+
 // ListProjectRolesForUser returns a map of projectID → role for every
 // non-deleted project the user is a member of. Returns a non-nil empty map
 // (not error) when the user has no memberships. Used by ResolveMembership

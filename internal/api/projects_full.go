@@ -142,6 +142,7 @@ type projectMember struct {
 	UserID int64  `json:"user_id"`
 	Login  string `json:"login"`
 	Email  string `json:"email"`
+	Role   string `json:"role"`
 }
 
 type projectRepo struct {
@@ -274,16 +275,25 @@ func (d Deps) handleGetProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	memberIDs, _ := d.Members.ListUserIDsInProject(r.Context(), p.ID)
-	members := make([]projectMember, 0, len(memberIDs))
-	for _, uid := range memberIDs {
-		u, err := d.Users.FindByID(r.Context(), uid)
-		if err != nil {
-			continue
+	// Single JOIN query returns members with their roles in one round-trip
+	// (avoids the old N+1 FindByID loop). pm.role is the Phase 2 RBAC
+	// column added by migration 034; D-17 requires it on every member entry.
+	memberRows, mErr := d.DB.Reader.QueryContext(r.Context(), `
+		SELECT pm.user_id, u.login, u.email, pm.role
+		FROM project_members pm
+		JOIN users u ON u.id = pm.user_id
+		WHERE pm.project_id = ? AND u.deleted_at IS NULL
+		ORDER BY u.login
+	`, p.ID)
+	members := make([]projectMember, 0)
+	if mErr == nil {
+		defer func() { _ = memberRows.Close() }()
+		for memberRows.Next() {
+			var m projectMember
+			if err := memberRows.Scan(&m.UserID, &m.Login, &m.Email, &m.Role); err == nil {
+				members = append(members, m)
+			}
 		}
-		members = append(members, projectMember{
-			UserID: u.ID, Login: u.Login, Email: u.Email,
-		})
 	}
 
 	repos, _ := d.Repos.ListByProject(r.Context(), p.ID)

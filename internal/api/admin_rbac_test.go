@@ -293,3 +293,104 @@ func seedTestUserID(t *testing.T, db *metadata.DB, login string) int64 {
 	}
 	return u.ID
 }
+
+// TestHandleMe_ProjectRoles_MemberUser verifies GET /me for a user who is a
+// member of two projects returns project_roles with correct role per project.
+func TestHandleMe_ProjectRoles_MemberUser(t *testing.T) {
+	s := newTestServer(t)
+	seedTestUser(t, s.db, "super", "s@x", true, false)
+	memberID, _ := seedTestUser(t, s.db, "member", "m@x", false, false)
+	superCookie, _, _ := s.login(t, "super", "pw-super")
+	memberCookie, _, _ := s.login(t, "member", "pw-member")
+
+	// Create two projects (super-admin is not auto-added to project_members per D-04).
+	s.do(t, "POST", "/api/v1/projects", superCookie, api.CreateProjectRequest{Name: "proj-a"})
+	s.do(t, "POST", "/api/v1/projects", superCookie, api.CreateProjectRequest{Name: "proj-b"})
+
+	// Add member as maintainer on proj-a, viewer on proj-b.
+	rbacAddMember(t, s.db, rbacProjectID(t, s.db, "proj-a"), memberID, "maintainer")
+	rbacAddMember(t, s.db, rbacProjectID(t, s.db, "proj-b"), memberID, "viewer")
+
+	resp, body := s.do(t, "GET", "/api/v1/me", memberCookie, nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("GET /me status=%d body=%v", resp.StatusCode, body)
+	}
+
+	roles, ok := body["project_roles"].(map[string]any)
+	if !ok {
+		t.Fatalf("project_roles missing or wrong type; body=%v", body)
+	}
+	if roles["proj-a"] != "maintainer" {
+		t.Fatalf("proj-a role=%q, want 'maintainer'", roles["proj-a"])
+	}
+	if roles["proj-b"] != "viewer" {
+		t.Fatalf("proj-b role=%q, want 'viewer'", roles["proj-b"])
+	}
+	if len(roles) != 2 {
+		t.Fatalf("expected 2 entries in project_roles, got %d: %v", len(roles), roles)
+	}
+}
+
+// TestHandleMe_ProjectRoles_SuperAdminEmpty verifies GET /me for a super-admin
+// returns project_roles absent (omitempty) — super-admins bypass via is_super_admin.
+func TestHandleMe_ProjectRoles_SuperAdminEmpty(t *testing.T) {
+	s := newTestServer(t)
+	seedTestUser(t, s.db, "super", "s@x", true, false)
+	superCookie, _, _ := s.login(t, "super", "pw-super")
+
+	resp, body := s.do(t, "GET", "/api/v1/me", superCookie, nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("GET /me status=%d body=%v", resp.StatusCode, body)
+	}
+
+	// project_roles must be absent or an empty map per D-16.
+	if pr, exists := body["project_roles"]; exists {
+		if m, ok := pr.(map[string]any); !ok || len(m) != 0 {
+			t.Fatalf("super-admin project_roles should be absent or empty map; got %v", pr)
+		}
+	}
+}
+
+// TestHandleMe_ProjectRoles_AnonymousNull verifies GET /me without auth returns null body.
+func TestHandleMe_ProjectRoles_AnonymousNull(t *testing.T) {
+	s := newTestServer(t)
+
+	resp, body := s.do(t, "GET", "/api/v1/me", "" /* no cookie */, nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("GET /me anon status=%d", resp.StatusCode)
+	}
+	// handleMe writes JSON null for unauthenticated callers; the parsed map will be nil/empty.
+	if len(body) != 0 {
+		t.Fatalf("expected null body for anonymous /me, got %v", body)
+	}
+}
+
+// TestHandleMe_ProjectRoles_NonMemberEmpty verifies a logged-in user with no
+// project memberships gets an empty (non-null) project_roles map.
+func TestHandleMe_ProjectRoles_NonMemberEmpty(t *testing.T) {
+	s := newTestServer(t)
+	seedTestUser(t, s.db, "loner", "l@x", false, false)
+	lonerCookie, _, _ := s.login(t, "loner", "pw-loner")
+
+	resp, body := s.do(t, "GET", "/api/v1/me", lonerCookie, nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("GET /me status=%d body=%v", resp.StatusCode, body)
+	}
+
+	// project_roles should be absent (omitempty on empty map) or an empty map.
+	if pr, exists := body["project_roles"]; exists {
+		if m, ok := pr.(map[string]any); !ok || len(m) != 0 {
+			t.Fatalf("non-member project_roles should be absent or empty map; got %v", pr)
+		}
+	}
+}
+
+// rbacProjectID is a helper that looks up a project ID by name for test setup.
+func rbacProjectID(t *testing.T, db *metadata.DB, name string) int64 {
+	t.Helper()
+	p, err := metadata.NewProjectsRepo(db).FindByName(context.Background(), name)
+	if err != nil {
+		t.Fatalf("rbacProjectID(%q): %v", name, err)
+	}
+	return p.ID
+}

@@ -195,6 +195,16 @@ components:
           type: boolean
         avatar_seed:
           type: string
+        project_roles:
+          type: object
+          description: >
+            Map of project name → caller's role in that project ("maintainer"
+            or "viewer"). Omitted or empty for super-admin callers (they use
+            is_super_admin for gating). Only projects the caller is a member
+            of appear (D-16).
+          additionalProperties:
+            type: string
+            enum: [maintainer, viewer]
 
     MeUpdateRequest:
       type: object
@@ -244,6 +254,26 @@ components:
         created_at:
           type: string
           format: date-time
+        members:
+          type: array
+          description: Members of the project (only present on the detail response).
+          items:
+            type: object
+            required: [user_id, login, email, role]
+            properties:
+              user_id:
+                type: integer
+                format: int64
+              login:
+                type: string
+              email:
+                type: string
+              role:
+                type: string
+                enum: [maintainer, viewer]
+                description: >
+                  Role of this member in the project. "maintainer" has full
+                  write access; "viewer" has read-only access (D-17).
 
     ProjectCreate:
       type: object

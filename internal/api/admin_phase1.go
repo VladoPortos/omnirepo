@@ -537,6 +537,15 @@ func (d Deps) handleMe(w http.ResponseWriter, r *http.Request) {
 		s := u.AvatarSeed
 		resp.AvatarSeed = &s
 	}
+	// D-16: populate project_roles for non-super-admin users only.
+	// Super-admins bypass all membership checks via IsSuperAdmin, so an
+	// empty map would be misleading. On lookup error we leave the field
+	// absent (omitempty) rather than failing the whole /me response.
+	if !u.IsSuperAdmin {
+		if roles, rerr := d.Members.ListProjectRolesByNameForUser(r.Context(), u.ID); rerr == nil {
+			resp.ProjectRoles = roles
+		}
+	}
 	writeJSON(w, http.StatusOK, resp)
 }
 

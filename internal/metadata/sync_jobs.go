@@ -365,3 +365,40 @@ func (r *SyncJobsRepo) RecoverStale(ctx context.Context, tx *sql.Tx, olderThan t
 	n, _ := res.RowsAffected()
 	return int(n), nil
 }
+
+// RecoverStaleByKind is the kind-scoped counterpart to RecoverStale
+// introduced for Phase 5 boot recovery (HELMRETRY-03, D-03b). Rather
+// than re-pending stale 'running' rows, it terminates them at the
+// caller-chosen terminalStatus ('failed' for helm_sync per D-01) and
+// populates sync_jobs.log with the caller-supplied JSON in the SAME
+// UPDATE statement (D-04 atomicity). The kind filter in the WHERE
+// clause preserves the D-02 scope boundary: non-matching sync kinds
+// retain the existing generic RecoverStale retry semantics.
+//
+// last_error is set to a stable sentinel ("stale running row
+// terminated at boot") so Phase 7 drift-purge / Phase 6 scheduler
+// consumers can distinguish crash-path terminations from the live-
+// path PartialSyncErr writes made by MarkPermanentlyFailedWithLog.
+//
+// leased_by / leased_at are intentionally NOT cleared — this is a
+// terminal write, so stale lease values remain as forensic residue.
+//
+// Returns the number of rows affected.
+func (r *SyncJobsRepo) RecoverStaleByKind(
+	ctx context.Context, tx *sql.Tx,
+	olderThan time.Time, kind, terminalStatus, logJSON string,
+) (int, error) {
+	res, err := tx.ExecContext(ctx, `
+		UPDATE sync_jobs
+		SET status     = ?,
+		    log        = ?,
+		    last_error = 'stale running row terminated at boot',
+		    updated_at = CURRENT_TIMESTAMP
+		WHERE status='running' AND kind=? AND leased_at < ?
+	`, terminalStatus, logJSON, kind, olderThan.UTC())
+	if err != nil {
+		return 0, fmt.Errorf("sync_jobs: recover_stale_by_kind %s: %w", kind, err)
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
+}

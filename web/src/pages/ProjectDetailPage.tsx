@@ -392,7 +392,7 @@ export function ProjectDetailPage() {
                     disabled={!memberLogin || addMember.isPending}
                     onClick={async () => {
                       try {
-                        await addMember.mutateAsync(memberLogin);
+                        await addMember.mutateAsync({ login: memberLogin });
                         toast.success(`${memberLogin} added to ${project.name}.`);
                         setMemberOpen(false);
                       } catch (err) {

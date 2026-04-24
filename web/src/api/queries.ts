@@ -887,10 +887,10 @@ export function useAdminUserList({ enabled = true }: { enabled?: boolean } = {})
 export function useAddProjectMember(projectName: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (login: string) =>
+    mutationFn: ({ login, role = 'viewer' }: { login: string; role?: 'maintainer' | 'viewer' }) =>
       api.post<void>(
         `/projects/${enc(projectName)}/members/${enc(login)}`,
-        undefined,
+        { role },
       ),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['projects', projectName] });
@@ -903,6 +903,20 @@ export function useRemoveProjectMember(projectName: string) {
   return useMutation({
     mutationFn: (login: string) =>
       api.del<void>(`/projects/${enc(projectName)}/members/${enc(login)}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['projects', projectName] });
+    },
+  });
+}
+
+export function useUpdateProjectMemberRole(projectName: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ login, role }: { login: string; role: 'maintainer' | 'viewer' }) =>
+      api.patch<void>(
+        `/projects/${enc(projectName)}/members/${enc(login)}`,
+        { role },
+      ),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['projects', projectName] });
     },

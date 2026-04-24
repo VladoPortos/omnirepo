@@ -94,6 +94,13 @@ export interface MeResponse {
   is_super_admin: boolean;
   must_change_password: boolean;
   avatar_seed: string;
+  /**
+   * Map of project name → caller's role ("maintainer" or "viewer").
+   * Omitted by the server for super-admin callers (they gate via is_super_admin)
+   * and by pre-Phase-2 servers (hence optional). Empty map means the caller is
+   * not a member of any project (D-16).
+   */
+  project_roles?: Record<string, 'maintainer' | 'viewer'>;
 }
 
 export interface MeUpdateRequest {
@@ -139,6 +146,8 @@ export interface ProjectMember {
   user_id: number;
   login: string;
   email: string;
+  /** Role of this member in the project. Required — post-Phase-2 server always sends it (D-17). */
+  role: 'maintainer' | 'viewer';
 }
 
 export interface ProjectRepo {

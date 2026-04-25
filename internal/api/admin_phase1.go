@@ -462,8 +462,11 @@ func (d Deps) handleLogout(w http.ResponseWriter, r *http.Request) {
 	}
 	auth.ClearSessionCookie(w)
 	if a, ok := auth.ActorFromContext(r.Context()); ok {
-		uid := a.ID
-		d.recordAudit(r, audit.Event{Kind: audit.EvtAuthLogout, ActorUserID: &uid})
+		// /auth/logout sits inside the SessionOrAPIKey-mounted subgroup
+		// (line ~227), so the actor can be a project-owned API key.
+		// recordAuditAs maps owner kind correctly so we never write
+		// actor_user_id = 0 (FK violation closed for AuthLogout).
+		d.recordAuditAs(r, audit.Event{Kind: audit.EvtAuthLogout}, a)
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
@@ -799,12 +802,13 @@ func (d Deps) handleAddMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if a, ok := auth.ActorFromContext(r.Context()); ok {
-		uid := a.ID
-		d.recordAudit(r, audit.Event{
-			Kind: audit.EvtMemberAdded, ActorUserID: &uid,
+		// Project-scoped admin route — reachable by project-owned API
+		// keys via membership. recordAuditAs maps owner kind correctly.
+		d.recordAuditAs(r, audit.Event{
+			Kind:       audit.EvtMemberAdded,
 			TargetKind: "project", TargetID: p.Name,
 			Details: map[string]any{"user": u.Login, "role": role}, // D-12 enrichment
-		})
+		}, a)
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
@@ -846,8 +850,8 @@ func (d Deps) handleRemoveMember(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if a, ok := auth.ActorFromContext(r.Context()); ok {
-		uid := a.ID
-		d.recordAudit(r, audit.Event{Kind: audit.EvtMemberRemoved, ActorUserID: &uid, TargetKind: "project", TargetID: p.Name, Details: map[string]any{"user": u.Login}})
+		// Project-scoped admin route — reachable by project-owned API keys.
+		d.recordAuditAs(r, audit.Event{Kind: audit.EvtMemberRemoved, TargetKind: "project", TargetID: p.Name, Details: map[string]any{"user": u.Login}}, a)
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
@@ -933,11 +937,10 @@ func (d Deps) handlePatchMember(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// D-11 audit emission: exactly three keys — user, old_role, new_role.
+	// Project-scoped — reachable by project-owned API keys via membership.
 	if a, ok2 := auth.ActorFromContext(r.Context()); ok2 {
-		uid := a.ID
-		d.recordAudit(r, audit.Event{
+		d.recordAuditAs(r, audit.Event{
 			Kind:       audit.EvtMemberRoleChanged,
-			ActorUserID: &uid,
 			TargetKind: "project",
 			TargetID:   p.Name,
 			Details: map[string]any{
@@ -945,7 +948,7 @@ func (d Deps) handlePatchMember(w http.ResponseWriter, r *http.Request) {
 				"old_role": currentRole,
 				"new_role": req.Role,
 			},
-		})
+		}, a)
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
@@ -1138,15 +1141,15 @@ func (d Deps) handleDeleteRepo(w http.ResponseWriter, r *http.Request) {
 			// DB row is already soft-deleted.
 			if !errors.Is(err, context.Canceled) && !errors.Is(err, os.ErrNotExist) {
 				if a, ok := auth.ActorFromContext(r.Context()); ok {
-					uid := a.ID
-					d.recordAudit(r, audit.Event{Kind: audit.EvtRepoDeleted, ActorUserID: &uid, TargetKind: "repo", TargetID: projectName + "/" + typ + "/" + repoName, Outcome: "trash_move_failed", Details: map[string]any{"err": err.Error()}})
+					// Project-scoped — reachable by project-owned API keys.
+					d.recordAuditAs(r, audit.Event{Kind: audit.EvtRepoDeleted, TargetKind: "repo", TargetID: projectName + "/" + typ + "/" + repoName, Outcome: "trash_move_failed", Details: map[string]any{"err": err.Error()}}, a)
 				}
 			}
 		}
 	}
 	if a, ok := auth.ActorFromContext(r.Context()); ok {
-		uid := a.ID
-		d.recordAudit(r, audit.Event{Kind: audit.EvtRepoDeleted, ActorUserID: &uid, TargetKind: "repo", TargetID: projectName + "/" + typ + "/" + repoName})
+		// Project-scoped — reachable by project-owned API keys.
+		d.recordAuditAs(r, audit.Event{Kind: audit.EvtRepoDeleted, TargetKind: "repo", TargetID: projectName + "/" + typ + "/" + repoName}, a)
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }

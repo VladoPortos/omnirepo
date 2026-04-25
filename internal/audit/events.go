@@ -220,4 +220,40 @@ const (
 	// emission lands in plan 11-06.
 	EvtOciTagRebound         EventKind = "mirror.oci.tag_rebound"
 	EvtMirrorSyncLFSDetected EventKind = "mirror.sync.lfs_detected"
+
+	// v1.5 Phase 6 — Drift purge (DRIFTPURGE-03, D-19 + D-20).
+	//
+	// EvtMirrorDriftPurged: emitted by plan 06-07 (internal/protocol/*/sync_handler.go)
+	// after a successful drift diff with drift_count > 0. details_json per D-19:
+	//
+	//   {
+	//     "protocol":     "pypi"|"rpm"|"deb"|"helm",
+	//     "count":        int64,        // PurgedCount from driftpurge.DriftReport
+	//     "sample":       []string,     // lex-sorted first-20 filenames (D-18)
+	//     "sync_job_id":  int64,
+	//     "upstream_url": string
+	//   }
+	//
+	// Zero-count emission is intentionally skipped (D-10). Run evidence for
+	// zero-drift syncs lives in sync_jobs.summary.drift_purged (plan 06-07
+	// writes this integer key unconditionally when drift detection ran).
+	EvtMirrorDriftPurged EventKind = "mirror.drift_purged"
+
+	// EvtMirrorDriftPurgeSkipped: emitted when driftpurge.Run's empty-upstream
+	// safety guard trips (D-08). Any misparsed or empty upstream response
+	// that would otherwise wipe a populated mirror triggers this event
+	// instead. details_json per D-20:
+	//
+	//   {
+	//     "protocol":     "pypi"|"rpm"|"deb"|"helm",
+	//     "reason":       "upstream_empty",
+	//     "local_count":  int64,   // LocalCount from driftpurge.DriftReport
+	//     "sync_job_id":  int64,
+	//     "upstream_url": string
+	//   }
+	//
+	// The reason enum is currently single-valued; future v1.6 guards
+	// (percent-threshold / admin-confirm) extend it without adding new
+	// event kinds.
+	EvtMirrorDriftPurgeSkipped EventKind = "mirror.drift_purge_skipped"
 )

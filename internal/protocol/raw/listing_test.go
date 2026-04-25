@@ -44,7 +44,18 @@ func TestValidateRawPath(t *testing.T) {
 		{"percent dot-dot mixed case", "foo/%2E%2E/outside.txt", "foo/%2E%2E/outside.txt", true, true},
 		{"percent dot-dot chain", "foo/%2e%2e/%2e%2e/outside.txt", "foo/%2e%2e/%2e%2e/outside.txt", true, true},
 		{"percent nul byte", "foo/%00bar", "foo/%00bar", true, true},
-		{"malformed percent", "foo/%2x/bar", "foo/%2x/bar", true, true},
+		// RAWFIX-01: chi v5 already URL-decodes most safe percent-encodings
+		// (notably `%25` → literal `%`) before the handler sees the path.
+		// A segment containing a literal `%` followed by non-hex chars (the
+		// post-chi shape of e.g. URL `name%252x/bar` arriving as `name%2x`)
+		// must NOT be rejected as "invalid percent-encoding" — the user
+		// uploaded a file whose name contains a literal `%`. Strict still
+		// rejects `%2e%2e`-style residual traversal because chi preserves
+		// `%2e`/`%2E` literally for that exact reason.
+		{"literal percent malformed", "foo/%2x/bar", "foo/%2x/bar", false, false},
+		{"literal percent name", "name%and.bin", "name%and.bin", false, false},
+		{"literal percent at end", "foo/100%/bar", "foo/100%/bar", false, false},
+		{"literal percent multiple", "a%b%c.txt", "a%b%c.txt", false, false},
 		// F-12.1 corollary — a segment whose decoded form is NOT traversal
 		// is still allowed on both writes and reads. "%2e%2e.txt" decodes
 		// to "...txt" (three dots + ".txt"), which is a legal filename.

@@ -301,15 +301,24 @@ func (h *Handler) resolveRepoAndPathWithMode(w http.ResponseWriter, r *http.Requ
 //   - cleaned path must not start with "/" (post-trim) — defense in depth
 //
 // strict adds one extra rule, applied only on write paths (PUT):
-//   - any segment whose percent-decoded form is "", ".", or ".." → error,
-//     and malformed percent-encoding → error
-//     (F-12.1: chi leaves `%2e%2e` literally in the wildcard param, so the
-//     pre-decode dotted-segment check would pass and the filesystem would
-//     store a file named `%2e%2e`. Writes reject that up-front. Reads
-//     (strict=false) do NOT apply this rule so legacy rows whose stored
-//     path contains a literal `%2e%2e` segment remain GET/HEAD/DELETEable;
-//     no filesystem escape is possible on reads because filepath.Join does
-//     not URL-decode and path.Clean below would reject any decoded "..").
+//   - any segment whose percent-decoded form is "", ".", or ".." → error.
+//     (F-12.1: chi v5 selectively decodes wildcard URL params — most
+//     percent-encodings are decoded before the handler sees them, but
+//     `%2e` / `%2E` are preserved literally to keep traversal protection
+//     intact at the routing layer. The pre-decode dotted-segment check
+//     above already catches literal `..`, so this strict block exists
+//     specifically to catch residual `%2e%2e` (or `%2e` / `%2E` mixed
+//     case) segments before they hit the filesystem. Reads (strict=false)
+//     do NOT apply this rule so legacy rows whose stored path contains a
+//     literal `%2e%2e` segment remain GET/HEAD/DELETEable; no filesystem
+//     escape is possible on reads because filepath.Join does not URL-
+//     decode and path.Clean below would reject any decoded "..".)
+//
+//     If `url.PathUnescape` errors on a segment (e.g. literal `%` chars
+//     that chi already decoded from `%25` — see RAWFIX-01), the segment
+//     cannot be a residual `%2e` pattern (those are well-formed escapes
+//     that PathUnescape always succeeds on), so we fall through to the
+//     NUL check. Filenames with literal `%` are valid raw artifacts.
 func validateRawPath(raw string, strict bool) (string, error) {
 	if raw == "" {
 		return "", errors.New("empty path")
@@ -334,15 +343,20 @@ func validateRawPath(raw string, strict bool) (string, error) {
 			return "", errors.New("invalid path segment")
 		}
 		if strict {
-			decoded, derr := url.PathUnescape(seg)
-			if derr != nil {
-				return "", errors.New("invalid percent-encoding")
-			}
-			if decoded == "" || decoded == ".." || decoded == "." {
-				return "", errors.New("invalid path segment")
-			}
-			if strings.ContainsRune(decoded, '\x00') {
-				return "", errors.New("nul byte in path segment")
+			if decoded, derr := url.PathUnescape(seg); derr == nil {
+				if decoded == "" || decoded == ".." || decoded == "." {
+					return "", errors.New("invalid path segment")
+				}
+				if strings.ContainsRune(decoded, '\x00') {
+					return "", errors.New("nul byte in path segment")
+				}
+			} else {
+				// PathUnescape failed — segment contains literal `%` chars
+				// chi already decoded (e.g. `name%bin` from URL `name%25bin`).
+				// Cannot be a residual %2e/%2E pattern (those decode cleanly).
+				if strings.ContainsRune(seg, '\x00') {
+					return "", errors.New("nul byte in path segment")
+				}
 			}
 		}
 	}

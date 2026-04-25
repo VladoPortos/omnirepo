@@ -43,8 +43,47 @@ func (db *DB) WriteTx(ctx context.Context, fn func(tx *sql.Tx) error) (err error
 	if err = fn(tx); err != nil {
 		return err
 	}
+
+	// Test-only failpoint: armed via SetWriteTxFailpointForTest.
+	// Returning here triggers the deferred rollback so the test observes
+	// "fn ran AND tx rolled back" — exactly the scenario ATOMICDEL-06
+	// needs to assert filesystem-DB consistency under tx failure.
+	if fp := db.consumeWriteTxFailpoint(); fp != nil {
+		err = fp
+		return err
+	}
+
 	if err = tx.Commit(); err != nil {
 		return fmt.Errorf("metadata: commit: %w", err)
 	}
 	return nil
+}
+
+// SetWriteTxFailpointForTest arms the next WriteTx call to return err AFTER
+// fn runs but BEFORE the commit, ensuring the deferred rollback fires. Pass
+// nil to clear an unfired failpoint (e.g. test cleanup).
+//
+// Test-only: the "ForTest" suffix is a grep-gate signal that production
+// code must not call this method (Go has no compile-time test-only export
+// — the convention + acceptance grep are the gate).
+//
+// One-shot semantics: the failpoint is cleared the moment it fires.
+// Subsequent WriteTx calls run normally. Concurrency: writeTxFailpointMu
+// guards the slot so cross-goroutine arms/clears do not race the
+// in-flight WriteTx (the writer pool itself serializes WriteTx calls
+// at size-1).
+func (db *DB) SetWriteTxFailpointForTest(err error) {
+	db.writeTxFailpointMu.Lock()
+	defer db.writeTxFailpointMu.Unlock()
+	db.writeTxFailpoint = err
+}
+
+// consumeWriteTxFailpoint returns the armed error and clears the slot
+// (one-shot). Returns nil when unarmed — the production fast path.
+func (db *DB) consumeWriteTxFailpoint() error {
+	db.writeTxFailpointMu.Lock()
+	defer db.writeTxFailpointMu.Unlock()
+	fp := db.writeTxFailpoint
+	db.writeTxFailpoint = nil
+	return fp
 }

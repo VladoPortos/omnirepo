@@ -15,6 +15,7 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"sync"
 
 	_ "modernc.org/sqlite" // registers driver "sqlite"
 )
@@ -32,11 +33,22 @@ const DBTimestampLayout = "2006-01-02T15:04:05.000000000Z07:00"
 
 // DB wraps the reader/writer *sql.DB pair. Callers use DB.Reader for read
 // queries and DB.WriteTx(ctx, fn) for any writes.
+//
+// writeTxFailpoint is a one-shot test-only error injection slot consumed by
+// WriteTx (see tx.go). The slot is nil in production; SetWriteTxFailpointForTest
+// arms it. The "ForTest" suffix on the public setter is a grep-gate signal
+// that production code must not call it. The mutex guards reads (consume)
+// and writes (set) so a t.Cleanup goroutine can safely clear the slot
+// alongside an in-flight WriteTx (the writer pool itself is size-1 so
+// WriteTx calls already serialize at the database/sql layer).
 type DB struct {
 	Reader *sql.DB // SetMaxOpenConns(8)
 	Writer *sql.DB // SetMaxOpenConns(1), SetMaxIdleConns(1)
 
 	path string
+
+	writeTxFailpointMu sync.Mutex // guards writeTxFailpoint
+	writeTxFailpoint   error      // one-shot test injection (nil in production)
 }
 
 // readerPoolSize is D-10's reader-pool default (N=8).

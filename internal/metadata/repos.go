@@ -40,6 +40,13 @@ type Repo struct {
 	MirrorFilterJSON  string
 	MirrorCredID      *int64
 	ScanOnSync        bool
+
+	// DriftPurge (v1.5 Phase 6 / DRIFTPURGE-04, D-17): opt-in per-mirror
+	// flag — when true, a successful mirror sync soft-deletes local rows
+	// whose upstream key vanished. Default false on upgrade (migration 035)
+	// to preserve v1.4 additive-only behaviour. Editable via PATCH;
+	// mirror-only invariant enforced in handlePatchRepo.
+	DriftPurge bool
 }
 
 // ReposRepo owns CRUD on repos.
@@ -188,7 +195,8 @@ func (r *ReposRepo) ListByProject(ctx context.Context, projectID int64) ([]Repo,
 	rows, err := r.db.Reader.QueryContext(ctx, `
 		SELECT id, project_id, type, name, description_md, auto_scan, block_on_severity,
 		       public_read, size_bytes, created_at, deleted_at, git_max_push_bytes,
-		       is_mirror, mirror_upstream_url, mirror_filter_json, mirror_cred_id, scan_on_sync
+		       is_mirror, mirror_upstream_url, mirror_filter_json, mirror_cred_id, scan_on_sync,
+		       drift_purge
 		FROM repos WHERE project_id=? AND deleted_at IS NULL
 		ORDER BY type, name
 	`, projectID)
@@ -326,7 +334,8 @@ func (r *ReposRepo) ListAll(ctx context.Context) ([]Repo, error) {
 	rows, err := r.db.Reader.QueryContext(ctx, `
 		SELECT id, project_id, type, name, description_md, auto_scan, block_on_severity,
 		       public_read, size_bytes, created_at, deleted_at, git_max_push_bytes,
-		       is_mirror, mirror_upstream_url, mirror_filter_json, mirror_cred_id, scan_on_sync
+		       is_mirror, mirror_upstream_url, mirror_filter_json, mirror_cred_id, scan_on_sync,
+		       drift_purge
 		FROM repos WHERE deleted_at IS NULL ORDER BY project_id, type, name
 	`)
 	if err != nil {
@@ -348,7 +357,8 @@ func (r *ReposRepo) scanOne(ctx context.Context, where string, args ...any) (*Re
 	row := r.db.Reader.QueryRowContext(ctx, `
 		SELECT id, project_id, type, name, description_md, auto_scan, block_on_severity,
 		       public_read, size_bytes, created_at, deleted_at, git_max_push_bytes,
-		       is_mirror, mirror_upstream_url, mirror_filter_json, mirror_cred_id, scan_on_sync
+		       is_mirror, mirror_upstream_url, mirror_filter_json, mirror_cred_id, scan_on_sync,
+		       drift_purge
 		FROM repos WHERE `+where, args...)
 	rr, err := scanRepoRow(row)
 	if err != nil {
@@ -389,6 +399,12 @@ type UpdateFields struct {
 	MirrorCredID     *int64 // pointer-of-pointer not needed; nil means "no change", non-nil with *val == 0 means "clear"
 	MirrorCredIDSet  bool   // distinguishes "no change" from "clear to NULL"
 	ScanOnSync       *bool
+
+	// DriftPurge (v1.5 Phase 6 / DRIFTPURGE-04, D-17): nil = no change.
+	// Non-nil sets the per-repo drift_purge flag. The mirror-only invariant
+	// (drift_purge=true requires IsMirror=true) is enforced one layer up in
+	// handlePatchRepo, NOT here — direct callers must pre-validate.
+	DriftPurge *bool
 }
 
 // Update applies a partial field update to the repo identified by repoID.
@@ -435,6 +451,10 @@ func (r *ReposRepo) Update(ctx context.Context, tx *sql.Tx, repoID int64, f Upda
 		sets = append(sets, "scan_on_sync = ?")
 		args = append(args, boolInt(*f.ScanOnSync))
 	}
+	if f.DriftPurge != nil {
+		sets = append(sets, "drift_purge = ?")
+		args = append(args, boolInt(*f.DriftPurge))
+	}
 	if len(sets) > 0 {
 		args = append(args, repoID)
 		q := "UPDATE repos SET " + strings.Join(sets, ", ") + " WHERE id = ? AND deleted_at IS NULL"
@@ -451,7 +471,8 @@ func (r *ReposRepo) Update(ctx context.Context, tx *sql.Tx, repoID int64, f Upda
 	row := tx.QueryRowContext(ctx, `
 		SELECT id, project_id, type, name, description_md, auto_scan, block_on_severity,
 		       public_read, size_bytes, created_at, deleted_at, git_max_push_bytes,
-		       is_mirror, mirror_upstream_url, mirror_filter_json, mirror_cred_id, scan_on_sync
+		       is_mirror, mirror_upstream_url, mirror_filter_json, mirror_cred_id, scan_on_sync,
+		       drift_purge
 		FROM repos WHERE id = ? AND deleted_at IS NULL
 	`, repoID)
 	rr, err := scanRepoRow(row)
@@ -713,7 +734,7 @@ func extractDigests(body []byte) []string {
 
 func scanRepoRow(rs scanner) (*Repo, error) {
 	var r Repo
-	var as, pr, isMirror, scanOnSync int64
+	var as, pr, isMirror, scanOnSync, driftPurge int64
 	var deleted sql.NullTime
 	var gitMax, mirrorCredID sql.NullInt64
 	var mirrorURL, mirrorFilter sql.NullString
@@ -722,6 +743,7 @@ func scanRepoRow(rs scanner) (*Repo, error) {
 		&as, &r.BlockOnSeverity, &pr, &r.SizeBytes,
 		&r.CreatedAt, &deleted, &gitMax,
 		&isMirror, &mirrorURL, &mirrorFilter, &mirrorCredID, &scanOnSync,
+		&driftPurge,
 	); err != nil {
 		return nil, err
 	}
@@ -737,6 +759,7 @@ func scanRepoRow(rs scanner) (*Repo, error) {
 	}
 	r.IsMirror = isMirror != 0
 	r.ScanOnSync = scanOnSync != 0
+	r.DriftPurge = driftPurge != 0
 	if mirrorURL.Valid {
 		r.MirrorUpstreamURL = mirrorURL.String
 	}

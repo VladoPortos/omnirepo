@@ -31,6 +31,7 @@ import (
 	"github.com/dxc-internal/omnirepo/internal/metadata"
 	"github.com/dxc-internal/omnirepo/internal/protocol/regen"
 	"github.com/dxc-internal/omnirepo/internal/storage"
+	"github.com/dxc-internal/omnirepo/internal/streamio"
 )
 
 // SyncJobKind is the sync_jobs.kind value routed to SyncHandler.Handle.
@@ -524,19 +525,28 @@ func downloadAndHashWithProgress(ctx context.Context, client *http.Client, urlSt
 		return nil, 0, "", fmt.Errorf("%s -> %d", urlStr, resp.StatusCode)
 	}
 	hasher := sha256.New()
-	var reader io.Reader = io.LimitReader(io.TeeReader(resp.Body, hasher), 4*1024*1024*1024)
+	var reader io.Reader = io.TeeReader(resp.Body, hasher)
 	if progress != nil && accumulatedDone != nil {
 		reader = &jobs.CountingReader{R: reader, OnRead: func(n int) {
 			done := atomic.AddInt64(accumulatedDone, int64(n))
 			_ = progress.Set(ctx, step, done, total)
 		}}
 	}
-	body, err := io.ReadAll(reader)
+	// STREAMIO-06 (audit #4): fail-explicit on cap+1 instead of the
+	// previous silent-truncation idiom (full-body read through a
+	// LimitReader). The cap is a package-level var (not a const) only
+	// so tests can shrink it; no production caller mutates it.
+	body, err := streamio.ReadAllLimited(reader, maxArtifactBytes, streamio.ErrArtifactTooLarge)
 	if err != nil {
 		return nil, 0, "", fmt.Errorf("read %s: %w", urlStr, err)
 	}
 	return body, int64(len(body)), hex.EncodeToString(hasher.Sum(nil)), nil
 }
+
+// maxArtifactBytes caps the per-artifact upstream body for mirror sync
+// downloads. Test-overridable (var, not const) so cap+1 oversized-upstream
+// regression guards can run without serving multi-GiB bodies.
+var maxArtifactBytes int64 = 4 * 1024 * 1024 * 1024
 
 func openBytesReader(b []byte) io.Reader { return &bytesReader{b: b} }
 

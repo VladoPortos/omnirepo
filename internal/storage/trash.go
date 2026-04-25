@@ -34,6 +34,12 @@ type TrashEntry struct {
 	// tree was absent at delete time — e.g. a git mirror that was
 	// created but never synced). Restore re-creates the DB row and only
 	// mkdir's the parent; there is no content to rename back.
+
+	// RowSnapshot is populated for drift-purge trash entries (D-02):
+	// the sidecar carries a verbatim column map of the purged DB row
+	// so the Restore handler can UPSERT it back. Nil for non-drift
+	// entries and legacy entries written before v1.5 Phase 6.
+	RowSnapshot json.RawMessage
 }
 
 // trashMetadata is the on-disk shape of the sidecar written by Move and
@@ -51,6 +57,13 @@ type trashMetadata struct {
 	// these as metadata-only and only re-creates the DB row + target
 	// parent dir; the sync handler will populate content on first success.
 	Empty bool `json:"empty,omitempty"`
+	// RowSnapshot is populated for drift-purge trash entries (D-02):
+	// the sidecar carries a verbatim column map of the purged DB row
+	// so the Restore handler can UPSERT it back. Nil for non-drift
+	// entries and legacy entries written before v1.5 Phase 6. The
+	// omitempty tag preserves wire compatibility with old sidecars
+	// (a missing key decodes to nil RawMessage).
+	RowSnapshot json.RawMessage `json:"row_snapshot,omitempty"`
 }
 
 // Trash is the soft-delete primitive (D-31). Move renames a tree into
@@ -62,6 +75,14 @@ type trashMetadata struct {
 // an empty "deleted_by" which the UI renders as "—".
 type Trash interface {
 	Move(ctx context.Context, srcPath string, kind string, id int64, actor string) (trashPath string, err error)
+	// MoveWithSnapshot soft-deletes srcPath AND stores rowSnapshot as
+	// the sidecar's RowSnapshot field. Used by drift-purge adapters
+	// (internal/driftpurge/*_adapter.go) so Restore can UPSERT the
+	// DB row back alongside the file-tree rename. Callers that don't
+	// need row snapshotting should use Move. Passing a nil snapshot
+	// is equivalent to Move (the JSON key is omitted from the sidecar
+	// via omitempty).
+	MoveWithSnapshot(ctx context.Context, srcPath string, kind string, id int64, actor string, rowSnapshot json.RawMessage) (trashPath string, err error)
 	Restore(ctx context.Context, trashPath string, dstPath string) error
 	List(ctx context.Context) ([]TrashEntry, error)
 }
@@ -77,6 +98,21 @@ func NewTrash(root string) Trash {
 }
 
 func (t *trashImpl) Move(ctx context.Context, srcPath, kind string, id int64, actor string) (string, error) {
+	return t.moveInternal(ctx, srcPath, kind, id, actor, nil)
+}
+
+// MoveWithSnapshot is the drift-purge ingress (D-02): identical to Move
+// except that rowSnapshot is stamped into the sidecar's RowSnapshot
+// field. Passing nil is equivalent to plain Move (the JSON tag is
+// omitempty so the key never appears for nil snapshots).
+func (t *trashImpl) MoveWithSnapshot(ctx context.Context, srcPath, kind string, id int64, actor string, rowSnapshot json.RawMessage) (string, error) {
+	return t.moveInternal(ctx, srcPath, kind, id, actor, rowSnapshot)
+}
+
+// moveInternal is the shared body for Move + MoveWithSnapshot.
+// rowSnapshot is nil for plain Move; non-nil snapshots are stamped
+// into the sidecar's RowSnapshot field for drift-purge restore.
+func (t *trashImpl) moveInternal(ctx context.Context, srcPath, kind string, id int64, actor string, rowSnapshot json.RawMessage) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
@@ -116,6 +152,7 @@ func (t *trashImpl) Move(ctx context.Context, srcPath, kind string, id int64, ac
 		MovedAtUnix:   now.Unix(),
 		DeletedByUser: actor,
 		Empty:         missing,
+		RowSnapshot:   rowSnapshot,
 	}
 	if b, err := json.Marshal(meta); err == nil {
 		_ = os.WriteFile(filepath.Join(dstDir, trashMetaFile), b, 0o640)
@@ -174,6 +211,7 @@ func (t *trashImpl) List(ctx context.Context) ([]TrashEntry, error) {
 				parsed.OriginalPath = m.OriginalPath
 				parsed.DeletedByUser = m.DeletedByUser
 				parsed.Empty = m.Empty
+				parsed.RowSnapshot = m.RowSnapshot
 				// Sidecar kind/id override the holder-name parse in case
 				// the holder name was constructed before the kind format
 				// stabilized.

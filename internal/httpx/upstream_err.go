@@ -14,20 +14,48 @@ package httpx
 import (
 	"errors"
 	"regexp"
+
+	"github.com/dxc-internal/omnirepo/internal/streamio"
 )
 
 // authRegex matches "Authorization: <bytes-to-EOL-or-newline-or-quote>"
 // case-insensitively. The greedy tail-match stops at \r, \n, ", or '.
 var authRegex = regexp.MustCompile(`(?i)Authorization:\s*[^\r\n"']*`)
 
+// classifiedError wraps a scrubbed message string with a clean sentinel
+// for errors.Is propagation. The sentinel itself NEVER contains
+// credential bytes (it's a package-level errors.New from streamio), so
+// preserving the wrap chain is safe.
+type classifiedError struct {
+	msg      string
+	sentinel error
+}
+
+func (e *classifiedError) Error() string { return e.msg }
+func (e *classifiedError) Unwrap() error { return e.sentinel }
+
 // SanitizeUpstreamErr returns a new error whose Error() has any
 // Authorization header bytes replaced with "Authorization: REDACTED".
-// The original wrap chain is deliberately dropped — nested %w values can
-// retain the credential bytes inside their own formatted strings.
+//
+// The wrap chain of the input is dropped (nested %w values can retain
+// credential bytes inside their own formatted strings — T-03-06-01).
+// However, well-known sentinels (streamio.ErrArtifactTooLarge,
+// streamio.ErrMetadataTooLarge — both credential-free errors.New
+// values) are preserved via a typed wrapper so callers can still use
+// errors.Is to detect over-limit conditions (Codex P5-06). New
+// sentinels need to be added to this allow-list explicitly.
 func SanitizeUpstreamErr(err error) error {
 	if err == nil {
 		return nil
 	}
 	scrubbed := authRegex.ReplaceAllString(err.Error(), "Authorization: REDACTED")
+	for _, sentinel := range []error{
+		streamio.ErrArtifactTooLarge,
+		streamio.ErrMetadataTooLarge,
+	} {
+		if errors.Is(err, sentinel) {
+			return &classifiedError{msg: scrubbed, sentinel: sentinel}
+		}
+	}
 	return errors.New(scrubbed)
 }

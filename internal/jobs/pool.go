@@ -14,6 +14,7 @@ import (
 
 	"github.com/dxc-internal/omnirepo/internal/config"
 	"github.com/dxc-internal/omnirepo/internal/metadata"
+	"github.com/dxc-internal/omnirepo/internal/streamio"
 )
 
 // MaxLastErrorLen caps the handler-error string persisted into
@@ -302,6 +303,26 @@ func (p *Pool) markFailed(ctx context.Context, j *JobView, herr error) {
 			return p.repo.MarkPermanentlyFailedWithLog(writeCtx, tx, j.ID, safeErr, logJSON)
 		}); derr != nil {
 			slog.Error("jobs.markpermfailed_withlog.err", "pool", p.name, "id", j.ID, "err", derr)
+		}
+		return
+	}
+
+	// Codex P5-07: over-limit (artifact / metadata) errors are PERMANENT
+	// — the upstream is over the configured cap, so retrying with the
+	// same input is guaranteed to fail again. Short-circuit to terminal
+	// 'failed' status BYPASSING the retry ladder, mirroring the
+	// HELMRETRY-03 partial-sync precedent above. Same ctx-cancel
+	// fallback to context.Background() for shutdown-during-write.
+	if errors.Is(herr, streamio.ErrArtifactTooLarge) || errors.Is(herr, streamio.ErrMetadataTooLarge) {
+		safeErr := sanitizeJobError(herr)
+		writeCtx := ctx
+		if ctx.Err() != nil {
+			writeCtx = context.Background()
+		}
+		if derr := p.db.WriteTx(writeCtx, func(tx *sql.Tx) error {
+			return p.repo.MarkPermanentlyFailed(writeCtx, tx, j.ID, safeErr)
+		}); derr != nil {
+			slog.Error("jobs.markpermfailed.over_limit.err", "pool", p.name, "id", j.ID, "err", derr)
 		}
 		return
 	}

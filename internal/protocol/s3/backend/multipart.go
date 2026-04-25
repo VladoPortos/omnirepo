@@ -362,8 +362,21 @@ func (b *Backend) CompleteMultipartUpload(bucket, object string, id gofakes3.Upl
 
 // AbortMultipartUpload removes rows + staging. Idempotent: returns nil if the
 // upload is already gone.
+//
+// gofakes3's Backend interface does not pass *http.Request / context, so
+// the public method bridges to abortMultipartUploadCtx with a fresh
+// background context. Callers that DO have a context (e.g.
+// SweepOrphanMultiparts during boot recovery — Codex P2-01) call
+// abortMultipartUploadCtx directly so app shutdown can cancel
+// in-flight aborts.
 func (b *Backend) AbortMultipartUpload(bucket, object string, id gofakes3.UploadID) error {
-	ctx := context.Background()
+	return b.abortMultipartUploadCtx(context.Background(), bucket, object, id)
+}
+
+// abortMultipartUploadCtx is the ctx-aware impl of AbortMultipartUpload.
+// Internal callers (the boot sweeper) thread their lifecycle ctx so a
+// pending shutdown actually cancels DB writes / fs work.
+func (b *Backend) abortMultipartUploadCtx(ctx context.Context, bucket, object string, id gofakes3.UploadID) error {
 	uploadID := string(id)
 	_, err := b.verifyUploadOwnership(ctx, bucket, object, uploadID)
 	if err != nil {
@@ -560,7 +573,9 @@ func (b *Backend) SweepOrphanMultiparts(ctx context.Context, cutoff time.Time) (
 		if _, statErr := os.Stat(staging); statErr == nil {
 			stagingExisted = true
 		}
-		if abortErr := b.AbortMultipartUpload(bucketName, up.Key, gofakes3.UploadID(up.UploadID)); abortErr != nil {
+		// Codex P2-01: thread the ctx through abort so app-shutdown
+		// cancellation reaches in-flight DB writes / RemoveAll calls.
+		if abortErr := b.abortMultipartUploadCtx(ctx, bucketName, up.Key, gofakes3.UploadID(up.UploadID)); abortErr != nil {
 			return swept, cleanedDirs, fmt.Errorf("backend: abort stale %s: %w", up.UploadID, abortErr)
 		}
 		swept++

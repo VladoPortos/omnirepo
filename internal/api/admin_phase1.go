@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	chimw "github.com/go-chi/chi/v5/middleware"
 
 	"github.com/dxc-internal/omnirepo/internal/audit"
 	"github.com/dxc-internal/omnirepo/internal/auth"
@@ -1235,5 +1236,18 @@ func (d Deps) recordAudit(r *http.Request, e audit.Event) {
 	if e.UserAgent == "" {
 		e.UserAgent = r.Header.Get("User-Agent")
 	}
-	_ = d.Audit.Record(r.Context(), e)
+	// AUDITATTR-04 / CONTEXT D-04: surface DB-insert failures at WARN
+	// with the request id so an admin reading slog can correlate a
+	// dropped audit row with the request that should have produced it.
+	// WARN (not ERROR) matches internal/audit's existing best-effort
+	// semantics — a transient DB hiccup must not page operators, and
+	// the state change has already happened. The HTTP response is NOT
+	// aborted; audit durability remains a secondary concern (OQ-9).
+	if err := d.Audit.Record(r.Context(), e); err != nil {
+		slog.WarnContext(r.Context(), "audit.record.failed",
+			"event_kind", string(e.Kind),
+			"request_id", chimw.GetReqID(r.Context()),
+			"err", err.Error(),
+		)
+	}
 }

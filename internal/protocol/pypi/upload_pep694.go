@@ -1,7 +1,6 @@
 package pypi
 
 import (
-	"bytes"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -439,16 +438,6 @@ func (h *Handler) handleCommit(w http.ResponseWriter, r *http.Request) {
 
 	committed := make([]string, 0, len(files))
 	for _, f := range files {
-		body, err := os.ReadFile(f.TmpPath)
-		if err != nil {
-			slog.ErrorContext(r.Context(), "pypi.pep694.read_staged_failed",
-				slog.String("incident_id", chimw.GetReqID(r.Context())),
-				slog.String("filename", f.Parsed.Filename),
-				slog.Any("err", err),
-			)
-			http.Error(w, "storage error", http.StatusInternalServerError)
-			return
-		}
 		storageKey := packageStorageKey(res.project.Name, res.repo.Name, f.Parsed.Filename)
 
 		// F-07.1 (wt3) Codex follow-up #2: hold the per-(repo, filename)
@@ -480,7 +469,25 @@ func (h *Handler) handleCommit(w http.ResponseWriter, r *http.Request) {
 				handled = true
 				return
 			}
-			if _, err := h.pathStore.Put(r.Context(), storageKey, bytes.NewReader(body)); err != nil {
+			// STREAMIO-04: re-open the staged tmp file as *os.File and
+			// pass to pathStore.Put — io.Copy streams the bytes directly,
+			// avoiding the prior os.ReadFile that pulled the full body
+			// back into RAM. Move the open INSIDE the locked closure so
+			// the fd lifetime matches the critical section (no fd leak if
+			// a later check returns early).
+			putF, oerr := os.Open(f.TmpPath)
+			if oerr != nil {
+				slog.ErrorContext(r.Context(), "pypi.pep694.tmp_reopen_failed",
+					slog.String("incident_id", chimw.GetReqID(r.Context())),
+					slog.String("filename", f.Parsed.Filename),
+					slog.Any("err", oerr),
+				)
+				http.Error(w, "storage error", http.StatusInternalServerError)
+				handled = true
+				return
+			}
+			if _, err := h.pathStore.Put(r.Context(), storageKey, putF); err != nil {
+				_ = putF.Close()
 				slog.ErrorContext(r.Context(), "pypi.pep694.storage_failed",
 					slog.String("incident_id", chimw.GetReqID(r.Context())),
 					slog.String("filename", f.Parsed.Filename),
@@ -490,6 +497,7 @@ func (h *Handler) handleCommit(w http.ResponseWriter, r *http.Request) {
 				handled = true
 				return
 			}
+			_ = putF.Close()
 			if err := h.commitPyPIRow(r, res, f.Parsed); err != nil {
 				// F-07.1 race defense-in-depth: even with the outer
 				// mutex the writer-tx check can still fire if another

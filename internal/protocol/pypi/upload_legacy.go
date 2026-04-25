@@ -1,7 +1,6 @@
 package pypi
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
@@ -251,10 +250,14 @@ func (h *Handler) handleLegacyUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Promote tmp file into PathStore.
-	tmpBytes, err := os.ReadFile(tmpPath)
+	// Promote tmp file into PathStore. Re-open the staged temp file as
+	// *os.File — pathstore.Put accepts io.Reader and io.Copy's the bytes
+	// straight to the destination. Avoids the prior os.ReadFile + reader
+	// pattern that pulled the full body back into RAM (STREAMIO-04 /
+	// audit finding #3).
+	putF, err := os.Open(tmpPath)
 	if err != nil {
-		slog.ErrorContext(r.Context(), "pypi.legacy.read_tmp_failed",
+		slog.ErrorContext(r.Context(), "pypi.legacy.tmp_reopen_failed",
 			slog.String("incident_id", chimw.GetReqID(r.Context())),
 			slog.String("tmp_path", tmpPath),
 			slog.Any("err", err),
@@ -262,7 +265,8 @@ func (h *Handler) handleLegacyUpload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
-	if _, err := h.pathStore.Put(r.Context(), storageKey, bytes.NewReader(tmpBytes)); err != nil {
+	if _, err := h.pathStore.Put(r.Context(), storageKey, putF); err != nil {
+		_ = putF.Close()
 		slog.ErrorContext(r.Context(), "pypi.legacy.storage_failed",
 			slog.String("incident_id", chimw.GetReqID(r.Context())),
 			slog.String("filename", filename),
@@ -271,6 +275,7 @@ func (h *Handler) handleLegacyUpload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
+	_ = putF.Close()
 
 	if err := h.commitPyPIRow(r, res, parsed); err != nil {
 		// F-07.1 (wt3) Codex follow-up: only delete the blob we just Put

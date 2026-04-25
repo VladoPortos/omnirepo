@@ -35,3 +35,18 @@ iana-after.png
 web/src/**/*.js
 !web/src/**/*.config.js
 test-results/
+
+# Stale tsc-emitted vite config artifacts. vite reads vite.config.ts;
+# the .js/.d.ts variants shadow edits and produce silent build-config
+# regressions (BUNDLE-01..03 hit this once already).
+web/vite.config.js
+web/vite.config.d.ts
+
+# Claude Code session state (settings.local.json, scheduled task locks,
+# worktree metadata). Per-developer, never shared.
+.claude/
+
+# Local audit/walkthrough reports — generated outputs from /gsd-* and
+# similar local workflows. Per project standard "no docs unless
+# explicitly required", these stay out of the tree.
+docs/reports/

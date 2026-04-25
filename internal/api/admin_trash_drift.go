@@ -163,6 +163,19 @@ func (d Deps) handleDriftRestore(
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
+// HandleDriftRestoreForTest exposes handleDriftRestore so the api_test
+// package can drive the 409 repo-missing branch directly without the
+// full HTTP-layer round-trip. Mirrors the RecordAuditAsForTest pattern.
+// Added by v1.7 Phase 4 / UIBACK-04.
+func (d Deps) HandleDriftRestoreForTest(
+	w http.ResponseWriter,
+	r *http.Request,
+	e storage.TrashEntry,
+	id string,
+) {
+	d.handleDriftRestore(w, r, e, id)
+}
+
 // snapStr extracts a string field from a json-decoded snapshot map. Missing
 // or wrong-typed keys produce empty strings — Insert callers validate
 // non-empty fields themselves and will surface a clear error.

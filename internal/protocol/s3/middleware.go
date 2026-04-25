@@ -11,6 +11,29 @@ import (
 	"github.com/dxc-internal/omnirepo/internal/protocol/s3/sigv4"
 )
 
+// payloadSHAKey carries the SigV4-verified declared payload-SHA256 (the
+// literal x-amz-content-sha256 value: 64-hex / "UNSIGNED-PAYLOAD" /
+// "STREAMING-AWS4-HMAC-SHA256-PAYLOAD"). PutObject reads this to enforce
+// S3HARD-03 (the post-write SHA compare); multipart paths ignore it.
+// (S3HARD-02, D-02)
+type payloadSHAKey struct{}
+
+// WithPayloadSHA returns ctx annotated with the verifier-attested payload
+// SHA. SigV4Middleware is the sole production caller; tests may also seed
+// one to assert downstream behavior without standing up the full verify
+// pipeline.
+func WithPayloadSHA(ctx context.Context, sha string) context.Context {
+	return context.WithValue(ctx, payloadSHAKey{}, sha)
+}
+
+// PayloadSHAFromContext returns the declared payload SHA stashed by
+// SigV4Middleware. Returns ("", false) when absent (non-S3 routes that
+// never ran the middleware).
+func PayloadSHAFromContext(ctx context.Context) (string, bool) {
+	v, ok := ctx.Value(payloadSHAKey{}).(string)
+	return v, ok
+}
+
 // actorCtxKey stashes the auth.Actor resolved by SigV4Middleware into the
 // request context. Downstream middleware (RequireBucketAccess) reads it.
 type actorCtxKey struct{}
@@ -87,8 +110,22 @@ func SigV4Middleware(service *s3keys.Service, skew time.Duration) func(http.Hand
 				Kind:         auth.ActorKindS3Key,
 				ProjectScope: &projectID,
 			}
+			// Populate S3KeyID from the resolved s3_access_keys row. The
+			// capturingLookup path always runs ahead of the ResolveProject
+			// fallback, so lookupResult is non-nil on every successful
+			// SigV4 verify in production. The fallback path is dead code
+			// today (kept for defense-in-depth) — leave S3KeyID nil there.
+			// (S3HARD-02, D-07 prerequisite)
+			if lookupResult != nil {
+				id := lookupResult.ID
+				actor.S3KeyID = &id
+			}
 			ctx := context.WithValue(r.Context(), actorCtxKey{}, actor)
 			ctx = auth.WithActor(ctx, actor)
+			// Stash the declared payload SHA unconditionally — even for
+			// UNSIGNED-PAYLOAD and STREAMING sentinels. PutObject decides
+			// what to do based on the literal value. (S3HARD-02, D-02)
+			ctx = WithPayloadSHA(ctx, result.PayloadSHA256)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}

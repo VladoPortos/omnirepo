@@ -76,6 +76,14 @@ type Actor struct {
 	// keys and user actors — their role derives from project_members at request
 	// time via ResolveMembership.
 	APIKeyRole string
+
+	// S3KeyID is non-nil only when Kind == ActorKindS3Key. It carries the
+	// resolved s3_access_keys.id stamped by the SigV4 middleware after a
+	// successful verify, so downstream handlers (multipart attribution per
+	// S3HARD-06) can record which key initiated a request without
+	// re-querying. Other authentication middlewares (session, API key)
+	// leave this nil. (S3HARD-02, D-07 prerequisite)
+	S3KeyID *int64
 }
 
 // ctxKey is the unexported context key for Actor.

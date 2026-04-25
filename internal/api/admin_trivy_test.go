@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/dxc-internal/omnirepo/internal/api"
 	"github.com/dxc-internal/omnirepo/internal/auth"
@@ -489,4 +490,117 @@ func createTarGzWithTraversal(t *testing.T) []byte {
 	_ = tw.Close()
 	_ = gw.Close()
 	return buf.Bytes()
+}
+
+// TestAdminTrivy_DBPull_UsesConfiguredBinaryPath — Phase 06 OPSCONS-01
+// regression guard. Before this change, runTrivyDBPull invoked
+// exec.CommandContext(ctx, "trivy", ...), bypassing cfg.Trivy.BinaryPath
+// even though the scan runner (internal/scan/trivy.go) honored it. That
+// drift meant operators with a non-PATH trivy install (e.g. /opt/trivy
+// or a versioned /usr/local/lib/omnirepo/trivy-0.69.3) saw scans run
+// against the configured binary while the admin "Pull DB" button
+// shelled out to whatever happened to be on $PATH — including, in the
+// air-gapped target environment, no trivy at all → bewildering
+// "Unable to reach the Trivy database server" errors.
+//
+// The fix plumbs cfg.Trivy.BinaryPath into Deps.TrivyBinary, surfaced
+// via Deps.trivyBinary(). This test:
+//
+//  1. drops a fake "trivy" shell script into a tempdir, makes it
+//     executable, and points Deps.TrivyBinary at it
+//  2. fires POST /api/v1/admin/trivy/db/pull
+//  3. waits for the background goroutine to finish (state != running)
+//  4. asserts the script's marker file exists — which is only true if
+//     exec.CommandContext resolved Deps.TrivyBinary
+//
+// If a future refactor reverts to the hardcoded literal, exec resolves
+// "trivy" via $PATH and runs whatever real trivy is installed on the
+// dev machine (or fails with ENOENT in CI where trivy isn't on PATH);
+// either way the fake script is never invoked, the marker file never
+// appears, and this test fails with a precise message pointing at the
+// regression.
+func TestAdminTrivy_DBPull_UsesConfiguredBinaryPath(t *testing.T) {
+	binDir := t.TempDir()
+	markerDir := t.TempDir()
+	markerFile := filepath.Join(markerDir, "trivy-was-invoked")
+	scriptPath := filepath.Join(binDir, "fake-trivy")
+
+	// The fake binary writes a marker file (proving it was invoked)
+	// and creates the cache-dir/db/ layout runTrivyDBPull expects so
+	// the subsequent SwapDir succeeds and pullJob ends in "success".
+	// Args from runTrivyDBPull: image --download-db-only --cache-dir <tmp>.
+	//
+	// Note: the script intentionally writes a small marker file inside
+	// db/ so storage.SwapDir has a non-empty source directory to move.
+	script := "#!/bin/sh\n" +
+		"set -e\n" +
+		"echo \"$@\" > " + filepath.Join(markerDir, "trivy-args") + "\n" +
+		"touch " + markerFile + "\n" +
+		// $4 is the value passed for --cache-dir (positional in our argv).
+		"mkdir -p \"$4/db\"\n" +
+		"echo '{}' > \"$4/db/metadata.json\"\n"
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake binary: %v", err)
+	}
+
+	s := newTestServer(t, func(d *api.Deps) {
+		d.TrivyBinary = scriptPath
+	})
+	_, pw := seedTestUser(t, s.db, "root", "r@x", true, false)
+	cookie, _, _ := s.login(t, "root", pw)
+
+	// Kick the pull. The endpoint returns 202 immediately and runs the
+	// goroutine in the background.
+	resp, body := s.do(t, "POST", "/api/v1/admin/trivy/db/pull", cookie, nil)
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("pull start: code=%d body=%v", resp.StatusCode, body)
+	}
+
+	// Poll the status endpoint until the job leaves the "running"
+	// state. 10s window with 50ms tick is plenty for a shell script
+	// that does five `touch` calls.
+	deadline := time.Now().Add(10 * time.Second)
+	var finalState string
+	for time.Now().Before(deadline) {
+		statusResp, statusBody := s.do(t, "GET", "/api/v1/admin/trivy/db/pull/status", cookie, nil)
+		if statusResp.StatusCode != http.StatusOK {
+			t.Fatalf("pull status: code=%d", statusResp.StatusCode)
+		}
+		if state, _ := statusBody["state"].(string); state != "running" {
+			finalState = state
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if finalState == "" {
+		t.Fatalf("pull job never left state=running within 10s")
+	}
+
+	// The core assertion: the configured binary was invoked. If
+	// admin_trivy regresses to exec.CommandContext(ctx, "trivy", ...),
+	// the fake script is never run and this file never appears.
+	if _, err := os.Stat(markerFile); err != nil {
+		t.Fatalf("configured binary path not used — marker file missing at %s (err=%v); "+
+			"runTrivyDBPull likely regressed to the hardcoded \"trivy\" literal", markerFile, err)
+	}
+
+	// Belt-and-braces: the args file confirms runTrivyDBPull passed
+	// the documented argv shape (image --download-db-only --cache-dir <dir>).
+	argsBytes, err := os.ReadFile(filepath.Join(markerDir, "trivy-args"))
+	if err != nil {
+		t.Fatalf("read args marker: %v", err)
+	}
+	args := strings.TrimSpace(string(argsBytes))
+	if !strings.HasPrefix(args, "image --download-db-only --cache-dir ") {
+		t.Fatalf("unexpected argv passed to fake trivy: %q", args)
+	}
+
+	// And the pull should have completed cleanly: the fake script
+	// produced a valid db/ layout, SwapDir succeeded, and the worker
+	// flipped to "success". A "failure" here would indicate the binary
+	// was invoked but the rest of runTrivyDBPull tripped — still proves
+	// the fix, but worth surfacing for diagnosis.
+	if finalState != "success" {
+		t.Logf("pull final state=%q (binary invocation verified, but DB install path failed)", finalState)
+	}
 }

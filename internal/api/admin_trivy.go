@@ -199,6 +199,17 @@ func (d Deps) trivyDBDir() string {
 	return filepath.Join(d.DataRoot, "trivy", "db")
 }
 
+// trivyBinary resolves the trivy executable used by handleTrivyDBPull.
+// Operator overrides via cfg.Trivy.BinaryPath come in through
+// Deps.TrivyBinary; the fallback resolves "trivy" via $PATH so existing
+// tests and dev builds keep working (OPSCONS-01).
+func (d Deps) trivyBinary() string {
+	if d.TrivyBinary != "" {
+		return d.TrivyBinary
+	}
+	return "trivy"
+}
+
 // mountAdminTrivy installs Trivy DB admin endpoints on r.
 func (d Deps) mountAdminTrivy(r chi.Router) {
 	r.With(authmw.RequireCan(auth.ActionTriggerGC)).
@@ -547,7 +558,10 @@ func (d Deps) runTrivyDBPull(userID *int64) {
 		}
 	}()
 
-	cmd := exec.CommandContext(ctx, "trivy", "image", "--download-db-only", "--cache-dir", tmpDir)
+	// OPSCONS-01: resolve the trivy binary via Deps so an operator-set
+	// cfg.Trivy.BinaryPath override applies here as well as in the scan
+	// runner. Falls back to "trivy" on $PATH when unset (test default).
+	cmd := exec.CommandContext(ctx, d.trivyBinary(), "image", "--download-db-only", "--cache-dir", tmpDir)
 	output, cmdErr := cmd.CombinedOutput()
 	close(sampleDone)
 

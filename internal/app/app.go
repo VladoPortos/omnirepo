@@ -734,6 +734,12 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 		Holder:      holder,
 		DataRoot:    cfg.DataRoot,
 		TrivyDBDir:  cfg.Trivy.DBPath,
+		// OPSCONS-01: align the admin DB-pull binary lookup with the
+		// scan runner so cfg.Trivy.BinaryPath overrides apply both
+		// places. Without this the pull endpoint relied on $PATH while
+		// the scan runner used the configured absolute path — same
+		// install, two different binaries when not on PATH.
+		TrivyBinary: cfg.Trivy.BinaryPath,
 		TLSCertPath: cfg.TLS.CertPath,
 		TLSKeyPath:  cfg.TLS.KeyPath,
 		Audit:                auditLogger,

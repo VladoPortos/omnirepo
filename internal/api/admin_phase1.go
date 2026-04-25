@@ -69,6 +69,16 @@ type Deps struct {
 	// Audit finding #4.
 	TrivyDBDir string
 
+	// TrivyBinary is the absolute path to the trivy executable used by
+	// the admin DB-pull endpoint (POST /api/v1/admin/trivy/db/pull).
+	// Set by app.Run from cfg.Trivy.BinaryPath so the admin pull and the
+	// scan runner (internal/scan/trivy.go) resolve the same binary, which
+	// matters in installs where trivy is not on PATH or where multiple
+	// trivy versions co-exist (Phase 06 OPSCONS-01). When empty, falls
+	// back to the literal "trivy" (relies on $PATH) so existing tests
+	// and dev builds keep working.
+	TrivyBinary string
+
 	// TLSCertPath / TLSKeyPath are where the admin TLS upload endpoint
 	// persists live certs. When empty, fall back to DataRoot/certs/server.*.
 	// Set by app.Run from cfg.TLS.* so operator overrides work. Audit

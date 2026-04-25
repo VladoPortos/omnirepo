@@ -90,7 +90,7 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 	// operator notices (CONTEXT D-05).
 	if fileOnDisk {
 		if _, err := h.trash.Move(r.Context(), abs, "deb-package", res.repo.ID, auth.ActorLoginFromContext(r.Context())); err != nil {
-			slog.ErrorContext(r.Context(), "deb.delete.trash_failed_post_commit",
+			slog.WarnContext(r.Context(), "deb.delete.trash_failed_post_commit",
 				slog.String("incident_id", chimw.GetReqID(r.Context())),
 				slog.String("filename", filename),
 				slog.Any("err", err),

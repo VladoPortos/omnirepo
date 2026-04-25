@@ -85,7 +85,7 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 	// leaves the file orphaned at absPath (no row pointing at it); we
 	// surface 500 so the operator notices.
 	if _, err := h.trash.Move(r.Context(), absPath, "raw-file", res.repo.ID, auth.ActorLoginFromContext(r.Context())); err != nil {
-		slog.ErrorContext(r.Context(), "raw.delete.trash_failed_post_commit",
+		slog.WarnContext(r.Context(), "raw.delete.trash_failed_post_commit",
 			slog.String("incident_id", chimw.GetReqID(r.Context())),
 			slog.String("path", res.relPath),
 			slog.Any("err", err),

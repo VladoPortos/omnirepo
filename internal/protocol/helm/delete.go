@@ -99,7 +99,7 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 	// surface 500 so the operator notices (CONTEXT D-05).
 	if chartOnDisk {
 		if _, err := h.trash.Move(r.Context(), chartAbs, "helm-chart", res.repo.ID, auth.ActorLoginFromContext(r.Context())); err != nil {
-			slog.ErrorContext(r.Context(), "helm.delete.trash_failed_post_commit",
+			slog.WarnContext(r.Context(), "helm.delete.trash_failed_post_commit",
 				slog.String("incident_id", chimw.GetReqID(r.Context())),
 				slog.String("filename", res.filename),
 				slog.Any("err", err),

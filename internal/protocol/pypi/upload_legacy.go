@@ -466,7 +466,7 @@ func (h *Handler) deletePackage(w http.ResponseWriter, r *http.Request) {
 	// operator notices (CONTEXT D-02, D-05).
 	if fileOnDisk {
 		if _, err := h.trash.Move(r.Context(), abs, "pypi-file", res.repo.ID, auth.ActorLoginFromContext(r.Context())); err != nil {
-			slog.ErrorContext(r.Context(), "pypi.delete.trash_failed_post_commit",
+			slog.WarnContext(r.Context(), "pypi.delete.trash_failed_post_commit",
 				slog.String("incident_id", chimw.GetReqID(r.Context())),
 				slog.String("filename", filename),
 				slog.Any("err", err),

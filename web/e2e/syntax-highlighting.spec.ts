@@ -289,8 +289,12 @@ test.describe('FRONTFIX-03: Shiki syntax highlighting in production', () => {
     // FileViewer only writes <pre><code>...</code></pre>). Require
     // at least 5 coloured spans — trivial samples still tokenize
     // into well over that count for both Go and TypeScript.
+    // Codex P7-01 flake fix: Shiki's loadLanguage is async and may
+    // resolve AFTER the <pre.shiki> element becomes visible but BEFORE
+    // tokenization renders spans. Poll the span count instead of
+    // asserting once.
     const colouredSpans = codeBlock.locator('span[style*="color"]');
-    expect(await colouredSpans.count()).toBeGreaterThan(5);
+    await expect.poll(() => colouredSpans.count(), { timeout: 10_000 }).toBeGreaterThan(5);
 
     // Sanity: actual source text is present (tokenized but the
     // textContent concatenation reconstructs the original).
@@ -326,8 +330,12 @@ test.describe('FRONTFIX-03: Shiki syntax highlighting in production', () => {
     const codeBlock = page.locator('pre.shiki, pre[class*="shiki"]').first();
     await expect(codeBlock).toBeVisible({ timeout: 15_000 });
 
+    // Codex P7-01 flake fix: Shiki's loadLanguage is async and may
+    // resolve AFTER the <pre.shiki> element becomes visible but BEFORE
+    // tokenization renders spans. Poll the span count instead of
+    // asserting once.
     const colouredSpans = codeBlock.locator('span[style*="color"]');
-    expect(await colouredSpans.count()).toBeGreaterThan(5);
+    await expect.poll(() => colouredSpans.count(), { timeout: 10_000 }).toBeGreaterThan(5);
 
     // Sanity: TypeScript-specific tokens visible in the rendered text.
     await expect(codeBlock).toContainText('interface Counter');

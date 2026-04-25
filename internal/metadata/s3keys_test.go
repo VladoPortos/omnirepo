@@ -292,6 +292,200 @@ func TestS3KeysTouchLastUsed(t *testing.T) {
 	}
 }
 
+// TestS3KeysRepo_RevokeAllForProject pins LIFECYCLE-01 cascade behavior.
+// Given two live keys + one already-revoked key for the same project, the
+// helper must stamp exactly the live keys with the supplied cascade
+// timestamp and leave the pre-revoked key untouched.
+func TestS3KeysRepo_RevokeAllForProject(t *testing.T) {
+	t.Parallel()
+	db := sqlitetest.New(t)
+	ctx := context.Background()
+	projectID, userID := seedS3Project(t, db)
+	r := metadata.NewS3KeysRepo(db)
+
+	// Insert three keys; revoke the third with a sentinel timestamp.
+	var preRevokedID int64
+	if err := db.WriteTx(ctx, func(tx *sql.Tx) error {
+		if _, err := r.Insert(ctx, tx, &metadata.S3AccessKey{
+			ProjectID: projectID, AccessKeyID: "AKIA-CASC-1", SecretEnc: []byte("x"),
+			Label: "live1", CreatedByUserID: userID,
+		}); err != nil {
+			return err
+		}
+		if _, err := r.Insert(ctx, tx, &metadata.S3AccessKey{
+			ProjectID: projectID, AccessKeyID: "AKIA-CASC-2", SecretEnc: []byte("x"),
+			Label: "live2", CreatedByUserID: userID,
+		}); err != nil {
+			return err
+		}
+		v, err := r.Insert(ctx, tx, &metadata.S3AccessKey{
+			ProjectID: projectID, AccessKeyID: "AKIA-CASC-PRE", SecretEnc: []byte("x"),
+			Label: "pre", CreatedByUserID: userID,
+		})
+		preRevokedID = v
+		return err
+	}); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	const preTS = "1999-01-01 00:00:00"
+	if _, err := db.Writer.ExecContext(ctx,
+		`UPDATE s3_access_keys SET revoked_at=? WHERE id=?`, preTS, preRevokedID,
+	); err != nil {
+		t.Fatalf("pre-revoke: %v", err)
+	}
+
+	// Cascade revoke at a chosen TS.
+	const cascadeTS = "2026-04-25 12:34:56"
+	var n int64
+	if err := db.WriteTx(ctx, func(tx *sql.Tx) error {
+		var cErr error
+		n, cErr = r.RevokeAllForProject(ctx, tx, projectID, cascadeTS)
+		return cErr
+	}); err != nil {
+		t.Fatalf("cascade: %v", err)
+	}
+	if n != 2 {
+		t.Fatalf("RevokeAllForProject: rows=%d, want 2", n)
+	}
+
+	// Both live keys carry cascadeTS; pre-revoked key keeps preTS.
+	for _, akid := range []string{"AKIA-CASC-1", "AKIA-CASC-2"} {
+		var got sql.NullString
+		if err := db.Reader.QueryRowContext(ctx,
+			`SELECT revoked_at FROM s3_access_keys WHERE access_key_id=?`, akid,
+		).Scan(&got); err != nil {
+			t.Fatalf("read %s: %v", akid, err)
+		}
+		if !got.Valid || got.String != cascadeTS {
+			t.Fatalf("%s revoked_at=%q want %q", akid, got.String, cascadeTS)
+		}
+	}
+	var preGot sql.NullString
+	if err := db.Reader.QueryRowContext(ctx,
+		`SELECT revoked_at FROM s3_access_keys WHERE id=?`, preRevokedID,
+	).Scan(&preGot); err != nil {
+		t.Fatalf("read pre: %v", err)
+	}
+	if !preGot.Valid || preGot.String != preTS {
+		t.Fatalf("pre-revoked revoked_at=%q want %q (untouched)", preGot.String, preTS)
+	}
+
+	// Idempotency — second cascade with a different TS yields 0 rows.
+	var n2 int64
+	if err := db.WriteTx(ctx, func(tx *sql.Tx) error {
+		var cErr error
+		n2, cErr = r.RevokeAllForProject(ctx, tx, projectID, "2099-12-31 23:59:59")
+		return cErr
+	}); err != nil {
+		t.Fatalf("idempotent cascade: %v", err)
+	}
+	if n2 != 0 {
+		t.Fatalf("second cascade rows=%d want 0", n2)
+	}
+	// Cascaded keys must still hold cascadeTS, not the new TS.
+	for _, akid := range []string{"AKIA-CASC-1", "AKIA-CASC-2"} {
+		var got sql.NullString
+		_ = db.Reader.QueryRowContext(ctx,
+			`SELECT revoked_at FROM s3_access_keys WHERE access_key_id=?`, akid,
+		).Scan(&got)
+		if got.String != cascadeTS {
+			t.Fatalf("%s re-stamped to %q (not idempotent)", akid, got.String)
+		}
+	}
+}
+
+// TestS3KeysRepo_RestoreCascadedForProject pins LIFECYCLE-01 reverse
+// cascade with timestamp-equality filter. Independently revoked keys must
+// stay revoked after Restore.
+func TestS3KeysRepo_RestoreCascadedForProject(t *testing.T) {
+	t.Parallel()
+	db := sqlitetest.New(t)
+	ctx := context.Background()
+	projectID, userID := seedS3Project(t, db)
+	r := metadata.NewS3KeysRepo(db)
+
+	var preRevokedID int64
+	if err := db.WriteTx(ctx, func(tx *sql.Tx) error {
+		if _, err := r.Insert(ctx, tx, &metadata.S3AccessKey{
+			ProjectID: projectID, AccessKeyID: "AKIA-RES-1", SecretEnc: []byte("x"),
+			Label: "live1", CreatedByUserID: userID,
+		}); err != nil {
+			return err
+		}
+		if _, err := r.Insert(ctx, tx, &metadata.S3AccessKey{
+			ProjectID: projectID, AccessKeyID: "AKIA-RES-2", SecretEnc: []byte("x"),
+			Label: "live2", CreatedByUserID: userID,
+		}); err != nil {
+			return err
+		}
+		v, err := r.Insert(ctx, tx, &metadata.S3AccessKey{
+			ProjectID: projectID, AccessKeyID: "AKIA-RES-PRE", SecretEnc: []byte("x"),
+			Label: "pre", CreatedByUserID: userID,
+		})
+		preRevokedID = v
+		return err
+	}); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	const preTS = "1999-01-01 00:00:00"
+	if _, err := db.Writer.ExecContext(ctx,
+		`UPDATE s3_access_keys SET revoked_at=? WHERE id=?`, preTS, preRevokedID,
+	); err != nil {
+		t.Fatalf("pre-revoke: %v", err)
+	}
+
+	const cascadeTS = "2026-04-25 12:34:56"
+	if err := db.WriteTx(ctx, func(tx *sql.Tx) error {
+		_, err := r.RevokeAllForProject(ctx, tx, projectID, cascadeTS)
+		return err
+	}); err != nil {
+		t.Fatalf("cascade: %v", err)
+	}
+
+	// Reverse cascade with the cascadeTS marker.
+	var restored int64
+	if err := db.WriteTx(ctx, func(tx *sql.Tx) error {
+		var rErr error
+		restored, rErr = r.RestoreCascadedForProject(ctx, tx, projectID, cascadeTS)
+		return rErr
+	}); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	if restored != 2 {
+		t.Fatalf("RestoreCascadedForProject: rows=%d want 2", restored)
+	}
+	for _, akid := range []string{"AKIA-RES-1", "AKIA-RES-2"} {
+		var got sql.NullString
+		_ = db.Reader.QueryRowContext(ctx,
+			`SELECT revoked_at FROM s3_access_keys WHERE access_key_id=?`, akid,
+		).Scan(&got)
+		if got.Valid {
+			t.Fatalf("%s revoked_at=%q want NULL after restore", akid, got.String)
+		}
+	}
+	var preGot sql.NullString
+	_ = db.Reader.QueryRowContext(ctx,
+		`SELECT revoked_at FROM s3_access_keys WHERE id=?`, preRevokedID,
+	).Scan(&preGot)
+	if !preGot.Valid || preGot.String != preTS {
+		t.Fatalf("pre-revoked revoked_at=%q want %q (independent revoke must survive)", preGot.String, preTS)
+	}
+
+	// Restoring with a non-matching TS is a no-op.
+	if err := db.WriteTx(ctx, func(tx *sql.Tx) error {
+		n, rErr := r.RestoreCascadedForProject(ctx, tx, projectID, "9999-99-99 99:99:99")
+		if rErr != nil {
+			return rErr
+		}
+		if n != 0 {
+			t.Fatalf("non-match restore rows=%d want 0", n)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("non-match: %v", err)
+	}
+}
+
 func TestS3KeysInsertUniqueViolation(t *testing.T) {
 	t.Parallel()
 	db := sqlitetest.New(t)

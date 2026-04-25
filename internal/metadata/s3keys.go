@@ -200,6 +200,61 @@ func (r *S3KeysRepo) RevokeIfOwnedBy(ctx context.Context, tx *sql.Tx, id, ownerU
 	return n > 0, nil
 }
 
+// RevokeAllForProject stamps revoked_at = cascadeTS on every live (non-revoked)
+// s3_access_keys row for projectID. Used by ProjectsRepo.SoftDelete to cascade
+// access-key revocation atomically inside the project's WriteTx (LIFECYCLE-01,
+// D-04). Returns the number of rows updated.
+//
+// cascadeTS is supplied by the caller — typically the literal string read back
+// from `projects.deleted_at` after the project's own UPDATE — so on Restore the
+// reverse helper can identify exactly which rows were cascade-revoked by
+// THIS soft-delete (timestamp-equality cascade marker, D-01..D-05).
+//
+// Idempotent: rows already revoked (revoked_at IS NOT NULL) are left untouched
+// — including rows independently revoked at a different timestamp before the
+// cascade fired (LIFECYCLE-03 / D-03).
+//
+// NOTE: this column is conventionally written via strftime ISO-8601-ms, but
+// SQLite TEXT columns accept any string. We deliberately store the project's
+// own deleted_at format (YYYY-MM-DD HH:MM:SS from CURRENT_TIMESTAMP) here so
+// equality compare on Restore is byte-for-byte exact against the project row.
+func (r *S3KeysRepo) RevokeAllForProject(ctx context.Context, tx *sql.Tx, projectID int64, cascadeTS string) (int64, error) {
+	res, err := tx.ExecContext(ctx, `
+		UPDATE s3_access_keys
+		   SET revoked_at = ?
+		 WHERE project_id = ? AND revoked_at IS NULL
+	`, cascadeTS, projectID)
+	if err != nil {
+		return 0, fmt.Errorf("s3_access_keys: revoke all for project %d: %w", projectID, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("s3_access_keys: revoke all rows %d: %w", projectID, err)
+	}
+	return n, nil
+}
+
+// RestoreCascadedForProject reverses a cascade revoke initiated by
+// RevokeAllForProject(projectID, priorTS). Only rows whose revoked_at exactly
+// equals priorTS are cleared — independently revoked rows have a different
+// timestamp and are left alone (LIFECYCLE-01 / D-05). Returns the number of
+// rows updated.
+func (r *S3KeysRepo) RestoreCascadedForProject(ctx context.Context, tx *sql.Tx, projectID int64, priorTS string) (int64, error) {
+	res, err := tx.ExecContext(ctx, `
+		UPDATE s3_access_keys
+		   SET revoked_at = NULL
+		 WHERE project_id = ? AND revoked_at = ?
+	`, projectID, priorTS)
+	if err != nil {
+		return 0, fmt.Errorf("s3_access_keys: restore cascaded for project %d: %w", projectID, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("s3_access_keys: restore cascaded rows %d: %w", projectID, err)
+	}
+	return n, nil
+}
+
 // Revoke stamps revoked_at = now() for the key id inside the caller's tx.
 // Idempotent: re-revoking a revoked row is a no-op.
 func (r *S3KeysRepo) Revoke(ctx context.Context, tx *sql.Tx, id int64) error {

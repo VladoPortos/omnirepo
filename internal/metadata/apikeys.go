@@ -298,6 +298,56 @@ func (r *APIKeysRepo) Revoke(ctx context.Context, id int64) error {
 	})
 }
 
+// RevokeProjectOwnedForProject stamps revoked_at = cascadeTS on every live
+// project-owned api_keys row for projectID. Used by ProjectsRepo.SoftDelete to
+// cascade-revoke project-owned API keys atomically inside the project's
+// WriteTx (LIFECYCLE-03, D-04).
+//
+// User-owned keys are EXPLICITLY excluded by the `owner_kind = 'project'`
+// filter — even when the user is a project member, their personal API keys
+// belong to user lifecycle (covered by RevokeAllByUser on user soft-delete),
+// not project lifecycle.
+//
+// cascadeTS is the literal string read back from `projects.deleted_at` after
+// the project UPDATE — Restore filters by exact equality to identify the rows
+// cascade-revoked by THIS soft-delete (D-01..D-05). Idempotent: rows already
+// revoked at a different timestamp are left untouched.
+func (r *APIKeysRepo) RevokeProjectOwnedForProject(ctx context.Context, tx *sql.Tx, projectID int64, cascadeTS string) (int64, error) {
+	res, err := tx.ExecContext(ctx, `
+		UPDATE api_keys
+		   SET revoked_at = ?
+		 WHERE owner_kind = 'project' AND owner_project_id = ? AND revoked_at IS NULL
+	`, cascadeTS, projectID)
+	if err != nil {
+		return 0, fmt.Errorf("api_keys: revoke project-owned for project %d: %w", projectID, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("api_keys: revoke project-owned rows %d: %w", projectID, err)
+	}
+	return n, nil
+}
+
+// RestoreCascadedProjectOwnedForProject reverses a cascade revoke initiated by
+// RevokeProjectOwnedForProject(projectID, priorTS). Only project-owned rows
+// whose revoked_at exactly equals priorTS are cleared (D-05). Returns the
+// number of rows updated.
+func (r *APIKeysRepo) RestoreCascadedProjectOwnedForProject(ctx context.Context, tx *sql.Tx, projectID int64, priorTS string) (int64, error) {
+	res, err := tx.ExecContext(ctx, `
+		UPDATE api_keys
+		   SET revoked_at = NULL
+		 WHERE owner_kind = 'project' AND owner_project_id = ? AND revoked_at = ?
+	`, projectID, priorTS)
+	if err != nil {
+		return 0, fmt.Errorf("api_keys: restore cascaded project-owned for project %d: %w", projectID, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("api_keys: restore cascaded project-owned rows %d: %w", projectID, err)
+	}
+	return n, nil
+}
+
 // RevokeAllByUser marks every live user-owned API key as revoked. Called on
 // account deletion (F-03.6 wt3): users are soft-deleted, so the FK cascade
 // that would normally clean up api_keys never fires — without this the

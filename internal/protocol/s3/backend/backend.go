@@ -33,6 +33,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -550,7 +551,7 @@ func (b *Backend) GetObject(bucketName, key string, rangeRequest *gofakes3.Objec
 	hash, _ := hex.DecodeString(row.ETag)
 	return &gofakes3.Object{
 		Name:     key,
-		Metadata: unmarshalMeta(row.MetadataJSON, row.ContentType),
+		Metadata: enrichMetaWithLastModified(unmarshalMeta(row.MetadataJSON, row.ContentType), row.CreatedAt),
 		Size:     row.SizeBytes,
 		Contents: body,
 		Hash:     hash,
@@ -578,7 +579,7 @@ func (b *Backend) HeadObject(bucketName, key string) (*gofakes3.Object, error) {
 	hash, _ := hex.DecodeString(row.ETag)
 	return &gofakes3.Object{
 		Name:     key,
-		Metadata: unmarshalMeta(row.MetadataJSON, row.ContentType),
+		Metadata: enrichMetaWithLastModified(unmarshalMeta(row.MetadataJSON, row.ContentType), row.CreatedAt),
 		Size:     row.SizeBytes,
 		Contents: io.NopCloser(bytes.NewReader(nil)),
 		Hash:     hash,
@@ -664,6 +665,24 @@ func unmarshalMeta(raw, contentType string) map[string]string {
 		if _, ok := m["Content-Type"]; !ok {
 			m["Content-Type"] = contentType
 		}
+	}
+	return m
+}
+
+// enrichMetaWithLastModified injects "Last-Modified" into m when the
+// upstream metadata didn't include it. wt4 F-12.1 — gofakes3's PutObject
+// path stamps Last-Modified before our PutObject runs, so single-shot
+// uploads are fine; CompleteMultipartUpload reuses the metadata from the
+// CreateMultipartUpload call (which has none), so multipart-uploaded
+// objects came back without Last-Modified and `aws s3 cp` chokes with
+// `fatal error: 'LastModified'`. Pull the timestamp from the row instead
+// of trying to keep two layers in sync.
+func enrichMetaWithLastModified(m map[string]string, t time.Time) map[string]string {
+	if m == nil {
+		m = map[string]string{}
+	}
+	if _, ok := m["Last-Modified"]; !ok && !t.IsZero() {
+		m["Last-Modified"] = t.UTC().Format(http.TimeFormat)
 	}
 	return m
 }

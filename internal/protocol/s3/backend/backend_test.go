@@ -9,11 +9,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/johannesboyne/gofakes3"
 
@@ -306,6 +308,53 @@ func TestHeadObject_FastPath(t *testing.T) {
 		t.Fatalf("head body not empty: %q", buf)
 	}
 	h.Contents.Close()
+}
+
+// wt4 F-12.1 — every HeadObject (and GetObject) response MUST carry
+// Last-Modified. gofakes3's PutObject path stamps it before our backend
+// runs, so single-shot uploads were already fine. Multipart uploads
+// reuse the metadata captured at CreateMultipartUpload (which has none),
+// so HeadObject for stitched multipart objects came back without
+// Last-Modified and `aws s3 cp` errored "fatal error: 'LastModified'".
+// Pin the invariant: HeadObject always returns Last-Modified, even when
+// the persisted metadata blob doesn't carry one.
+func TestHeadObject_AlwaysHasLastModified(t *testing.T) {
+	f := newFixture(t)
+	if err := f.b.CreateBucket("bucket1"); err != nil {
+		t.Fatal(err)
+	}
+	body := []byte("hello-multipart-shape")
+	// Simulate the multipart-completion path by upserting a row whose
+	// MetadataJSON does NOT include Last-Modified (mirrors what the
+	// CreateMultipartUpload metadata snapshot looks like).
+	ctx := context.Background()
+	if err := f.b.DB.WriteTx(ctx, func(tx *sql.Tx) error {
+		_, err := f.b.Objects.Upsert(ctx, tx, &metadata.S3Object{
+			BucketID:     1,
+			Key:          "mpu",
+			SizeBytes:    int64(len(body)),
+			ETag:         "abcdef-2",
+			ContentType:  "application/octet-stream",
+			MetadataJSON: `{"Content-Type":"application/octet-stream"}`,
+			SHA256:       "multipart:abcdef-2",
+		})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	h, err := f.b.HeadObject("bucket1", "mpu")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lm, ok := h.Metadata["Last-Modified"]
+	if !ok || lm == "" {
+		t.Fatalf("HeadObject Metadata missing Last-Modified: %+v", h.Metadata)
+	}
+	// Format must parse back via http.TimeFormat — that is what AWS-CLI
+	// expects on the wire.
+	if _, perr := time.Parse(http.TimeFormat, lm); perr != nil {
+		t.Fatalf("Last-Modified %q does not parse via http.TimeFormat: %v", lm, perr)
+	}
 }
 
 func TestDeleteObject_AtomicAndIdempotent(t *testing.T) {

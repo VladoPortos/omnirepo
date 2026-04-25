@@ -63,65 +63,122 @@ func (db *DB) SearchAll(ctx context.Context, p SearchParams) ([]SearchResult, er
 		arms = append(arms, a)
 	}
 
+	// Phase 01 Plan 01-03 (LIFECYCLE-08): every arm filters
+	// `r.deleted_at IS NULL AND p.deleted_at IS NULL` as a defense-in-depth
+	// gate beyond PruneRepoFTS. The filter is the second independent
+	// guarantee that search NEVER surfaces soft-deleted owner data, even if
+	// a Prune missed a row or a row was inserted mid-soft-delete.
+	//
+	// All six per-protocol arms become INNER JOIN-based with a uniform
+	// `p.name = ?` project filter. The CVE arm uses an EXISTS subquery via
+	// the verified vulnerabilities → scans → repos → projects chain
+	// (vulnerabilities has NO direct repo_id column).
 	projectFilterExpr := ""
 	projectVals := []any{}
 	if p.Project != "" {
-		projectFilterExpr = " AND project_name = ?"
+		projectFilterExpr = " AND p.name = ?"
 		projectVals = []any{p.Project}
 	}
 
 	if p.Kind == "" || p.Kind == "repo" {
 		addArm(arm{
-			sql:  `SELECT * FROM (SELECT 'repo' AS kind, rowid AS entity_id, repo_name AS name, project_name AS location, '' AS severity, rank * 1.5 AS score, project_name AS project_name FROM repos_fts WHERE repos_fts MATCH ?` + projectFilterExpr + ` LIMIT ?)`,
+			sql: `SELECT * FROM (SELECT 'repo' AS kind, f.rowid AS entity_id, f.repo_name AS name, p.name AS location, '' AS severity, rank * 1.5 AS score, p.name AS project_name
+				FROM repos_fts f
+				INNER JOIN repos    r ON r.id = f.rowid
+				INNER JOIN projects p ON p.id = r.project_id
+				WHERE repos_fts MATCH ?
+				  AND r.deleted_at IS NULL AND p.deleted_at IS NULL` + projectFilterExpr + ` LIMIT ?)`,
 			vals: append(append([]any{ftsQuery}, projectVals...), perArmLimit),
 		})
 	}
 	if p.Kind == "" || p.Kind == "artifact" {
 		addArm(arm{
-			sql:  `SELECT * FROM (SELECT 'artifact' AS kind, f.rowid AS entity_id, f.name, f.version AS location, '' AS severity, rank AS score, COALESCE(p.name, '') AS project_name FROM artifacts_fts f LEFT JOIN repos r ON r.id = f.repo_id LEFT JOIN projects p ON p.id = r.project_id WHERE artifacts_fts MATCH ?` + projectFilterExpr + ` LIMIT ?)`,
+			sql: `SELECT * FROM (SELECT 'artifact' AS kind, f.rowid AS entity_id, f.name, f.version AS location, '' AS severity, rank AS score, p.name AS project_name
+				FROM artifacts_fts f
+				INNER JOIN repos    r ON r.id = f.repo_id
+				INNER JOIN projects p ON p.id = r.project_id
+				WHERE artifacts_fts MATCH ?
+				  AND r.deleted_at IS NULL AND p.deleted_at IS NULL` + projectFilterExpr + ` LIMIT ?)`,
 			vals: append(append([]any{ftsQuery}, projectVals...), perArmLimit),
 		})
 	}
 	if p.Kind == "" || p.Kind == "cve" {
-		// CVEs join vulnerabilities to surface severity (highest per CVE).
-		// When p.Severity is set, only rows matching are returned.
+		// CVE arm — chain filter via EXISTS subquery walking
+		// vulnerabilities → scans → repos → projects. At least one live
+		// repo must own the CVE for it to surface (defense-in-depth that
+		// matches PruneRepoFTS's conditional cves_fts prune chain — D-11).
+		// vulnerabilities has NO direct repo_id column; the chain is
+		// load-bearing, NOT optional.
+		//
+		// LEFT JOIN vulnerabilities v ON v.cve_id = f.cve_id stays for the
+		// severity surfacing (existing behavior preserved). The EXISTS
+		// subquery is the new lifetime gate. Severity filter (if any) is
+		// appended verbatim from the prior implementation.
 		cveSeverityClause := ""
 		cveVals := []any{ftsQuery}
 		if p.Severity != "" {
-			// vulnerabilities.severity is stored uppercase ("HIGH", "MEDIUM",
-			// …) while the API surface (and UI chips) use lowercase. Normalize
-			// so `?severity=high` matches `v.severity='HIGH'` — otherwise the
-			// filter silently returns empty results.
 			cveSeverityClause = " AND v.severity = ?"
 			cveVals = append(cveVals, strings.ToUpper(p.Severity))
 		}
 		cveVals = append(cveVals, perArmLimit)
 		addArm(arm{
-			sql:  `SELECT * FROM (SELECT 'cve' AS kind, f.rowid AS entity_id, f.cve_id AS name, f.package AS location, COALESCE(v.severity, '') AS severity, rank AS score, '' AS project_name FROM cves_fts f LEFT JOIN vulnerabilities v ON v.cve_id = f.cve_id WHERE cves_fts MATCH ?` + cveSeverityClause + ` GROUP BY f.cve_id LIMIT ?)`,
+			sql: `SELECT * FROM (SELECT 'cve' AS kind, f.rowid AS entity_id, f.cve_id AS name, f.package AS location, COALESCE(v.severity, '') AS severity, rank AS score, '' AS project_name
+				FROM cves_fts f
+				LEFT JOIN vulnerabilities v ON v.cve_id = f.cve_id
+				WHERE cves_fts MATCH ?
+				  AND EXISTS (
+				    SELECT 1 FROM vulnerabilities v2
+				      INNER JOIN scans    s ON s.id = v2.scan_id
+				      INNER JOIN repos    r ON r.id = s.repo_id
+				      INNER JOIN projects p ON p.id = r.project_id
+				     WHERE v2.cve_id = f.cve_id
+				       AND r.deleted_at IS NULL
+				       AND p.deleted_at IS NULL
+				  )` + cveSeverityClause + ` GROUP BY f.cve_id LIMIT ?)`,
 			vals: cveVals,
 		})
 	}
 	if p.Kind == "" || p.Kind == "rpm" {
 		addArm(arm{
-			sql:  `SELECT * FROM (SELECT 'rpm' AS kind, f.rowid AS entity_id, f.name, f.version AS location, '' AS severity, rank AS score, COALESCE(p.name, '') AS project_name FROM rpm_fts f LEFT JOIN repos r ON r.id = f.repo_id LEFT JOIN projects p ON p.id = r.project_id WHERE rpm_fts MATCH ?` + projectFilterExpr + ` LIMIT ?)`,
+			sql: `SELECT * FROM (SELECT 'rpm' AS kind, f.rowid AS entity_id, f.name, f.version AS location, '' AS severity, rank AS score, p.name AS project_name
+				FROM rpm_fts f
+				INNER JOIN repos    r ON r.id = f.repo_id
+				INNER JOIN projects p ON p.id = r.project_id
+				WHERE rpm_fts MATCH ?
+				  AND r.deleted_at IS NULL AND p.deleted_at IS NULL` + projectFilterExpr + ` LIMIT ?)`,
 			vals: append(append([]any{ftsQuery}, projectVals...), perArmLimit),
 		})
 	}
 	if p.Kind == "" || p.Kind == "deb" {
 		addArm(arm{
-			sql:  `SELECT * FROM (SELECT 'deb' AS kind, f.rowid AS entity_id, f.name, f.version AS location, '' AS severity, rank AS score, COALESCE(p.name, '') AS project_name FROM deb_fts f LEFT JOIN repos r ON r.id = f.repo_id LEFT JOIN projects p ON p.id = r.project_id WHERE deb_fts MATCH ?` + projectFilterExpr + ` LIMIT ?)`,
+			sql: `SELECT * FROM (SELECT 'deb' AS kind, f.rowid AS entity_id, f.name, f.version AS location, '' AS severity, rank AS score, p.name AS project_name
+				FROM deb_fts f
+				INNER JOIN repos    r ON r.id = f.repo_id
+				INNER JOIN projects p ON p.id = r.project_id
+				WHERE deb_fts MATCH ?
+				  AND r.deleted_at IS NULL AND p.deleted_at IS NULL` + projectFilterExpr + ` LIMIT ?)`,
 			vals: append(append([]any{ftsQuery}, projectVals...), perArmLimit),
 		})
 	}
 	if p.Kind == "" || p.Kind == "pypi" {
 		addArm(arm{
-			sql:  `SELECT * FROM (SELECT 'pypi' AS kind, f.rowid AS entity_id, f.name, f.version AS location, '' AS severity, rank AS score, COALESCE(p.name, '') AS project_name FROM pypi_fts f LEFT JOIN repos r ON r.id = f.repo_id LEFT JOIN projects p ON p.id = r.project_id WHERE pypi_fts MATCH ?` + projectFilterExpr + ` LIMIT ?)`,
+			sql: `SELECT * FROM (SELECT 'pypi' AS kind, f.rowid AS entity_id, f.name, f.version AS location, '' AS severity, rank AS score, p.name AS project_name
+				FROM pypi_fts f
+				INNER JOIN repos    r ON r.id = f.repo_id
+				INNER JOIN projects p ON p.id = r.project_id
+				WHERE pypi_fts MATCH ?
+				  AND r.deleted_at IS NULL AND p.deleted_at IS NULL` + projectFilterExpr + ` LIMIT ?)`,
 			vals: append(append([]any{ftsQuery}, projectVals...), perArmLimit),
 		})
 	}
 	if p.Kind == "" || p.Kind == "helm" {
 		addArm(arm{
-			sql:  `SELECT * FROM (SELECT 'helm' AS kind, f.rowid AS entity_id, f.name, f.version AS location, '' AS severity, rank AS score, COALESCE(p.name, '') AS project_name FROM helm_fts f LEFT JOIN repos r ON r.id = f.repo_id LEFT JOIN projects p ON p.id = r.project_id WHERE helm_fts MATCH ?` + projectFilterExpr + ` LIMIT ?)`,
+			sql: `SELECT * FROM (SELECT 'helm' AS kind, f.rowid AS entity_id, f.name, f.version AS location, '' AS severity, rank AS score, p.name AS project_name
+				FROM helm_fts f
+				INNER JOIN repos    r ON r.id = f.repo_id
+				INNER JOIN projects p ON p.id = r.project_id
+				WHERE helm_fts MATCH ?
+				  AND r.deleted_at IS NULL AND p.deleted_at IS NULL` + projectFilterExpr + ` LIMIT ?)`,
 			vals: append(append([]any{ftsQuery}, projectVals...), perArmLimit),
 		})
 	}

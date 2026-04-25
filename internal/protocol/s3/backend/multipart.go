@@ -505,14 +505,32 @@ func (b *Backend) ListParts(bucket, object string, uploadID gofakes3.UploadID, m
 	return res, nil
 }
 
-// SweepOrphanMultiparts aborts multipart uploads whose initiated_at is older
-// than `now - 24h`. Intended to be invoked daily by the scheduler (D-21 /
-// Plan 12 wiring).
-func (b *Backend) SweepOrphanMultiparts(ctx context.Context, now time.Time) error {
-	cutoff := now.Add(-24 * time.Hour)
+// SweepOrphanMultiparts aborts every multipart upload whose initiated_at
+// is older than `cutoff`. Returns (swept, cleanedDirs, err) so both
+// callers can report progress:
+//
+//   - boot-recovery goroutine in internal/app/app.go ignores the counts
+//     and just logs the outcome (S3HARD-07);
+//   - admin handler at POST /api/v1/admin/maintenance/sweep-multipart
+//     surfaces them in the JSON response (S3HARD-08).
+//
+// One function — no parallel WithCounts variant (W-4 fix; the grep gate
+// in Plan 02-04 enforces this contract). Caller computes the cutoff from
+// cfg.S3.MultipartRetention (default 24h, configurable per Plan 02-04).
+//
+// `swept` counts uploads whose row + parts cascade was removed.
+// `cleanedDirs` counts on-disk staging trees actually unlinked. Under
+// normal operation the two are equal, but the bucket-gone branch can
+// remove a row whose staging dir was already missing — surfacing both
+// counters helps operators debug staging-vs-DB drift.
+//
+// Errors short-circuit. Per-upload abort failures are surfaced verbatim;
+// the caller decides whether to retry. The boot goroutine logs at WARN;
+// the admin handler returns 500 InternalError.
+func (b *Backend) SweepOrphanMultiparts(ctx context.Context, cutoff time.Time) (swept int, cleanedDirs int, err error) {
 	stale, err := b.Multipart.ListStaleUploads(ctx, cutoff)
 	if err != nil {
-		return fmt.Errorf("backend: list stale: %w", err)
+		return 0, 0, fmt.Errorf("backend: list stale: %w", err)
 	}
 	for _, up := range stale {
 		// Resolve bucket name for AbortMultipartUpload's contract.
@@ -521,17 +539,39 @@ func (b *Backend) SweepOrphanMultiparts(ctx context.Context, now time.Time) erro
 			`SELECT name FROM s3_buckets WHERE id=?`, up.BucketID,
 		).Scan(&bucketName); err != nil {
 			// Bucket gone → still remove the orphan rows + staging.
-			_ = b.DB.WriteTx(ctx, func(tx *sql.Tx) error {
+			if derr := b.DB.WriteTx(ctx, func(tx *sql.Tx) error {
 				return b.Multipart.DeleteUpload(ctx, tx, up.UploadID)
-			})
-			_ = os.RemoveAll(b.multipartStaging(up.UploadID))
+			}); derr == nil {
+				swept++
+			}
+			staging := b.multipartStaging(up.UploadID)
+			if _, statErr := os.Stat(staging); statErr == nil {
+				if rmErr := os.RemoveAll(staging); rmErr == nil {
+					cleanedDirs++
+				}
+			}
 			continue
 		}
-		if err := b.AbortMultipartUpload(bucketName, up.Key, gofakes3.UploadID(up.UploadID)); err != nil {
-			return fmt.Errorf("backend: abort stale %s: %w", up.UploadID, err)
+		// Note staging existence BEFORE abort so we can attribute the
+		// dir-cleaned counter even though AbortMultipartUpload is the one
+		// that unlinks the directory.
+		staging := b.multipartStaging(up.UploadID)
+		stagingExisted := false
+		if _, statErr := os.Stat(staging); statErr == nil {
+			stagingExisted = true
+		}
+		if abortErr := b.AbortMultipartUpload(bucketName, up.Key, gofakes3.UploadID(up.UploadID)); abortErr != nil {
+			return swept, cleanedDirs, fmt.Errorf("backend: abort stale %s: %w", up.UploadID, abortErr)
+		}
+		swept++
+		if stagingExisted {
+			if _, statErr := os.Stat(staging); statErr != nil {
+				// Dir is gone — AbortMultipartUpload removed it.
+				cleanedDirs++
+			}
 		}
 	}
-	return nil
+	return swept, cleanedDirs, nil
 }
 
 // -- internal helpers -----------------------------------------------------

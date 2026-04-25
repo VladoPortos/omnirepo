@@ -46,6 +46,21 @@ type Config struct {
 	Sync      SyncConfig      `koanf:"sync"`
 	Signing   SigningConfig   `koanf:"signing"`
 	Repos     ReposConfig     `koanf:"repos"`
+	S3        S3Config        `koanf:"s3"`
+}
+
+// S3Config carries S3-protocol-wide knobs not tied to a single bucket row.
+// Phase 02 v1.6 (Plan 02-04) introduces MultipartRetention as the age cutoff
+// for the boot + admin sweep of orphan multipart uploads (S3HARD-07/08).
+// The boot-recovery sweep mirrors the helm-retry pattern from v1.5 Phase 5
+// (no in-process scheduler, per project §Constraints — boot one-shot +
+// admin endpoint only).
+type S3Config struct {
+	// MultipartRetention is the age beyond which an in-progress multipart
+	// upload is considered orphaned and aborted by SweepOrphanMultiparts.
+	// Default: 24h. Operators tune via [s3] in config.yaml or
+	// OMNIREPO_S3__MULTIPART_RETENTION=<duration>.
+	MultipartRetention time.Duration `koanf:"multipart_retention"`
 }
 
 // ReposConfig carries per-protocol repo knobs that are not tied to a single
@@ -276,6 +291,11 @@ func Defaults() Config {
 		Signing: SigningConfig{
 			GPGKeyBits: 4096,
 		},
+		S3: S3Config{
+			// Plan 02-04 (S3HARD-07): 24h matches the legacy hardcoded
+			// sweep cutoff and AWS's S3 multipart-upload age guideline.
+			MultipartRetention: 24 * time.Hour,
+		},
 	}
 }
 
@@ -361,6 +381,13 @@ func (cfg *Config) Validate() error {
 	}
 	if cfg.Repos.Git.MaxPushBytes == 0 {
 		cfg.Repos.Git.MaxPushBytes = 524288000 // 500 MiB default (D-35)
+	}
+	// Plan 02-04 (S3HARD-07): negative retention is meaningless. Zero is
+	// permitted at the schema level — both the boot goroutine and the
+	// admin handler treat <=0 as "use 24h default" so operators who clear
+	// the value via env/yaml don't disable the sweep entirely.
+	if cfg.S3.MultipartRetention < 0 {
+		return fmt.Errorf("config: s3.multipart_retention must be non-negative (got %s)", cfg.S3.MultipartRetention)
 	}
 	// Re-bind Trivy paths to follow a relocated DataRoot. The defaults are
 	// pinned to /var/lib/omnirepo/... which is correct in production but

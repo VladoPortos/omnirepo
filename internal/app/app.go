@@ -345,6 +345,32 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 	slog.InfoContext(ctx, "jobs.boot_recovered",
 		"sync", recovery.SyncRecovered, "scans", recovery.ScansRecovered)
 
+	// 5c-2. S3 multipart orphan sweep (Phase 2 v1.6, S3HARD-07). Mirrors
+	// the helm-retry boot-recovery pattern (v1.5 Phase 5.4): one-shot
+	// goroutine bounded by context.WithTimeout(appCtx, 5*time.Minute) so a
+	// shutdown signal cancels the sweep promptly and a malicious or buggy
+	// backend cannot stall startup indefinitely (I-2 fix). Errors log at
+	// WARN; never blocks boot. Honors the no-in-process-scheduler
+	// invariant — POST /api/v1/admin/maintenance/sweep-multipart is the
+	// on-demand trigger for external schedulers (CLAUDE.md §Constraints).
+	bootSweepBackend := s3backend.New(cfg.DataRoot, db, storage.NewLocks())
+	bootSweepRetention := cfg.S3.MultipartRetention
+	if bootSweepRetention <= 0 {
+		bootSweepRetention = 24 * time.Hour
+	}
+	go func(appCtx context.Context, retention time.Duration) {
+		sweepCtx, sweepCancel := context.WithTimeout(appCtx, 5*time.Minute)
+		defer sweepCancel()
+		cutoff := time.Now().Add(-retention)
+		swept, cleaned, err := bootSweepBackend.SweepOrphanMultiparts(sweepCtx, cutoff)
+		if err != nil {
+			slog.WarnContext(sweepCtx, "s3.multipart.boot_sweep.error", "err", err)
+			return
+		}
+		slog.InfoContext(sweepCtx, "s3.multipart.boot_sweep.done",
+			"swept", swept, "cleaned_dirs", cleaned)
+	}(ctx, bootSweepRetention)
+
 	// 5d. Job pools (D-14, D-16). The scan pool's handler map is populated
 	// below (Plan 02-09 wiring) BEFORE the pool's dispatcher goroutine
 	// starts, so map-mutation under read concurrency is impossible. The
@@ -710,10 +736,11 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 		TrivyDBDir:  cfg.Trivy.DBPath,
 		TLSCertPath: cfg.TLS.CertPath,
 		TLSKeyPath:  cfg.TLS.KeyPath,
-		Audit:       auditLogger,
-		Trash:       storage.NewTrash(filepath.Join(cfg.DataRoot, "trash")),
-		Locks:       storage.NewLocks(),
-		SessionTTL:  cfg.Auth.SessionTTL,
+		Audit:                auditLogger,
+		Trash:                storage.NewTrash(filepath.Join(cfg.DataRoot, "trash")),
+		Locks:                storage.NewLocks(),
+		SessionTTL:           cfg.Auth.SessionTTL,
+		S3MultipartRetention: cfg.S3.MultipartRetention,
 
 		RepoCreateHook: composedRepoCreateHook,
 		// Plan 02-09: scan REST endpoints.

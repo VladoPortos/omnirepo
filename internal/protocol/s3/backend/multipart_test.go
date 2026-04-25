@@ -323,7 +323,8 @@ func TestSweepOrphanMultiparts_AbortsOld(t *testing.T) {
 		`UPDATE s3_multipart_uploads SET initiated_at='2020-01-01T00:00:00.000Z' WHERE upload_id=?`, string(id)); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.b.SweepOrphanMultiparts(context.Background(), time.Now()); err != nil {
+	cutoff := time.Now().Add(-24 * time.Hour)
+	if _, _, err := f.b.SweepOrphanMultiparts(context.Background(), cutoff); err != nil {
 		t.Fatalf("sweep: %v", err)
 	}
 	// Upload should be gone.
@@ -338,7 +339,8 @@ func TestSweepOrphanMultiparts_LeavesFreshAlone(t *testing.T) {
 		t.Fatal(err)
 	}
 	id, _ := fixtureCreateMPU(t, f,"bucket1", "k", nil)
-	if err := f.b.SweepOrphanMultiparts(context.Background(), time.Now()); err != nil {
+	cutoff := time.Now().Add(-24 * time.Hour)
+	if _, _, err := f.b.SweepOrphanMultiparts(context.Background(), cutoff); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := metadata.NewS3MultipartRepo(f.db).FindUpload(context.Background(), string(id)); err != nil {

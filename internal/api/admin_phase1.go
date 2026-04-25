@@ -126,6 +126,14 @@ type Deps struct {
 	// session is rejected regardless of recent activity (D-07: 7d).
 	// Zero → 7d default.
 	SessionHardTTL time.Duration
+
+	// S3MultipartRetention is the cfg.S3.MultipartRetention duration
+	// threaded by app.Run (Plan 02-04, S3HARD-07/08). Used by the admin
+	// sweep handler at POST /api/v1/admin/maintenance/sweep-multipart to
+	// compute the orphan-upload cutoff. Zero → 24h default applied
+	// inside the handler so the endpoint never sweeps with a 0-second
+	// cutoff (which would abort every in-flight upload).
+	S3MultipartRetention time.Duration
 }
 
 func (d Deps) clock() time.Time {
@@ -313,6 +321,11 @@ func Mount(r chi.Router, d Deps) {
 			// Trivy DB, TLS history, full user CRUD.
 			d.mountAdminAudit(r)
 			d.mountAdminMaintenance(r)
+			// Plan 02-04 (S3HARD-08): super-admin on-demand sweep of
+			// orphan S3 multipart uploads. Mirrors the same cutoff as
+			// the boot-recovery goroutine in internal/app/app.go (no
+			// in-process scheduler — boot one-shot + this endpoint).
+			d.mountAdminSweepMultipart(r)
 			d.mountAdminTrash(r)
 			d.mountAdminSettings(r)
 			d.mountAdminTrivy(r)

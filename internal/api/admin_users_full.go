@@ -201,6 +201,13 @@ func (d Deps) handlePatchUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if patch.NewPassword != nil && *patch.NewPassword != "" {
+		// wt4 F-04.2: admin force-reset MUST also enforce the password
+		// floor — without this an admin could PATCH a user to "abc" via
+		// the API even though setup/change-password reject it.
+		if err := auth.PasswordValid(*patch.NewPassword); err != nil {
+			writeJSONError(w, r, http.StatusUnprocessableEntity, ErrValidationFailed, err.Error())
+			return
+		}
 		hash, err := auth.HashPassword(*patch.NewPassword)
 		if err != nil {
 			writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")

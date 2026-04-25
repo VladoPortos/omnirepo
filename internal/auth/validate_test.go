@@ -78,3 +78,32 @@ func TestLoginValid_Rejects(t *testing.T) {
 		}
 	}
 }
+
+// wt4 F-04.2 — the policy floor must be uniform across setup,
+// self-service change, and admin force-reset. Pin it here so any
+// future drift fails noisily before reaching production.
+func TestPasswordValid(t *testing.T) {
+	cases := []struct {
+		pw      string
+		wantErr bool
+	}{
+		{"", true},
+		{"a", true},
+		{"abc", true},
+		{"1234567", true},          // 7 chars: floor minus one
+		{"12345678", false},        // 8 chars: at floor
+		{"Adm1n!Passw0rd", false},  // realistic
+		{strings.Repeat("x", 64), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.pw, func(t *testing.T) {
+			err := auth.PasswordValid(tc.pw)
+			if tc.wantErr && err == nil {
+				t.Errorf("PasswordValid(%q): err=nil; want error", tc.pw)
+			}
+			if !tc.wantErr && err != nil {
+				t.Errorf("PasswordValid(%q): %v; want nil", tc.pw, err)
+			}
+		})
+	}
+}

@@ -366,9 +366,28 @@ func TestChangePassword_WrongCurrent(t *testing.T) {
 	s := newTestServer(t)
 	seedTestUser(t, s.db, "alice", "a@x", false, false)
 	cookie, _, _ := s.login(t, "alice", "pw-alice")
-	resp, _ := s.do(t, "POST", "/api/v1/auth/change-password", cookie, api.ChangePasswordRequest{Current: "wrong", New: "x"})
+	// New must satisfy auth.PasswordValid floor (wt4 F-04.2) so the
+	// wrong-current branch is the one that fires; previously this used
+	// New:"x" which now short-circuits at validation.
+	resp, _ := s.do(t, "POST", "/api/v1/auth/change-password", cookie, api.ChangePasswordRequest{Current: "wrong", New: "long-enough-pw"})
 	if resp.StatusCode != 401 {
 		t.Fatalf("code=%d", resp.StatusCode)
+	}
+}
+
+// wt4 F-04.2 — change-password rejects a weak new password BEFORE
+// verifying current. Symmetric with setup; admin force-reset path
+// is covered by api_test.go where applicable.
+func TestChangePassword_WeakNew(t *testing.T) {
+	s := newTestServer(t)
+	seedTestUser(t, s.db, "alice", "a@x", false, false)
+	cookie, _, _ := s.login(t, "alice", "pw-alice")
+	resp, body := s.do(t, "POST", "/api/v1/auth/change-password", cookie, api.ChangePasswordRequest{Current: "pw-alice", New: "abc"})
+	if resp.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("code=%d, want 422; body=%+v", resp.StatusCode, body)
+	}
+	if msg, _ := body["message"].(string); msg == "" || msg == "new password empty" {
+		t.Fatalf("expected min-length message, got %q", msg)
 	}
 }
 

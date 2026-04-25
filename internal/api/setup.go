@@ -82,8 +82,8 @@ func (d Deps) handleSetupSuperAdmin(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, r, http.StatusUnprocessableEntity, ErrValidationFailed, "email empty")
 		return
 	}
-	if len(req.Password) < 8 {
-		writeJSONError(w, r, http.StatusUnprocessableEntity, ErrValidationFailed, "password must be at least 8 characters")
+	if err := auth.PasswordValid(req.Password); err != nil {
+		writeJSONError(w, r, http.StatusUnprocessableEntity, ErrValidationFailed, err.Error())
 		return
 	}
 

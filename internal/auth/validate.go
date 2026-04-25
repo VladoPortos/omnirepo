@@ -54,3 +54,22 @@ func LoginValid(login string) error {
 	}
 	return nil
 }
+
+// PasswordMinLen is the floor for any user-chosen password. Setup,
+// self-service change, and admin force-reset all enforce this — without
+// a single source of truth the bootstrap path validated 8 chars while
+// the change-password and admin-reset paths accepted "abc" (wt4 F-04.2).
+const PasswordMinLen = 8
+
+// PasswordValid returns nil when pw meets the policy floor. Centralized
+// so every entry point that sets a password (POST /setup/superadmin,
+// POST /auth/change-password, PATCH /admin/users/{login}.new_password,
+// PUT /admin/users/{login}/password reset flows) shares one rule. The
+// message is shaped to match what setup already returned so existing
+// clients see no behavioural delta.
+func PasswordValid(pw string) error {
+	if len(pw) < PasswordMinLen {
+		return fmt.Errorf("password must be at least %d characters", PasswordMinLen)
+	}
+	return nil
+}

@@ -478,8 +478,8 @@ func (d Deps) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, r, http.StatusBadRequest, ErrValidationFailed, "invalid JSON")
 		return
 	}
-	if req.New == "" {
-		writeJSONError(w, r, http.StatusUnprocessableEntity, ErrValidationFailed, "new password empty")
+	if err := auth.PasswordValid(req.New); err != nil {
+		writeJSONError(w, r, http.StatusUnprocessableEntity, ErrValidationFailed, err.Error())
 		return
 	}
 	u, err := d.Users.FindByID(r.Context(), a.ID)

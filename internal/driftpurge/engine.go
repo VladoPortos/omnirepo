@@ -211,8 +211,16 @@ func Run(
 	//    (no float division, no rounding ambiguity). force=true
 	//    bypasses the guard for operator-confirmed overrides;
 	//    thresholdPct==0 disables the guard entirely.
-	if thresholdPct > 0 && !force && len(local) > 0 &&
-		len(drift)*100 > thresholdPct*len(local) {
+	//
+	//    int64 cast on the multiplication keeps the check correct
+	//    on 32-bit builds where `int` is 32 bits — without it,
+	//    len(drift)*100 silently overflows above ~21M rows.
+	//    OmniRepo only ships amd64+arm64 today (both 64-bit) but
+	//    the cast is free.
+	driftN := int64(len(drift))
+	localN := int64(len(local))
+	threshN := int64(thresholdPct)
+	if threshN > 0 && !force && localN > 0 && driftN*100 > threshN*localN {
 		report.Skipped = true
 		report.Reason = reasonThresholdExceeded
 		report.BlockedCount = len(drift)

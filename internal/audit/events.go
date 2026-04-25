@@ -239,21 +239,34 @@ const (
 	// writes this integer key unconditionally when drift detection ran).
 	EvtMirrorDriftPurged EventKind = "mirror.drift_purged"
 
-	// EvtMirrorDriftPurgeSkipped: emitted when driftpurge.Run's empty-upstream
-	// safety guard trips (D-08). Any misparsed or empty upstream response
-	// that would otherwise wipe a populated mirror triggers this event
-	// instead. details_json per D-20:
+	// EvtMirrorDriftPurgeSkipped: emitted when one of driftpurge.Run's
+	// safety guards trips. Any misparsed/empty upstream response or
+	// suspiciously large drift fraction that would otherwise wipe a
+	// populated mirror triggers this event instead of a real purge.
+	//
+	// details_json per D-20 (base shape, all reasons):
 	//
 	//   {
 	//     "protocol":     "pypi"|"rpm"|"deb"|"helm",
-	//     "reason":       "upstream_empty",
-	//     "local_count":  int64,   // LocalCount from driftpurge.DriftReport
+	//     "reason":       "upstream_empty" | "threshold_exceeded",
+	//     "local_count":  int64,   // LocalCount from DriftReport
 	//     "sync_job_id":  int64,
 	//     "upstream_url": string
 	//   }
 	//
-	// The reason enum is currently single-valued; future v1.6 guards
-	// (percent-threshold / admin-confirm) extend it without adding new
-	// event kinds.
+	// reason="upstream_empty" — D-08 guard. Upstream returned zero
+	//   keys while local has rows; emitted shape uses the base fields
+	//   only.
+	//
+	// reason="threshold_exceeded" — v1.7 / UIBACK-03 guard. Drift
+	//   count exceeded the configured percent threshold of local rows.
+	//   Adds two extra fields beyond the base shape:
+	//
+	//     "blocked_count": int64,  // BlockedCount from DriftReport
+	//     "threshold_pct": int64,  // cfg.Sync.DriftPurgeThresholdPct
+	//
+	//   External audit consumers must accept either reason value;
+	//   hard-coding `reason=="upstream_empty"` will silently drop the
+	//   v1.7 threshold-blocked events.
 	EvtMirrorDriftPurgeSkipped EventKind = "mirror.drift_purge_skipped"
 )

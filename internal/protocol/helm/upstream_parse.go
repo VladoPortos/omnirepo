@@ -9,7 +9,6 @@ package helm
 import (
 	"context"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -18,8 +17,19 @@ import (
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/dxc-internal/omnirepo/internal/protocol/helm/ociclient"
+	"github.com/dxc-internal/omnirepo/internal/streamio"
 	helmrepo "helm.sh/helm/v3/pkg/repo"
 )
+
+// maxIndexYAMLBytes caps the upstream index.yaml body. Test-overridable
+// (var, not const) so cap+1 oversized-upstream regression guards can run
+// without serving multi-MiB bodies. Production callers do not mutate it.
+//
+// Plan 05-04 (closes audit #5 helm gap): replaces the prior
+// silent-truncation idiom (full-body read through a LimitReader at 64 MiB)
+// with an explicit streamio.ErrMetadataTooLarge sentinel — same shape as
+// the rpm/deb/pypi upstream_parse.go cap vars introduced by Plan 05-03.
+var maxIndexYAMLBytes int64 = 64 * 1024 * 1024
 
 // EntrySourceKind classifies the fetch transport for a single upstream
 // index entry. Tagged onto UpstreamEntry so sync_handler.fetchAndCommit
@@ -107,14 +117,21 @@ func ParseUpstream(
 		return 0, fmt.Errorf("helm upstream: %s -> %d", indexURL, resp.StatusCode)
 	}
 
+	// STREAMIO-08 (audit #5 helm follow-up, Plan 05-04): fail-explicit on
+	// cap+1 instead of the previous silent-truncation idiom (full-body read
+	// through a LimitReader). The cap is a package-level var (not a const)
+	// only so tests can shrink it; no production caller mutates it.
+	body, err := streamio.ReadAllLimited(resp.Body, maxIndexYAMLBytes, streamio.ErrMetadataTooLarge)
+	if err != nil {
+		return 0, fmt.Errorf("helm upstream: read index.yaml: %w", err)
+	}
 	tmp, err := os.CreateTemp("", "helm-upstream-*.yaml")
 	if err != nil {
 		return 0, fmt.Errorf("helm upstream: tmp: %w", err)
 	}
 	tmpPath := tmp.Name()
 	defer func() { _ = os.Remove(tmpPath) }()
-	const maxIndexBytes = 64 * 1024 * 1024
-	if _, err := io.Copy(tmp, io.LimitReader(resp.Body, maxIndexBytes)); err != nil {
+	if _, err := tmp.Write(body); err != nil {
 		_ = tmp.Close()
 		return 0, fmt.Errorf("helm upstream: copy: %w", err)
 	}

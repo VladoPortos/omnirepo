@@ -57,6 +57,29 @@ export interface SyncHistoryDialogProps {
   repoName: string;
 }
 
+// driftPurgedCount parses the per-job summary blob and returns the
+// drift_purged count if present and > 0. Returns null when the key is
+// absent (non-mirror sync, drift_purge=false, or upstream-empty guard
+// tripped — D-21 absence rule). Malformed JSON also returns null —
+// the dialog still renders the row, just without the drift line.
+//
+// UIBACK-01 (v1.7): the SyncHistoryDialog surfaces this count as a
+// dedicated per-job line so operators can see drift activity at a
+// glance without cross-referencing audit events.
+function driftPurgedCount(summary: string | undefined): number | null {
+  if (!summary) return null;
+  try {
+    const parsed = JSON.parse(summary) as Record<string, unknown>;
+    const v = parsed.drift_purged;
+    if (typeof v === 'number' && Number.isFinite(v) && v > 0) {
+      return Math.trunc(v);
+    }
+  } catch {
+    // Fall through.
+  }
+  return null;
+}
+
 // durationLabel returns "12s" / "3m 42s" / "—" for pending/unknown.
 function durationLabel(job: JobDetail): string {
   // sync_jobs has created_at + updated_at. For terminal states the
@@ -138,46 +161,57 @@ export function SyncHistoryDialog({
                 </tr>
               </thead>
               <tbody>
-                {jobs.map((job) => (
-                  <tr
-                    key={job.id}
-                    className="border-b last:border-b-0 align-top"
-                    title={
-                      job.last_error
-                        ? `Last error: ${job.last_error}`
-                        : undefined
-                    }
-                  >
-                    <td className="px-2 py-1.5">
-                      <StatusBadge
-                        status={statusToVariant(job.status)}
-                        label={
-                          job.attempts > 1
-                            ? `${job.status} · attempt ${job.attempts}`
-                            : job.status
-                        }
-                        size="sm"
-                      />
-                    </td>
-                    <td className="px-2 py-1.5 text-muted-foreground">
-                      {formatDate(job.created_at)}
-                    </td>
-                    <td className="px-2 py-1.5 text-muted-foreground tabular-nums">
-                      {durationLabel(job)}
-                    </td>
-                    <td className="px-2 py-1.5 text-right tabular-nums">
-                      {job.files_synced.toLocaleString()}
-                    </td>
-                    <td className="px-2 py-1.5 text-right tabular-nums">
-                      {job.total_bytes > 0
-                        ? formatBytes(job.total_bytes)
-                        : '—'}
-                    </td>
-                    <td className="px-2 py-1.5 text-muted-foreground">
-                      {job.current_step || '—'}
-                    </td>
-                  </tr>
-                ))}
+                {jobs.map((job) => {
+                  const driftPurged = driftPurgedCount(job.summary);
+                  return (
+                    <tr
+                      key={job.id}
+                      className="border-b last:border-b-0 align-top"
+                      title={
+                        job.last_error
+                          ? `Last error: ${job.last_error}`
+                          : undefined
+                      }
+                    >
+                      <td className="px-2 py-1.5">
+                        <StatusBadge
+                          status={statusToVariant(job.status)}
+                          label={
+                            job.attempts > 1
+                              ? `${job.status} · attempt ${job.attempts}`
+                              : job.status
+                          }
+                          size="sm"
+                        />
+                      </td>
+                      <td className="px-2 py-1.5 text-muted-foreground">
+                        {formatDate(job.created_at)}
+                      </td>
+                      <td className="px-2 py-1.5 text-muted-foreground tabular-nums">
+                        {durationLabel(job)}
+                      </td>
+                      <td className="px-2 py-1.5 text-right tabular-nums">
+                        {job.files_synced.toLocaleString()}
+                      </td>
+                      <td className="px-2 py-1.5 text-right tabular-nums">
+                        {job.total_bytes > 0
+                          ? formatBytes(job.total_bytes)
+                          : '—'}
+                      </td>
+                      <td className="px-2 py-1.5 text-muted-foreground">
+                        <div>{job.current_step || '—'}</div>
+                        {driftPurged !== null && (
+                          <div
+                            className="mt-0.5 text-xs text-amber-600 dark:text-amber-400 tabular-nums"
+                            data-testid="sync-history-drift-purged"
+                          >
+                            Drift purged: {driftPurged.toLocaleString()}
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           )}

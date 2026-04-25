@@ -24,6 +24,23 @@ import { formatDate } from '@/lib/format';
 import { Trash2, RotateCcw, AlertTriangle } from 'lucide-react';
 import { EmptyState } from '@/components/common/EmptyState';
 
+// ---------- Drift kind helpers (UIBACK-02 / v1.7) ----------
+
+// DRIFT_KIND_LABEL maps the four <proto>_*_drift trash kinds emitted by
+// driftpurge.Run (per D-03) to the short protocol token surfaced in the
+// Type-column badge. Source of truth for the kind strings:
+// internal/storage/trash_test.go and internal/api/admin_trash_drift.go.
+const DRIFT_KIND_LABEL: Record<string, string> = {
+  pypi_file_drift: 'PyPI',
+  rpm_package_drift: 'RPM',
+  deb_package_drift: 'APT',
+  helm_chart_drift: 'Helm',
+};
+
+function driftLabel(kind: string): string | null {
+  return DRIFT_KIND_LABEL[kind] ?? null;
+}
+
 // ---------- Hooks ----------
 
 function useTrashList(cursor?: string) {
@@ -137,11 +154,33 @@ export default function TrashPage() {
     {
       id: 'type',
       name: 'Type',
-      render: (row) => (
-        <Badge variant={row.type === 'repo' ? 'default' : 'secondary'}>
-          {row.type}
-        </Badge>
-      ),
+      render: (row) => {
+        const drift = driftLabel(row.type);
+        if (drift !== null) {
+          // UIBACK-02 (v1.7): drift-purge trash holders get a distinct
+          // amber outline badge so operators scanning the table can spot
+          // mirror-drift entries vs. user-deleted ones at a glance. The
+          // outline variant + tabIndex=0 keeps the badge keyboard-
+          // focusable for screen-reader users; aria-label spells out the
+          // kind (the short "PyPI" label alone is too terse for AT).
+          return (
+            <Badge
+              variant="outline"
+              tabIndex={0}
+              aria-label={`Drift purge: ${drift}`}
+              data-testid="trash-drift-badge"
+              className="border-amber-500/60 bg-amber-50 text-amber-800 dark:bg-amber-950/40 dark:text-amber-200 focus-visible:ring-amber-400/50"
+            >
+              Drift · {drift}
+            </Badge>
+          );
+        }
+        return (
+          <Badge variant={row.type === 'repo' ? 'default' : 'secondary'}>
+            {row.type}
+          </Badge>
+        );
+      },
     },
     {
       id: 'original_location',

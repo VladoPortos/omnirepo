@@ -47,6 +47,7 @@ function job(overrides: Partial<JobDetail>): JobDetail {
     total_bytes: 0,
     current_step: '',
     files_synced: 0,
+    summary: '{}',
     created_at: '2026-04-20T00:00:00Z',
     updated_at: '2026-04-20T00:00:00Z',
     ...overrides,

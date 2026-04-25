@@ -435,6 +435,18 @@ export interface JobDetail {
    * shape). Backend COALESCEs missing rows to 0.
    */
   files_synced: number;
+  /**
+   * Raw JSON blob from sync_jobs.summary (migration 035, default '{}').
+   * Always present on the wire. Currently carries:
+   *   - drift_purged: integer count, written when a successful drift
+   *     run completes (DRIFTPURGE-03). Absent for non-mirror or non-
+   *     drift_purge syncs (D-21 absence rule).
+   *   - drift_blocked: integer count, written when the v1.7 percent-
+   *     threshold guard tripped (UIBACK-03). Operator must override.
+   * Future writers add sibling keys via SQLite json_set so consumers
+   * parse only the keys they care about.
+   */
+  summary: string;
   created_at: string;
   updated_at: string;
 }

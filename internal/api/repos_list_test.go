@@ -19,6 +19,7 @@ import (
 	"context"
 	"net/http"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/dxc-internal/omnirepo/internal/metadata"
@@ -200,6 +201,84 @@ func TestGetSyncJob_IncludesFilesSynced(t *testing.T) {
 	first := items[0].(map[string]any)
 	if got, ok := first["files_synced"].(float64); !ok || int64(got) != 7 {
 		t.Errorf("list[0].files_synced=%v; want 7", first["files_synced"])
+	}
+}
+
+// TestGetSyncJob_IncludesSummary — UIBACK-01 (v1.7).
+//
+// SyncJobsRepo.SetSummaryDriftPurged json_set's a `drift_purged` integer
+// into sync_jobs.summary. The wire-shape contract: BOTH list and by-id
+// endpoints emit the raw `summary` JSON string, COALESCEd to '{}' for
+// rows the column-default touched but no writer has stamped. This test
+// pins that contract end-to-end so a future schema change or COALESCE
+// removal can't silently drop the summary column from the payload (the
+// SyncHistoryDialog drift-purged sub-line depends on it).
+func TestGetSyncJob_IncludesSummary(t *testing.T) {
+	s := newTestServer(t)
+	cookie := bootProjectAndRepo(t, s, "sumcase", "rpm", "r1")
+	repoID := lookupRepoID(t, s.db, "sumcase", "rpm", "r1")
+
+	jobID := seedSyncJob(t, s.db, repoID, "rpm_sync")
+	jobsRepo := metadata.NewSyncJobsRepo(s.db)
+	if err := jobsRepo.SetSummaryDriftPurged(context.Background(), jobID, 12); err != nil {
+		t.Fatalf("SetSummaryDriftPurged: %v", err)
+	}
+
+	// By-id endpoint.
+	path := "/api/v1/projects/sumcase/repos/rpm/r1/sync-jobs/" + strconv.FormatInt(jobID, 10)
+	resp, body := s.do(t, "GET", path, cookie, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET sync-job: code=%d body=%+v", resp.StatusCode, body)
+	}
+	summary, ok := body["summary"].(string)
+	if !ok {
+		t.Fatalf("response missing summary string key; got %+v", body)
+	}
+	if !strings.Contains(summary, `"drift_purged":12`) {
+		t.Errorf("summary=%q; want substring \"drift_purged\":12", summary)
+	}
+
+	// List endpoint — same shape contract.
+	resp, body = s.do(t, "GET", "/api/v1/projects/sumcase/repos/rpm/r1/sync-jobs", cookie, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("list code=%d body=%+v", resp.StatusCode, body)
+	}
+	items, ok := body["items"].([]any)
+	if !ok || len(items) < 1 {
+		t.Fatalf("items=%v; want >=1 entry", body["items"])
+	}
+	first := items[0].(map[string]any)
+	listSummary, ok := first["summary"].(string)
+	if !ok {
+		t.Fatalf("list[0] missing summary string; got %+v", first)
+	}
+	if !strings.Contains(listSummary, `"drift_purged":12`) {
+		t.Errorf("list[0].summary=%q; want substring \"drift_purged\":12", listSummary)
+	}
+}
+
+// TestGetSyncJob_SummaryDefaultEmptyObject pins the COALESCE contract:
+// a sync job that no writer has stamped still emits summary as the JSON
+// string "{}" rather than omitting the key. This keeps the UI parser
+// trivial (always JSON.parse-able, never undefined-checked).
+func TestGetSyncJob_SummaryDefaultEmptyObject(t *testing.T) {
+	s := newTestServer(t)
+	cookie := bootProjectAndRepo(t, s, "sumdef", "helm", "r1")
+	repoID := lookupRepoID(t, s.db, "sumdef", "helm", "r1")
+
+	jobID := seedSyncJob(t, s.db, repoID, "helm_sync")
+
+	path := "/api/v1/projects/sumdef/repos/helm/r1/sync-jobs/" + strconv.FormatInt(jobID, 10)
+	resp, body := s.do(t, "GET", path, cookie, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET sync-job: code=%d body=%+v", resp.StatusCode, body)
+	}
+	summary, ok := body["summary"].(string)
+	if !ok {
+		t.Fatalf("response missing summary string key; got %+v", body)
+	}
+	if summary != "{}" {
+		t.Errorf("summary=%q; want \"{}\"", summary)
 	}
 }
 

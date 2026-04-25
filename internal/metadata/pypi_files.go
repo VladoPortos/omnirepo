@@ -144,6 +144,32 @@ func (r *PyPIFilesRepo) ListByProject(ctx context.Context, repoID int64, project
 	return out, rows.Err()
 }
 
+// ListByRepo returns every file row for repoID across all projects.
+// Used by the v1.5 Phase 6 drift-purge engine (DRIFTPURGE-01) so the
+// per-protocol adapter can compute drift in one query rather than
+// iterating ListProjects + ListByProject.
+func (r *PyPIFilesRepo) ListByRepo(ctx context.Context, repoID int64) ([]PyPIFile, error) {
+	rows, err := r.db.Reader.QueryContext(ctx, `
+		SELECT id, repo_id, project_normalized, version, filename, kind,
+		       requires_python, size_bytes, digest, core_metadata_json, uploaded_at
+		FROM pypi_files WHERE repo_id=?
+		ORDER BY project_normalized, version DESC, filename
+	`, repoID)
+	if err != nil {
+		return nil, fmt.Errorf("pypi_files: list by repo: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []PyPIFile
+	for rows.Next() {
+		p, err := scanPyPIFile(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *p)
+	}
+	return out, rows.Err()
+}
+
 // ListProjects returns every distinct project_normalized for repoID.
 // Drives the Simple root index regen.
 func (r *PyPIFilesRepo) ListProjects(ctx context.Context, repoID int64) ([]string, error) {

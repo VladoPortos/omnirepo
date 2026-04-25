@@ -20,12 +20,13 @@ import (
 // Flow:
 //  1. Resolve project + repo + path.
 //  2. Authorize (project member or super-admin).
-//  3. Move the file to trash via storage.Trash.Move (Phase 1 D-31). When
-//     the file does not exist on disk we still try to clean up the row so
-//     a partial state heals.
-//  4. In a single writer tx: delete raw_files row + IndexArtifactDelete +
-//     audit.
-//  5. 204 No Content.
+//  3. In a single writer tx: delete raw_files row + IndexArtifactDelete.
+//     A failed tx leaves the row AND the file in place — operator can retry.
+//  4. After tx commits, move the file to trash via storage.Trash.Move
+//     (Phase 1 D-31). A failure here surfaces as HTTP 500; the row is
+//     already gone, so the file becomes orphaned at its original storage
+//     path (CONTEXT D-05; operator-recoverable via `find`).
+//  5. Audit + 204 No Content.
 func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 	res, ok := h.resolveRepoAndPath(w, r, true)
 	if !ok {
@@ -58,10 +59,20 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Soft-delete via trash. Use repo.id as the trash holder id so listing
-	// reveals which raw repo a file came from.
-	if _, err := h.trash.Move(r.Context(), absPath, "raw-file", res.repo.ID, auth.ActorLoginFromContext(r.Context())); err != nil {
-		slog.ErrorContext(r.Context(), "raw.delete.trash_failed",
+	// Atomic delete ordering (CONTEXT D-01, audit finding #6): commit the
+	// DB tx FIRST. If the tx fails, the file remains at its original path
+	// and the row is intact — operator can retry the DELETE. Only after
+	// the tx commits do we move the file to trash. If the post-commit
+	// trash.Move fails, we return 500 but the row is already gone — the
+	// file becomes "abandoned" at its original storage path (CONTEXT D-05;
+	// operator can locate via standard `find` and clean up).
+	if err := h.db.WriteTx(r.Context(), func(tx *sql.Tx) error {
+		if err := h.files.Delete(r.Context(), tx, res.repo.ID, res.relPath); err != nil {
+			return err
+		}
+		return metadata.IndexArtifactDelete(r.Context(), tx, res.repo.ID, res.relPath)
+	}); err != nil {
+		slog.ErrorContext(r.Context(), "raw.delete.commit_failed",
 			slog.String("incident_id", chimw.GetReqID(r.Context())),
 			slog.String("path", res.relPath),
 			slog.Any("err", err),
@@ -70,13 +81,11 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.db.WriteTx(r.Context(), func(tx *sql.Tx) error {
-		if err := h.files.Delete(r.Context(), tx, res.repo.ID, res.relPath); err != nil {
-			return err
-		}
-		return metadata.IndexArtifactDelete(r.Context(), tx, res.repo.ID, res.relPath)
-	}); err != nil {
-		slog.ErrorContext(r.Context(), "raw.delete.commit_failed",
+	// Tx committed → row is gone. Move the file to trash. A failure here
+	// leaves the file orphaned at absPath (no row pointing at it); we
+	// surface 500 so the operator notices.
+	if _, err := h.trash.Move(r.Context(), absPath, "raw-file", res.repo.ID, auth.ActorLoginFromContext(r.Context())); err != nil {
+		slog.ErrorContext(r.Context(), "raw.delete.trash_failed_post_commit",
 			slog.String("incident_id", chimw.GetReqID(r.Context())),
 			slog.String("path", res.relPath),
 			slog.Any("err", err),

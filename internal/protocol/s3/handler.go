@@ -50,6 +50,16 @@ func (d *Deps) Mount(parent chi.Router) {
 		r.Use(RejectNonSigV4)
 		r.Use(SigV4Middleware(d.Service, d.Skew))
 		r.Use(RequireBucketAccess(d.Backend.FindBucketProjectID))
+		// Plan 02-03 / S3HARD-03: chi-side PutObject SHA enforcement.
+		// Mounted AFTER SigV4Middleware (which stashes the declared SHA in
+		// ctx) and AFTER RequireBucketAccess, BEFORE the gofakes3 server
+		// (which hijacks r.Body and would defeat any wrapper-on-r.Body
+		// pattern). Mismatch returns 400 XAmzContentSHA256Mismatch and
+		// gofakes3 is never reached — pre-existing dst objects survive
+		// byte-for-byte (B-2 fix).
+		// Plan 02-04 inserts r.Use(interceptCreateMultipartUpload(d.Backend))
+		// next to this line for the Create-Multipart SHA enforcement path.
+		r.Use(interceptPutObject(d.Backend))
 		r.Handle("/*", http.StripPrefix("/s3", server))
 	})
 }

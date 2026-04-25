@@ -98,6 +98,20 @@ func (b *Backend) tmpRoot() string {
 	return filepath.Join(b.DataRoot, "tmp", "s3")
 }
 
+// TmpRoot exposes the bucket-shared temp directory used by the chi-side
+// PutObject SHA intercept (Plan 02-03 / S3HARD-03). The intercept stages the
+// inbound body to a temp file here before either rejecting on SHA mismatch
+// or forwarding the verified bytes to gofakes3 — the directory is created
+// lazily by the intercept on first use.
+func (b *Backend) TmpRoot() string { return b.tmpRoot() }
+
+// BucketRoot exposes the on-disk bucket directory. Used by the chi-side
+// PutObject intercept's destructive-overwrite test (Plan 02-03 / S3HARD-03)
+// to assert that a rejected PUT does not touch the dst path. Production
+// callers continue to use the unexported bucketRoot via PutObject /
+// GetObject — this accessor exists strictly for test-side path resolution.
+func (b *Backend) BucketRoot(name string) string { return b.bucketRoot(name) }
+
 // bucketLock returns the per-bucket mutex (storage.Locks keyed on bucket name).
 // Call .Lock() before any write, .Unlock() after the writer tx commits.
 func (b *Backend) bucketLock(name string) *lockedMutex {

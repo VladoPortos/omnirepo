@@ -551,6 +551,79 @@ func TestPruneRepoFTS_KeepsSharedCVEButDropsExclusiveCVE(t *testing.T) {
 	}
 }
 
+// TestPruneRepoFTS_DropsCVESharedOnlyAcrossSoftDeletedRepos — D-11 case (c).
+// Three repos: A (live → about to soft-delete), B (already soft-deleted), C
+// (live, no scans). CVE-X is referenced by scanA and scanB only — both their
+// owning repos are/become soft-deleted. After PruneRepoFTS(repoA), CVE-X has
+// zero live owners and must be removed from cves_fts. Guards the production
+// SQL's `r2.deleted_at IS NULL` clause in the NOT-IN-live-owners subquery.
+func TestPruneRepoFTS_DropsCVESharedOnlyAcrossSoftDeletedRepos(t *testing.T) {
+	t.Parallel()
+	db := sqlitetest.New(t)
+	ctx := context.Background()
+
+	repoA := seedRepoLive(t, db, "projA2", "repoA2")
+	repoB := seedRepoLive(t, db, "projB2", "repoB2")
+
+	scans := metadata.NewScansRepo(db)
+	vulns := metadata.NewVulnerabilitiesRepo(db)
+	repos := metadata.NewReposRepo(db)
+
+	var scanA, scanB int64
+	if err := db.WriteTx(ctx, func(tx *sql.Tx) error {
+		var err error
+		scanA, err = scans.Enqueue(ctx, tx, repoA, "rpm", "artA")
+		return err
+	}); err != nil {
+		t.Fatalf("enqueue scanA: %v", err)
+	}
+	if err := db.WriteTx(ctx, func(tx *sql.Tx) error {
+		var err error
+		scanB, err = scans.Enqueue(ctx, tx, repoB, "rpm", "artB")
+		return err
+	}); err != nil {
+		t.Fatalf("enqueue scanB: %v", err)
+	}
+
+	if err := db.WriteTx(ctx, func(tx *sql.Tx) error {
+		if err := vulns.InsertBatch(ctx, tx, scanA, []metadata.Vuln{
+			{CVEID: "CVE-X", Severity: "HIGH", PackageName: "p"},
+		}, 0); err != nil {
+			return err
+		}
+		if err := vulns.InsertBatch(ctx, tx, scanB, []metadata.Vuln{
+			{CVEID: "CVE-X", Severity: "HIGH", PackageName: "p"},
+		}, 0); err != nil {
+			return err
+		}
+		return metadata.IndexVulnerability(ctx, tx, "CVE-X", "p", "shared only across deleted repos")
+	}); err != nil {
+		t.Fatalf("seed vulns + cves_fts: %v", err)
+	}
+
+	// Soft-delete repoB FIRST, so when PruneRepoFTS(repoA) runs, the only other
+	// repo holding CVE-X is already soft-deleted (no live owner remains).
+	if err := repos.SoftDelete(ctx, repoB); err != nil {
+		t.Fatalf("soft-delete repoB: %v", err)
+	}
+
+	if err := db.WriteTx(ctx, func(tx *sql.Tx) error {
+		return metadata.PruneRepoFTS(ctx, tx, repoA)
+	}); err != nil {
+		t.Fatalf("PruneRepoFTS(repoA): %v", err)
+	}
+
+	var n int
+	if err := db.Reader.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM cves_fts WHERE cve_id = ?`, "CVE-X",
+	).Scan(&n); err != nil {
+		t.Fatalf("count CVE-X: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("CVE-X count=%d want 0 (no live owner remains across A and B)", n)
+	}
+}
+
 func TestFTSReindexer_FromBaseTables(t *testing.T) {
 	t.Parallel()
 	db := sqlitetest.New(t)

@@ -329,30 +329,6 @@ func (r *ReposRepo) catalogQuery(ctx context.Context, q string, args ...any) ([]
 	return out, rows.Err()
 }
 
-// ListAll returns every live repo across every project.
-func (r *ReposRepo) ListAll(ctx context.Context) ([]Repo, error) {
-	rows, err := r.db.Reader.QueryContext(ctx, `
-		SELECT id, project_id, type, name, description_md, auto_scan, block_on_severity,
-		       public_read, size_bytes, created_at, deleted_at, git_max_push_bytes,
-		       is_mirror, mirror_upstream_url, mirror_filter_json, mirror_cred_id, scan_on_sync,
-		       drift_purge
-		FROM repos WHERE deleted_at IS NULL ORDER BY project_id, type, name
-	`)
-	if err != nil {
-		return nil, fmt.Errorf("repos: list all: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-	var out []Repo
-	for rows.Next() {
-		rr, err := scanRepo(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, *rr)
-	}
-	return out, rows.Err()
-}
-
 func (r *ReposRepo) scanOne(ctx context.Context, where string, args ...any) (*Repo, error) {
 	row := r.db.Reader.QueryRowContext(ctx, `
 		SELECT id, project_id, type, name, description_md, auto_scan, block_on_severity,

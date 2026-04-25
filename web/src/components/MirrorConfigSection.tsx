@@ -32,6 +32,7 @@ import { FilterWidgetRpm } from './FilterWidgetRpm';
 import { FilterWidgetPypi } from './FilterWidgetPypi';
 import { FilterWidgetHelm } from './FilterWidgetHelm';
 import { useUpstreamCreds } from '@/api/queries';
+import { useRoleFor } from '@/hooks/useAuth';
 import type {
   AnyFilter,
   AptFilter,
@@ -139,6 +140,12 @@ export function MirrorConfigSection({
   const filteredCreds = (credsQ.data ?? []).filter((c) =>
     allowedKinds.includes(c.kind),
   );
+
+  // v1.5 Phase 6 (D-15): drift_purge is maintainer-gated. Viewers see
+  // the checkbox read-only; non-members never reach this component
+  // because the repo settings route gates them upstream.
+  const myRole = useRoleFor(projectName);
+  const driftGateDisabled = disabled || myRole === 'viewer';
 
   const isOpen = hideCheckbox || value.is_mirror;
 
@@ -274,6 +281,26 @@ export function MirrorConfigSection({
               <span className="block text-xs text-muted-foreground">
                 Scanning thousands of freshly-mirrored packages is slow — off
                 by default. Flip on once the mirror is healthy.
+              </span>
+            </span>
+          </label>
+
+          <label className="inline-flex items-start gap-2 cursor-pointer">
+            <Checkbox
+              checked={value.drift_purge}
+              onCheckedChange={(v) =>
+                onChange({ ...value, drift_purge: v === true })
+              }
+              disabled={driftGateDisabled}
+              aria-label="Auto-remove mirror rows whose upstream entry vanished"
+            />
+            <span className="text-sm">
+              <span className="font-semibold">
+                Auto-purge rows that vanish from upstream
+              </span>
+              <span className="block text-xs text-muted-foreground">
+                Auto-remove mirror rows whose upstream entry vanished. Purged rows
+                go to Trash for the configured retention window.
               </span>
             </span>
           </label>

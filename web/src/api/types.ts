@@ -269,6 +269,7 @@ export interface Repo {
   mirror_filter_json: string;
   mirror_cred_id: number | null;
   scan_on_sync: boolean;
+  drift_purge: boolean;
 }
 
 // -- Mirror filters (Phase 8 Plan 04) --------------------------------------
@@ -316,6 +317,12 @@ export interface MirrorConfigValue {
   mirror_filter: AnyFilter;
   mirror_cred_id: number | null;
   scan_on_sync: boolean;
+  // v1.5 Phase 6 (DRIFTPURGE-04, D-17) — opt-in: when true, a
+  // successful mirror sync soft-deletes local rows whose upstream
+  // key vanished. Default false on upgrade. Mirror-only — server
+  // rejects drift_purge=true on non-mirror repos with envelope code
+  // repo.drift_purge_mirror_only.
+  drift_purge: boolean;
 }
 
 export interface RepoCreate {
@@ -338,6 +345,8 @@ export interface RepoCreate {
   mirror_filter?: AnyFilter;
   mirror_cred_id?: number | null;
   scan_on_sync?: boolean;
+  // v1.5 Phase 6: optional create-time opt-in (default false).
+  drift_purge?: boolean;
 }
 
 export interface RepoPatch {
@@ -353,6 +362,8 @@ export interface RepoPatch {
   mirror_filter?: AnyFilter;
   mirror_cred_id?: number | null;
   scan_on_sync?: boolean;
+  // v1.5 Phase 6 (DRIFTPURGE-04): drift_purge may change post-creation.
+  drift_purge?: boolean;
 }
 
 // SyncEnqueueResponse — the 202 body emitted by POST /sync for mirror

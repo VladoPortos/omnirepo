@@ -110,6 +110,7 @@ const EMPTY_MIRROR: MirrorConfigValue = {
   mirror_filter: {},
   mirror_cred_id: null,
   scan_on_sync: false,
+  drift_purge: false,
 };
 
 export function CreateRepoDialog({

@@ -49,6 +49,7 @@ function deriveInitial(
   filterJSON: string,
   credID: number | null,
   scanOnSync: boolean,
+  driftPurge: boolean,
 ): MirrorConfigValue {
   let filter: MirrorConfigValue['mirror_filter'] = {};
   if (filterJSON) {
@@ -64,6 +65,7 @@ function deriveInitial(
     mirror_filter: filter,
     mirror_cred_id: credID,
     scan_on_sync: scanOnSync,
+    drift_purge: driftPurge,
   };
 }
 
@@ -95,6 +97,7 @@ export function RepoSettingsTab() {
       repoQ.data.mirror_filter_json,
       repoQ.data.mirror_cred_id,
       repoQ.data.scan_on_sync,
+      repoQ.data.drift_purge,
     );
     setInitialCfg(derived);
     setLocalCfg(derived);
@@ -138,6 +141,7 @@ export function RepoSettingsTab() {
           mirror_filter: localCfg.mirror_filter,
           mirror_cred_id: localCfg.mirror_cred_id,
           scan_on_sync: localCfg.scan_on_sync,
+          drift_purge: localCfg.drift_purge,
         },
       });
       toast.success('Mirror config saved.');

@@ -17,11 +17,36 @@ type Project struct {
 	DeletedAt     *time.Time
 }
 
+// cascadeStepHook is called between cascade steps inside SoftDelete and the
+// shared restoreCascadeInTx helper. When non-nil and returning a non-nil
+// error, the surrounding WriteTx aborts and rolls back — proving LIFECYCLE-04
+// atomicity end-to-end.
+//
+// step values used by SoftDelete:        "after_project_update", "s3_keys", "buckets", "api_keys"
+// step values used by restoreCascadeInTx: "s3_keys", "buckets", "api_keys"
+//
+// Production code never sets this; only TestProjectsRepo_SoftDelete_Atomicity
+// (and TestProjectsRepo_Restore_Atomicity) install it via the package-private
+// setter withCascadeStepHookForTest. The setter is unexported by design — it
+// has no API stability guarantees and would be a footgun if exported.
+type cascadeStepHook func(step string) error
+
 // ProjectsRepo owns CRUD on projects.
-type ProjectsRepo struct{ db *DB }
+type ProjectsRepo struct {
+	db              *DB
+	cascadeStepHook cascadeStepHook // nil in production; set only by internal tests
+}
 
 // NewProjectsRepo constructs a repo bound to db.
 func NewProjectsRepo(db *DB) *ProjectsRepo { return &ProjectsRepo{db: db} }
+
+// withCascadeStepHookForTest installs (or clears, when h is nil) a hook fired
+// between cascade steps. Lives on ProjectsRepo so internal tests can call it
+// from the same package. Returns the receiver to keep test setup compact.
+func (r *ProjectsRepo) withCascadeStepHookForTest(h cascadeStepHook) *ProjectsRepo {
+	r.cascadeStepHook = h
+	return r
+}
 
 // Create inserts a project row and returns the generated id. Duplicate names
 // surface the UNIQUE-constraint error from SQLite verbatim.
@@ -64,26 +89,164 @@ func (r *ProjectsRepo) FindByID(ctx context.Context, id int64) (*Project, error)
 	return r.scanOne(ctx, `id=? AND deleted_at IS NULL`, id)
 }
 
-// SoftDelete stamps deleted_at for id. Idempotent.
+// SoftDelete soft-deletes the project and cascades to its s3_access_keys,
+// s3_buckets, and project-owned api_keys (LIFECYCLE-01..03). All four UPDATEs
+// ride a single WriteTx — any error rolls back all four (D-04, LIFECYCLE-04).
+// Idempotent: a second SoftDelete is a no-op for already-deleted rows.
+//
+// Cascade timestamp marker (D-01): after stamping projects.deleted_at, we
+// read it back inside the same tx and pass that exact string to each cascade
+// helper. Restore uses the same value to reverse-cascade ONLY rows whose
+// timestamp matches (D-05 — independently revoked rows survive Restore).
+//
+// modernc/sqlite normalizes TIMESTAMP-affinity columns to ISO-8601 on read,
+// but bound parameters in WHERE clauses still match the originally stored
+// bytes. Reading projects.deleted_at and reusing that exact string for
+// downstream UPDATEs gives us byte-for-byte equality on Restore — see
+// PLAN 01-01 §"Timestamp Strategy" for the discovery story.
 func (r *ProjectsRepo) SoftDelete(ctx context.Context, id int64) error {
 	return r.db.WriteTx(ctx, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `UPDATE projects SET deleted_at=CURRENT_TIMESTAMP WHERE id=?`, id)
-		if err != nil {
+		// 1) Stamp the project row.
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE projects SET deleted_at=CURRENT_TIMESTAMP WHERE id=? AND deleted_at IS NULL`, id,
+		); err != nil {
 			return fmt.Errorf("projects: soft delete %d: %w", id, err)
+		}
+		if r.cascadeStepHook != nil {
+			if err := r.cascadeStepHook("after_project_update"); err != nil {
+				return fmt.Errorf("projects: cascade hook (after_project_update): %w", err)
+			}
+		}
+
+		// 2) Read back the project's deleted_at as a TEXT marker for the
+		//    cascade. Even when the project was already soft-deleted (the
+		//    UPDATE above stamped 0 rows), we still want the existing
+		//    timestamp so a second SoftDelete is a no-op cascade (the
+		//    children are either already revoked at that timestamp, or
+		//    independently revoked and must be left alone).
+		var deletedAt sql.NullString
+		if err := tx.QueryRowContext(ctx,
+			`SELECT deleted_at FROM projects WHERE id=?`, id,
+		).Scan(&deletedAt); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return ErrNotFound
+			}
+			return fmt.Errorf("projects: read-back deleted_at %d: %w", id, err)
+		}
+		if !deletedAt.Valid {
+			// Edge case: project row exists but deleted_at NULL after the
+			// UPDATE — should never happen because CURRENT_TIMESTAMP can't
+			// produce NULL. Surface explicitly so we don't pass an empty
+			// cascadeTS into the child helpers (which would clobber every
+			// row revoked at the empty string, however unlikely).
+			return fmt.Errorf("projects: soft delete %d: deleted_at NULL after UPDATE", id)
+		}
+		cascadeTS := deletedAt.String
+
+		// 3) Cascade in fixed order: s3_access_keys, s3_buckets, api_keys.
+		s3keys := &S3KeysRepo{db: r.db}
+		if _, err := s3keys.RevokeAllForProject(ctx, tx, id, cascadeTS); err != nil {
+			return err
+		}
+		if r.cascadeStepHook != nil {
+			if err := r.cascadeStepHook("s3_keys"); err != nil {
+				return fmt.Errorf("projects: cascade hook (s3_keys): %w", err)
+			}
+		}
+		if _, err := SoftDeleteAllBucketsForProject(ctx, tx, id, cascadeTS); err != nil {
+			return err
+		}
+		if r.cascadeStepHook != nil {
+			if err := r.cascadeStepHook("buckets"); err != nil {
+				return fmt.Errorf("projects: cascade hook (buckets): %w", err)
+			}
+		}
+		apikeys := &APIKeysRepo{db: r.db}
+		if _, err := apikeys.RevokeProjectOwnedForProject(ctx, tx, id, cascadeTS); err != nil {
+			return err
+		}
+		if r.cascadeStepHook != nil {
+			if err := r.cascadeStepHook("api_keys"); err != nil {
+				return fmt.Errorf("projects: cascade hook (api_keys): %w", err)
+			}
 		}
 		return nil
 	})
 }
 
-// Restore clears deleted_at for id. Idempotent for live rows.
+// Restore clears deleted_at for id and reverse-cascades to its s3_access_keys,
+// s3_buckets, and project-owned api_keys via timestamp-equality (D-05). Rows
+// that were independently revoked / soft-deleted at a different timestamp
+// before the cascade are left alone.
 func (r *ProjectsRepo) Restore(ctx context.Context, id int64) error {
 	return r.db.WriteTx(ctx, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `UPDATE projects SET deleted_at=NULL WHERE id=?`, id)
+		priorTS, err := r.readPriorDeletedAt(ctx, tx, id)
 		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE projects SET deleted_at=NULL WHERE id=?`, id,
+		); err != nil {
 			return fmt.Errorf("projects: restore %d: %w", id, err)
 		}
-		return nil
+		if priorTS == "" {
+			return nil // already live → nothing to reverse-cascade
+		}
+		return r.restoreCascadeInTx(ctx, tx, id, priorTS)
 	})
+}
+
+// readPriorDeletedAt fetches projects.deleted_at as a string for the
+// cascade-equality filter. Empty string when the row is already live (the
+// caller skips the reverse cascade in that case).
+func (r *ProjectsRepo) readPriorDeletedAt(ctx context.Context, tx *sql.Tx, id int64) (string, error) {
+	var prior sql.NullString
+	if err := tx.QueryRowContext(ctx,
+		`SELECT deleted_at FROM projects WHERE id=?`, id,
+	).Scan(&prior); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", ErrNotFound
+		}
+		return "", fmt.Errorf("projects: restore lookup %d: %w", id, err)
+	}
+	if !prior.Valid {
+		return "", nil
+	}
+	return prior.String, nil
+}
+
+// restoreCascadeInTx reverses the cascade for projectID, restoring only rows
+// whose tombstone timestamp exactly equals priorTS. Shared by Restore and
+// RestoreIfNameFree so the LIFECYCLE-04 atomicity guarantee holds for both.
+// Plan 01-03 will extend this helper with the FTS reindex reverse-cascade.
+func (r *ProjectsRepo) restoreCascadeInTx(ctx context.Context, tx *sql.Tx, projectID int64, priorTS string) error {
+	s3keys := &S3KeysRepo{db: r.db}
+	if _, err := s3keys.RestoreCascadedForProject(ctx, tx, projectID, priorTS); err != nil {
+		return err
+	}
+	if r.cascadeStepHook != nil {
+		if err := r.cascadeStepHook("s3_keys"); err != nil {
+			return fmt.Errorf("projects: restore cascade hook (s3_keys): %w", err)
+		}
+	}
+	if _, err := RestoreCascadedBucketsForProject(ctx, tx, projectID, priorTS); err != nil {
+		return err
+	}
+	if r.cascadeStepHook != nil {
+		if err := r.cascadeStepHook("buckets"); err != nil {
+			return fmt.Errorf("projects: restore cascade hook (buckets): %w", err)
+		}
+	}
+	apikeys := &APIKeysRepo{db: r.db}
+	if _, err := apikeys.RestoreCascadedProjectOwnedForProject(ctx, tx, projectID, priorTS); err != nil {
+		return err
+	}
+	if r.cascadeStepHook != nil {
+		if err := r.cascadeStepHook("api_keys"); err != nil {
+			return fmt.Errorf("projects: restore cascade hook (api_keys): %w", err)
+		}
+	}
+	return nil
 }
 
 // ErrNameTaken is returned by RestoreIfNameFree when the project's name
@@ -94,6 +257,10 @@ var ErrNameTaken = errors.New("projects: name already taken by a live project")
 // single writer tx, refusing the UPDATE (ErrNameTaken) when the name
 // has since been claimed by another live project. Closes the TOCTOU
 // window between a pre-check and the UPDATE (Codex batch-14 Q2).
+//
+// On success, runs the same reverse-cascade as Restore (LIFECYCLE-01..04):
+// every row tombstoned by THIS project's soft-delete is un-tombstoned via
+// timestamp-equality.
 func (r *ProjectsRepo) RestoreIfNameFree(ctx context.Context, id int64) error {
 	return r.db.WriteTx(ctx, func(tx *sql.Tx) error {
 		var name string
@@ -113,10 +280,19 @@ func (r *ProjectsRepo) RestoreIfNameFree(ctx context.Context, id int64) error {
 		if n > 0 {
 			return ErrNameTaken
 		}
+		// Capture the prior deleted_at BEFORE clearing it — reverse cascade
+		// needs the tombstone timestamp to identify cascade-tombstoned rows.
+		priorTS, err := r.readPriorDeletedAt(ctx, tx, id)
+		if err != nil {
+			return err
+		}
 		if _, err := tx.ExecContext(ctx, `UPDATE projects SET deleted_at=NULL WHERE id=?`, id); err != nil {
 			return fmt.Errorf("projects: restore %d: %w", id, err)
 		}
-		return nil
+		if priorTS == "" {
+			return nil
+		}
+		return r.restoreCascadeInTx(ctx, tx, id, priorTS)
 	})
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -173,6 +174,214 @@ func TestS3MultipartStartUniqueViolation(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("want UNIQUE error, got nil")
+	}
+}
+
+// -- Plan 02-05 paginated repo helper tests (S3HARD-09 / S3HARD-10) --------
+
+// seedUploads inserts uploads with the supplied (key, uploadID) pairs and
+// returns the bucket id used. Callers pass them in lexicographic order if
+// they want stable cursor tests.
+func seedUploads(t *testing.T, db *metadata.DB, bucketID, userID int64, pairs [][2]string) {
+	t.Helper()
+	r := metadata.NewS3MultipartRepo(db)
+	if err := db.WriteTx(context.Background(), func(tx *sql.Tx) error {
+		for _, p := range pairs {
+			if _, err := r.StartUpload(context.Background(), tx, &metadata.S3MultipartUpload{
+				UploadID: p[1], BucketID: bucketID, Key: p[0], InitiatedByUserID: &userID,
+			}); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("seedUploads: %v", err)
+	}
+}
+
+func TestListUploadsForBucketPaginated_TruncatesAtLimit(t *testing.T) {
+	t.Parallel()
+	db := sqlitetest.New(t)
+	bucketID, userID := seedS3BucketAndUser(t, db)
+	seedUploads(t, db, bucketID, userID, [][2]string{
+		{"k1", "u1"}, {"k2", "u2"}, {"k3", "u3"},
+	})
+	r := metadata.NewS3MultipartRepo(db)
+	rows, err := r.ListUploadsForBucketPaginated(context.Background(), bucketID, "", "", "", 2)
+	if err != nil {
+		t.Fatalf("paginated: %v", err)
+	}
+	// LIMIT ?+1 means caller asks for 2 → SQL returns 3 (so caller can detect truncation).
+	if len(rows) != 3 {
+		t.Fatalf("want 3 rows (limit+1), got %d", len(rows))
+	}
+	if rows[0].Key != "k1" || rows[1].Key != "k2" || rows[2].Key != "k3" {
+		t.Fatalf("unexpected order: %+v", rows)
+	}
+}
+
+func TestListUploadsForBucketPaginated_AppliesDefault(t *testing.T) {
+	t.Parallel()
+	db := sqlitetest.New(t)
+	bucketID, userID := seedS3BucketAndUser(t, db)
+	seedUploads(t, db, bucketID, userID, [][2]string{{"k1", "u1"}, {"k2", "u2"}})
+	r := metadata.NewS3MultipartRepo(db)
+	// limit=0 must be clamped to 1000 → both rows returned with no error.
+	rows, err := r.ListUploadsForBucketPaginated(context.Background(), bucketID, "", "", "", 0)
+	if err != nil {
+		t.Fatalf("paginated default: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("want 2 rows under default limit, got %d", len(rows))
+	}
+}
+
+func TestListUploadsForBucketPaginated_RespectsCursor(t *testing.T) {
+	t.Parallel()
+	db := sqlitetest.New(t)
+	bucketID, userID := seedS3BucketAndUser(t, db)
+	pairs := [][2]string{
+		{"k1", "u1"}, {"k2", "u2"}, {"k3", "u3"}, {"k4", "u4"}, {"k5", "u5"},
+	}
+	seedUploads(t, db, bucketID, userID, pairs)
+	r := metadata.NewS3MultipartRepo(db)
+	ctx := context.Background()
+
+	// Page 1: limit=2 → returns 3 (limit+1); caller would use rows[1] as last-included.
+	page1, err := r.ListUploadsForBucketPaginated(ctx, bucketID, "", "", "", 2)
+	if err != nil {
+		t.Fatalf("page1: %v", err)
+	}
+	if len(page1) != 3 {
+		t.Fatalf("page1: want 3 (limit+1), got %d", len(page1))
+	}
+	// Caller drops the extra row; last-included = page1[1].
+	last := page1[1]
+
+	// Page 2: cursor at page1[1]; limit=2 → SQL returns 3 (k3..k5 = 3 rows).
+	page2, err := r.ListUploadsForBucketPaginated(ctx, bucketID, "", last.Key, last.UploadID, 2)
+	if err != nil {
+		t.Fatalf("page2: %v", err)
+	}
+	if len(page2) != 3 {
+		t.Fatalf("page2: want 3 (limit+1), got %d (keys=%v)", len(page2), keysOf(page2))
+	}
+	last2 := page2[1]
+	if last2.Key != "k4" {
+		t.Fatalf("page2 last-included: want k4, got %s", last2.Key)
+	}
+
+	// Page 3: cursor at page2[1]; limit=2 → SQL returns 1 (k5 only — terminal page).
+	page3, err := r.ListUploadsForBucketPaginated(ctx, bucketID, "", last2.Key, last2.UploadID, 2)
+	if err != nil {
+		t.Fatalf("page3: %v", err)
+	}
+	if len(page3) != 1 {
+		t.Fatalf("page3: want 1 (terminal, no extra), got %d (keys=%v)", len(page3), keysOf(page3))
+	}
+	if page3[0].Key != "k5" {
+		t.Fatalf("page3: want k5, got %s", page3[0].Key)
+	}
+}
+
+func TestListUploadsForBucketPaginated_RespectsPrefix(t *testing.T) {
+	t.Parallel()
+	db := sqlitetest.New(t)
+	bucketID, userID := seedS3BucketAndUser(t, db)
+	seedUploads(t, db, bucketID, userID, [][2]string{
+		{"a/k1", "u1"}, {"a/k2", "u2"}, {"b/k1", "u3"},
+	})
+	r := metadata.NewS3MultipartRepo(db)
+	rows, err := r.ListUploadsForBucketPaginated(context.Background(), bucketID, "a/", "", "", 10)
+	if err != nil {
+		t.Fatalf("prefix: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("want 2 a/-prefixed rows, got %d (%v)", len(rows), keysOf(rows))
+	}
+	for _, r := range rows {
+		if !strings.HasPrefix(r.Key, "a/") {
+			t.Fatalf("non-prefix row leaked: %s", r.Key)
+		}
+	}
+}
+
+func keysOf(rows []metadata.S3MultipartUpload) []string {
+	out := make([]string, len(rows))
+	for i, r := range rows {
+		out[i] = r.Key
+	}
+	return out
+}
+
+func TestListPartsPaginated_TruncatesAtLimit(t *testing.T) {
+	t.Parallel()
+	db := sqlitetest.New(t)
+	bucketID, userID := seedS3BucketAndUser(t, db)
+	r := metadata.NewS3MultipartRepo(db)
+	if err := db.WriteTx(context.Background(), func(tx *sql.Tx) error {
+		if _, err := r.StartUpload(context.Background(), tx, &metadata.S3MultipartUpload{
+			UploadID: "p-up", BucketID: bucketID, Key: "k", InitiatedByUserID: &userID,
+		}); err != nil {
+			return err
+		}
+		for i := 1; i <= 5; i++ {
+			if err := r.AddPart(context.Background(), tx, &metadata.S3MultipartPart{
+				UploadID: "p-up", PartNumber: i, SizeBytes: int64(i), MD5: "m",
+			}); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("seed parts: %v", err)
+	}
+	parts, err := r.ListPartsPaginated(context.Background(), "p-up", 0, 3)
+	if err != nil {
+		t.Fatalf("paginated parts: %v", err)
+	}
+	if len(parts) != 4 {
+		t.Fatalf("want 4 (limit+1), got %d", len(parts))
+	}
+	for i, p := range parts {
+		if p.PartNumber != i+1 {
+			t.Fatalf("parts not ordered: %+v", parts)
+		}
+	}
+}
+
+func TestListPartsPaginated_RespectsMarker(t *testing.T) {
+	t.Parallel()
+	db := sqlitetest.New(t)
+	bucketID, userID := seedS3BucketAndUser(t, db)
+	r := metadata.NewS3MultipartRepo(db)
+	if err := db.WriteTx(context.Background(), func(tx *sql.Tx) error {
+		if _, err := r.StartUpload(context.Background(), tx, &metadata.S3MultipartUpload{
+			UploadID: "p-mk", BucketID: bucketID, Key: "k", InitiatedByUserID: &userID,
+		}); err != nil {
+			return err
+		}
+		for i := 1; i <= 5; i++ {
+			if err := r.AddPart(context.Background(), tx, &metadata.S3MultipartPart{
+				UploadID: "p-mk", PartNumber: i, SizeBytes: int64(i), MD5: "m",
+			}); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	// First call with marker=2, limit=3 → parts 3, 4, 5 → SQL returns 3 (no extra).
+	parts, err := r.ListPartsPaginated(context.Background(), "p-mk", 2, 3)
+	if err != nil {
+		t.Fatalf("paginated: %v", err)
+	}
+	if len(parts) != 3 {
+		t.Fatalf("want 3, got %d", len(parts))
+	}
+	if parts[0].PartNumber != 3 || parts[2].PartNumber != 5 {
+		t.Fatalf("unexpected parts: %+v", parts)
 	}
 }
 

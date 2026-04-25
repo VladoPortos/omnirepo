@@ -477,27 +477,33 @@ func indexLifecycleFixturePackages(t *testing.T, dataRoot string, f *fixture) {
 	}
 }
 
-// insertDebFixtureViaPragma — inserts an apt_suites row + a deb_packages row
-// for the given (repoID, pkg, version, arch). Uses PRAGMA table_info to
-// discover NOT NULL columns of deb_packages dynamically, defaulting unknown
-// columns to "" or 0. Schema-drift-proof: any new NOT NULL column added in
-// a future migration gets a safe default rather than breaking the fixture.
+// insertDebFixtureViaPragma — inserts a deb_packages row for the given
+// (repoID, pkg, version, arch). Uses PRAGMA table_info to discover NOT NULL
+// columns of deb_packages dynamically, defaulting unknown columns to "" or
+// 0. Schema-drift-proof: any new NOT NULL column added in a future migration
+// gets a safe default rather than breaking the fixture.
+//
+// apt_suites is NOT inserted here — the deb repo create hook
+// (internal/app/deb_repo_create.go.CreateDEBRepoHook) seeds three default
+// rows ({stable, main, amd64|arm64|all}) atomically with the repos INSERT,
+// so the bootstrapped repo already has matching apt_suites rows. We look
+// up the (repo_id, suite='stable', component='main', architecture=arch)
+// row by SELECT and use its id as the suite_id FK on deb_packages.
 func insertDebFixtureViaPragma(t *testing.T, db *sql.DB, repoID int64, pkg, version, arch string) {
 	t.Helper()
 
-	// 1) apt_suites: insert a stable suite/component/arch row for this repo.
-	// Schema (migration 009): all of repo_id/suite/component/architecture
-	// are NOT NULL with no default; we set them all explicitly.
-	res, err := db.Exec(`
-		INSERT INTO apt_suites(repo_id, suite, component, architecture)
-		VALUES (?, 'stable', 'main', ?)
-	`, repoID, arch)
-	if err != nil {
-		t.Fatalf("insert apt_suites: %v", err)
-	}
-	suiteID, err := res.LastInsertId()
-	if err != nil {
-		t.Fatalf("apt_suites last insert id: %v", err)
+	// 1) apt_suites: look up the seeded row for this (repo, arch). If the
+	// repo create hook didn't run for any reason (e.g. repo wasn't created
+	// via the seeded path), fail with a clear message rather than letting
+	// the deb_packages INSERT die with a confusing FK error.
+	var suiteID int64
+	if err := db.QueryRow(`
+		SELECT id FROM apt_suites
+		WHERE repo_id=? AND suite='stable' AND component='main' AND architecture=?
+	`, repoID, arch).Scan(&suiteID); err != nil {
+		t.Fatalf("lookup apt_suites for (repo_id=%d, arch=%s): %v "+
+			"(was CreateDEBRepoHook wired into the bootstrap path?)",
+			repoID, arch, err)
 	}
 
 	// 2) deb_packages: PRAGMA-driven defensive INSERT.
@@ -617,13 +623,18 @@ func lookupRepoID(t *testing.T, db *sql.DB, projectID int64, repoType, repoName 
 	return id
 }
 
-// softDeleteProject calls DELETE /api/v1/admin/projects/{name} as super-admin.
+// softDeleteProject calls DELETE /api/v1/projects/{name} as super-admin.
 // One canonical path — no try/retry alternative endpoint. Verified mount:
-// internal/api/admin_phase1.go:239 — `r.Delete("/projects/{name}", d.handleDeleteProject)`
-// mounted under `/admin`.
+// internal/api/admin_phase1.go:238-239 — `r.With(...).Delete("/projects/{name}",
+// d.handleDeleteProject)` mounted under `/api/v1` (the SessionOrAPIKey auth
+// subgroup), NOT under `/admin`. The plan's interfaces table at planning
+// time reported `/admin/projects/{name}` which was incorrect — the route
+// is mounted directly under the auth-required subrouter at `/projects/{name}`.
+// Verified at execute time via grep against the running app's 404
+// envelope on the planned path.
 func softDeleteProject(t *testing.T, f *fixture, name string) {
 	t.Helper()
-	url := fmt.Sprintf("%s/api/v1/admin/projects/%s", f.httpEndpoint, name)
+	url := fmt.Sprintf("%s/api/v1/projects/%s", f.httpEndpoint, name)
 	req, err := http.NewRequest(http.MethodDelete, url, nil)
 	if err != nil {
 		t.Fatalf("softDeleteProject req: %v", err)

@@ -105,6 +105,16 @@ type Deps struct {
 	// nil = no-op (used by tests that don't care about per-type extras).
 	RepoCreateHook RepoCreateHookFn
 
+	// v1.5 Phase 6 (DRIFTPURGE-01..05, D-06): per-protocol row repos
+	// consumed by handleRestoreTrash when dispatching on the four
+	// <proto>_drift trash kinds. Any field may be nil — when nil, the
+	// corresponding drift restore branch returns 500 ErrInternal rather
+	// than panicking. Tests that don't exercise drift restore omit these.
+	PyPIFiles   *metadata.PyPIFilesRepo
+	RPMPackages *metadata.RPMPackagesRepo
+	DEBPackages *metadata.DEBPackagesRepo
+	HelmCharts  *metadata.HelmChartsRepo
+
 	// Clock is used for session/token issuance. Defaults to time.Now().UTC.
 	Clock func() time.Time
 

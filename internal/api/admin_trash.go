@@ -6,6 +6,8 @@
 package api
 
 import (
+	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -23,6 +25,12 @@ import (
 	authmw "github.com/dxc-internal/omnirepo/internal/auth/middleware"
 	"github.com/dxc-internal/omnirepo/internal/metadata"
 )
+
+// codeRestoreConflictRepoMissing is the envelope code returned when a
+// drift trash entry's snapshot.repo_id references an absent or
+// soft-deleted repo (v1.5 Phase 6 / DRIFTPURGE-02, D-05). File stays
+// in trash; admin hard-deletes or re-creates the repo first.
+const codeRestoreConflictRepoMissing = "restore.conflict.repo_missing"
 
 // projectTrashPrefix IDs soft-deleted projects in the Trash list. Picked to
 // sort (lexicographically) AFTER filesystem entries whose IDs start with a
@@ -218,6 +226,19 @@ func (d Deps) handleRestoreTrash(w http.ResponseWriter, r *http.Request) {
 		if dirName != id {
 			continue
 		}
+
+		// v1.5 Phase 6 — drift kind dispatch (DRIFTPURGE-02, D-06 + D-04).
+		// Drift trash holders carry a row_snapshot in the sidecar; restore
+		// re-inserts the row via the per-protocol Insert (which is an
+		// UPSERT per D-04) and moves the on-disk file back. Unknown drift
+		// kinds fall through to the generic path (which will fail via the
+		// e.Empty / childPath branches — belt-and-braces).
+		switch e.Kind {
+		case "pypi_file_drift", "rpm_package_drift", "deb_package_drift", "helm_chart_drift":
+			d.handleDriftRestore(w, r, e, id)
+			return
+		}
+
 		// F-11 follow-up: metadata-only entries (soft-delete of a
 		// never-synced git mirror etc.) have no tree to move back.
 		// Restore the DB row + clean the holder dir; the sync handler

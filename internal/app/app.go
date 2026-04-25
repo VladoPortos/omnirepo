@@ -688,6 +688,12 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 		S3AEAD:        aead,
 		S3Backend:     s3Be,
 		S3ObjectsRepo: metadata.NewS3ObjectsRepo(db),
+		// v1.5 Phase 6 (DRIFTPURGE-01..05, D-06): per-protocol row repos
+		// consumed by handleRestoreTrash for the <proto>_drift kinds.
+		PyPIFiles:   metadata.NewPyPIFilesRepo(db),
+		RPMPackages: metadata.NewRPMPackagesRepo(db),
+		DEBPackages: metadata.NewDEBPackagesRepo(db),
+		HelmCharts:  metadata.NewHelmChartsRepo(db),
 		Holder:      holder,
 		DataRoot:    cfg.DataRoot,
 		TrivyDBDir:  cfg.Trivy.DBPath,

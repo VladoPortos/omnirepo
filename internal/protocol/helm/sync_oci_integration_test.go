@@ -695,6 +695,12 @@ func (r *recordingTrash) Move(ctx context.Context, srcPath, kind string, id int6
 	r.mu.Unlock()
 	return r.inner.Move(ctx, srcPath, kind, id, actor)
 }
+func (r *recordingTrash) MoveWithSnapshot(ctx context.Context, srcPath, kind string, id int64, actor string, rowSnapshot json.RawMessage) (string, error) {
+	r.mu.Lock()
+	r.moveKind = append(r.moveKind, kind)
+	r.mu.Unlock()
+	return r.inner.MoveWithSnapshot(ctx, srcPath, kind, id, actor, rowSnapshot)
+}
 func (r *recordingTrash) Restore(ctx context.Context, trashPath, dstPath string) error {
 	return r.inner.Restore(ctx, trashPath, dstPath)
 }

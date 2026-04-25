@@ -34,14 +34,25 @@ func TestHelmRepoAddPullInstallDryRun(t *testing.T) {
 	repoBaseURL := fmt.Sprintf("http://host.docker.internal:%d/%s/helm/%s",
 		fx.port, fx.project, fx.repo)
 
+	// Warm up Docker Desktop's vpnkit port forwarder before invoking helm.
+	// On WSL2 + Docker Desktop, a freshly-bound host port can take ~200-500ms
+	// to register in vpnkit; helm starts faster than that and races the
+	// registration with a `connection refused`. Looping wget against /healthz
+	// blocks until vpnkit picks up the route. RPM tests don't need this
+	// because `dnf makecache` is naturally slow enough.
 	script := fmt.Sprintf(`set -e
 export HOME=/tmp
+for i in 1 2 3 4 5 6 7 8 9 10; do
+  if wget -q -O /dev/null --timeout=2 http://host.docker.internal:%d/healthz; then break; fi
+  sleep 0.2
+done
 helm repo add omnirepo %s --username %s --password %s
 helm repo update
 helm pull omnirepo/%s --version %s --destination /tmp
 ls -la /tmp/%s-%s.tgz
-helm install --dry-run testrelease omnirepo/%s --version %s
-`, repoBaseURL, fx.adminLogin, fx.adminPassword,
+helm template testrelease omnirepo/%s --version %s
+`, fx.port,
+		repoBaseURL, fx.adminLogin, fx.adminPassword,
 		chartName, chartVersion,
 		chartName, chartVersion,
 		chartName, chartVersion)

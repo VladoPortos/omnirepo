@@ -78,6 +78,11 @@ func bootAppWithRepo(t *testing.T, repoType string) *bootFixture {
 	cfg.DataRoot = dataRoot
 	cfg.Bootstrap.Path = bsPath
 	cfg.Server.ExternalHostnames = []string{"localhost", "host.docker.internal"}
+	// Conformance test fixtures fire one upload per test; production
+	// debounce (2000ms / 30s) is anti-test latency. 10ms / 100ms preserves
+	// debounce semantics without dominating wall-clock.
+	cfg.Regen.DebounceMs = 10
+	cfg.Regen.MaxWaitMs = 100
 
 	httpLn, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

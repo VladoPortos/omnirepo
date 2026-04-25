@@ -40,10 +40,16 @@ func TestPipInstallFromOmniRepo(t *testing.T) {
 
 	image := resolveImage(t)
 	indexURL := fmt.Sprintf("http://host.docker.internal:%d/%s/pypi/%s/simple/", fx.port, fx.project, fx.repo)
+	// Warm vpnkit before pip runs (Docker Desktop on WSL2 can race
+	// freshly-bound host port forwarding; same flake class as helm test).
 	script := fmt.Sprintf(`set -e
+for i in 1 2 3 4 5 6 7 8 9 10; do
+  if wget -q -O /dev/null --timeout=2 http://host.docker.internal:%d/healthz; then break; fi
+  sleep 0.2
+done
 pip install --no-cache-dir --index-url %s --trusted-host host.docker.internal %s
 python -c "import importlib.metadata; print(importlib.metadata.version('%s'))"
-`, indexURL, pkgName, pkgName)
+`, fx.port, indexURL, pkgName, pkgName)
 	out, err := dockerRun(t, image, script)
 	if err != nil {
 		t.Fatalf("pip install via DinD failed: %v\n--- output ---\n%s", err, out)
@@ -62,11 +68,16 @@ func TestUVInstallFromOmniRepo(t *testing.T) {
 
 	image := resolveImage(t)
 	indexURL := fmt.Sprintf("http://host.docker.internal:%d/%s/pypi/%s/simple/", fx.port, fx.project, fx.repo)
+	// Warm vpnkit before uv runs (see TestPipInstallFromOmniRepo for rationale).
 	script := fmt.Sprintf(`set -e
+for i in 1 2 3 4 5 6 7 8 9 10; do
+  if wget -q -O /dev/null --timeout=2 http://host.docker.internal:%d/healthz; then break; fi
+  sleep 0.2
+done
 pip install --no-cache-dir uv >/dev/null
 uv pip install --system --no-cache --index-url %s --index-strategy unsafe-best-match %s
 python -c "import importlib.metadata; print(importlib.metadata.version('%s'))"
-`, indexURL, pkgName, pkgName)
+`, fx.port, indexURL, pkgName, pkgName)
 	out, err := dockerRun(t, image, script)
 	if err != nil {
 		t.Fatalf("uv pip install via DinD failed: %v\n--- output ---\n%s", err, out)

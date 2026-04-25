@@ -41,7 +41,7 @@ func TestS3MultipartStartAndFind(t *testing.T) {
 	if err := db.WriteTx(ctx, func(tx *sql.Tx) error {
 		v, err := r.StartUpload(ctx, tx, &metadata.S3MultipartUpload{
 			UploadID: "uuid-1", BucketID: bucketID, Key: "big/file",
-			InitiatedByUserID: userID,
+			InitiatedByUserID: &userID,
 			MetadataJSON:      `{"x-amz-meta-author":"alice"}`,
 		})
 		id = v
@@ -76,7 +76,7 @@ func TestS3MultipartAddPartAndList(t *testing.T) {
 
 	if err := db.WriteTx(ctx, func(tx *sql.Tx) error {
 		if _, err := r.StartUpload(ctx, tx, &metadata.S3MultipartUpload{
-			UploadID: "u2", BucketID: bucketID, Key: "k", InitiatedByUserID: userID,
+			UploadID: "u2", BucketID: bucketID, Key: "k", InitiatedByUserID: &userID,
 		}); err != nil {
 			return err
 		}
@@ -126,7 +126,7 @@ func TestS3MultipartDeleteCascades(t *testing.T) {
 
 	_ = db.WriteTx(ctx, func(tx *sql.Tx) error {
 		if _, err := r.StartUpload(ctx, tx, &metadata.S3MultipartUpload{
-			UploadID: "u3", BucketID: bucketID, Key: "k", InitiatedByUserID: userID,
+			UploadID: "u3", BucketID: bucketID, Key: "k", InitiatedByUserID: &userID,
 		}); err != nil {
 			return err
 		}
@@ -161,13 +161,13 @@ func TestS3MultipartStartUniqueViolation(t *testing.T) {
 
 	_ = db.WriteTx(ctx, func(tx *sql.Tx) error {
 		_, err := r.StartUpload(ctx, tx, &metadata.S3MultipartUpload{
-			UploadID: "dup", BucketID: bucketID, Key: "k1", InitiatedByUserID: userID,
+			UploadID: "dup", BucketID: bucketID, Key: "k1", InitiatedByUserID: &userID,
 		})
 		return err
 	})
 	err := db.WriteTx(ctx, func(tx *sql.Tx) error {
 		_, err := r.StartUpload(ctx, tx, &metadata.S3MultipartUpload{
-			UploadID: "dup", BucketID: bucketID, Key: "k2", InitiatedByUserID: userID,
+			UploadID: "dup", BucketID: bucketID, Key: "k2", InitiatedByUserID: &userID,
 		})
 		return err
 	})
@@ -185,7 +185,7 @@ func TestS3MultipartListStaleUploads(t *testing.T) {
 
 	_ = db.WriteTx(ctx, func(tx *sql.Tx) error {
 		_, err := r.StartUpload(ctx, tx, &metadata.S3MultipartUpload{
-			UploadID: "stale-1", BucketID: bucketID, Key: "k", InitiatedByUserID: userID,
+			UploadID: "stale-1", BucketID: bucketID, Key: "k", InitiatedByUserID: &userID,
 		})
 		return err
 	})

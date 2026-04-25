@@ -19,12 +19,26 @@ import (
 )
 
 // S3MultipartUpload mirrors one s3_multipart_uploads row.
+//
+// Attribution model (post-migration 036, S3HARD-05):
+//
+//   - InitiatedByUserID is set when the upload came in through the user-
+//     authenticated REST surface (or, transiently in v1.6 Phase 2, through
+//     the Plan 02-02 fallback wrapper at internal/protocol/s3/backend/multipart.go).
+//   - InitiatedByS3KeyID is set when the upload came in through the SigV4-
+//     authenticated S3 surface (the typical case post-Plan 02-04).
+//   - At least one of the two MUST be non-nil — StartUpload enforces that
+//     at the validation gate. Both nil = unattributed = audit gap.
+//
+// Both pointers nil-able to model SQL NULL: scan via sql.NullInt64 then
+// convert (mirrors the apikeys.go owner_user_id / owner_project_id pattern).
 type S3MultipartUpload struct {
 	ID                 int64
 	UploadID           string // UUID v4, client-visible handle
 	BucketID           int64
 	Key                string
-	InitiatedByUserID  int64
+	InitiatedByUserID  *int64 // NULLable post-036 (was int64)
+	InitiatedByS3KeyID *int64 // new in 036; nil for legacy/user-attributed rows
 	InitiatedAt        time.Time
 	MetadataJSON       string // canonical JSON serialization of user metadata headers
 }
@@ -48,21 +62,33 @@ func NewS3MultipartRepo(db *DB) *S3MultipartRepo { return &S3MultipartRepo{db: d
 // StartUpload inserts a new upload row. Returns the row id. `UploadID`
 // uniqueness enforces idempotency: if the caller re-uses a UUID the DB
 // surfaces a UNIQUE error.
+//
+// Attribution: at least one of InitiatedByUserID / InitiatedByS3KeyID must be
+// non-nil. Both nil is rejected at the validation gate to prevent silent
+// audit gaps (S3HARD-05). Both set is permitted but unusual — typically a
+// row carries exactly one.
+//
+// modernc/sqlite handles `*int64` arguments to ExecContext as
+// "NULL when nil, integer when non-nil" without needing sql.NullInt64
+// wrapping (mirrors the apikeys.go INSERT pattern).
 func (r *S3MultipartRepo) StartUpload(ctx context.Context, tx *sql.Tx, row *S3MultipartUpload) (int64, error) {
 	if row == nil {
 		return 0, errors.New("s3_multipart_uploads: nil row")
 	}
-	if row.UploadID == "" || row.BucketID == 0 || row.Key == "" || row.InitiatedByUserID == 0 {
-		return 0, errors.New("s3_multipart_uploads: upload_id, bucket_id, key, initiated_by_user_id required")
+	if row.UploadID == "" || row.BucketID == 0 || row.Key == "" {
+		return 0, errors.New("s3_multipart_uploads: upload_id, bucket_id, key required")
+	}
+	if row.InitiatedByUserID == nil && row.InitiatedByS3KeyID == nil {
+		return 0, errors.New("s3_multipart_uploads: either initiated_by_user_id or initiated_by_s3_key_id required")
 	}
 	meta := row.MetadataJSON
 	if meta == "" {
 		meta = "{}"
 	}
 	res, err := tx.ExecContext(ctx, `
-		INSERT INTO s3_multipart_uploads(upload_id, bucket_id, key, initiated_by_user_id, metadata_json)
-		VALUES (?, ?, ?, ?, ?)
-	`, row.UploadID, row.BucketID, row.Key, row.InitiatedByUserID, meta)
+		INSERT INTO s3_multipart_uploads(upload_id, bucket_id, key, initiated_by_user_id, initiated_by_s3_key_id, metadata_json)
+		VALUES (?, ?, ?, ?, ?, ?)
+	`, row.UploadID, row.BucketID, row.Key, row.InitiatedByUserID, row.InitiatedByS3KeyID, meta)
 	if err != nil {
 		return 0, fmt.Errorf("s3_multipart_uploads: insert: %w", err)
 	}
@@ -98,20 +124,32 @@ func (r *S3MultipartRepo) AddPart(ctx context.Context, tx *sql.Tx, row *S3Multip
 
 // FindUpload returns the upload row by its client-visible UploadID.
 // Returns ErrNotFound on miss.
+//
+// initiated_by_user_id and initiated_by_s3_key_id are both NULLable post-036.
+// Scan via sql.NullInt64 then convert to *int64 (apikeys.go pattern).
 func (r *S3MultipartRepo) FindUpload(ctx context.Context, uploadID string) (*S3MultipartUpload, error) {
 	var u S3MultipartUpload
 	var initiated string
+	var userID, s3KeyID sql.NullInt64
 	err := r.db.Reader.QueryRowContext(ctx, `
-		SELECT id, upload_id, bucket_id, key, initiated_by_user_id, initiated_at, metadata_json
+		SELECT id, upload_id, bucket_id, key, initiated_by_user_id, initiated_by_s3_key_id, initiated_at, metadata_json
 		FROM s3_multipart_uploads WHERE upload_id = ?
 	`, uploadID).Scan(
-		&u.ID, &u.UploadID, &u.BucketID, &u.Key, &u.InitiatedByUserID, &initiated, &u.MetadataJSON,
+		&u.ID, &u.UploadID, &u.BucketID, &u.Key, &userID, &s3KeyID, &initiated, &u.MetadataJSON,
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrNotFound
 		}
 		return nil, fmt.Errorf("s3_multipart_uploads: find: %w", err)
+	}
+	if userID.Valid {
+		v := userID.Int64
+		u.InitiatedByUserID = &v
+	}
+	if s3KeyID.Valid {
+		v := s3KeyID.Int64
+		u.InitiatedByS3KeyID = &v
 	}
 	u.InitiatedAt, _ = time.Parse("2006-01-02T15:04:05.000Z", initiated)
 	return &u, nil
@@ -152,11 +190,13 @@ func (r *S3MultipartRepo) DeleteUpload(ctx context.Context, tx *sql.Tx, uploadID
 }
 
 // ListStaleUploads returns uploads whose initiated_at is older than cutoff.
-// Used by the daily cleanup job (D-21).
+// Used by the daily cleanup job (D-21) and the boot-recovery sweeper (Plan 02-03).
+//
+// Both attribution columns are scanned via sql.NullInt64 (post-036 NULLable).
 func (r *S3MultipartRepo) ListStaleUploads(ctx context.Context, cutoff time.Time) ([]S3MultipartUpload, error) {
 	cutoffStr := cutoff.UTC().Format("2006-01-02T15:04:05.000Z")
 	rows, err := r.db.Reader.QueryContext(ctx, `
-		SELECT id, upload_id, bucket_id, key, initiated_by_user_id, initiated_at, metadata_json
+		SELECT id, upload_id, bucket_id, key, initiated_by_user_id, initiated_by_s3_key_id, initiated_at, metadata_json
 		FROM s3_multipart_uploads WHERE initiated_at < ?
 		ORDER BY initiated_at ASC
 	`, cutoffStr)
@@ -168,8 +208,17 @@ func (r *S3MultipartRepo) ListStaleUploads(ctx context.Context, cutoff time.Time
 	for rows.Next() {
 		var u S3MultipartUpload
 		var initiated string
-		if err := rows.Scan(&u.ID, &u.UploadID, &u.BucketID, &u.Key, &u.InitiatedByUserID, &initiated, &u.MetadataJSON); err != nil {
+		var userID, s3KeyID sql.NullInt64
+		if err := rows.Scan(&u.ID, &u.UploadID, &u.BucketID, &u.Key, &userID, &s3KeyID, &initiated, &u.MetadataJSON); err != nil {
 			return nil, fmt.Errorf("s3_multipart_uploads: scan stale: %w", err)
+		}
+		if userID.Valid {
+			v := userID.Int64
+			u.InitiatedByUserID = &v
+		}
+		if s3KeyID.Valid {
+			v := s3KeyID.Int64
+			u.InitiatedByS3KeyID = &v
 		}
 		u.InitiatedAt, _ = time.Parse("2006-01-02T15:04:05.000Z", initiated)
 		out = append(out, u)

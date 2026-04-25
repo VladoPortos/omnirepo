@@ -87,12 +87,25 @@ func (b *Backend) CreateMultipartUpload(bucket, object string, meta map[string]s
 	uploadID := uuid.NewString()
 	metaJSON := marshalMeta(meta)
 
+	// REMOVE IN 02-04: Plan 02-02 (S3HARD-05 / D-06) flipped
+	// S3MultipartUpload.InitiatedByUserID from int64 to *int64 so the
+	// SigV4-attributed path (Plan 02-04) can pass a NULL user-id and store
+	// the resolved S3 access key id in the new initiated_by_s3_key_id
+	// column instead. Plan 02-04 deletes the multipartInitiatorFallback
+	// constant, removes this temporary pointer wrapper, and switches this
+	// call site to read actor.S3KeyID from the chi-intercepted request
+	// context (D-07). Plan 02-04 Task 1 also grep-gates BOTH
+	// `multipartInitiatorFallback` AND `REMOVE IN 02-04` — the build fails
+	// if either string survives. See
+	// internal/protocol/s3/backend/remove_in_02_04_marker_test.go for the
+	// forcing-function gate (W-2 / threat T-02-02-05).
+	tmpUserID := multipartInitiatorFallback
 	if err := b.DB.WriteTx(ctx, func(tx *sql.Tx) error {
 		_, err := b.Multipart.StartUpload(ctx, tx, &metadata.S3MultipartUpload{
 			UploadID:          uploadID,
 			BucketID:          id,
 			Key:               object,
-			InitiatedByUserID: multipartInitiatorFallback, // REST layer sets this; see note.
+			InitiatedByUserID: &tmpUserID,
 			MetadataJSON:      metaJSON,
 		})
 		return err

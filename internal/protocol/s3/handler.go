@@ -57,9 +57,16 @@ func (d *Deps) Mount(parent chi.Router) {
 		// pattern). Mismatch returns 400 XAmzContentSHA256Mismatch and
 		// gofakes3 is never reached — pre-existing dst objects survive
 		// byte-for-byte (B-2 fix).
-		// Plan 02-04 inserts r.Use(interceptCreateMultipartUpload(d.Backend))
-		// next to this line for the Create-Multipart SHA enforcement path.
 		r.Use(interceptPutObject(d.Backend))
+		// Plan 02-04 / S3HARD-05 / S3HARD-06 (audit finding #10): chi-side
+		// CreateMultipartUpload attribution. Hijacks `?uploads` POST so we
+		// can read actor.S3KeyID off ctx (gofakes3 drops *http.Request from
+		// MultipartBackend.CreateMultipartUpload's signature) and persist
+		// s3_multipart_uploads.initiated_by_s3_key_id correctly. All other
+		// multipart subroutes (UploadPart / Complete / Abort / List)
+		// continue through gofakes3 unchanged — they look up rows by
+		// uploadId, which now has the correct attribution.
+		r.Use(interceptCreateMultipartUpload(d.Backend))
 		r.Handle("/*", http.StripPrefix("/s3", server))
 	})
 }

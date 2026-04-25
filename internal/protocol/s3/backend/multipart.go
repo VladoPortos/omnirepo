@@ -70,10 +70,25 @@ func (b *Backend) partCountLimit() int {
 	return defaultPartCountLimit
 }
 
-// CreateMultipartUpload opens a new upload. Returns the client-visible
-// UploadID (uuid v4 string).
-func (b *Backend) CreateMultipartUpload(bucket, object string, meta map[string]string) (gofakes3.UploadID, error) {
-	ctx := context.Background()
+// CreateMultipartUploadCtx is the actor-aware entry point invoked by the
+// chi-side interceptCreateMultipartUpload middleware (S3HARD-05 / S3HARD-06,
+// audit finding #10). The chi intercept hijacks `?uploads` POST requests
+// upstream of gofakes3 because gofakes3's MultipartBackend.CreateMultipartUpload
+// signature drops *http.Request — we need r.Context() to read the actor and
+// stamp s3_multipart_uploads.initiated_by_s3_key_id with the SigV4-resolved
+// s3_access_keys.id rather than the legacy users.id=1 fabrication.
+//
+// actorS3KeyID MUST be non-nil. The middleware's contract is:
+//   - SigV4Middleware ran upstream and stamped Actor.S3KeyID on ctx.
+//   - The intercept reads it and passes the pointer here.
+//   - A nil pointer is a programming error and surfaces as an error rather
+//     than persisting a silently-unattributed row (defense-in-depth: the
+//     metadata.S3MultipartRepo.StartUpload validation gate also rejects
+//     both-nil rows).
+func (b *Backend) CreateMultipartUploadCtx(ctx context.Context, bucket, object string, meta map[string]string, actorS3KeyID *int64) (gofakes3.UploadID, error) {
+	if actorS3KeyID == nil {
+		return "", fmt.Errorf("backend: missing actor s3 key id (programming error)")
+	}
 	if err := validateObjectKey(object); err != nil {
 		return "", err
 	}
@@ -86,27 +101,13 @@ func (b *Backend) CreateMultipartUpload(bucket, object string, meta map[string]s
 	}
 	uploadID := uuid.NewString()
 	metaJSON := marshalMeta(meta)
-
-	// REMOVE IN 02-04: Plan 02-02 (S3HARD-05 / D-06) flipped
-	// S3MultipartUpload.InitiatedByUserID from int64 to *int64 so the
-	// SigV4-attributed path (Plan 02-04) can pass a NULL user-id and store
-	// the resolved S3 access key id in the new initiated_by_s3_key_id
-	// column instead. Plan 02-04 deletes the multipartInitiatorFallback
-	// constant, removes this temporary pointer wrapper, and switches this
-	// call site to read actor.S3KeyID from the chi-intercepted request
-	// context (D-07). Plan 02-04 Task 1 also grep-gates BOTH
-	// `multipartInitiatorFallback` AND `REMOVE IN 02-04` — the build fails
-	// if either string survives. See
-	// internal/protocol/s3/backend/remove_in_02_04_marker_test.go for the
-	// forcing-function gate (W-2 / threat T-02-02-05).
-	tmpUserID := multipartInitiatorFallback
 	if err := b.DB.WriteTx(ctx, func(tx *sql.Tx) error {
 		_, err := b.Multipart.StartUpload(ctx, tx, &metadata.S3MultipartUpload{
-			UploadID:          uploadID,
-			BucketID:          id,
-			Key:               object,
-			InitiatedByUserID: &tmpUserID,
-			MetadataJSON:      metaJSON,
+			UploadID:           uploadID,
+			BucketID:           id,
+			Key:                object,
+			InitiatedByS3KeyID: actorS3KeyID,
+			MetadataJSON:       metaJSON,
 		})
 		return err
 	}); err != nil {
@@ -118,12 +119,16 @@ func (b *Backend) CreateMultipartUpload(bucket, object string, meta map[string]s
 	return gofakes3.UploadID(uploadID), nil
 }
 
-// multipartInitiatorFallback is the sentinel user id used when the gofakes3
-// call path doesn't thread an authenticated user through to the Backend.
-// The REST-API path (Plan 07) wraps CreateMultipartUpload with an explicit
-// user id; this sentinel keeps the FK satisfied in the meantime. Value 0 is
-// reserved; we use 1 (the bootstrap super-admin, present in every install).
-const multipartInitiatorFallback int64 = 1
+// CreateMultipartUpload is the legacy gofakes3-driven path. Production
+// requests never reach it because interceptCreateMultipartUpload owns the
+// `?uploads` POST route (Plan 02-04). The shim returns gofakes3.ErrInternal
+// as a defensive safety net — if a future routing change ever bypasses the
+// chi intercept, the request fails closed (HTTP 500 InternalError) rather
+// than persisting a silently-unattributed multipart row that audit could
+// not trace back to a SigV4 actor.
+func (b *Backend) CreateMultipartUpload(bucket, object string, meta map[string]string) (gofakes3.UploadID, error) {
+	return "", gofakes3.ErrInternal
+}
 
 // verifyUploadOwnership checks that the upload exists, belongs to the requested
 // bucket, and matches the expected object key. Prevents cross-bucket multipart

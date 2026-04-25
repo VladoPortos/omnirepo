@@ -25,11 +25,13 @@ package s3
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/xml"
 	"io"
 	"net/http"
 	"os"
 	"strings"
 
+	"github.com/dxc-internal/omnirepo/internal/auth"
 	"github.com/dxc-internal/omnirepo/internal/protocol/s3/backend"
 	"github.com/dxc-internal/omnirepo/internal/protocol/s3/sigv4"
 )
@@ -167,4 +169,180 @@ func interceptPutObject(b *backend.Backend) func(http.Handler) http.Handler {
 // use interceptPutObject directly — handler.go does so when mounting.
 func InterceptPutObjectForTest(b *backend.Backend) func(http.Handler) http.Handler {
 	return interceptPutObject(b)
+}
+
+// interceptCreateMultipartUpload owns the `?uploads` POST route at the chi
+// layer (Plan 02-04, S3HARD-05 / S3HARD-06, audit finding #10).
+//
+// The motivation: gofakes3's MultipartBackend.CreateMultipartUpload signature
+// drops the *http.Request argument, so the Backend method has no way to read
+// the SigV4-resolved Actor.S3KeyID off r.Context(). To stamp
+// s3_multipart_uploads.initiated_by_s3_key_id correctly (replacing the
+// legacy users.id=1 fabrication that closed audit-finding-#10) we hijack
+// the route at the chi layer — read actor.S3KeyID from ctx, dispatch to the
+// new actor-aware backend.CreateMultipartUploadCtx, and render the AWS-spec
+// `<InitiateMultipartUploadResult>` XML envelope ourselves. gofakes3 is
+// bypassed entirely for this single route.
+//
+// All other multipart routes (UploadPart `?partNumber=`, CompleteMultipart
+// `POST ?uploadId=`, AbortMultipartUpload `DELETE ?uploadId=`,
+// ListMultipartUploads `GET ?uploads`, ListParts `GET ?uploadId=`) continue
+// to flow through gofakes3 unchanged — they look up rows by uploadId, which
+// now has the correct initiated_by_s3_key_id.
+//
+// Bypass paths (in order, short-circuiting):
+//  1. Non-POST request                                          → forward
+//  2. POST without `?uploads` (other multipart subroutes)       → forward
+//  3. Missing actor.S3KeyID on ctx (programming error: SigV4
+//     middleware did not run upstream)                          → fail closed
+//  4. Bucket/key cannot be parsed from URL                       → 400
+//
+// Hex-mode enforcement is not relevant here — the body of an
+// InitiateMultipartUpload POST is empty per AWS spec; metadata travels via
+// x-amz-meta-* headers which we forward to the backend opaquely.
+//
+// Threat coverage (T-02-04-01..06 — see Plan 02-04 <threat_model>):
+//   - T-02-04-01 (spoofing) mitigated by reading actor.S3KeyID off ctx
+//     (only SigV4Middleware sets it, after a verified signature).
+//   - T-02-04-02 (unauthenticated multipart-create) mitigated by route
+//     placement under SigV4Middleware + RequireBucketAccess.
+//   - T-02-04-06 (x-amz-meta passthrough) — same trust posture as gofakes3
+//     would have applied; metadata is stored opaquely as JSON.
+func interceptCreateMultipartUpload(b *backend.Backend) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Step 1: non-POST bypass.
+			if r.Method != http.MethodPost {
+				next.ServeHTTP(w, r)
+				return
+			}
+			// Step 2: only `?uploads` (presence) is the create route. Other
+			// `?uploadId=...` POSTs are CompleteMultipartUpload (gofakes3 owns).
+			q := r.URL.Query()
+			if !q.Has("uploads") {
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			// Step 3: actor.S3KeyID must be on ctx. Fail closed on programming
+			// error — silent bypass would leave the row attribution path
+			// unenforced. SigV4Middleware always stamps it on success.
+			actor, ok := auth.ActorFromContext(r.Context())
+			if !ok || actor.S3KeyID == nil {
+				sigv4.WriteError(w, r, sigv4.ErrInvalidAccessKeyId)
+				return
+			}
+
+			// Step 4: parse bucket + key from path. Path arrives as
+			// "/<bucket>/<key>" (chi.StripPrefix removed /s3 upstream) OR
+			// "/s3/<bucket>/<key>" (depending on whether the test mounts the
+			// strip-prefix or hits the chi route directly). Handle both.
+			bucket := bucketFromPath(r.URL.Path)
+			if bucket == "" {
+				// Try without /s3 prefix (path already stripped).
+				bucket = bucketFromStrippedPath(r.URL.Path)
+			}
+			if bucket == "" {
+				sigv4.WriteError(w, r, sigv4.ErrInvalidRequest)
+				return
+			}
+			key := multipartKeyFromPath(r.URL.Path, bucket)
+			if key == "" {
+				sigv4.WriteError(w, r, sigv4.ErrInvalidRequest)
+				return
+			}
+
+			// Forward x-amz-meta-* headers + Content-Type to the backend as
+			// opaque metadata. gofakes3 normalizes to map[string]string —
+			// we mirror its passthrough shape.
+			meta := metaFromMultipartHeaders(r)
+
+			uploadID, err := b.CreateMultipartUploadCtx(r.Context(), bucket, key, meta, actor.S3KeyID)
+			if err != nil {
+				// Map to a generic AWS-shape error envelope. Detailed cause
+				// stays in slog at Warn — never leaked over the wire.
+				sigv4.WriteError(w, r, sigv4.ErrInvalidRequest)
+				return
+			}
+
+			// Render AWS-spec InitiateMultipartUploadResult.
+			resp := struct {
+				XMLName  xml.Name `xml:"InitiateMultipartUploadResult"`
+				XMLNS    string   `xml:"xmlns,attr"`
+				Bucket   string   `xml:"Bucket"`
+				Key      string   `xml:"Key"`
+				UploadID string   `xml:"UploadId"`
+			}{
+				XMLNS:    "http://s3.amazonaws.com/doc/2006-03-01/",
+				Bucket:   bucket,
+				Key:      key,
+				UploadID: string(uploadID),
+			}
+			w.Header().Set("Content-Type", "application/xml")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(xml.Header))
+			_ = xml.NewEncoder(w).Encode(resp)
+		})
+	}
+}
+
+// InterceptCreateMultipartUploadForTest exposes interceptCreateMultipartUpload
+// for the s3_test package's intercept_multipart_test.go. Internal callers
+// should use interceptCreateMultipartUpload directly — handler.go does so
+// when mounting (Plan 02-04 Task 1).
+func InterceptCreateMultipartUploadForTest(b *backend.Backend) func(http.Handler) http.Handler {
+	return interceptCreateMultipartUpload(b)
+}
+
+// bucketFromStrippedPath extracts the bucket name from a path that has
+// already had any /s3 prefix removed (e.g. "/<bucket>/<key>"). Returns ""
+// for paths without a leading slash + bucket segment.
+func bucketFromStrippedPath(path string) string {
+	if !strings.HasPrefix(path, "/") {
+		return ""
+	}
+	rest := path[1:]
+	if rest == "" {
+		return ""
+	}
+	if idx := strings.IndexByte(rest, '/'); idx >= 0 {
+		return rest[:idx]
+	}
+	return rest
+}
+
+// multipartKeyFromPath returns the object key from a chi-routed path that
+// looks like "/s3/<bucket>/<key>" or "/<bucket>/<key>" once the /s3 prefix
+// has been stripped upstream. The key may itself contain '/' (e.g. a/b/c).
+//
+// Returns "" if the path does not contain a key segment after the bucket.
+func multipartKeyFromPath(path, bucket string) string {
+	// Try /s3/<bucket>/<key> first.
+	if rest, ok := strings.CutPrefix(path, "/s3/"+bucket+"/"); ok {
+		return rest
+	}
+	// Then /<bucket>/<key>.
+	if rest, ok := strings.CutPrefix(path, "/"+bucket+"/"); ok {
+		return rest
+	}
+	return ""
+}
+
+// metaFromMultipartHeaders builds the meta map gofakes3 would have populated
+// from x-amz-meta-* + Content-Type + x-amz-acl headers. Caller-supplied
+// metadata is stored opaquely as JSON in s3_multipart_uploads.metadata_json
+// — no downstream code interprets it (same trust posture as gofakes3's
+// native handling — T-02-04-06).
+func metaFromMultipartHeaders(r *http.Request) map[string]string {
+	if len(r.Header) == 0 {
+		return nil
+	}
+	m := make(map[string]string, len(r.Header))
+	for k, vs := range r.Header {
+		if len(vs) == 0 {
+			continue
+		}
+		m[k] = vs[0]
+	}
+	return m
 }

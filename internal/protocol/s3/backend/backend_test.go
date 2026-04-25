@@ -29,6 +29,11 @@ type fixture struct {
 	db        *metadata.DB
 	dataRoot  string
 	projectID int64
+
+	// s3KeyID is the cached id of the fixture s3_access_keys row used by
+	// fixtureCreateMPU (Plan 02-04). Lazily populated on first multipart
+	// create call from a given test.
+	s3KeyID int64
 }
 
 func newFixture(t *testing.T) *fixture {

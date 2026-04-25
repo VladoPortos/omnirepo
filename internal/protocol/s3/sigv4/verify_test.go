@@ -227,6 +227,145 @@ func TestVerify_SHA256BodyMode(t *testing.T) {
 	})
 }
 
+// ---- PayloadSHA256 plumbing tests (S3HARD-01, D-01) ----
+
+// TestVerify_PayloadSHA256_HexMode asserts that VerifyResult.PayloadSHA256
+// carries the literal hex(sha256(body)) header value the client signed when
+// the request used standard SigV4 SHA mode.
+func TestVerify_PayloadSHA256_HexMode(t *testing.T) {
+	now := time.Date(2026, 4, 16, 12, 0, 0, 0, time.UTC)
+	body := []byte("payload-bytes")
+	want := func() string {
+		h := sha256.Sum256(body)
+		return hex.EncodeToString(h[:])
+	}()
+	r := makeReq("PUT", "/k", body)
+	signRequest(t, r, now, body, "")
+
+	withFrozenTime(t, now, func() {
+		res, err := Verify(r, testLookup, 15*time.Minute)
+		if err != nil {
+			t.Fatalf("Verify: %v", err)
+		}
+		if res.BodyMode != BodyModeSHA256 {
+			t.Errorf("BodyMode=%d, want SHA256", res.BodyMode)
+		}
+		if res.PayloadSHA256 != want {
+			t.Errorf("PayloadSHA256=%q, want %q", res.PayloadSHA256, want)
+		}
+	})
+}
+
+// TestVerify_PayloadSHA256_Unsigned asserts the literal "UNSIGNED-PAYLOAD"
+// sentinel propagates verbatim into VerifyResult.PayloadSHA256 — downstream
+// PutObject reads this to skip the post-write SHA compare.
+func TestVerify_PayloadSHA256_Unsigned(t *testing.T) {
+	now := time.Date(2026, 4, 16, 12, 0, 0, 0, time.UTC)
+	body := []byte("the body")
+	r := makeReq("PUT", "/k", body)
+	signRequest(t, r, now, body, "UNSIGNED-PAYLOAD")
+
+	withFrozenTime(t, now, func() {
+		res, err := Verify(r, testLookup, 15*time.Minute)
+		if err != nil {
+			t.Fatalf("Verify: %v", err)
+		}
+		if res.BodyMode != BodyModeUnsignedPayload {
+			t.Errorf("BodyMode=%d, want Unsigned", res.BodyMode)
+		}
+		if res.PayloadSHA256 != "UNSIGNED-PAYLOAD" {
+			t.Errorf("PayloadSHA256=%q, want UNSIGNED-PAYLOAD", res.PayloadSHA256)
+		}
+	})
+}
+
+// TestVerify_PayloadSHA256_Streaming asserts the
+// "STREAMING-AWS4-HMAC-SHA256-PAYLOAD" sentinel propagates verbatim — the
+// chunk verifier already runs inline; PutObject must skip the post-write
+// compare.
+func TestVerify_PayloadSHA256_Streaming(t *testing.T) {
+	now := time.Date(2026, 4, 16, 12, 0, 0, 0, time.UTC)
+	r := makeReq("PUT", "/k", nil)
+	// Build a SigV4 signature for a STREAMING request. The canonical-request
+	// payload-hash slot is the literal sentinel; the actual chunked body is
+	// handed off to NewChunkedReader inside dispatchBody.
+	amzDate := now.UTC().Format(amzTimeFmt)
+	date := amzDate[:8]
+	r.Header.Set("Host", testHost)
+	r.Host = testHost
+	r.Header.Set("x-amz-date", amzDate)
+	r.Header.Set("x-amz-content-sha256", "STREAMING-AWS4-HMAC-SHA256-PAYLOAD")
+	signed := []string{"host", "x-amz-content-sha256", "x-amz-date"}
+	canonReq := canonicalRequest(r.Method, r.URL.EscapedPath(), r.URL.RawQuery,
+		r.Header, signed, "STREAMING-AWS4-HMAC-SHA256-PAYLOAD")
+	scope := date + "/" + testRegion + "/" + testService + "/aws4_request"
+	sts := stringToSign(amzDate, scope, canonReq)
+	kSigning := deriveKey(testSecret, date, testRegion, testService)
+	sig := hmacSHA256Hex(kSigning, []byte(sts))
+	r.Header.Set("Authorization",
+		"AWS4-HMAC-SHA256 Credential="+testAKID+"/"+scope+
+			", SignedHeaders="+strings.Join(signed, ";")+", Signature="+sig)
+
+	withFrozenTime(t, now, func() {
+		res, err := Verify(r, testLookup, 15*time.Minute)
+		if err != nil {
+			t.Fatalf("Verify: %v", err)
+		}
+		if res.BodyMode != BodyModeStreamingSigned {
+			t.Errorf("BodyMode=%d, want Streaming", res.BodyMode)
+		}
+		if res.PayloadSHA256 != "STREAMING-AWS4-HMAC-SHA256-PAYLOAD" {
+			t.Errorf("PayloadSHA256=%q, want STREAMING-AWS4-HMAC-SHA256-PAYLOAD",
+				res.PayloadSHA256)
+		}
+	})
+}
+
+// TestVerify_PayloadSHA256_EmptyHeader asserts that when the client omits
+// x-amz-content-sha256, the verifier reports PayloadSHA256 = hex(sha256(""))
+// — matching the implicit value the client signed.
+func TestVerify_PayloadSHA256_EmptyHeader(t *testing.T) {
+	now := time.Date(2026, 4, 16, 12, 0, 0, 0, time.UTC)
+	wantEmpty := func() string {
+		h := sha256.Sum256(nil)
+		return hex.EncodeToString(h[:])
+	}()
+
+	// Build a request that signs with hex(sha256("")) but DOES NOT set the
+	// x-amz-content-sha256 header on the wire — the verifier infers the
+	// implicit empty-body hash. Note: signedHeaders MUST omit
+	// x-amz-content-sha256 in this branch (the client never sent it).
+	r := makeReq("GET", "/k", nil)
+	amzDate := now.UTC().Format(amzTimeFmt)
+	date := amzDate[:8]
+	r.Header.Set("Host", testHost)
+	r.Host = testHost
+	r.Header.Set("x-amz-date", amzDate)
+	signed := []string{"host", "x-amz-date"}
+	canonReq := canonicalRequest(r.Method, r.URL.EscapedPath(), r.URL.RawQuery,
+		r.Header, signed, wantEmpty)
+	scope := date + "/" + testRegion + "/" + testService + "/aws4_request"
+	sts := stringToSign(amzDate, scope, canonReq)
+	kSigning := deriveKey(testSecret, date, testRegion, testService)
+	sig := hmacSHA256Hex(kSigning, []byte(sts))
+	r.Header.Set("Authorization",
+		"AWS4-HMAC-SHA256 Credential="+testAKID+"/"+scope+
+			", SignedHeaders="+strings.Join(signed, ";")+", Signature="+sig)
+
+	withFrozenTime(t, now, func() {
+		res, err := Verify(r, testLookup, 15*time.Minute)
+		if err != nil {
+			t.Fatalf("Verify: %v", err)
+		}
+		if res.BodyMode != BodyModeSHA256 {
+			t.Errorf("BodyMode=%d, want SHA256", res.BodyMode)
+		}
+		if res.PayloadSHA256 != wantEmpty {
+			t.Errorf("PayloadSHA256=%q, want %q", res.PayloadSHA256, wantEmpty)
+		}
+	})
+}
+
 func TestVerify_WrongService(t *testing.T) {
 	now := time.Date(2026, 4, 16, 12, 0, 0, 0, time.UTC)
 	r := makeReq("GET", "/x", nil)

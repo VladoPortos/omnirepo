@@ -11,14 +11,21 @@ import (
 	"compress/gzip"
 	"context"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/dxc-internal/omnirepo/internal/streamio"
 )
+
+// maxPackagesDecompressedBytes caps the gunzipped Packages stream.
+// Test-overridable (var, not const) so cap+1 oversized-upstream regression
+// guards can run without crafting a multi-GiB gzip bomb. Production
+// callers do not mutate it.
+var maxPackagesDecompressedBytes int64 = 1024 * 1024 * 1024
 
 // UpstreamEntry is one binary package yielded by ParseUpstream.
 type UpstreamEntry struct {
@@ -121,7 +128,12 @@ func ParseUpstream(
 				if gerr != nil {
 					return count, fmt.Errorf("deb upstream: gunzip Packages: %w", gerr)
 				}
-				expanded, rerr := io.ReadAll(io.LimitReader(gz, 1024*1024*1024))
+				// STREAMIO-06 (audit #5): fail-explicit on cap+1 instead
+				// of the previous silent-truncation idiom on the
+				// gunzipped Packages stream. Cap layer is post-decompress
+				// so a small compressed body that decompresses to cap+1
+				// is rejected.
+				expanded, rerr := streamio.ReadAllLimited(gz, maxPackagesDecompressedBytes, streamio.ErrMetadataTooLarge)
 				_ = gz.Close()
 				if rerr != nil {
 					return count, fmt.Errorf("deb upstream: read Packages: %w", rerr)
@@ -357,7 +369,10 @@ func fetchAll(ctx context.Context, client *http.Client, urlStr string, creds Aut
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("deb upstream: %s -> %d", urlStr, resp.StatusCode)
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes))
+	// STREAMIO-06 (audit #5): fail-explicit on cap+1 metadata bodies
+	// (Release / InRelease / Packages / Packages.gz) instead of the prior
+	// silent-truncation idiom.
+	body, err := streamio.ReadAllLimited(resp.Body, maxBytes, streamio.ErrMetadataTooLarge)
 	if err != nil {
 		return nil, fmt.Errorf("deb upstream: read body: %w", err)
 	}

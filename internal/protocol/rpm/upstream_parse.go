@@ -11,12 +11,19 @@ import (
 	"context"
 	"encoding/xml"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"path/filepath"
 	"strings"
+
+	"github.com/dxc-internal/omnirepo/internal/streamio"
 )
+
+// maxPrimaryDecompressedBytes caps the gunzipped primary.xml stream.
+// Test-overridable (var, not const) so cap+1 oversized-upstream regression
+// guards can run without crafting a multi-GiB gzip bomb. Production
+// callers do not mutate it.
+var maxPrimaryDecompressedBytes int64 = 1024 * 1024 * 1024
 
 // UpstreamEntry is one package yielded by ParseUpstream.
 type UpstreamEntry struct {
@@ -84,7 +91,11 @@ func ParseUpstream(
 	if err != nil {
 		return 0, fmt.Errorf("rpm upstream: gunzip primary: %w", err)
 	}
-	primaryBody, err := io.ReadAll(io.LimitReader(gz, 1024*1024*1024))
+	// STREAMIO-06 (audit #5): fail-explicit on cap+1 instead of the
+	// previous silent-truncation idiom (full-buffer read through a
+	// LimitReader on the gunzipped stream). Cap layer is post-decompress
+	// so a small compressed body that decompresses to cap+1 is rejected.
+	primaryBody, err := streamio.ReadAllLimited(gz, maxPrimaryDecompressedBytes, streamio.ErrMetadataTooLarge)
 	if err != nil {
 		_ = gz.Close()
 		return 0, fmt.Errorf("rpm upstream: read primary: %w", err)
@@ -181,7 +192,10 @@ func fetchAll(ctx context.Context, client *http.Client, urlStr string, creds Aut
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("rpm upstream: %s -> %d", urlStr, resp.StatusCode)
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes))
+	// STREAMIO-06 (audit #5): fail-explicit on cap+1 metadata bodies
+	// (repomd.xml, primary.xml.gz) instead of the prior silent-truncation
+	// idiom.
+	body, err := streamio.ReadAllLimited(resp.Body, maxBytes, streamio.ErrMetadataTooLarge)
 	if err != nil {
 		return nil, fmt.Errorf("rpm upstream: read body: %w", err)
 	}

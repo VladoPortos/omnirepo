@@ -15,14 +15,24 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/dxc-internal/omnirepo/internal/streamio"
 )
+
+// maxSimpleIndexBytes caps the /simple/ index page body. Test-overridable
+// (var, not const) so cap+1 oversized-upstream regression guards can run
+// without serving multi-MiB bodies. Production callers do not mutate it.
+var maxSimpleIndexBytes int64 = 64 * 1024 * 1024
+
+// maxProjectPageBytes caps the /simple/<project>/ page body. Same
+// test-overridable rationale as maxSimpleIndexBytes.
+var maxProjectPageBytes int64 = 16 * 1024 * 1024
 
 // UpstreamFile is one file entry parsed from an upstream PyPI Simple
 // project page. Path holds the absolute or upstream-relative URL the sync
@@ -133,7 +143,9 @@ func ParseUpstreamSimpleIndex(ctx context.Context, client *http.Client, upstream
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("pypi upstream: %s -> %d", indexURL, resp.StatusCode)
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 64*1024*1024))
+	// STREAMIO-06 (audit #5): fail-explicit on cap+1 instead of the prior
+	// silent-truncation idiom (full-buffer read through a LimitReader).
+	body, err := streamio.ReadAllLimited(resp.Body, maxSimpleIndexBytes, streamio.ErrMetadataTooLarge)
 	if err != nil {
 		return nil, fmt.Errorf("pypi upstream: read body: %w", err)
 	}
@@ -191,7 +203,9 @@ func ParseUpstreamProject(ctx context.Context, client *http.Client, upstream, no
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("pypi upstream: %s -> %d", projectURL, resp.StatusCode)
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 16*1024*1024))
+	// STREAMIO-06 (audit #5): fail-explicit on cap+1 instead of the prior
+	// silent-truncation idiom (full-buffer read through a LimitReader).
+	body, err := streamio.ReadAllLimited(resp.Body, maxProjectPageBytes, streamio.ErrMetadataTooLarge)
 	if err != nil {
 		return nil, fmt.Errorf("pypi upstream: read body: %w", err)
 	}

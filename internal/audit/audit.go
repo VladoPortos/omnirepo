@@ -12,13 +12,16 @@ import (
 )
 
 // Event is the in-memory shape audit callers construct and hand to Record.
-// ActorUserID and ActorAPIKeyID are pointers so unauthenticated events (e.g.
-// auth.login.failure) can omit them — they land as NULL in the audit_log
-// table, which is the documented behaviour (D-33).
+// ActorUserID, ActorAPIKeyID, and ActorS3KeyID are pointers so unauthenticated
+// events (e.g. auth.login.failure) can omit them — they land as NULL in the
+// audit_log table, which is the documented behaviour (D-33). Exactly one of
+// the three is non-nil for a successfully authenticated actor; all three are
+// nil for anonymous events.
 type Event struct {
 	OccurredAt    time.Time      `json:"occurred_at"`
 	ActorUserID   *int64         `json:"actor_user_id,omitempty"`
 	ActorAPIKeyID *int64         `json:"actor_api_key_id,omitempty"`
+	ActorS3KeyID  *int64         `json:"actor_s3_key_id,omitempty"`
 	IP            string         `json:"ip,omitempty"`
 	UserAgent     string         `json:"user_agent,omitempty"`
 	Kind          EventKind      `json:"kind"`
@@ -89,13 +92,15 @@ func (l *logger) Record(ctx context.Context, e Event) error {
 		// (see internal/api/admin_audit.go).
 		_, exErr := tx.ExecContext(ctx, `
 			INSERT INTO audit_log(
-				occurred_at, actor_user_id, actor_api_key_id, ip, user_agent,
+				occurred_at, actor_user_id, actor_api_key_id, actor_s3_key_id,
+				ip, user_agent,
 				event_kind, target_kind, target_id, outcome, details_json
-			) VALUES (?,?,?,?,?,?,?,?,?,?)
+			) VALUES (?,?,?,?,?,?,?,?,?,?,?)
 		`,
 			e.OccurredAt.UTC().Format(DBTimestampLayout),
 			nullableInt64(e.ActorUserID),
 			nullableInt64(e.ActorAPIKeyID),
+			nullableInt64(e.ActorS3KeyID),
 			e.IP,
 			e.UserAgent,
 			string(e.Kind),

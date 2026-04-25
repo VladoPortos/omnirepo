@@ -23,11 +23,14 @@ import (
 //     → ActorUserID = nil (NEVER 0 — that is the FK violation case
 //     the helper exists to prevent), ActorAPIKeyID = &actor.APIKeyID.
 //   - actor.Kind == ActorKindS3Key
-//     → both nil. Phase 2's Actor.S3KeyID is not surfaced in audit_log
-//     columns yet (deferred to v1.7+; CONTEXT.md "Deferred Ideas").
+//     → ActorUserID = nil, ActorAPIKeyID = nil, ActorS3KeyID = actor.S3KeyID.
+//     v1.7 Phase 3 / S3AUDIT-02 surfaces the S3 access-key id directly so
+//     SigV4 actions carry meaningful protocol-level provenance instead of
+//     collapsing to "all-NULL" anonymous-shape rows. The migration 037
+//     introduced audit_log.actor_s3_key_id (FK to s3_access_keys).
 //   - actor.Kind == ActorKindAnonymous (or zero value)
-//     → both nil; the existing audit-event semantics for unauthenticated
-//     flows (e.g. EvtAuthLoginFailure) are preserved.
+//     → all three nil; the existing audit-event semantics for
+//     unauthenticated flows (e.g. EvtAuthLoginFailure) are preserved.
 //
 // SetActor is mutating: it writes through *e and leaves every other field
 // unchanged. The signature is `(*audit.Event, auth.Actor)` rather than
@@ -50,6 +53,7 @@ func SetActor(e *audit.Event, actor auth.Actor) {
 		uid := actor.ID
 		e.ActorUserID = &uid
 		e.ActorAPIKeyID = nil
+		e.ActorS3KeyID = nil
 	case auth.ActorKindAPIKey:
 		switch actor.OwnerKind {
 		case auth.OwnerKindUser:
@@ -57,24 +61,47 @@ func SetActor(e *audit.Event, actor auth.Actor) {
 			kid := actor.APIKeyID
 			e.ActorUserID = &uid
 			e.ActorAPIKeyID = &kid
+			e.ActorS3KeyID = nil
 		case auth.OwnerKindProject:
 			// CRITICAL: never write &0 here — that's the FK violation
 			// against users(id) that audit finding #7 documented.
 			kid := actor.APIKeyID
 			e.ActorUserID = nil
 			e.ActorAPIKeyID = &kid
+			e.ActorS3KeyID = nil
 		default:
 			// Defensive: an APIKey actor with no OwnerKind is a
-			// middleware bug. Leave both nil so the row is recognizable
-			// as malformed in post-mortem rather than silently mis-attributing.
+			// middleware bug. Leave all three nil so the row is
+			// recognizable as malformed in post-mortem rather than
+			// silently mis-attributing.
 			e.ActorUserID = nil
 			e.ActorAPIKeyID = nil
+			e.ActorS3KeyID = nil
 		}
-	default:
-		// ActorKindS3Key, ActorKindAnonymous, and the zero value all
-		// collapse to "no user/api-key attribution." S3 SigV4 keys may
-		// get their own column in v1.7+ (CONTEXT.md Deferred Ideas).
+	case auth.ActorKindS3Key:
+		// v1.7 Phase 3 / S3AUDIT-02: surface the resolved S3 access-key
+		// id so SigV4 state changes carry protocol-level provenance.
+		// actor.S3KeyID is itself *int64 — copy through, not the field
+		// pointer, so a future actor mutation cannot retroactively
+		// change a recorded audit row.
 		e.ActorUserID = nil
 		e.ActorAPIKeyID = nil
+		if actor.S3KeyID != nil {
+			kid := *actor.S3KeyID
+			e.ActorS3KeyID = &kid
+		} else {
+			// Defensive: an S3Key actor without an S3KeyID is a
+			// middleware bug (sigv4 lookup didn't populate it). Leave
+			// nil rather than fabricate; the row is identifiable as
+			// malformed.
+			e.ActorS3KeyID = nil
+		}
+	default:
+		// ActorKindAnonymous and the zero value collapse to
+		// "no attribution." Existing semantics for unauthenticated
+		// flows (EvtAuthLoginFailure etc.) are preserved.
+		e.ActorUserID = nil
+		e.ActorAPIKeyID = nil
+		e.ActorS3KeyID = nil
 	}
 }

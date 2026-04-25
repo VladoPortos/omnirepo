@@ -13,10 +13,11 @@ func ptrInt64(v int64) *int64 { return &v }
 
 func TestSetActor(t *testing.T) {
 	cases := []struct {
-		name       string
-		actor      auth.Actor
-		wantUserID *int64
-		wantKeyID  *int64
+		name        string
+		actor       auth.Actor
+		wantUserID  *int64
+		wantKeyID   *int64
+		wantS3KeyID *int64
 	}{
 		{
 			name:       "session_user",
@@ -40,10 +41,24 @@ func TestSetActor(t *testing.T) {
 			wantKeyID:  ptrInt64(9),
 		},
 		{
-			name:       "s3_sigv4_actor",
+			// v1.7 / S3AUDIT-02: S3 actor without S3KeyID is a defensive
+			// branch (sigv4 middleware should always populate it). Leave
+			// all three nil rather than fabricate.
+			name:       "s3_sigv4_actor_no_id_defensive",
 			actor:      auth.Actor{Kind: auth.ActorKindS3Key},
 			wantUserID: nil,
 			wantKeyID:  nil,
+		},
+		{
+			// v1.7 / S3AUDIT-02: the canonical happy path. ActorS3KeyID
+			// is populated from actor.S3KeyID (deep-copied so a later
+			// mutation of actor cannot retroactively change a recorded
+			// audit row).
+			name:        "s3_sigv4_actor_with_id",
+			actor:       auth.Actor{Kind: auth.ActorKindS3Key, S3KeyID: ptrInt64(55)},
+			wantUserID:  nil,
+			wantKeyID:   nil,
+			wantS3KeyID: ptrInt64(55),
 		},
 		{
 			name:       "anonymous",
@@ -59,8 +74,8 @@ func TestSetActor(t *testing.T) {
 		},
 		{
 			// Defensive: APIKey actor with empty OwnerKind is a
-			// middleware bug. Helper must leave both nil rather than
-			// silently mis-attributing as user 0.
+			// middleware bug. Helper must leave all three nil rather
+			// than silently mis-attributing as user 0.
 			name:       "api_key_missing_owner_kind_defensive",
 			actor:      auth.Actor{Kind: auth.ActorKindAPIKey, APIKeyID: 13},
 			wantUserID: nil,
@@ -81,6 +96,7 @@ func TestSetActor(t *testing.T) {
 			// a literal nil, not &0.
 			assertPtrEq(t, "ActorUserID", e.ActorUserID, tc.wantUserID)
 			assertPtrEq(t, "ActorAPIKeyID", e.ActorAPIKeyID, tc.wantKeyID)
+			assertPtrEq(t, "ActorS3KeyID", e.ActorS3KeyID, tc.wantS3KeyID)
 
 			// Untouched fields stay untouched.
 			if e.Kind != audit.EvtS3BucketCreated {
@@ -90,6 +106,29 @@ func TestSetActor(t *testing.T) {
 				t.Fatalf("Target* mutated: %q/%q", e.TargetKind, e.TargetID)
 			}
 		})
+	}
+}
+
+// TestSetActor_S3KeyID_DeepCopy proves SetActor copies the value behind
+// actor.S3KeyID into the event rather than aliasing the same pointer.
+// A subsequent mutation of the actor's underlying *int64 must not
+// retroactively change e.ActorS3KeyID — that would silently rewrite
+// already-recorded audit rows if the same actor reused storage.
+func TestSetActor_S3KeyID_DeepCopy(t *testing.T) {
+	id := int64(77)
+	actor := auth.Actor{Kind: auth.ActorKindS3Key, S3KeyID: &id}
+
+	e := audit.Event{Kind: audit.EvtS3BucketCreated}
+	api.SetActor(&e, actor)
+	if e.ActorS3KeyID == nil || *e.ActorS3KeyID != 77 {
+		t.Fatalf("initial: ActorS3KeyID = %v, want &77", e.ActorS3KeyID)
+	}
+
+	// Mutate the storage that actor.S3KeyID points at.
+	id = 999
+	if *e.ActorS3KeyID != 77 {
+		t.Fatalf("alias bug: ActorS3KeyID drifted to %d after actor mutation; want 77",
+			*e.ActorS3KeyID)
 	}
 }
 

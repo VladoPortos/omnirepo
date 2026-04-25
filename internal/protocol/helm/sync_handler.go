@@ -23,6 +23,7 @@ import (
 	"github.com/dxc-internal/omnirepo/internal/audit"
 	"github.com/dxc-internal/omnirepo/internal/auth"
 	"github.com/dxc-internal/omnirepo/internal/config"
+	"github.com/dxc-internal/omnirepo/internal/driftpurge"
 	"github.com/dxc-internal/omnirepo/internal/httpx"
 	"github.com/dxc-internal/omnirepo/internal/jobs"
 	"github.com/dxc-internal/omnirepo/internal/metadata"
@@ -180,9 +181,34 @@ func (h *SyncHandler) Handle(ctx context.Context, payload string, projectID, rep
 	// dashboards don't break — Success Criterion 1 in ROADMAP.
 	var (
 		entries       []UpstreamEntry
+		upstreamKeys  []driftpurge.Key
 		skippedOtherP int
 	)
 	collectFn := func(ent UpstreamEntry) error {
+		// v1.5 Phase 6 (DRIFTPURGE-01, D-14): record the chart's drift key
+		// regardless of transport (HTTP or OCI) and regardless of whether
+		// the chart is already cached locally. The drift step compares the
+		// FULL upstream key set against locally-stored helm_charts rows.
+		// D-12 Helm projection: Key{A: name, B: version, C: ""}.
+		var name, version string
+		if ent.Metadata != nil {
+			name = ent.Metadata.Name
+			version = ent.Metadata.Version
+		}
+		// OCI tags do not always populate Metadata pre-pull; fall back to
+		// parseOCIRef so OCI drift detection still has a key set.
+		if ent.Source == EntrySourceOCI && (name == "" || version == "") {
+			if n, v := parseOCIRef(ent.Path); n != "" && v != "" {
+				name, version = n, v
+			}
+		}
+		if name != "" && version != "" {
+			upstreamKeys = append(upstreamKeys, driftpurge.Key{
+				A: name,
+				B: version,
+				C: "",
+			})
+		}
 		if ent.Digest != "" {
 			if existing, ferr := h.deps.HelmCharts.FindByDigest(ctx, repoID, ent.Digest); ferr == nil && existing != nil {
 				return nil
@@ -359,6 +385,73 @@ func (h *SyncHandler) Handle(ctx context.Context, payload string, projectID, rep
 
 	// Terminal emit so Flush shows completion; progress_bytes = totalCharts.
 	_ = progress.Set(ctx, "done", int64(totalCharts), 0)
+
+	// v1.5 Phase 6 — Drift purge (DRIFTPURGE-01..05). Runs after upload
+	// success (D-07) and before SetFilesSynced. The Phase 5 partial-sync
+	// paths above (ctx-cancel + downloadErrors) return via h.fail(...)
+	// BEFORE this point, so the drift step is structurally unreachable on
+	// failed/partial syncs (D-11). Both HTTP and OCI helm upstreams flow
+	// through here per D-14.
+	if repo.DriftPurge && h.deps.Trash != nil {
+		adapter := driftpurge.NewHelmAdapter(
+			upstreamKeys,
+			h.deps.HelmCharts,
+			h.deps.Trash,
+			func(row *metadata.HelmChart) string {
+				// Mirror the ingest path: {project}/helm/{repo}/charts/{filename}.
+				key := strings.Join([]string{proj.Name, "helm", repo.Name, "charts", row.Filename}, "/")
+				return filepath.Join(h.deps.RepoRoot, filepath.FromSlash(key))
+			},
+		)
+		var report driftpurge.DriftReport
+		if err := h.deps.DB.WriteTx(ctx, func(tx *sql.Tx) error {
+			var rerr error
+			report, rerr = driftpurge.Run(ctx, tx, repo.ID, "", adapter)
+			return rerr
+		}); err != nil {
+			return h.fail(ctx, repo.ID, pl, startedAt, fmt.Errorf("drift purge: %w", err))
+		}
+
+		switch {
+		case report.Skipped:
+			if h.deps.Audit != nil {
+				_ = h.deps.Audit.Record(ctx, audit.Event{
+					Kind:       audit.EvtMirrorDriftPurgeSkipped,
+					TargetKind: "repo",
+					TargetID:   strconv.FormatInt(repo.ID, 10),
+					Details: map[string]any{
+						"protocol":     "helm",
+						"reason":       report.Reason,
+						"local_count":  int64(report.LocalCount),
+						"sync_job_id":  jobID,
+						"upstream_url": pl.UpstreamURL,
+					},
+				})
+			}
+		case report.PurgedCount > 0:
+			if h.deps.Audit != nil {
+				_ = h.deps.Audit.Record(ctx, audit.Event{
+					Kind:       audit.EvtMirrorDriftPurged,
+					TargetKind: "repo",
+					TargetID:   strconv.FormatInt(repo.ID, 10),
+					Details: map[string]any{
+						"protocol":     "helm",
+						"count":        int64(report.PurgedCount),
+						"sample":       report.Sample,
+						"sync_job_id":  jobID,
+						"upstream_url": pl.UpstreamURL,
+					},
+				})
+			}
+			if h.deps.SyncJobs != nil {
+				_ = h.deps.SyncJobs.SetSummaryDriftPurged(ctx, jobID, int64(report.PurgedCount))
+			}
+		default:
+			if h.deps.SyncJobs != nil {
+				_ = h.deps.SyncJobs.SetSummaryDriftPurged(ctx, jobID, 0)
+			}
+		}
+	}
 
 	// D-03 closure: persist per-job file count once so the UI pill can
 	// render "Sync complete · N files". wg.Wait() synced all goroutines.

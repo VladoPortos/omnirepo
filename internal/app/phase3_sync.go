@@ -58,6 +58,12 @@ func (d syncDeps) wireSync() *api.SyncRESTAdapter {
 	// four handlers for throttled byte-level / step-based progress emit.
 	syncJobsRepo := metadata.NewSyncJobsRepo(d.db)
 
+	// v1.5 Phase 6 (DRIFTPURGE-01..05): shared Trash root threaded into
+	// all four mirror handlers so driftpurge.Run can soft-delete drifted
+	// artifacts via Trash.MoveWithSnapshot. Same instance as the one
+	// wired into SyncDeps.Trash for helm OCI tag-rebound (Plan 11-03).
+	trashRoot := storage.NewTrash(filepath.Join(d.cfg.DataRoot, "trash"))
+
 	rpmSync := rpm.NewSyncHandler(rpm.SyncDeps{
 		DB: d.db, Path: pathStore,
 		RPMPackages: metadata.NewRPMPackagesRepo(d.db),
@@ -66,6 +72,7 @@ func (d syncDeps) wireSync() *api.SyncRESTAdapter {
 		Coalescer: d.rpmRegistry, HTTPClient: httpClient,
 		RepoRoot: repoRoot, Cfg: d.cfg.Sync,
 		SyncJobs: syncJobsRepo,
+		Trash:    trashRoot,
 	})
 	debSync := deb.NewSyncHandler(deb.SyncDeps{
 		DB: d.db, Path: pathStore,
@@ -76,6 +83,7 @@ func (d syncDeps) wireSync() *api.SyncRESTAdapter {
 		Coalescer: d.debRegistry, HTTPClient: httpClient,
 		RepoRoot: repoRoot, Cfg: d.cfg.Sync,
 		SyncJobs: syncJobsRepo,
+		Trash:    trashRoot,
 	})
 	pypiSync := pypi.NewSyncHandler(pypi.SyncDeps{
 		DB: d.db, Path: pathStore,
@@ -85,6 +93,7 @@ func (d syncDeps) wireSync() *api.SyncRESTAdapter {
 		Coalescer: d.pypiRegistry, HTTPClient: httpClient,
 		RepoRoot: repoRoot, Cfg: d.cfg.Sync,
 		SyncJobs: syncJobsRepo,
+		Trash:    trashRoot,
 	})
 	helmSync := helm.NewSyncHandler(helm.SyncDeps{
 		DB: d.db, Path: pathStore,
@@ -101,7 +110,9 @@ func (d syncDeps) wireSync() *api.SyncRESTAdapter {
 		// Plan 11-03 (D-02): tag-rebound handling soft-deletes the prior
 		// digest's on-disk file via Trash.Move with kind
 		// "oci_tag_rebound" before inserting the replacement row.
-		Trash: storage.NewTrash(filepath.Join(d.cfg.DataRoot, "trash")),
+		// v1.5 Phase 6 shares the same Trash root with the drift-purge
+		// step in all four mirror handlers.
+		Trash: trashRoot,
 	})
 	// Plan 11-06: git mirror sync handler. Uses the same shared httpClient
 	// (TLS/CA/proxy/timeout configured at startup per Pitfall E — go-git's

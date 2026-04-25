@@ -29,6 +29,7 @@ import (
 
 	"github.com/dxc-internal/omnirepo/internal/audit"
 	"github.com/dxc-internal/omnirepo/internal/config"
+	"github.com/dxc-internal/omnirepo/internal/driftpurge"
 	"github.com/dxc-internal/omnirepo/internal/httpx"
 	"github.com/dxc-internal/omnirepo/internal/jobs"
 	"github.com/dxc-internal/omnirepo/internal/metadata"
@@ -63,6 +64,11 @@ type SyncDeps struct {
 	// Phase 8 Plan 02 (M2.5): sync-jobs repo for throttled byte-level
 	// progress emit. Nil-safe — if unwired, progress.Set is a no-op.
 	SyncJobs *metadata.SyncJobsRepo
+	// Trash is the soft-delete primitive used by v1.5 Phase 6 drift purge
+	// (DRIFTPURGE-01..05) to move drifted .rpm blobs to the trash root
+	// before deleting their rpm_packages row. Nil-safe — when nil, drift
+	// purge is structurally skipped even if repo.DriftPurge is true.
+	Trash storage.Trash
 }
 
 // SyncHandler is the sync-pool handler for kind="rpm_sync".
@@ -159,11 +165,25 @@ func (h *SyncHandler) Handle(ctx context.Context, payload string, projectID, rep
 	// package="..."/> values). Keeps idempotency-by-digest filtering in
 	// the collect pass to avoid listing already-present rows as
 	// "to-download".
+	//
+	// v1.5 Phase 6 (DRIFTPURGE-01): the SAME pass also captures the full
+	// upstream key set (every accepted upstream entry, not just the
+	// to-fetch subset) so the end-of-Handle drift step can compute
+	// local\upstream without re-parsing primary.xml. D-12 RPM projection:
+	// {name, version, arch} — coarser than DB UNIQUE NEVRA per Pitfall 7.
 	var (
-		entries    []UpstreamEntry
-		totalBytes int64
+		entries      []UpstreamEntry
+		upstreamKeys []driftpurge.Key
+		totalBytes   int64
 	)
 	collectFn := func(ent UpstreamEntry) error {
+		if ent.Metadata != nil {
+			upstreamKeys = append(upstreamKeys, driftpurge.Key{
+				A: ent.Metadata.Name,
+				B: ent.Metadata.Version.Ver,
+				C: ent.Metadata.Arch,
+			})
+		}
 		if ent.Digest != "" {
 			if existing, ferr := h.deps.RPMPackages.FindByDigest(ctx, repoID, ent.Digest); ferr == nil && existing != nil {
 				return nil
@@ -245,6 +265,72 @@ func (h *SyncHandler) Handle(ctx context.Context, payload string, projectID, rep
 
 	// Terminal progress emit so Flush writes "done" with accumulated bytes.
 	_ = progress.Set(ctx, "done", atomic.LoadInt64(&accumulatedDone), totalBytes)
+
+	// v1.5 Phase 6 — Drift purge (DRIFTPURGE-01..05). Runs after upload
+	// success (D-07) and before SetFilesSynced. Failed syncs return via
+	// h.fail(...) earlier in the function, so this step is structurally
+	// unreachable on partial-sync paths (D-11).
+	if repo.DriftPurge && h.deps.Trash != nil {
+		adapter := driftpurge.NewRPMAdapter(
+			upstreamKeys,
+			h.deps.RPMPackages,
+			h.deps.Trash,
+			func(row *metadata.RPMPackage) string {
+				// Mirror the ingest path used by fetchAndCommit (canonical
+				// NEVRA filename in the {project}/rpm/{repo}/Packages/ dir).
+				key := storageKeyFor(proj.Name, repo.Name, row.Filename)
+				return filepath.Join(h.deps.RepoRoot, filepath.FromSlash(key))
+			},
+		)
+		var report driftpurge.DriftReport
+		if err := h.deps.DB.WriteTx(ctx, func(tx *sql.Tx) error {
+			var rerr error
+			report, rerr = driftpurge.Run(ctx, tx, repo.ID, "", adapter)
+			return rerr
+		}); err != nil {
+			return h.fail(ctx, repo.ID, pl, startedAt, fmt.Errorf("drift purge: %w", err))
+		}
+
+		switch {
+		case report.Skipped:
+			if h.deps.Audit != nil {
+				_ = h.deps.Audit.Record(ctx, audit.Event{
+					Kind:       audit.EvtMirrorDriftPurgeSkipped,
+					TargetKind: "repo",
+					TargetID:   strconv.FormatInt(repo.ID, 10),
+					Details: map[string]any{
+						"protocol":     "rpm",
+						"reason":       report.Reason,
+						"local_count":  int64(report.LocalCount),
+						"sync_job_id":  jobID,
+						"upstream_url": pl.UpstreamURL,
+					},
+				})
+			}
+		case report.PurgedCount > 0:
+			if h.deps.Audit != nil {
+				_ = h.deps.Audit.Record(ctx, audit.Event{
+					Kind:       audit.EvtMirrorDriftPurged,
+					TargetKind: "repo",
+					TargetID:   strconv.FormatInt(repo.ID, 10),
+					Details: map[string]any{
+						"protocol":     "rpm",
+						"count":        int64(report.PurgedCount),
+						"sample":       report.Sample,
+						"sync_job_id":  jobID,
+						"upstream_url": pl.UpstreamURL,
+					},
+				})
+			}
+			if h.deps.SyncJobs != nil {
+				_ = h.deps.SyncJobs.SetSummaryDriftPurged(ctx, jobID, int64(report.PurgedCount))
+			}
+		default:
+			if h.deps.SyncJobs != nil {
+				_ = h.deps.SyncJobs.SetSummaryDriftPurged(ctx, jobID, 0)
+			}
+		}
+	}
 
 	// D-03 closure: persist per-job file count once so the UI pill can
 	// render "Sync complete · N files · X MB". wg.Wait() synced all goroutines.

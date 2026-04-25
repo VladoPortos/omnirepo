@@ -25,6 +25,7 @@ import (
 
 	"github.com/dxc-internal/omnirepo/internal/audit"
 	"github.com/dxc-internal/omnirepo/internal/config"
+	"github.com/dxc-internal/omnirepo/internal/driftpurge"
 	"github.com/dxc-internal/omnirepo/internal/httpx"
 	"github.com/dxc-internal/omnirepo/internal/jobs"
 	"github.com/dxc-internal/omnirepo/internal/metadata"
@@ -62,6 +63,11 @@ type SyncDeps struct {
 	// Phase 8 Plan 02 (M2.4): sync-jobs repo for throttled byte-level
 	// progress emit. Nil-safe — if unwired, progress.Set is a no-op.
 	SyncJobs *metadata.SyncJobsRepo
+	// Trash is the soft-delete primitive used by v1.5 Phase 6 drift purge
+	// (DRIFTPURGE-01..05) to move drifted .deb blobs to the trash root
+	// before deleting their deb_packages row. Nil-safe — when nil, drift
+	// purge is structurally skipped even if repo.DriftPurge is true.
+	Trash storage.Trash
 }
 
 // SyncHandler is the sync-pool handler for kind="apt_sync".
@@ -162,11 +168,27 @@ func (h *SyncHandler) Handle(ctx context.Context, payload string, projectID, rep
 	// byte-level progress with a stable denominator. The collect pass
 	// filters identical to v1.0's yieldFn (skips rows already present
 	// by digest) so the slice holds only entries we'll actually download.
+	//
+	// v1.5 Phase 6 (DRIFTPURGE-01): the same pass also captures the full
+	// upstream key set across every per-suite parse iteration so the
+	// end-of-Handle drift step compares against the union of all suites'
+	// upstream entries. D-12 DEB projection flattens the 5-tuple into 3
+	// slots: Key{A: package+"|"+component+"|"+suite, B: version, C: arch}.
+	// Caller projection MUST match the adapter's row.Key() formula in
+	// internal/driftpurge/deb_adapter.go (debRow.Key).
 	var (
-		entries    []UpstreamEntry
-		totalBytes int64
+		entries      []UpstreamEntry
+		upstreamKeys []driftpurge.Key
+		totalBytes   int64
 	)
 	collectFn := func(ent UpstreamEntry) error {
+		if ent.Control != nil {
+			upstreamKeys = append(upstreamKeys, driftpurge.Key{
+				A: ent.Control.Package + "|" + ent.Component + "|" + ent.Suite,
+				B: ent.Control.Version,
+				C: ent.Control.Architecture,
+			})
+		}
 		if ent.Digest != "" {
 			if existing, ferr := h.deps.DEBPackages.FindByDigest(ctx, repoID, ent.Digest); ferr == nil && existing != nil {
 				return nil
@@ -270,6 +292,79 @@ func (h *SyncHandler) Handle(ctx context.Context, payload string, projectID, rep
 	// in-flight per-file step (UI poll mid-flush would otherwise keep
 	// reading "pulling foo_1.0" forever on zero-entry syncs).
 	_ = progress.Set(ctx, "done", atomic.LoadInt64(&accumulatedDone), totalBytes)
+
+	// v1.5 Phase 6 — Drift purge (DRIFTPURGE-01..05). Runs after upload
+	// success (D-07) and before SetFilesSynced. Failed syncs return via
+	// h.fail(...) earlier in the function, so this step is structurally
+	// unreachable on partial-sync paths (D-11).
+	if repo.DriftPurge && h.deps.Trash != nil {
+		adapter := driftpurge.NewDEBAdapter(
+			upstreamKeys,
+			h.deps.DEBPackages,
+			h.deps.AptSuites,
+			h.deps.Trash,
+			func(row *metadata.DEBPackage) string {
+				// Mirror the ingest path used by fetchAndCommit: rows
+				// store the canonical pool-relative path in
+				// StoragePoolPath; fall back to row.Filename for legacy
+				// rows backfilled by migration 023.
+				rest := row.StoragePoolPath
+				if rest == "" {
+					rest = row.Filename
+				}
+				key := strings.Join([]string{proj.Name, "deb", repo.Name, rest}, "/")
+				return filepath.Join(h.deps.RepoRoot, filepath.FromSlash(key))
+			},
+		)
+		var report driftpurge.DriftReport
+		if err := h.deps.DB.WriteTx(ctx, func(tx *sql.Tx) error {
+			var rerr error
+			report, rerr = driftpurge.Run(ctx, tx, repo.ID, "", adapter)
+			return rerr
+		}); err != nil {
+			return h.fail(ctx, repo.ID, pl, startedAt, fmt.Errorf("drift purge: %w", err))
+		}
+
+		switch {
+		case report.Skipped:
+			if h.deps.Audit != nil {
+				_ = h.deps.Audit.Record(ctx, audit.Event{
+					Kind:       audit.EvtMirrorDriftPurgeSkipped,
+					TargetKind: "repo",
+					TargetID:   strconv.FormatInt(repo.ID, 10),
+					Details: map[string]any{
+						"protocol":     "deb",
+						"reason":       report.Reason,
+						"local_count":  int64(report.LocalCount),
+						"sync_job_id":  jobID,
+						"upstream_url": pl.UpstreamURL,
+					},
+				})
+			}
+		case report.PurgedCount > 0:
+			if h.deps.Audit != nil {
+				_ = h.deps.Audit.Record(ctx, audit.Event{
+					Kind:       audit.EvtMirrorDriftPurged,
+					TargetKind: "repo",
+					TargetID:   strconv.FormatInt(repo.ID, 10),
+					Details: map[string]any{
+						"protocol":     "deb",
+						"count":        int64(report.PurgedCount),
+						"sample":       report.Sample,
+						"sync_job_id":  jobID,
+						"upstream_url": pl.UpstreamURL,
+					},
+				})
+			}
+			if h.deps.SyncJobs != nil {
+				_ = h.deps.SyncJobs.SetSummaryDriftPurged(ctx, jobID, int64(report.PurgedCount))
+			}
+		default:
+			if h.deps.SyncJobs != nil {
+				_ = h.deps.SyncJobs.SetSummaryDriftPurged(ctx, jobID, 0)
+			}
+		}
+	}
 
 	// D-03 closure: persist per-job file count once so the UI pill can
 	// render "Sync complete · N files · X MB". wg.Wait() synced all goroutines.

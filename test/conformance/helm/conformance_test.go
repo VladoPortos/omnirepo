@@ -40,10 +40,16 @@ func TestHelmRepoAddPullInstallDryRun(t *testing.T) {
 	// registration with a `connection refused`. Looping wget against /healthz
 	// blocks until vpnkit picks up the route. RPM tests don't need this
 	// because `dnf makecache` is naturally slow enough.
+	//
+	// Per-attempt timeout is enforced via the `timeout` busybox applet
+	// rather than `wget --timeout=...` because alpine/helm:3.20's wget
+	// silently ignores --timeout (empirically: 3+ minutes per attempt
+	// against an unreachable IP). `timeout 2` works portably across all
+	// alpine-based conformance images.
 	script := fmt.Sprintf(`set -e
 export HOME=/tmp
 for i in 1 2 3 4 5 6 7 8 9 10; do
-  if wget -q -O /dev/null --timeout=2 http://host.docker.internal:%d/healthz; then break; fi
+  if timeout 2 wget -q -O /dev/null http://host.docker.internal:%d/healthz; then break; fi
   sleep 0.2
 done
 helm repo add omnirepo %s --username %s --password %s

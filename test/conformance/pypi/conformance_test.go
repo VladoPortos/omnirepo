@@ -44,7 +44,7 @@ func TestPipInstallFromOmniRepo(t *testing.T) {
 	// freshly-bound host port forwarding; same flake class as helm test).
 	script := fmt.Sprintf(`set -e
 for i in 1 2 3 4 5 6 7 8 9 10; do
-  if wget -q -O /dev/null --timeout=2 http://host.docker.internal:%d/healthz; then break; fi
+  if timeout 2 wget -q -O /dev/null http://host.docker.internal:%d/healthz; then break; fi
   sleep 0.2
 done
 pip install --no-cache-dir --index-url %s --trusted-host host.docker.internal %s
@@ -71,7 +71,7 @@ func TestUVInstallFromOmniRepo(t *testing.T) {
 	// Warm vpnkit before uv runs (see TestPipInstallFromOmniRepo for rationale).
 	script := fmt.Sprintf(`set -e
 for i in 1 2 3 4 5 6 7 8 9 10; do
-  if wget -q -O /dev/null --timeout=2 http://host.docker.internal:%d/healthz; then break; fi
+  if timeout 2 wget -q -O /dev/null http://host.docker.internal:%d/healthz; then break; fi
   sleep 0.2
 done
 pip install --no-cache-dir uv >/dev/null

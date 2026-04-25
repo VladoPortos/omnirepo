@@ -377,9 +377,18 @@ func (b *Backend) AbortMultipartUpload(bucket, object string, id gofakes3.Upload
 	return nil
 }
 
-// ListMultipartUploads is a minimal implementation — Plan 07 may refine the
-// marker semantics. For Phase 4 we satisfy the interface with a single-page
-// response; pagination semantics are not required by the spec.
+// ListMultipartUploads returns one page of in-progress uploads for `bucket`
+// with AWS-spec pagination semantics (S3HARD-09 / D-13).
+//
+// Cursor: `marker` carries (KeyMarker, UploadIDMarker) from the previous
+// page's NextKeyMarker / NextUploadIDMarker. nil = first page.
+//
+// Limit: AWS-spec range is 1..1000. Values <=0 or >1000 collapse to 1000.
+//
+// Truncation: the underlying repo helper returns up to (limit+1) rows. If
+// more than `limit` come back we drop the extra row, set IsTruncated=true,
+// and emit NextKeyMarker / NextUploadIDMarker pointing at the last INCLUDED
+// row so the client can resume.
 func (b *Backend) ListMultipartUploads(bucket string, marker *gofakes3.UploadListMarker, prefix gofakes3.Prefix, limit int64) (*gofakes3.ListMultipartUploadsResult, error) {
 	ctx := context.Background()
 	id, ok, err := b.findBucketID(ctx, bucket)
@@ -389,62 +398,104 @@ func (b *Backend) ListMultipartUploads(bucket string, marker *gofakes3.UploadLis
 	if !ok {
 		return nil, gofakes3.BucketNotFound(bucket)
 	}
-	rows, err := b.DB.Reader.QueryContext(ctx, `
-		SELECT upload_id, key, initiated_at
-		FROM s3_multipart_uploads WHERE bucket_id=? ORDER BY key, upload_id
-	`, id)
+
+	effLimit := int(limit)
+	if effLimit <= 0 || effLimit > 1000 {
+		effLimit = 1000
+	}
+	var markerKey, markerUploadID string
+	if marker != nil {
+		markerKey = marker.Object
+		markerUploadID = string(marker.UploadID)
+	}
+	pfx := ""
+	if prefix.HasPrefix {
+		pfx = prefix.Prefix
+	}
+
+	rows, err := b.Multipart.ListUploadsForBucketPaginated(ctx, id, pfx, markerKey, markerUploadID, effLimit)
 	if err != nil {
 		return nil, fmt.Errorf("backend: list mpu: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
+
 	res := &gofakes3.ListMultipartUploadsResult{
-		Bucket:     bucket,
-		MaxUploads: limit,
+		Bucket:         bucket,
+		MaxUploads:     int64(effLimit),
+		Prefix:         pfx,
+		KeyMarker:      markerKey,
+		UploadIDMarker: gofakes3.UploadID(markerUploadID),
 	}
-	for rows.Next() {
-		var upID, key, initiated string
-		if err := rows.Scan(&upID, &key, &initiated); err != nil {
-			return nil, err
-		}
-		if prefix.HasPrefix && !matchesPrefix(key, prefix.Prefix) {
-			continue
-		}
-		t, _ := time.Parse("2006-01-02T15:04:05.000Z", initiated)
+
+	truncated := len(rows) > effLimit
+	if truncated {
+		rows = rows[:effLimit]
+	}
+	for _, u := range rows {
 		res.Uploads = append(res.Uploads, gofakes3.ListMultipartUploadItem{
-			Key:       key,
-			UploadID:  gofakes3.UploadID(upID),
-			Initiated: gofakes3.NewContentTime(t),
+			Key:       u.Key,
+			UploadID:  gofakes3.UploadID(u.UploadID),
+			Initiated: gofakes3.NewContentTime(u.InitiatedAt),
 		})
 	}
-	return res, rows.Err()
+	if truncated && len(rows) > 0 {
+		last := rows[len(rows)-1]
+		res.IsTruncated = true
+		res.NextKeyMarker = last.Key
+		res.NextUploadIDMarker = gofakes3.UploadID(last.UploadID)
+	}
+	return res, nil
 }
 
-// ListParts returns every part of an upload.
+// ListParts returns one page of parts for the given upload with AWS-spec
+// pagination semantics (S3HARD-10 / D-14).
+//
+// Cursor: `marker` is the PartNumberMarker from the previous page (0 for the
+// first page). The repo helper returns parts strictly greater than the
+// marker.
+//
+// Limit: AWS-spec range is 1..1000. Values <=0 or >1000 collapse to 1000.
+//
+// Truncation: same LIMIT (effLimit+1) idiom as ListMultipartUploads —
+// extra row is dropped, IsTruncated=true is set, NextPartNumberMarker is
+// the part_number of the last INCLUDED part.
 func (b *Backend) ListParts(bucket, object string, uploadID gofakes3.UploadID, marker int, limit int64) (*gofakes3.ListMultipartUploadPartsResult, error) {
 	ctx := context.Background()
 	if _, err := b.verifyUploadOwnership(ctx, bucket, object, string(uploadID)); err != nil {
 		return nil, err
 	}
-	parts, err := b.Multipart.ListParts(ctx, string(uploadID))
-	if err != nil {
-		return nil, err
+	effLimit := int(limit)
+	if effLimit <= 0 || effLimit > 1000 {
+		effLimit = 1000
 	}
+
+	parts, err := b.Multipart.ListPartsPaginated(ctx, string(uploadID), marker, effLimit)
+	if err != nil {
+		return nil, fmt.Errorf("backend: list parts: %w", err)
+	}
+
 	res := &gofakes3.ListMultipartUploadPartsResult{
-		Bucket:   bucket,
-		Key:      object,
-		UploadID: uploadID,
-		MaxParts: limit,
+		Bucket:           bucket,
+		Key:              object,
+		UploadID:         uploadID,
+		MaxParts:         int64(effLimit),
+		PartNumberMarker: marker,
+	}
+	truncated := len(parts) > effLimit
+	if truncated {
+		parts = parts[:effLimit]
 	}
 	for _, p := range parts {
-		if p.PartNumber <= marker {
-			continue
-		}
 		res.Parts = append(res.Parts, gofakes3.ListMultipartUploadPartItem{
 			PartNumber:   p.PartNumber,
 			LastModified: gofakes3.NewContentTime(p.UploadedAt),
 			ETag:         `"` + p.MD5 + `"`,
 			Size:         p.SizeBytes,
 		})
+	}
+	if truncated && len(parts) > 0 {
+		last := parts[len(parts)-1]
+		res.IsTruncated = true
+		res.NextPartNumberMarker = last.PartNumber
 	}
 	return res, nil
 }
@@ -480,12 +531,8 @@ func (b *Backend) SweepOrphanMultiparts(ctx context.Context, now time.Time) erro
 
 // -- internal helpers -----------------------------------------------------
 
-func matchesPrefix(key, prefix string) bool {
-	if prefix == "" {
-		return true
-	}
-	return len(key) >= len(prefix) && key[:len(prefix)] == prefix
-}
+// (matchesPrefix was removed in Plan 02-05 — prefix filtering moved into
+// SQL via the LIKE predicate in ListUploadsForBucketPaginated.)
 
 func contentTypeFromMeta(metaJSON string) string {
 	if metaJSON == "" || metaJSON == "{}" {

@@ -72,9 +72,12 @@ func NewService(repo *metadata.S3KeysRepo, aead *omrcrypto.AEAD) *Service {
 	return &Service{Repo: repo, AEAD: aead}
 }
 
-// LookupResult holds both the secret and the project_id from a single DB
-// lookup so callers don't need to query twice for the same AKID.
+// LookupResult holds the AKID's row id, secret, and project_id from a single
+// DB lookup so callers don't need to query twice for the same AKID. ID is the
+// s3_access_keys.id primary key — Plan 02-04 reads it for multipart-upload
+// attribution (replaces the hardcoded user-id 1 fallback). (S3HARD-01)
 type LookupResult struct {
+	ID        int64
 	Secret    string
 	ProjectID int64
 }
@@ -109,6 +112,7 @@ func (s *Service) LookupFull(akid string) (*LookupResult, error) {
 	}(akid)
 
 	return &LookupResult{
+		ID:        row.ID,
 		Secret:    string(plaintext),
 		ProjectID: row.ProjectID,
 	}, nil

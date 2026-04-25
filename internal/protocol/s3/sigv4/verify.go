@@ -42,6 +42,13 @@ type VerifyResult struct {
 	Scope       string
 	RequestTime time.Time
 	BodyMode    BodyMode
+	// PayloadSHA256 is the literal x-amz-content-sha256 header value the
+	// client signed: a 64-char lowercase hex digest, the "UNSIGNED-PAYLOAD"
+	// sentinel, or "STREAMING-AWS4-HMAC-SHA256-PAYLOAD" sentinel. When the
+	// header is absent the verifier reports hex(sha256("")) — the implicit
+	// value the client signed. Downstream PutObject reads this to enforce
+	// S3HARD-03 (Plan 02-03); multipart paths ignore it. (S3HARD-01, D-01)
+	PayloadSHA256 string
 }
 
 // parsedAuthz is the decomposed Authorization header.
@@ -180,10 +187,11 @@ func Verify(r *http.Request, lookup SecretLookup, skew time.Duration) (*VerifyRe
 	}
 
 	return &VerifyResult{
-		AccessKeyID: parsed.AKID,
-		Scope:       parsed.Scope,
-		RequestTime: reqTime,
-		BodyMode:    mode,
+		AccessKeyID:   parsed.AKID,
+		Scope:         parsed.Scope,
+		RequestTime:   reqTime,
+		BodyMode:      mode,
+		PayloadSHA256: bodyHash,
 	}, nil
 }
 

@@ -46,17 +46,15 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Atomic delete ordering (CONTEXT D-01, audit finding #6): stat first
+	// to learn whether the file is on disk (preserves the partial-state
+	// heal — when the file is missing but the row is present, we still
+	// drop the row in tx and skip trash.Move). Then commit the DB tx
+	// BEFORE trash.Move so a tx rollback never moves the file.
 	abs := filepath.Join(h.repoRoot, filepath.FromSlash(storageKeyForPool(res.project.Name, res.repo.Name, poolPath)))
+	fileOnDisk := false
 	if _, err := os.Stat(abs); err == nil {
-		if _, err := h.trash.Move(r.Context(), abs, "deb-package", res.repo.ID, auth.ActorLoginFromContext(r.Context())); err != nil {
-			slog.ErrorContext(r.Context(), "deb.delete.trash_failed",
-				slog.String("incident_id", chimw.GetReqID(r.Context())),
-				slog.String("filename", filename),
-				slog.Any("err", err),
-			)
-			http.Error(w, "storage error", http.StatusInternalServerError)
-			return
-		}
+		fileOnDisk = true
 	} else if !errors.Is(err, os.ErrNotExist) {
 		slog.ErrorContext(r.Context(), "deb.delete.stat_failed",
 			slog.String("incident_id", chimw.GetReqID(r.Context())),
@@ -66,6 +64,7 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
+	// (else ENOENT → fileOnDisk stays false; the tx heals the orphaned row.)
 
 	if err := h.db.WriteTx(r.Context(), func(tx *sql.Tx) error {
 		if err := h.debPackages.Delete(r.Context(), tx, row.ID); err != nil {
@@ -83,6 +82,22 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 		)
 		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
+	}
+
+	// Tx committed → row is gone. If the file was on disk at the start of
+	// the request, move it to trash now. A failure here leaves the file
+	// orphaned at abs (no row pointing at it); we surface 500 so the
+	// operator notices (CONTEXT D-05).
+	if fileOnDisk {
+		if _, err := h.trash.Move(r.Context(), abs, "deb-package", res.repo.ID, auth.ActorLoginFromContext(r.Context())); err != nil {
+			slog.ErrorContext(r.Context(), "deb.delete.trash_failed_post_commit",
+				slog.String("incident_id", chimw.GetReqID(r.Context())),
+				slog.String("filename", filename),
+				slog.Any("err", err),
+			)
+			http.Error(w, "storage error", http.StatusInternalServerError)
+			return
+		}
 	}
 
 	if h.coalescer != nil {

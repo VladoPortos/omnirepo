@@ -725,3 +725,86 @@ func TestSyncJobsRepo_RecoverStaleByKind_HelmOnly(t *testing.T) {
 		t.Fatalf("pypi status=%q want running (untouched)", pypiStatus)
 	}
 }
+
+// TestSyncJobs_SetSummaryDriftPurged covers v1.5 Phase 6 D-21: a JSON-merge
+// writer that stamps `drift_purged` into sync_jobs.summary without disturbing
+// sibling keys. Uses SQLite's json_set() so json1 must be compiled in
+// (modernc.org/sqlite default).
+func TestSyncJobs_SetSummaryDriftPurged(t *testing.T) {
+	t.Parallel()
+	db := sqlitetest.New(t)
+	jobs := metadata.NewSyncJobsRepo(db)
+	ctx := context.Background()
+
+	var id int64
+	if err := db.WriteTx(ctx, func(tx *sql.Tx) error {
+		var err error
+		id, err = jobs.Enqueue(ctx, tx, "helm_sync", 0, 0, "{}")
+		return err
+	}); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+
+	// First write: summary starts as '{}', drift_purged key absent.
+	if err := jobs.SetSummaryDriftPurged(ctx, id, 5); err != nil {
+		t.Fatalf("set drift_purged=5: %v", err)
+	}
+	var summary string
+	if err := db.Reader.QueryRow(
+		`SELECT summary FROM sync_jobs WHERE id=?`, id,
+	).Scan(&summary); err != nil {
+		t.Fatalf("select summary: %v", err)
+	}
+	// json_set should produce {"drift_purged":5}.
+	if summary != `{"drift_purged":5}` {
+		t.Fatalf("summary after first write = %q, want %q", summary, `{"drift_purged":5}`)
+	}
+
+	// Second write: overwrites in place.
+	if err := jobs.SetSummaryDriftPurged(ctx, id, 12); err != nil {
+		t.Fatalf("set drift_purged=12: %v", err)
+	}
+	if err := db.Reader.QueryRow(
+		`SELECT summary FROM sync_jobs WHERE id=?`, id,
+	).Scan(&summary); err != nil {
+		t.Fatalf("select summary 2: %v", err)
+	}
+	if summary != `{"drift_purged":12}` {
+		t.Fatalf("summary after overwrite = %q, want %q", summary, `{"drift_purged":12}`)
+	}
+
+	// Sibling-key preservation: pre-populate summary with a foreign key,
+	// then call SetSummaryDriftPurged and assert the foreign key survives.
+	if _, err := db.Writer.ExecContext(ctx,
+		`UPDATE sync_jobs SET summary = ? WHERE id = ?`,
+		`{"files_synced":7}`, id,
+	); err != nil {
+		t.Fatalf("seed sibling key: %v", err)
+	}
+	if err := jobs.SetSummaryDriftPurged(ctx, id, 3); err != nil {
+		t.Fatalf("set drift_purged=3 with sibling: %v", err)
+	}
+	if err := db.Reader.QueryRow(
+		`SELECT summary FROM sync_jobs WHERE id=?`, id,
+	).Scan(&summary); err != nil {
+		t.Fatalf("select summary 3: %v", err)
+	}
+	// json_set merges — both keys present. Order is JSON-set's insertion
+	// order: existing first, new appended.
+	if summary != `{"files_synced":7,"drift_purged":3}` {
+		t.Fatalf("summary after merge = %q, want %q", summary, `{"files_synced":7,"drift_purged":3}`)
+	}
+
+	// Zero-count is legal (D-10 run-evidence path).
+	if err := jobs.SetSummaryDriftPurged(ctx, id, 0); err != nil {
+		t.Fatalf("set drift_purged=0: %v", err)
+	}
+	if err := db.Reader.QueryRow(
+		`SELECT summary FROM sync_jobs WHERE id=?`, id,
+	).Scan(&summary); err != nil {
+		t.Fatalf("select summary 4: %v", err)
+	}
+	if summary != `{"files_synced":7,"drift_purged":0}` {
+		t.Fatalf("summary after drift_purged=0 = %q, want %q", summary, `{"files_synced":7,"drift_purged":0}`)
+	}
+}

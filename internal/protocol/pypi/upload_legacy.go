@@ -153,7 +153,12 @@ func (h *Handler) handleLegacyUpload(w http.ResponseWriter, r *http.Request) {
 			hasher := sha256.New()
 			n, ferr := io.Copy(io.MultiWriter(tf, hasher), part)
 			_ = part.Close()
-			_ = tf.Close()
+			// Codex P5-02: tf.Close() flushes the file. On disk-full /
+			// writeback failure the close error surfaces here even if
+			// io.Copy reported success. Treat as a write failure.
+			if cerr := tf.Close(); cerr != nil && ferr == nil {
+				ferr = cerr
+			}
 			if ferr != nil {
 				var maxErr *http.MaxBytesError
 				if errors.As(ferr, &maxErr) {

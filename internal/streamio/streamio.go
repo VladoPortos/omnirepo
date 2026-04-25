@@ -56,9 +56,34 @@ func ReadAllLimited(r io.Reader, max int64, overLimitErr error) ([]byte, error) 
 	// Read max+1 bytes. If the (max+1)-th byte arrives, the upstream
 	// exceeded the cap; LimitReader stops there so we never drain
 	// arbitrary bytes from a malicious or runaway upstream.
-	buf, err := io.ReadAll(io.LimitReader(r, max+1))
-	if err != nil {
-		return nil, fmt.Errorf("streamio: read: %w", err)
+	//
+	// Hand-rolled read loop (not io.ReadAll) so we can detect a hostile
+	// reader that returns (0, nil) repeatedly. Per io.Reader contract,
+	// (0, nil) is legal but discouraged — io.ReadAll would spin on
+	// such a reader. We give up after maxNoProgressReads consecutive
+	// zero-byte non-EOF reads.
+	const maxNoProgressReads = 16
+	lr := io.LimitReader(r, max+1)
+	buf := make([]byte, 0, 4096)
+	tmp := make([]byte, 4096)
+	noProgress := 0
+	for {
+		n, rerr := lr.Read(tmp)
+		if n > 0 {
+			buf = append(buf, tmp[:n]...)
+			noProgress = 0
+		} else if rerr == nil {
+			noProgress++
+			if noProgress >= maxNoProgressReads {
+				return nil, fmt.Errorf("streamio: reader stalled (returned 0,nil %d times)", maxNoProgressReads)
+			}
+		}
+		if rerr == io.EOF {
+			break
+		}
+		if rerr != nil {
+			return nil, fmt.Errorf("streamio: read: %w", rerr)
+		}
 	}
 	if int64(len(buf)) > max {
 		return nil, overLimitErr

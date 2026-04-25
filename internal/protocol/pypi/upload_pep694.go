@@ -317,11 +317,25 @@ func (h *Handler) handleUploadFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tmpPath := tf.Name()
+	// Codex P5-04: panic-leak guard. The promote step takes ownership of
+	// the temp path on success; until then a panic in io.Copy / parsing
+	// would leak the temp file. Deferred cleanup with an ownership-
+	// transfer flag closes the gap. ownsTmp starts true and flips to
+	// false only when path-store has accepted the file.
+	ownsTmp := true
+	defer func() {
+		if ownsTmp && tmpPath != "" {
+			_ = os.Remove(tmpPath)
+		}
+	}()
 	hasher := sha256.New()
 	n, err := io.Copy(io.MultiWriter(tf, hasher), r.Body)
-	_ = tf.Close()
+	// Codex P5-03: capture tf.Close() error — disk-full / writeback
+	// failure surfaces at close even if io.Copy succeeded.
+	if cerr := tf.Close(); cerr != nil && err == nil {
+		err = cerr
+	}
 	if err != nil {
-		_ = os.Remove(tmpPath)
 		var maxErr *http.MaxBytesError
 		if errors.As(err, &maxErr) {
 			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
@@ -353,7 +367,9 @@ func (h *Handler) handleUploadFile(w http.ResponseWriter, r *http.Request) {
 		perr = fmt.Errorf("unknown filename extension")
 	}
 	if perr != nil {
-		_ = os.Remove(tmpPath)
+		// Cleanup is handled by the deferred ownership-flag remove
+		// above (Codex P5-04). Explicit Remove here would be a no-op
+		// after the defer.
 		h.auditEvent(r, audit.EvtPyPIUpload, filename, "rejected", map[string]any{
 			"project": res.project.Name,
 			"repo":    res.repo.Name,
@@ -379,6 +395,10 @@ func (h *Handler) handleUploadFile(w http.ResponseWriter, r *http.Request) {
 		Parsed:  parsed,
 	}
 	sess.mu.Unlock()
+	// Codex P5-04: ownership has transferred to the session map. The
+	// commit endpoint reads sess.Files[filename].TmpPath later — the
+	// deferred panic-leak guard must NOT remove the file now.
+	ownsTmp = false
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(http.StatusAccepted)

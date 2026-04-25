@@ -86,6 +86,145 @@ func TestReposRepo_SoftDeleteListExcludes(t *testing.T) {
 	}
 }
 
+// -----------------------------------------------------------------------------
+// Phase 01 Plan 01-03 (LIFECYCLE-09): Repos.SoftDelete prunes FTS;
+// Repos.Restore reindexes from base tables; Repos.SoftDelete is idempotent.
+// -----------------------------------------------------------------------------
+
+// TestRepos_SoftDelete_PrunesFTS — soft-deleting a repo removes every per-protocol
+// FTS row keyed to that repo, in the same WriteTx as the row UPDATE.
+func TestRepos_SoftDelete_PrunesFTS(t *testing.T) {
+	db := sqlitetest.New(t)
+	ctx := context.Background()
+	pid := seedProject(t, db, "p-prune")
+	r := metadata.NewReposRepo(db)
+	id, err := r.Create(ctx, pid, "rpm", "r-prune", "", nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Seed 2 rpm_fts + 1 artifacts_fts + 1 repos_fts.
+	if err := db.WriteTx(ctx, func(tx *sql.Tx) error {
+		if err := metadata.IndexRepo(ctx, tx, id, "r-prune", "p-prune", "", "rpm"); err != nil {
+			return err
+		}
+		if err := metadata.IndexRPM(ctx, tx, id, "httpd", "2.4.62", "x86_64", "Apache"); err != nil {
+			return err
+		}
+		if err := metadata.IndexRPM(ctx, tx, id, "nginx", "1.25", "x86_64", "web"); err != nil {
+			return err
+		}
+		return metadata.IndexArtifact(ctx, tx, id, "art", "1.0", "sha256:art")
+	}); err != nil {
+		t.Fatalf("seed FTS: %v", err)
+	}
+
+	if err := r.SoftDelete(ctx, id); err != nil {
+		t.Fatalf("SoftDelete: %v", err)
+	}
+
+	for _, q := range []struct {
+		name, sql string
+	}{
+		{"repos_fts", `SELECT COUNT(*) FROM repos_fts WHERE rowid=?`},
+		{"rpm_fts", `SELECT COUNT(*) FROM rpm_fts WHERE repo_id=?`},
+		{"artifacts_fts", `SELECT COUNT(*) FROM artifacts_fts WHERE repo_id=?`},
+	} {
+		var n int
+		_ = db.Reader.QueryRowContext(ctx, q.sql, id).Scan(&n)
+		if n != 0 {
+			t.Errorf("%s after SoftDelete=%d want 0", q.name, n)
+		}
+	}
+}
+
+// TestRepos_Restore_ReindexesFTS — after SoftDelete, base tables are
+// untouched. Inserting a fresh rpm_packages row directly while the repo is
+// soft-deleted then calling Restore must re-derive rpm_fts from base tables
+// (loss-free reindex).
+func TestRepos_Restore_ReindexesFTS(t *testing.T) {
+	db := sqlitetest.New(t)
+	ctx := context.Background()
+	pid := seedProject(t, db, "p-restore")
+	rpmRepo := metadata.NewRPMPackagesRepo(db)
+	rx := metadata.NewFTSReindexer(db, rpmRepo, metadata.NewDEBPackagesRepo(db),
+		metadata.NewPyPIFilesRepo(db), metadata.NewHelmChartsRepo(db))
+	r := metadata.NewReposRepo(db).WithReindexer(rx)
+
+	id, err := r.Create(ctx, pid, "rpm", "r-restore", "", nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Insert one rpm_packages row pre-SoftDelete (FTS not seeded — Reindex builds it).
+	if err := db.WriteTx(ctx, func(tx *sql.Tx) error {
+		_, err := rpmRepo.Insert(ctx, tx, &metadata.RPMPackage{
+			RepoID: id, Name: "httpd", Epoch: 0, Version: "2.4.62", Release: "1",
+			Arch: "x86_64", Summary: "Apache", Digest: "sha256:rpm1", Filename: "httpd.rpm",
+		})
+		return err
+	}); err != nil {
+		t.Fatalf("insert rpm: %v", err)
+	}
+
+	if err := r.SoftDelete(ctx, id); err != nil {
+		t.Fatalf("SoftDelete: %v", err)
+	}
+
+	// Insert a NEW rpm row directly while the repo is soft-deleted — bypasses
+	// FTS path. Restore must re-derive FTS from this base row + the original.
+	if err := db.WriteTx(ctx, func(tx *sql.Tx) error {
+		_, err := rpmRepo.Insert(ctx, tx, &metadata.RPMPackage{
+			RepoID: id, Name: "nginx", Epoch: 0, Version: "1.25", Release: "1",
+			Arch: "x86_64", Summary: "web", Digest: "sha256:rpm2", Filename: "nginx.rpm",
+		})
+		return err
+	}); err != nil {
+		t.Fatalf("insert rpm 2: %v", err)
+	}
+
+	if err := r.Restore(ctx, id); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+
+	// rpm_fts should now have 2 rows for repoID (re-derived from rpm_packages).
+	var n int
+	_ = db.Reader.QueryRowContext(ctx, `SELECT COUNT(*) FROM rpm_fts WHERE repo_id=?`, id).Scan(&n)
+	if n != 2 {
+		t.Errorf("rpm_fts after Restore=%d want 2 (loss-free reindex)", n)
+	}
+}
+
+// TestRepos_SoftDelete_Idempotent — calling SoftDelete twice doesn't error
+// and doesn't double-delete. Pruning cves_fts via the conditional NOT_IN
+// chain is also a no-op on the second call.
+func TestRepos_SoftDelete_Idempotent(t *testing.T) {
+	db := sqlitetest.New(t)
+	ctx := context.Background()
+	pid := seedProject(t, db, "p-idem")
+	r := metadata.NewReposRepo(db)
+	id, err := r.Create(ctx, pid, "rpm", "r-idem", "", nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.WriteTx(ctx, func(tx *sql.Tx) error {
+		return metadata.IndexRPM(ctx, tx, id, "x", "1.0", "x86_64", "")
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if err := r.SoftDelete(ctx, id); err != nil {
+		t.Fatalf("SoftDelete pass 1: %v", err)
+	}
+	if err := r.SoftDelete(ctx, id); err != nil {
+		t.Fatalf("SoftDelete pass 2 (must be no-op): %v", err)
+	}
+	var n int
+	_ = db.Reader.QueryRowContext(ctx, `SELECT COUNT(*) FROM rpm_fts WHERE repo_id=?`, id).Scan(&n)
+	if n != 0 {
+		t.Errorf("rpm_fts after 2 SoftDeletes=%d want 0", n)
+	}
+}
+
 // --------------------------------------------------------------------------
 // Phase 02-11: Update + WipeDocker + WipeRaw helpers (REPO-05, REPO-07).
 // --------------------------------------------------------------------------

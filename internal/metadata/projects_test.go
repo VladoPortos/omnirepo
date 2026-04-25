@@ -437,6 +437,189 @@ func TestProjectsRepo_RestoreIfNameFree_NameCollisionPreservesCascade(t *testing
 	}
 }
 
+// -----------------------------------------------------------------------------
+// Phase 01 Plan 01-03 (LIFECYCLE-09): Projects.SoftDelete cascades FTS prune
+// to every live repo; Projects.Restore reverse-cascades FTS reindex only for
+// repos cascaded by THIS soft-delete (timestamp-equality filter).
+// -----------------------------------------------------------------------------
+
+// TestProjects_SoftDelete_CascadesPruneFTS — project SoftDelete must:
+//   - cascade-soft-delete every live repo using cascadeTS (NOT CURRENT_TIMESTAMP)
+//   - prune FTS rows for each cascaded repo
+//   - leave already-soft-deleted repos at their prior tombstone (different TS)
+func TestProjects_SoftDelete_CascadesPruneFTS(t *testing.T) {
+	db := sqlitetest.New(t)
+	ctx := context.Background()
+	r := metadata.NewProjectsRepo(db)
+	repos := metadata.NewReposRepo(db)
+
+	pid, err := r.Create(ctx, "casc-fts", "")
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	r1id, err := repos.Create(ctx, pid, "rpm", "r1", "", nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r2id, err := repos.Create(ctx, pid, "rpm", "r2", "", nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r3id, err := repos.Create(ctx, pid, "rpm", "r3", "", nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Seed 1 rpm_fts row per repo.
+	if err := db.WriteTx(ctx, func(tx *sql.Tx) error {
+		for _, rid := range []int64{r1id, r2id, r3id} {
+			if err := metadata.IndexRPM(ctx, tx, rid, "pkg", "1.0", "x86_64", ""); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("seed FTS: %v", err)
+	}
+
+	// Independently soft-delete r3 BEFORE the project cascade — its
+	// deleted_at must NOT be clobbered by the project cascade and Restore
+	// must NOT bring it back (different TS). r3's FTS is also pruned by
+	// Repos.SoftDelete in the same step.
+	//
+	// We force r3's tombstone to a fixed legacy string so the cascade-vs-
+	// independent equality probe doesn't depend on modernc/sqlite's
+	// TIMESTAMP-affinity normalization (plan 01-01 discovery — read-back
+	// returns ISO-8601 even when the WHERE-equality compare needs the raw
+	// stored bytes).
+	if err := repos.SoftDelete(ctx, r3id); err != nil {
+		t.Fatalf("SoftDelete r3: %v", err)
+	}
+	const r3PriorTS = "1999-01-01 00:00:00"
+	if _, err := db.Writer.ExecContext(ctx,
+		`UPDATE repos SET deleted_at=? WHERE id=?`, r3PriorTS, r3id,
+	); err != nil {
+		t.Fatalf("override r3 TS: %v", err)
+	}
+
+	// Cascade-soft-delete via the project.
+	if err := r.SoftDelete(ctx, pid); err != nil {
+		t.Fatalf("Project SoftDelete: %v", err)
+	}
+
+	// All three repos have FTS pruned (r1, r2 via project cascade; r3 was already pruned).
+	for _, rid := range []int64{r1id, r2id, r3id} {
+		var n int
+		_ = db.Reader.QueryRowContext(ctx, `SELECT COUNT(*) FROM rpm_fts WHERE repo_id=?`, rid).Scan(&n)
+		if n != 0 {
+			t.Errorf("rpm_fts for repo %d=%d want 0", rid, n)
+		}
+	}
+
+	// r1, r2 deleted_at == project.deleted_at (cascade marker).
+	var pdel sql.NullString
+	_ = db.Reader.QueryRowContext(ctx, `SELECT deleted_at FROM projects WHERE id=?`, pid).Scan(&pdel)
+	if !pdel.Valid {
+		t.Fatal("project deleted_at NULL")
+	}
+	for _, rid := range []int64{r1id, r2id} {
+		var n int
+		_ = db.Reader.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM repos WHERE id=? AND deleted_at = ?`, rid, pdel.String,
+		).Scan(&n)
+		if n != 1 {
+			t.Errorf("repo %d cascade-TS equality probe got %d want 1", rid, n)
+		}
+	}
+	// r3 still has its original TS, NOT the project's cascade TS.
+	var n int
+	_ = db.Reader.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM repos WHERE id=? AND deleted_at = ?`, r3id, r3PriorTS,
+	).Scan(&n)
+	if n != 1 {
+		t.Errorf("r3 prior-TS equality probe got %d want 1 (independent soft-delete must survive)", n)
+	}
+}
+
+// TestProjects_Restore_CascadesReindexFTS_TimestampEqualityOnly — after
+// project Restore, only repos cascaded by THIS soft-delete (deleted_at ==
+// priorTS) get reindexed; independently soft-deleted repos stay tombstoned.
+func TestProjects_Restore_CascadesReindexFTS_TimestampEqualityOnly(t *testing.T) {
+	db := sqlitetest.New(t)
+	ctx := context.Background()
+	rpmRepo := metadata.NewRPMPackagesRepo(db)
+	rx := metadata.NewFTSReindexer(db, rpmRepo, metadata.NewDEBPackagesRepo(db),
+		metadata.NewPyPIFilesRepo(db), metadata.NewHelmChartsRepo(db))
+	r := metadata.NewProjectsRepo(db).WithReindexer(rx)
+	repos := metadata.NewReposRepo(db).WithReindexer(rx)
+
+	pid, err := r.Create(ctx, "casc-rest", "")
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	r1id, _ := repos.Create(ctx, pid, "rpm", "r1", "", nil, nil, nil)
+	r2id, _ := repos.Create(ctx, pid, "rpm", "r2", "", nil, nil, nil)
+	r3id, _ := repos.Create(ctx, pid, "rpm", "r3", "", nil, nil, nil)
+
+	// Seed 1 rpm_packages row per repo (base table, untouched by SoftDelete).
+	if err := db.WriteTx(ctx, func(tx *sql.Tx) error {
+		for i, rid := range []int64{r1id, r2id, r3id} {
+			if _, err := rpmRepo.Insert(ctx, tx, &metadata.RPMPackage{
+				RepoID: rid, Name: "pkg", Epoch: 0, Version: "1.0", Release: "1",
+				Arch: "x86_64", Summary: "s",
+				Digest: "sha256:r" + string(rune('0'+i)), Filename: "pkg.rpm",
+			}); err != nil {
+				return err
+			}
+			if err := metadata.IndexRPM(ctx, tx, rid, "pkg", "1.0", "x86_64", ""); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	// Independently soft-delete r3.
+	if err := repos.SoftDelete(ctx, r3id); err != nil {
+		t.Fatalf("SoftDelete r3: %v", err)
+	}
+
+	// Now project SoftDelete (cascades r1, r2; r3 already deleted at different TS).
+	if err := r.SoftDelete(ctx, pid); err != nil {
+		t.Fatalf("Project SoftDelete: %v", err)
+	}
+	// Restore.
+	if err := r.Restore(ctx, pid); err != nil {
+		t.Fatalf("Project Restore: %v", err)
+	}
+
+	// r1, r2 reindexed (1 rpm_fts each, re-derived from base table).
+	for _, rid := range []int64{r1id, r2id} {
+		var n int
+		_ = db.Reader.QueryRowContext(ctx, `SELECT COUNT(*) FROM rpm_fts WHERE repo_id=?`, rid).Scan(&n)
+		if n != 1 {
+			t.Errorf("rpm_fts for restored repo %d=%d want 1 (reindex)", rid, n)
+		}
+		var del sql.NullString
+		_ = db.Reader.QueryRowContext(ctx, `SELECT deleted_at FROM repos WHERE id=?`, rid).Scan(&del)
+		if del.Valid {
+			t.Errorf("repo %d deleted_at=%q want NULL post-restore", rid, del.String)
+		}
+	}
+	// r3 still soft-deleted; FTS still empty (independent soft-delete must survive).
+	var del sql.NullString
+	_ = db.Reader.QueryRowContext(ctx, `SELECT deleted_at FROM repos WHERE id=?`, r3id).Scan(&del)
+	if !del.Valid {
+		t.Fatal("r3 spuriously restored by project cascade")
+	}
+	var n int
+	_ = db.Reader.QueryRowContext(ctx, `SELECT COUNT(*) FROM rpm_fts WHERE repo_id=?`, r3id).Scan(&n)
+	if n != 0 {
+		t.Errorf("rpm_fts for r3=%d want 0 (still soft-deleted)", n)
+	}
+}
+
 func TestProjectsRepo_ListAll(t *testing.T) {
 	db := sqlitetest.New(t)
 	r := metadata.NewProjectsRepo(db)

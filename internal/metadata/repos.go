@@ -59,10 +59,27 @@ type Repo struct {
 // The app layer (bootstrap validator V13, api handlers) validates the same
 // set before INSERT so bad input surfaces a typed Go error rather than the
 // raw CHECK-constraint string.
-type ReposRepo struct{ db *DB }
+//
+// Phase 01 Plan 01-03 (LIFECYCLE-09): SoftDelete + Restore now drive the FTS5
+// prune and reindex steps in the same WriteTx as the row UPDATE. The optional
+// reindexer (set via WithReindexer) drives Restore; nil-reindexer is the
+// test-time default (no reindex side-effect).
+type ReposRepo struct {
+	db        *DB
+	reindexer *FTSReindexer
+}
 
 // NewReposRepo constructs a repo bound to db.
 func NewReposRepo(db *DB) *ReposRepo { return &ReposRepo{db: db} }
+
+// WithReindexer wires an FTSReindexer used by Repos.Restore (and indirectly by
+// Projects.Restore via cascade). Returns the receiver for compact builder
+// chaining at bootstrap. Tests that don't exercise Restore can leave the
+// reindexer unset — Restore becomes a row-only UPDATE in that case.
+func (r *ReposRepo) WithReindexer(rx *FTSReindexer) *ReposRepo {
+	r.reindexer = rx
+	return r
+}
 
 // Create inserts a repo row and returns the generated id. Nil/empty optional
 // arguments fall back to schema defaults.
@@ -168,23 +185,52 @@ func (r *ReposRepo) FindByID(ctx context.Context, id int64) (*Repo, error) {
 	return r.scanOne(ctx, `id=? AND deleted_at IS NULL`, id)
 }
 
-// SoftDelete stamps deleted_at.
+// SoftDelete stamps deleted_at and prunes every per-repo FTS5 row in the same
+// WriteTx (LIFECYCLE-09). The `WHERE deleted_at IS NULL` filter on the UPDATE
+// makes the operation idempotent — a second SoftDelete is a no-op cascade
+// (PruneRepoFTS itself is idempotent because its DELETEs match zero rows).
 func (r *ReposRepo) SoftDelete(ctx context.Context, id int64) error {
 	return r.db.WriteTx(ctx, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `UPDATE repos SET deleted_at=CURRENT_TIMESTAMP WHERE id=?`, id)
-		if err != nil {
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE repos SET deleted_at=CURRENT_TIMESTAMP WHERE id=? AND deleted_at IS NULL`, id,
+		); err != nil {
 			return fmt.Errorf("repos: soft delete %d: %w", id, err)
 		}
-		return nil
+		return PruneRepoFTS(ctx, tx, id)
 	})
 }
 
-// Restore clears the soft-delete timestamp, making the repo live again.
+// SoftDeleteRepoForProjectCascade is the project-cascade variant of SoftDelete:
+// stamps repos.deleted_at = cascadeTS (instead of CURRENT_TIMESTAMP) so
+// Projects.Restore can identify which repos to reindex via timestamp-equality
+// (D-14). Idempotent — already soft-deleted repos are skipped via the
+// `deleted_at IS NULL` filter.
+//
+// Lives at package level (not as a method on ReposRepo) so the project cascade
+// closure in projects.go can call it from inside its WriteTx without holding a
+// ReposRepo reference; mirrors the SoftDeleteAllBucketsForProject pattern.
+func SoftDeleteRepoForProjectCascade(ctx context.Context, tx *sql.Tx, repoID int64, cascadeTS string) error {
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE repos SET deleted_at=? WHERE id=? AND deleted_at IS NULL`, cascadeTS, repoID,
+	); err != nil {
+		return fmt.Errorf("repos: cascade soft-delete %d: %w", repoID, err)
+	}
+	return PruneRepoFTS(ctx, tx, repoID)
+}
+
+// Restore clears the soft-delete timestamp, making the repo live again. When
+// a reindexer is wired (production path), it re-derives FTS5 rows from the
+// canonical base tables in the same WriteTx — base tables are untouched by
+// SoftDelete so the reindex is loss-free.
 func (r *ReposRepo) Restore(ctx context.Context, id int64) error {
 	return r.db.WriteTx(ctx, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `UPDATE repos SET deleted_at=NULL WHERE id=?`, id)
-		if err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE repos SET deleted_at=NULL WHERE id=?`, id); err != nil {
 			return fmt.Errorf("repos: restore %d: %w", id, err)
+		}
+		if r.reindexer != nil {
+			if err := r.reindexer.ReindexRepo(ctx, tx, id); err != nil {
+				return err
+			}
 		}
 		return nil
 	})

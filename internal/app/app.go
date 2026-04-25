@@ -672,14 +672,25 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 	// api.Deps can expose it for the REST bucket-provision endpoint.
 	s3Be := s3backend.New(cfg.DataRoot, db, sharedLocks)
 
+	// Phase 01 Plan 01-03 (LIFECYCLE-09): one shared FTSReindexer drives the
+	// per-repo FTS5 prune+reindex cascade in Repos.Restore + Projects.Restore.
+	// Bound to the same canonical typed repos used elsewhere — base tables are
+	// the source of truth on Restore.
+	ftsReindexer := metadata.NewFTSReindexer(db,
+		metadata.NewRPMPackagesRepo(db),
+		metadata.NewDEBPackagesRepo(db),
+		metadata.NewPyPIFilesRepo(db),
+		metadata.NewHelmChartsRepo(db),
+	)
+
 	api.Mount(router, api.Deps{
 		DB:            db,
 		Users:         metadata.NewUsersRepo(db),
 		Sessions:      metadata.NewSessionsRepo(db),
 		APIKeys:       metadata.NewAPIKeysRepo(db),
-		Projects:      metadata.NewProjectsRepo(db),
+		Projects:      metadata.NewProjectsRepo(db).WithReindexer(ftsReindexer),
 		Members:       metadata.NewMembersRepo(db),
-		Repos:         metadata.NewReposRepo(db),
+		Repos:         metadata.NewReposRepo(db).WithReindexer(ftsReindexer),
 		Settings:      metadata.NewSettingsRepo(db),
 		UpstreamCreds: upstreamCreds,
 		// Phase 04-05: S3 access-key CRUD. Reuses the same per-install

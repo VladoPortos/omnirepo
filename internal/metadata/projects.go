@@ -22,8 +22,8 @@ type Project struct {
 // error, the surrounding WriteTx aborts and rolls back — proving LIFECYCLE-04
 // atomicity end-to-end.
 //
-// step values used by SoftDelete:        "after_project_update", "s3_keys", "buckets", "api_keys"
-// step values used by restoreCascadeInTx: "s3_keys", "buckets", "api_keys"
+// step values used by SoftDelete:        "after_project_update", "s3_keys", "buckets", "api_keys", "fts"
+// step values used by restoreCascadeInTx: "s3_keys", "buckets", "api_keys", "fts"
 //
 // Production code never sets this; only TestProjectsRepo_SoftDelete_Atomicity
 // (and TestProjectsRepo_Restore_Atomicity) install it via the package-private
@@ -32,13 +32,29 @@ type Project struct {
 type cascadeStepHook func(step string) error
 
 // ProjectsRepo owns CRUD on projects.
+//
+// Phase 01 Plan 01-03 (LIFECYCLE-09): the cascade step chain now ends with an
+// "fts" step — SoftDelete cascades the per-repo FTS prune via
+// SoftDeleteRepoForProjectCascade for every live repo in the project; Restore
+// reverse-cascades by re-indexing only repos whose deleted_at exactly matches
+// the project's prior tombstone timestamp (timestamp-equality filter).
 type ProjectsRepo struct {
 	db              *DB
 	cascadeStepHook cascadeStepHook // nil in production; set only by internal tests
+	reindexer       *FTSReindexer   // nil in tests that don't exercise FTS reindex; set in production wiring
 }
 
 // NewProjectsRepo constructs a repo bound to db.
 func NewProjectsRepo(db *DB) *ProjectsRepo { return &ProjectsRepo{db: db} }
+
+// WithReindexer wires an FTSReindexer used by the FTS step of the project
+// Restore cascade (LIFECYCLE-09). Returns the receiver for compact builder
+// chaining at bootstrap. Tests that don't exercise Restore can leave this
+// unset — the FTS step then becomes a row-only un-tombstone.
+func (r *ProjectsRepo) WithReindexer(rx *FTSReindexer) *ProjectsRepo {
+	r.reindexer = rx
+	return r
+}
 
 // withCascadeStepHookForTest installs (or clears, when h is nil) a hook fired
 // between cascade steps. Lives on ProjectsRepo so internal tests can call it
@@ -170,6 +186,39 @@ func (r *ProjectsRepo) SoftDelete(ctx context.Context, id int64) error {
 				return fmt.Errorf("projects: cascade hook (api_keys): %w", err)
 			}
 		}
+		// 4) FTS cascade (LIFECYCLE-09). For every live repo in this project,
+		//    cascade-soft-delete + prune FTS in the same tx. Repos already
+		//    independently soft-deleted have a different deleted_at and are
+		//    skipped by the `deleted_at IS NULL` filter inside
+		//    SoftDeleteRepoForProjectCascade — Restore later only reindexes
+		//    repos whose deleted_at exactly equals priorTS.
+		liveRepoRows, err := tx.QueryContext(ctx,
+			`SELECT id FROM repos WHERE project_id=? AND deleted_at IS NULL`, id)
+		if err != nil {
+			return fmt.Errorf("projects: cascade list repos %d: %w", id, err)
+		}
+		var repoIDs []int64
+		for liveRepoRows.Next() {
+			var rid int64
+			if err := liveRepoRows.Scan(&rid); err != nil {
+				_ = liveRepoRows.Close()
+				return fmt.Errorf("projects: cascade scan repo %d: %w", id, err)
+			}
+			repoIDs = append(repoIDs, rid)
+		}
+		if err := liveRepoRows.Close(); err != nil {
+			return fmt.Errorf("projects: cascade close repos %d: %w", id, err)
+		}
+		for _, rid := range repoIDs {
+			if err := SoftDeleteRepoForProjectCascade(ctx, tx, rid, cascadeTS); err != nil {
+				return err
+			}
+		}
+		if r.cascadeStepHook != nil {
+			if err := r.cascadeStepHook("fts"); err != nil {
+				return fmt.Errorf("projects: cascade hook (fts): %w", err)
+			}
+		}
 		return nil
 	})
 }
@@ -244,6 +293,45 @@ func (r *ProjectsRepo) restoreCascadeInTx(ctx context.Context, tx *sql.Tx, proje
 	if r.cascadeStepHook != nil {
 		if err := r.cascadeStepHook("api_keys"); err != nil {
 			return fmt.Errorf("projects: restore cascade hook (api_keys): %w", err)
+		}
+	}
+	// FTS reverse-cascade (LIFECYCLE-09). Reindex only repos whose deleted_at
+	// exactly equals priorTS — i.e. repos cascaded by THIS project soft-delete.
+	// Independently soft-deleted repos (different timestamp) stay tombstoned.
+	restoredRepoRows, err := tx.QueryContext(ctx,
+		`SELECT id FROM repos WHERE project_id=? AND deleted_at=?`, projectID, priorTS)
+	if err != nil {
+		return fmt.Errorf("projects: cascade restore list repos %d: %w", projectID, err)
+	}
+	var restoredIDs []int64
+	for restoredRepoRows.Next() {
+		var rid int64
+		if err := restoredRepoRows.Scan(&rid); err != nil {
+			_ = restoredRepoRows.Close()
+			return fmt.Errorf("projects: cascade restore scan repo %d: %w", projectID, err)
+		}
+		restoredIDs = append(restoredIDs, rid)
+	}
+	if err := restoredRepoRows.Close(); err != nil {
+		return fmt.Errorf("projects: cascade restore close repos %d: %w", projectID, err)
+	}
+	if len(restoredIDs) > 0 {
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE repos SET deleted_at=NULL WHERE project_id=? AND deleted_at=?`, projectID, priorTS,
+		); err != nil {
+			return fmt.Errorf("projects: cascade restore repos %d: %w", projectID, err)
+		}
+		if r.reindexer != nil {
+			for _, rid := range restoredIDs {
+				if err := r.reindexer.ReindexRepo(ctx, tx, rid); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	if r.cascadeStepHook != nil {
+		if err := r.cascadeStepHook("fts"); err != nil {
+			return fmt.Errorf("projects: restore cascade hook (fts): %w", err)
 		}
 	}
 	return nil

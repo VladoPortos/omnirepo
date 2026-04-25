@@ -52,6 +52,12 @@ const (
 	codeRepoMirrorFilterInvalid      = "repo.mirror_filter_invalid"
 	codeRepoMirrorURLImmutable       = "repo.mirror_url_immutable"
 	codeRepoMirrorCredWrongProject   = "repo.mirror_cred_wrong_project"
+	// codeRepoDriftPurgeMirrorOnly (v1.5 Phase 6 / DRIFTPURGE-04, D-17):
+	// drift_purge=true is only meaningful on mirror repos. A non-mirror
+	// repo has no upstream to diff against; accepting the flag would
+	// be a silent no-op. Reject explicitly so operators learn the
+	// invariant at call time.
+	codeRepoDriftPurgeMirrorOnly = "repo.drift_purge_mirror_only"
 )
 
 // repoPatchRequest is the PATCH body shape. All fields optional; nil pointers
@@ -82,6 +88,10 @@ type repoPatchRequest struct {
 	// from "patch clears cred".
 	MirrorCredIDRaw json.RawMessage `json:"mirror_cred_id,omitempty"`
 	ScanOnSync      *bool           `json:"scan_on_sync,omitempty"`
+	// DriftPurge (v1.5 Phase 6 / DRIFTPURGE-04, D-17): mirror-only opt-in.
+	// PATCH'ing drift_purge=true on a non-mirror repo is rejected with
+	// codeRepoDriftPurgeMirrorOnly. drift_purge=false is always allowed.
+	DriftPurge *bool `json:"drift_purge,omitempty"`
 }
 
 // repoResponse mirrors the Repo row projected for the REST API. We do not
@@ -117,6 +127,9 @@ type repoResponse struct {
 	MirrorFilterJSON  string `json:"mirror_filter_json"`
 	MirrorCredID      *int64 `json:"mirror_cred_id"`
 	ScanOnSync        bool   `json:"scan_on_sync"`
+	// DriftPurge (v1.5 Phase 6 / DRIFTPURGE-04, D-17): per-mirror opt-in
+	// for drift purge on sync. Non-mirror repos always serialize false.
+	DriftPurge bool `json:"drift_purge"`
 }
 
 func repoToResponse(r metadata.Repo) repoResponse {
@@ -137,6 +150,7 @@ func repoToResponse(r metadata.Repo) repoResponse {
 		MirrorFilterJSON:  r.MirrorFilterJSON,
 		MirrorCredID:      r.MirrorCredID,
 		ScanOnSync:        r.ScanOnSync,
+		DriftPurge:        r.DriftPurge,
 	}
 }
 
@@ -219,6 +233,16 @@ func (d Deps) handlePatchRepo(w http.ResponseWriter, r *http.Request) {
 	if body.IsMirror != nil || body.MirrorUpstreamURL != nil {
 		writeJSONError(w, r, http.StatusBadRequest, codeRepoMirrorURLImmutable,
 			"is_mirror and mirror_upstream_url cannot be changed after creation")
+		return
+	}
+	// v1.5 Phase 6 (DRIFTPURGE-04, D-17): drift_purge=true is mirror-only.
+	// Non-mirror repos have no upstream diff to trigger purge against;
+	// reject explicitly with a typed envelope rather than silently storing
+	// a flag that has no effect. drift_purge=false is always allowed (no-op
+	// on non-mirror; idempotent on mirror).
+	if body.DriftPurge != nil && *body.DriftPurge && !before.IsMirror {
+		writeJSONError(w, r, http.StatusBadRequest, codeRepoDriftPurgeMirrorOnly,
+			"drift_purge=true is only valid on mirror repos")
 		return
 	}
 	// Validate editable mirror fields.
@@ -309,6 +333,9 @@ func (d Deps) handlePatchRepo(w http.ResponseWriter, r *http.Request) {
 	if body.ScanOnSync != nil && *body.ScanOnSync != before.ScanOnSync {
 		diff["scan_on_sync"] = map[string]any{"from": before.ScanOnSync, "to": *body.ScanOnSync}
 	}
+	if body.DriftPurge != nil && *body.DriftPurge != before.DriftPurge {
+		diff["drift_purge"] = map[string]any{"from": before.DriftPurge, "to": *body.DriftPurge}
+	}
 
 	var updated metadata.Repo
 	err := d.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
@@ -321,6 +348,7 @@ func (d Deps) handlePatchRepo(w http.ResponseWriter, r *http.Request) {
 			MirrorCredID:     patchCredID,
 			MirrorCredIDSet:  patchCredIDSet,
 			ScanOnSync:       body.ScanOnSync,
+			DriftPurge:       body.DriftPurge,
 		})
 		if err != nil {
 			return err

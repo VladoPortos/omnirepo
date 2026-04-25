@@ -551,6 +551,132 @@ func TestPatchRepo_RejectsCrossProjectCred(t *testing.T) {
 	}
 }
 
+// --------------------------------------------------------------------------
+// Phase 06-02 (DRIFTPURGE-04, D-17) — drift_purge PATCH + GET coverage.
+// --------------------------------------------------------------------------
+
+// TestHandlePatchRepo_DriftPurgeMirrorOnly locks the mirror-only invariant:
+// PATCH'ing drift_purge=true against a non-mirror repo must 400 with the
+// codeRepoDriftPurgeMirrorOnly envelope code. The non-mirror repo here is
+// the default repo created via bootProjectAndRepo (deb without is_mirror).
+func TestHandlePatchRepo_DriftPurgeMirrorOnly(t *testing.T) {
+	s := newTestServer(t)
+	cookie := bootProjectAndRepo(t, s, "pr", "deb", "r1")
+
+	resp, body := s.do(t, "PATCH", "/api/v1/projects/pr/repos/deb/r1", cookie,
+		map[string]any{"drift_purge": true})
+	if resp.StatusCode != 400 {
+		t.Fatalf("status = %d, want 400; body=%+v", resp.StatusCode, body)
+	}
+	code, _ := body["code"].(string)
+	if code != "repo.drift_purge_mirror_only" {
+		t.Fatalf("envelope code = %q, want repo.drift_purge_mirror_only; body=%+v", code, body)
+	}
+}
+
+// TestHandlePatchRepo_DriftPurgeOnMirror_Accepted exercises the happy path:
+// PATCH drift_purge=true on a mirror repo returns 200 and GET reflects the
+// flag. PATCH drift_purge=false flips it back; GET shows false.
+func TestHandlePatchRepo_DriftPurgeOnMirror_Accepted(t *testing.T) {
+	s := newTestServer(t)
+	cookie := bootProjectOnly(t, s, "pr")
+	if resp, body := s.do(t, "POST", "/api/v1/projects/pr/repos", cookie, map[string]any{
+		"name":                "mirror-r1",
+		"type":                "deb",
+		"is_mirror":           true,
+		"mirror_upstream_url": "https://archive.example/ubuntu",
+	}); resp.StatusCode != 200 {
+		t.Fatalf("create mirror repo: %d %+v", resp.StatusCode, body)
+	}
+
+	// Default drift_purge is false on creation (migration 035 DEFAULT 0).
+	resp, body := s.do(t, "GET", "/api/v1/projects/pr/repos/deb/mirror-r1", cookie, nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("GET pre-patch status = %d; body=%+v", resp.StatusCode, body)
+	}
+	if v, ok := body["drift_purge"].(bool); !ok || v {
+		t.Fatalf("GET pre-patch drift_purge = %v, want false; body=%+v", body["drift_purge"], body)
+	}
+
+	// PATCH drift_purge=true.
+	resp, body = s.do(t, "PATCH", "/api/v1/projects/pr/repos/deb/mirror-r1", cookie,
+		map[string]any{"drift_purge": true})
+	if resp.StatusCode != 200 {
+		t.Fatalf("patch true status = %d; body=%+v", resp.StatusCode, body)
+	}
+	if v, ok := body["drift_purge"].(bool); !ok || !v {
+		t.Fatalf("PATCH response drift_purge = %v, want true; body=%+v", body["drift_purge"], body)
+	}
+
+	// GET round-trips the new value.
+	resp, body = s.do(t, "GET", "/api/v1/projects/pr/repos/deb/mirror-r1", cookie, nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("GET post-patch status = %d; body=%+v", resp.StatusCode, body)
+	}
+	if v, ok := body["drift_purge"].(bool); !ok || !v {
+		t.Fatalf("GET post-patch drift_purge = %v, want true; body=%+v", body["drift_purge"], body)
+	}
+
+	// Audit diff captures the change for plan 06-07 consumption.
+	var details string
+	err := s.db.Reader.QueryRowContext(context.Background(), `
+		SELECT details_json FROM audit_log WHERE event_kind='repo.updated' ORDER BY id DESC LIMIT 1
+	`).Scan(&details)
+	if err != nil {
+		t.Fatalf("no repo.updated audit row: %v", err)
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(details), &parsed); err != nil {
+		t.Fatalf("details_json not json: %v (%s)", err, details)
+	}
+	diff, ok := parsed["diff"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing diff in audit details: %s", details)
+	}
+	dp, ok := diff["drift_purge"].(map[string]any)
+	if !ok {
+		t.Fatalf("diff missing drift_purge entry: %+v", diff)
+	}
+	if dp["from"] != false || dp["to"] != true {
+		t.Errorf("drift_purge diff = %+v, want {from:false, to:true}", dp)
+	}
+
+	// PATCH drift_purge=false.
+	resp, body = s.do(t, "PATCH", "/api/v1/projects/pr/repos/deb/mirror-r1", cookie,
+		map[string]any{"drift_purge": false})
+	if resp.StatusCode != 200 {
+		t.Fatalf("patch false status = %d; body=%+v", resp.StatusCode, body)
+	}
+	if v, ok := body["drift_purge"].(bool); !ok || v {
+		t.Fatalf("PATCH false response drift_purge = %v, want false; body=%+v", body["drift_purge"], body)
+	}
+	resp, body = s.do(t, "GET", "/api/v1/projects/pr/repos/deb/mirror-r1", cookie, nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("GET final status = %d; body=%+v", resp.StatusCode, body)
+	}
+	if v, ok := body["drift_purge"].(bool); !ok || v {
+		t.Fatalf("GET final drift_purge = %v, want false; body=%+v", body["drift_purge"], body)
+	}
+}
+
+// TestHandlePatchRepo_DriftPurgeFalseOnNonMirror_Allowed asserts that
+// PATCH drift_purge=false on a non-mirror repo is a no-op (200), not a
+// 400. Only setting drift_purge=true requires IsMirror=true; clearing
+// the flag is always allowed (idempotent on default-false rows).
+func TestHandlePatchRepo_DriftPurgeFalseOnNonMirror_Allowed(t *testing.T) {
+	s := newTestServer(t)
+	cookie := bootProjectAndRepo(t, s, "pr", "deb", "r1")
+	resp, body := s.do(t, "PATCH", "/api/v1/projects/pr/repos/deb/r1", cookie,
+		map[string]any{"drift_purge": false})
+	if resp.StatusCode != 200 {
+		t.Fatalf("status = %d, want 200 (drift_purge=false on non-mirror is allowed); body=%+v",
+			resp.StatusCode, body)
+	}
+	if v, ok := body["drift_purge"].(bool); !ok || v {
+		t.Fatalf("response drift_purge = %v, want false; body=%+v", body["drift_purge"], body)
+	}
+}
+
 func TestPatchRepo_AllowsFilterEdit(t *testing.T) {
 	s := newTestServer(t)
 	cookie := bootProjectOnly(t, s, "pr")

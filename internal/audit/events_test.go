@@ -129,6 +129,33 @@ func TestPyPIFixPhase3EventKindsDistinctAndCount(t *testing.T) {
 	}
 }
 
+// AllDriftPurgePhase6EventKinds enumerates the v1.5 Phase 6 additions
+// for drift purge. Per D-22 + precedent (AllRBACPhase2EventKinds,
+// AllPyPIFixPhase3EventKinds), each v1.5 phase owns its own slice so
+// milestone boundaries stay greppable and the locked baseline
+// AllPhase1EventKinds (asserted at 23 by TestAllEventKindsDistinctAndCount)
+// is NEVER extended.
+var AllDriftPurgePhase6EventKinds = []audit.EventKind{
+	audit.EvtMirrorDriftPurged,
+	audit.EvtMirrorDriftPurgeSkipped,
+}
+
+func TestDriftPurgePhase6EventKindsDistinctAndCount(t *testing.T) {
+	if got, want := len(AllDriftPurgePhase6EventKinds), 2; got != want {
+		t.Fatalf("DriftPurge Phase6 EventKind count = %d, want %d", got, want)
+	}
+	seen := make(map[audit.EventKind]struct{}, len(AllDriftPurgePhase6EventKinds))
+	for _, k := range AllDriftPurgePhase6EventKinds {
+		if k == "" {
+			t.Fatalf("empty DriftPurge Phase6 EventKind in enumeration")
+		}
+		if _, dup := seen[k]; dup {
+			t.Fatalf("duplicate DriftPurge Phase6 EventKind: %q", k)
+		}
+		seen[k] = struct{}{}
+	}
+}
+
 func TestAllEventKindsDistinctAndCount(t *testing.T) {
 	if got := len(AllPhase1EventKinds); got != 23 {
 		t.Fatalf("EventKind count = %d, want 23", got)

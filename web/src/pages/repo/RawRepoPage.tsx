@@ -262,7 +262,23 @@ export function RawRepoPage({ repo }: RawRepoPageProps) {
               nativeButton={false}
               render={
                 <a
-                  href={`/${encodeURIComponent(projectName ?? '')}/raw/${encodeURIComponent(repo.name)}/${row.path}`}
+                  // FRONTFIX-02: encode each path segment individually
+                  // so reserved URL characters (`#`, `%`, `?`, space,
+                  // `+`, `&`, ...) survive round-trip to the backend
+                  // routing layer. Naïve interpolation of `row.path`
+                  // produced URLs that the browser truncated at `#`
+                  // (fragment), the chi router rejected at literal
+                  // `%` (invalid percent-encoding when the next two
+                  // chars aren't hex), and that lost trailing
+                  // segments after `?` (query). Splitting on `/` and
+                  // re-joining preserves the slash separators while
+                  // letting encodeURIComponent handle every other
+                  // reserved char. Mirrors the encode-per-filename
+                  // pattern HelmRepoPage and PypiRepoPage already use.
+                  href={`/${encodeURIComponent(projectName ?? '')}/raw/${encodeURIComponent(repo.name)}/${row.path
+                    .split('/')
+                    .map(encodeURIComponent)
+                    .join('/')}`}
                   download
                 />
               }
@@ -409,7 +425,16 @@ export function RawRepoPage({ repo }: RawRepoPageProps) {
                     ? `/projects/${encodeURIComponent(projectName ?? '')}/${encodeURIComponent(repo.type)}/${encodeURIComponent(repo.name)}/scans/${row.latest_scan_id}`
                     : undefined
                 }
-                downloadURL={`/${encodeURIComponent(projectName ?? '')}/raw/${encodeURIComponent(repo.name)}/${row.path}`}
+                // FRONTFIX-02: per-segment encode (see download
+                // button in the actions column above for the full
+                // rationale). The expanded ArtifactDetail panel
+                // surfaces the same "Download" affordance and was
+                // affected by the same `#`, `%`, `?`, space-in-path
+                // truncation bug.
+                downloadURL={`/${encodeURIComponent(projectName ?? '')}/raw/${encodeURIComponent(repo.name)}/${row.path
+                  .split('/')
+                  .map(encodeURIComponent)
+                  .join('/')}`}
                 downloadLabel="Download"
               />
             )}

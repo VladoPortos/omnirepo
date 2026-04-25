@@ -127,10 +127,17 @@ func interceptPutObject(b *backend.Backend) func(http.Handler) http.Handler {
 			// staged file once gofakes3 has consumed the re-issued reader.
 			defer func() { _ = os.Remove(tmpPath) }()
 
+			// Codex P2-02: capture original r.Body so we can Close it
+			// explicitly before swapping. Net/http would Close it itself
+			// at end of request, but gofakes3 (the next handler) may
+			// inspect or replace r.Body in ways that would skip the
+			// original Close. Belt-and-suspenders.
+			origBody := r.Body
 			h := sha256.New()
-			tee := io.TeeReader(r.Body, h)
+			tee := io.TeeReader(origBody, h)
 			_, copyErr := io.Copy(tmp, tee)
 			closeErr := tmp.Close()
+			_ = origBody.Close()
 			if copyErr != nil {
 				sigv4.WriteError(w, r, sigv4.ErrInvalidRequest)
 				return

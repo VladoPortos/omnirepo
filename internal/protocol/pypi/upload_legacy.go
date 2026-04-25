@@ -125,6 +125,16 @@ func (h *Handler) handleLegacyUpload(w http.ResponseWriter, r *http.Request) {
 			b, _ := io.ReadAll(io.LimitReader(part, 128))
 			clientDigest = strings.TrimSpace(strings.ToLower(string(b)))
 		case "content":
+			// Codex P5-05: reject duplicate content parts. PEP 503 +
+			// twine send exactly one content part per upload; a second
+			// would silently overwrite tmpPath and leak the first temp
+			// file (the deferred cleanup only handles the LATEST path).
+			// 400 with a clear message instead of a leaked temp.
+			if tmpPath != "" {
+				_ = part.Close()
+				http.Error(w, "duplicate content part", http.StatusBadRequest)
+				return
+			}
 			fname := part.FileName()
 			if fname == "" {
 				_ = part.Close()

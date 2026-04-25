@@ -20,10 +20,14 @@ import (
 // Flow:
 //  1. Resolve + auth (project member).
 //  2. Locate helm_charts row by repo+filename; 404 if absent.
-//  3. Move .tgz (and matching .prov, if present) to trash.
-//  4. One writer tx: helm_charts.Delete + IndexHelmDelete + metadata_state=dirty.
-//  5. coalescer.Kick so index.yaml regenerates without the deleted chart.
-//  6. Audit EvtHelmDelete; 204.
+//  3. Single writer tx: helm_charts.Delete + IndexHelmDelete + metadata_state=dirty.
+//     A failed tx leaves both row AND file in place (CONTEXT D-01).
+//  4. After tx commits, move the .tgz to trash. A failure here surfaces
+//     HTTP 500; the row is already gone (CONTEXT D-05 orphan trade-off).
+//  5. Move matching .prov to trash (best-effort; CONTEXT D-03 — provenance
+//     sidecar, slog.WarnContext on failure but request still succeeds).
+//  6. coalescer.Kick so index.yaml regenerates without the deleted chart.
+//  7. Audit EvtHelmDelete; 204.
 func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 	res, ok := h.resolveRepo(w, r, true)
 	if !ok {
@@ -50,37 +54,26 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Atomic delete ordering (CONTEXT D-01, audit finding #6): stat first
+	// to learn whether the .tgz is on disk (preserves the partial-state
+	// heal — when the file is missing but the row is present, we still
+	// drop the row in tx and skip trash.Move). Then commit the DB tx
+	// BEFORE moving the .tgz so a tx rollback never moves the file.
 	chartKey := storageKeyFor(res.project.Name, res.repo.Name, res.filename)
 	chartAbs := filepath.Join(h.repoRoot, filepath.FromSlash(chartKey))
-	if _, err := os.Stat(chartAbs); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			// File missing on disk but row exists — reconcile by dropping the
-			// row. Fall through to tx.
-		} else {
-			slog.ErrorContext(r.Context(), "helm.delete.stat_failed",
-				slog.String("incident_id", chimw.GetReqID(r.Context())),
-				slog.String("filename", res.filename),
-				slog.Any("err", err),
-			)
-			http.Error(w, "storage error", http.StatusInternalServerError)
-			return
-		}
-	} else {
-		if _, err := h.trash.Move(r.Context(), chartAbs, "helm-chart", res.repo.ID, auth.ActorLoginFromContext(r.Context())); err != nil {
-			slog.ErrorContext(r.Context(), "helm.delete.trash_failed",
-				slog.String("incident_id", chimw.GetReqID(r.Context())),
-				slog.String("filename", res.filename),
-				slog.Any("err", err),
-			)
-			http.Error(w, "storage error", http.StatusInternalServerError)
-			return
-		}
+	chartOnDisk := false
+	if _, err := os.Stat(chartAbs); err == nil {
+		chartOnDisk = true
+	} else if !errors.Is(err, os.ErrNotExist) {
+		slog.ErrorContext(r.Context(), "helm.delete.stat_failed",
+			slog.String("incident_id", chimw.GetReqID(r.Context())),
+			slog.String("filename", res.filename),
+			slog.Any("err", err),
+		)
+		http.Error(w, "storage error", http.StatusInternalServerError)
+		return
 	}
-	// Matching provenance file: best-effort move to trash.
-	provAbs := chartAbs + ".prov"
-	if _, err := os.Stat(provAbs); err == nil {
-		_, _ = h.trash.Move(r.Context(), provAbs, "helm-prov", res.repo.ID, auth.ActorLoginFromContext(r.Context()))
-	}
+	// (else ENOENT → chartOnDisk stays false; the tx heals the orphaned row.)
 
 	if err := h.db.WriteTx(r.Context(), func(tx *sql.Tx) error {
 		if err := h.helmCharts.Delete(r.Context(), tx, row.ID); err != nil {
@@ -99,6 +92,36 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 		)
 		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
+	}
+
+	// Tx committed → row is gone. Move the .tgz to trash. A failure here
+	// leaves the file orphaned at chartAbs (no row pointing at it); we
+	// surface 500 so the operator notices (CONTEXT D-05).
+	if chartOnDisk {
+		if _, err := h.trash.Move(r.Context(), chartAbs, "helm-chart", res.repo.ID, auth.ActorLoginFromContext(r.Context())); err != nil {
+			slog.ErrorContext(r.Context(), "helm.delete.trash_failed_post_commit",
+				slog.String("incident_id", chimw.GetReqID(r.Context())),
+				slog.String("filename", res.filename),
+				slog.Any("err", err),
+			)
+			http.Error(w, "storage error", http.StatusInternalServerError)
+			return
+		}
+	}
+
+	// Matching provenance file: best-effort move to trash (CONTEXT D-03).
+	// .prov is not load-bearing — failure logs a warning but does not fail
+	// the request. Replaces the prior silent `_, _ = ` discard.
+	provAbs := chartAbs + ".prov"
+	if _, statErr := os.Stat(provAbs); statErr == nil {
+		if _, err := h.trash.Move(r.Context(), provAbs, "helm-prov", res.repo.ID, auth.ActorLoginFromContext(r.Context())); err != nil {
+			slog.WarnContext(r.Context(), "helm.delete.prov_trash_failed_post_commit",
+				slog.String("incident_id", chimw.GetReqID(r.Context())),
+				slog.String("filename", res.filename+".prov"),
+				slog.Any("err", err),
+			)
+			// .prov is provenance metadata, not load-bearing — proceed.
+		}
 	}
 
 	if h.coalescer != nil {

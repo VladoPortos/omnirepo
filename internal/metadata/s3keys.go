@@ -68,14 +68,24 @@ func (r *S3KeysRepo) Insert(ctx context.Context, tx *sql.Tx, row *S3AccessKey) (
 	return id, nil
 }
 
-// FindByAKID returns the live (non-revoked) key with the matching AKID.
-// Collapses missing + revoked into ErrS3AccessKeyNotFound (D-12 no-oracle).
+// FindByAKID returns the live (non-revoked) key with the matching AKID whose
+// owning project is also live. Collapses missing + revoked + deleted-project
+// into ErrS3AccessKeyNotFound (D-12 no-oracle, LIFECYCLE-05).
+//
+// The INNER JOIN on projects with `p.deleted_at IS NULL` is a SECOND
+// independent gate beyond the cascade in plan 01-01 — even if a row was
+// somehow missed by the cascade, or a new row appeared between project
+// soft-delete and the cascade landing, the JOIN filter alone refuses to
+// resolve a key whose parent project is dead. Belt-and-braces vs audit
+// finding #1.
 func (r *S3KeysRepo) FindByAKID(ctx context.Context, akid string) (*S3AccessKey, error) {
 	row := r.db.Reader.QueryRowContext(ctx, `
-		SELECT id, project_id, access_key_id, secret_enc, label, created_by_user_id,
-		       created_at, last_used_at, revoked_at
-		FROM s3_access_keys
-		WHERE access_key_id = ? AND revoked_at IS NULL
+		SELECT k.id, k.project_id, k.access_key_id, k.secret_enc, k.label, k.created_by_user_id,
+		       k.created_at, k.last_used_at, k.revoked_at
+		FROM s3_access_keys k
+		INNER JOIN projects p ON p.id = k.project_id
+		WHERE k.access_key_id = ? AND k.revoked_at IS NULL
+		      AND p.deleted_at IS NULL
 	`, akid)
 	k, err := scanS3AccessKey(row)
 	if err != nil {

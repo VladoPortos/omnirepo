@@ -20,7 +20,7 @@ One Go binary, one HTTP/HTTPS port, one mounted volume. Drop it on a host, point
 | **PyPI** | `/<project>/pypi/<repo>/simple/...` | `pip`, `uv`, `twine` | PEP 503 + 691 + 694 uploads | ✓ Mirror a PEP 503 upstream (by project name) |
 | **Helm** | `/<project>/helm/<repo>/index.yaml` | `helm` | Helm v3 `index.yaml` + `.tgz` + `.prov` | ✓ Mirror a Helm chart repo (HTTP `index.yaml`; `oci://` charts skipped gracefully) |
 | **Raw blobs** | `/<project>/raw/<repo>/<path>` | `curl`, `wget`, any HTTP client | Plain HTTP with digest headers | — |
-| **S3-compatible** | `/<bucket>/<key>` with SigV4 | `aws-cli`, `s3cmd`, any AWS SDK | AWS SigV4 + gofakes3 backend | — |
+| **S3-compatible** | `/s3/<bucket>/<key>` with SigV4 | `aws-cli`, `s3cmd`, any AWS SDK | AWS SigV4 + gofakes3 backend | — |
 | **Git hosting** | `/<project>/git/<repo>.git` | `git` CLI (Smart HTTP) | go-git v6 backend + gitkit fallback | — |
 
 ### Core features

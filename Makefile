@@ -11,6 +11,7 @@ BENCH_WORKERS ?= 16
 	lint-docs \
 	conformance conformance-oci conformance-rpm conformance-deb \
 	conformance-pypi conformance-helm conformance-s3 conformance-git \
+	conformance-lifecycle \
 	test-git-conformance conformance-all \
 	frontend build-all docker e2e bench bench-throughput
 
@@ -167,6 +168,15 @@ conformance-helm:
 
 conformance-s3:
 	$(GO) test -mod=vendor -tags=conformance -count=1 -timeout=5m ./test/conformance/s3/...
+
+# v1.6 Phase 1 / LIFECYCLE-11 gate: cross-protocol denial conformance for
+# project soft-delete + restore. Boots omnirepo in-process, provisions a
+# project + 4 repos + S3 access key + S3 bucket + project-owned API key + 4
+# indexed packages, then asserts every protocol surface (S3 SigV4, REST API
+# key, search) denies access after soft-delete and works again after Restore
+# (D-21 regression guard). Runs in <2 minutes typical; 10m upper bound.
+conformance-lifecycle:
+	$(GO) test -mod=vendor -tags=conformance -count=1 -timeout=10m ./test/conformance/lifecycle/...
 
 # Phase 4 D-46 gate: Git Smart-HTTP conformance via real `git` CLI (DinD).
 # Exercises both gogit and gitkit backends: clone/push/fetch matrix,

@@ -225,6 +225,29 @@ func (r *SyncJobsRepo) SetFilesSynced(ctx context.Context, jobID, files int64) e
 	return nil
 }
 
+// SetSummaryDriftPurged merges a `drift_purged` integer key into the
+// sync_jobs.summary JSON blob (v1.5 Phase 6 / DRIFTPURGE-03, D-21).
+// Emitted unconditionally by each protocol sync_handler after a
+// successful drift run (including count=0 — run evidence per D-10).
+// Absent when drift didn't run (guard tripped, drift_purge=false, or
+// non-mirror repo).
+//
+// Uses SQLite's json_set() so repeat calls overwrite the key in place
+// and sibling keys from other writers (future summary additions) are
+// preserved. json1 is compiled into modernc.org/sqlite by default.
+func (r *SyncJobsRepo) SetSummaryDriftPurged(ctx context.Context, jobID, count int64) error {
+	_, err := r.db.Writer.ExecContext(ctx, `
+		UPDATE sync_jobs
+		SET summary    = json_set(summary, '$.drift_purged', ?),
+		    updated_at = CURRENT_TIMESTAMP
+		WHERE id = ?
+	`, count, jobID)
+	if err != nil {
+		return fmt.Errorf("sync_jobs: set summary.drift_purged %d: %w", jobID, err)
+	}
+	return nil
+}
+
 // CountRepoInflight reports how many sync_jobs rows for repoID are
 // currently pending or running. Used by the mirror-aware /sync endpoint
 // (Phase 8 Plan 01, D-07) to enforce one-in-flight-sync-per-repo with

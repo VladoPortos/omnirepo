@@ -141,17 +141,15 @@ func (d Deps) handleCreateS3Bucket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	uid := actor.ID
-	d.recordAudit(r, audit.Event{
-		Kind:        audit.EvtS3BucketCreated,
-		ActorUserID: &uid,
-		TargetKind:  "s3_bucket",
-		TargetID:    name,
+	d.recordAuditAs(r, audit.Event{
+		Kind:       audit.EvtS3BucketCreated,
+		TargetKind: "s3_bucket",
+		TargetID:   name,
 		Details: map[string]any{
 			"project": projectName,
 			"name":    name,
 		},
-	})
+	}, actor)
 
 	writeJSON(w, http.StatusCreated, s3BucketItem{
 		Name:      name,
@@ -230,18 +228,16 @@ func (d Deps) handleDeleteS3Bucket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	uid := actor.ID
-	d.recordAudit(r, audit.Event{
-		Kind:        audit.EvtS3BucketDeleted,
-		ActorUserID: &uid,
-		TargetKind:  "s3_bucket",
-		TargetID:    name,
+	d.recordAuditAs(r, audit.Event{
+		Kind:       audit.EvtS3BucketDeleted,
+		TargetKind: "s3_bucket",
+		TargetID:   name,
 		Details: map[string]any{
 			"project": projectName,
 			"name":    name,
 			"size_bytes_at_delete": info.SizeBytes,
 		},
-	})
+	}, actor)
 	w.WriteHeader(http.StatusNoContent)
 }
 

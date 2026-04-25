@@ -229,10 +229,8 @@ func (d Deps) handleCreateUpstreamCred(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
 	}
-	uid := actor.ID
-	d.recordAudit(r, audit.Event{
+	d.recordAuditAs(r, audit.Event{
 		Kind:       audit.EvtUpstreamCredCreated,
-		ActorUserID: &uid,
 		TargetKind: "upstream_cred",
 		TargetID:   strconv.FormatInt(id, 10),
 		Details: map[string]any{
@@ -241,7 +239,7 @@ func (d Deps) handleCreateUpstreamCred(w http.ResponseWriter, r *http.Request) {
 			"project": projectName,
 			"id":      id,
 		},
-	})
+	}, actor)
 	writeJSON(w, http.StatusCreated, credMetaToResponse(*m))
 }
 
@@ -284,10 +282,8 @@ func (d Deps) handleUpdateUpstreamCred(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
 	}
-	uid := actor.ID
-	d.recordAudit(r, audit.Event{
+	d.recordAuditAs(r, audit.Event{
 		Kind:       audit.EvtUpstreamCredUpdated,
-		ActorUserID: &uid,
 		TargetKind: "upstream_cred",
 		TargetID:   strconv.FormatInt(id, 10),
 		Details: map[string]any{
@@ -296,7 +292,7 @@ func (d Deps) handleUpdateUpstreamCred(w http.ResponseWriter, r *http.Request) {
 			"project": projectName,
 			"id":      id,
 		},
-	})
+	}, actor)
 	writeJSON(w, http.StatusOK, credMetaToResponse(*m))
 }
 
@@ -323,10 +319,8 @@ func (d Deps) handleDeleteUpstreamCred(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
 	}
-	uid := actor.ID
-	d.recordAudit(r, audit.Event{
+	d.recordAuditAs(r, audit.Event{
 		Kind:       audit.EvtUpstreamCredDeleted,
-		ActorUserID: &uid,
 		TargetKind: "upstream_cred",
 		TargetID:   strconv.FormatInt(id, 10),
 		Details: map[string]any{
@@ -335,7 +329,7 @@ func (d Deps) handleDeleteUpstreamCred(w http.ResponseWriter, r *http.Request) {
 			"project": projectName,
 			"id":      id,
 		},
-	})
+	}, actor)
 	w.WriteHeader(http.StatusNoContent)
 }
 

@@ -158,12 +158,10 @@ func (d Deps) handleCreateS3Key(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	uid := actor.ID
-	d.recordAudit(r, audit.Event{
-		Kind:        audit.EvtS3AccessKeyCreated,
-		ActorUserID: &uid,
-		TargetKind:  "s3_access_key",
-		TargetID:    strconv.FormatInt(rowID, 10),
+	d.recordAuditAs(r, audit.Event{
+		Kind:       audit.EvtS3AccessKeyCreated,
+		TargetKind: "s3_access_key",
+		TargetID:   strconv.FormatInt(rowID, 10),
 		Details: map[string]any{
 			"project":       projectName,
 			"id":            rowID,
@@ -171,7 +169,7 @@ func (d Deps) handleCreateS3Key(w http.ResponseWriter, r *http.Request) {
 			"access_key_id": akid,
 			// NOTE: secret is deliberately excluded (T-04-05-01).
 		},
-	})
+	}, actor)
 
 	writeJSON(w, http.StatusCreated, s3KeyCreateResponse{
 		ID:          row.ID,
@@ -238,18 +236,16 @@ func (d Deps) handleRevokeS3Key(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	uid := actor.ID
-	d.recordAudit(r, audit.Event{
-		Kind:        audit.EvtS3AccessKeyRevoked,
-		ActorUserID: &uid,
-		TargetKind:  "s3_access_key",
-		TargetID:    strconv.FormatInt(id, 10),
+	d.recordAuditAs(r, audit.Event{
+		Kind:       audit.EvtS3AccessKeyRevoked,
+		TargetKind: "s3_access_key",
+		TargetID:   strconv.FormatInt(id, 10),
 		Details: map[string]any{
 			"project":       projectName,
 			"id":            id,
 			"access_key_id": row.AccessKeyID,
 		},
-	})
+	}, actor)
 
 	w.WriteHeader(http.StatusNoContent)
 }

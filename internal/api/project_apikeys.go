@@ -163,19 +163,17 @@ func (d Deps) handleCreateProjectAPIKey(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	uid := actor.ID
-	d.recordAudit(r, audit.Event{
-		Kind:        audit.EvtProjectAPIKeyCreated,
-		ActorUserID: &uid,
-		TargetKind:  "project_api_key",
-		TargetID:    strconv.FormatInt(id, 10),
+	d.recordAuditAs(r, audit.Event{
+		Kind:       audit.EvtProjectAPIKeyCreated,
+		TargetKind: "project_api_key",
+		TargetID:   strconv.FormatInt(id, 10),
 		Details: map[string]any{
 			"project": projectName,
 			"id":      id,
 			"name":    name,
 			"prefix":  key.Prefix,
 		},
-	})
+	}, actor)
 
 	writeJSON(w, http.StatusCreated, projectAPIKeyCreateResponse{
 		ID:        id,
@@ -215,18 +213,16 @@ func (d Deps) handleRevokeProjectAPIKey(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	uid := actor.ID
-	d.recordAudit(r, audit.Event{
-		Kind:        audit.EvtProjectAPIKeyRevoked,
-		ActorUserID: &uid,
-		TargetKind:  "project_api_key",
-		TargetID:    strconv.FormatInt(id, 10),
+	d.recordAuditAs(r, audit.Event{
+		Kind:       audit.EvtProjectAPIKeyRevoked,
+		TargetKind: "project_api_key",
+		TargetID:   strconv.FormatInt(id, 10),
 		Details: map[string]any{
 			"project": projectName,
 			"id":      id,
 			"name":    key.Name,
 		},
-	})
+	}, actor)
 
 	w.WriteHeader(http.StatusNoContent)
 }

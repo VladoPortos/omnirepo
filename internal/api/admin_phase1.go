@@ -1060,10 +1060,9 @@ func (d Deps) handleCreateRepo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if a, ok := auth.ActorFromContext(r.Context()); ok {
-		uid := a.ID
-		d.recordAudit(r, audit.Event{Kind: audit.EvtRepoCreated, ActorUserID: &uid, TargetKind: "repo", TargetID: p.Name + "/" + req.Type + "/" + req.Name})
+		d.recordAuditAs(r, audit.Event{Kind: audit.EvtRepoCreated, TargetKind: "repo", TargetID: p.Name + "/" + req.Type + "/" + req.Name}, a)
 		if fp, ok := extras["fingerprint"].(string); ok && fp != "" {
-			d.recordAudit(r, audit.Event{Kind: audit.EvtSigningKeyCreated, ActorUserID: &uid, TargetKind: "repo", TargetID: p.Name + "/" + req.Type + "/" + req.Name, Details: map[string]any{"fingerprint": fp, "key_kind": "gpg_rsa4096"}})
+			d.recordAuditAs(r, audit.Event{Kind: audit.EvtSigningKeyCreated, TargetKind: "repo", TargetID: p.Name + "/" + req.Type + "/" + req.Name, Details: map[string]any{"fingerprint": fp, "key_kind": "gpg_rsa4096"}}, a)
 		}
 	}
 	resp := map[string]any{"id": id, "name": req.Name, "type": req.Type}

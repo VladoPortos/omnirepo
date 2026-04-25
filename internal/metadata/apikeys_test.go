@@ -262,6 +262,171 @@ func TestAPIKeysRepo_RestoreCascadedProjectOwnedForProject(t *testing.T) {
 	}
 }
 
+// -- LIFECYCLE-07 lookup-hardening tests -----------------------------------
+//
+// All six tests below soft-delete the project via raw UPDATE rather than
+// going through ProjectsRepo.SoftDelete — the plan 01-01 cascade also
+// revokes project-owned api_keys, masking the lookup-hardening behavior we
+// need to test (the LEFT JOIN + conditional WHERE filter).
+
+// rawSoftDeleteProject soft-deletes a project via raw SQL, decoupled from
+// plan 01-01 cascade. Used only by lookup-hardening tests.
+func rawSoftDeleteProject(t *testing.T, db *metadata.DB, projectID int64) {
+	t.Helper()
+	if _, err := db.Writer.ExecContext(context.Background(),
+		`UPDATE projects SET deleted_at = CURRENT_TIMESTAMP WHERE id = ?`, projectID,
+	); err != nil {
+		t.Fatalf("raw soft-delete project %d: %v", projectID, err)
+	}
+}
+
+// TestAPIKeysRepo_FindByPrefixSha_DeletedProject pins LIFECYCLE-07: a
+// project-owned API key whose owning project is soft-deleted MUST collapse
+// to ErrNotFound.
+func TestAPIKeysRepo_FindByPrefixSha_DeletedProject(t *testing.T) {
+	db := sqlitetest.New(t)
+	pid := seedProject(t, db, "deleted-proj")
+	repo := metadata.NewAPIKeysRepo(db)
+	ctx := context.Background()
+
+	if _, err := repo.CreateProjectKey(ctx, pid, "ci", "delpref0", "delsha"); err != nil {
+		t.Fatalf("CreateProjectKey: %v", err)
+	}
+	// Sanity: live project resolves.
+	if _, err := repo.FindByPrefixSha(ctx, "delpref0", "delsha"); err != nil {
+		t.Fatalf("pre-soft-delete: want resolve, got %v", err)
+	}
+
+	rawSoftDeleteProject(t, db, pid)
+
+	_, err := repo.FindByPrefixSha(ctx, "delpref0", "delsha")
+	if !errors.Is(err, metadata.ErrNotFound) {
+		t.Fatalf("post-soft-delete: want ErrNotFound, got %v", err)
+	}
+}
+
+// TestAPIKeysRepo_FindByPrefixSha_UserOwnedUnaffected pins that user
+// lifecycle is out of scope for this phase — user-owned keys MUST still
+// resolve even when an unrelated project is soft-deleted (the LEFT JOIN
+// filter must whitelist user-owned rows via the OR clause).
+func TestAPIKeysRepo_FindByPrefixSha_UserOwnedUnaffected(t *testing.T) {
+	db := sqlitetest.New(t)
+	uid := seedUser(t, db, "alice")
+	pid := seedProject(t, db, "unrelated-proj")
+	repo := metadata.NewAPIKeysRepo(db)
+	ctx := context.Background()
+
+	if _, err := repo.CreateUserKey(ctx, uid, "alice-laptop", "ukunaffe", "uksha"); err != nil {
+		t.Fatalf("CreateUserKey: %v", err)
+	}
+
+	// Soft-delete an unrelated project (alice may or may not be a member —
+	// her user-owned key has no FK to it; lifecycle should be independent).
+	rawSoftDeleteProject(t, db, pid)
+
+	got, err := repo.FindByPrefixSha(ctx, "ukunaffe", "uksha")
+	if err != nil {
+		t.Fatalf("user-owned key resolve: %v", err)
+	}
+	if got.OwnerKind != "user" || got.OwnerUserID == nil || *got.OwnerUserID != uid {
+		t.Fatalf("unexpected owner shape: %+v", got)
+	}
+}
+
+// TestAPIKeysRepo_FindByPrefixSha_LiveProjectStillWorks pins regression
+// check — live project + project-owned key still resolves.
+func TestAPIKeysRepo_FindByPrefixSha_LiveProjectStillWorks(t *testing.T) {
+	db := sqlitetest.New(t)
+	pid := seedProject(t, db, "live-proj")
+	repo := metadata.NewAPIKeysRepo(db)
+	ctx := context.Background()
+
+	id, err := repo.CreateProjectKey(ctx, pid, "ci-live", "lvpref01", "lvsha")
+	if err != nil {
+		t.Fatalf("CreateProjectKey: %v", err)
+	}
+	got, err := repo.FindByPrefixSha(ctx, "lvpref01", "lvsha")
+	if err != nil {
+		t.Fatalf("FindByPrefixSha: %v", err)
+	}
+	if got.ID != id || got.OwnerKind != "project" || got.OwnerProjectID == nil || *got.OwnerProjectID != pid {
+		t.Fatalf("unexpected: %+v", got)
+	}
+}
+
+// TestAPIKeysRepo_FindByPrefixSha_RevokedReturnsNotFound pins existing
+// behavior — revoked rows still collapse to ErrNotFound (the new JOIN
+// must not break this).
+func TestAPIKeysRepo_FindByPrefixSha_RevokedReturnsNotFound(t *testing.T) {
+	db := sqlitetest.New(t)
+	pid := seedProject(t, db, "revrec-proj")
+	repo := metadata.NewAPIKeysRepo(db)
+	ctx := context.Background()
+
+	id, err := repo.CreateProjectKey(ctx, pid, "ci-rev", "rvpref01", "rvsha")
+	if err != nil {
+		t.Fatalf("CreateProjectKey: %v", err)
+	}
+	if err := repo.Revoke(ctx, id); err != nil {
+		t.Fatalf("Revoke: %v", err)
+	}
+	_, err = repo.FindByPrefixSha(ctx, "rvpref01", "rvsha")
+	if !errors.Is(err, metadata.ErrNotFound) {
+		t.Fatalf("post-revoke: want ErrNotFound, got %v", err)
+	}
+}
+
+// TestAPIKeysRepo_FindByID_DeletedProject mirrors the FindByPrefixSha
+// deleted-project test for FindByID — used by /v2 Bearer middleware to
+// re-resolve actor on every request.
+func TestAPIKeysRepo_FindByID_DeletedProject(t *testing.T) {
+	db := sqlitetest.New(t)
+	pid := seedProject(t, db, "fbid-deleted")
+	repo := metadata.NewAPIKeysRepo(db)
+	ctx := context.Background()
+
+	id, err := repo.CreateProjectKey(ctx, pid, "ci", "fbidpref", "fbidsha")
+	if err != nil {
+		t.Fatalf("CreateProjectKey: %v", err)
+	}
+	// Sanity.
+	if _, err := repo.FindByID(ctx, id); err != nil {
+		t.Fatalf("pre-soft-delete: want resolve, got %v", err)
+	}
+
+	rawSoftDeleteProject(t, db, pid)
+
+	_, err = repo.FindByID(ctx, id)
+	if !errors.Is(err, metadata.ErrNotFound) {
+		t.Fatalf("post-soft-delete: want ErrNotFound, got %v", err)
+	}
+}
+
+// TestAPIKeysRepo_FindByID_UserOwnedUnaffected mirrors the UserOwnedUnaffected
+// test for FindByID — user-owned key resolution unaffected by project lifecycle.
+func TestAPIKeysRepo_FindByID_UserOwnedUnaffected(t *testing.T) {
+	db := sqlitetest.New(t)
+	uid := seedUser(t, db, "alice")
+	pid := seedProject(t, db, "fbid-unrelated-proj")
+	repo := metadata.NewAPIKeysRepo(db)
+	ctx := context.Background()
+
+	id, err := repo.CreateUserKey(ctx, uid, "alice-laptop", "fbidup01", "fbidupsh")
+	if err != nil {
+		t.Fatalf("CreateUserKey: %v", err)
+	}
+
+	rawSoftDeleteProject(t, db, pid)
+
+	got, err := repo.FindByID(ctx, id)
+	if err != nil {
+		t.Fatalf("FindByID user-owned: %v", err)
+	}
+	if got.OwnerKind != "user" || got.OwnerUserID == nil || *got.OwnerUserID != uid {
+		t.Fatalf("unexpected: %+v", got)
+	}
+}
+
 func TestAPIKeysRepo_RevokeExcludesFromFind(t *testing.T) {
 	db := sqlitetest.New(t)
 	uid := seedUser(t, db, "alice")

@@ -86,13 +86,24 @@ func (r *APIKeysRepo) create(ctx context.Context, kind string, userID, projectID
 }
 
 // FindByPrefixSha returns the live (non-revoked) api_keys row matching both
-// prefix and sha256. Returns ErrNotFound on miss or revoked.
+// prefix and sha256. Project-owned rows additionally require their owning
+// project to be live (LIFECYCLE-07). User-owned rows are unaffected by
+// project lifecycle.
+//
+// LEFT JOIN strategy: project_id is NULL for user-owned rows, so the JOIN
+// produces a row with p.id NULL on the left side. The OR clause whitelists
+// those rows so user keys always pass through, regardless of any project's
+// deleted_at state. Project-owned rows hit `p.deleted_at IS NULL` directly.
+//
+// Returns ErrNotFound on miss, revoked, or deleted-owning-project.
 func (r *APIKeysRepo) FindByPrefixSha(ctx context.Context, prefix, sha256hex string) (*APIKey, error) {
 	row := r.db.Reader.QueryRowContext(ctx, `
-		SELECT id, owner_kind, owner_user_id, owner_project_id, name, token_prefix, token_sha256,
-		       role, last_used_at, created_at, revoked_at
-		FROM api_keys
-		WHERE token_prefix=? AND token_sha256=? AND revoked_at IS NULL
+		SELECT k.id, k.owner_kind, k.owner_user_id, k.owner_project_id, k.name,
+		       k.token_prefix, k.token_sha256, k.role, k.last_used_at, k.created_at, k.revoked_at
+		  FROM api_keys k
+		  LEFT JOIN projects p ON p.id = k.owner_project_id
+		 WHERE k.token_prefix=? AND k.token_sha256=? AND k.revoked_at IS NULL
+		       AND (k.owner_kind = 'user' OR p.deleted_at IS NULL)
 	`, prefix, sha256hex)
 	var k APIKey
 	var userID, projectID sql.NullInt64
@@ -129,14 +140,22 @@ func (r *APIKeysRepo) FindByPrefixSha(ctx context.Context, prefix, sha256hex str
 }
 
 // FindByID returns the live (non-revoked) api_keys row with matching id.
-// Returns ErrNotFound on miss or revoked. Used by the /v2 Bearer middleware
-// to re-resolve an Actor from a JWT's claims on every request.
+// Returns ErrNotFound on miss, revoked, or deleted-owning-project. Used by
+// the /v2 Bearer middleware to re-resolve an Actor from a JWT's claims on
+// every request — without the LEFT JOIN here, a JWT issued before project
+// soft-delete would still resolve to a project-owned Actor across requests
+// after the project was soft-deleted (defense-in-depth alongside plan 01-01's
+// cascade revoking revoked_at). Same LEFT JOIN strategy as FindByPrefixSha
+// so user-owned keys (owner_project_id NULL) bypass the project lifetime
+// filter via the OR-clause whitelist.
 func (r *APIKeysRepo) FindByID(ctx context.Context, id int64) (*APIKey, error) {
 	row := r.db.Reader.QueryRowContext(ctx, `
-		SELECT id, owner_kind, owner_user_id, owner_project_id, name, token_prefix, token_sha256,
-		       role, last_used_at, created_at, revoked_at
-		FROM api_keys
-		WHERE id=? AND revoked_at IS NULL
+		SELECT k.id, k.owner_kind, k.owner_user_id, k.owner_project_id, k.name,
+		       k.token_prefix, k.token_sha256, k.role, k.last_used_at, k.created_at, k.revoked_at
+		  FROM api_keys k
+		  LEFT JOIN projects p ON p.id = k.owner_project_id
+		 WHERE k.id=? AND k.revoked_at IS NULL
+		       AND (k.owner_kind = 'user' OR p.deleted_at IS NULL)
 	`, id)
 	var k APIKey
 	var userID, projectID sql.NullInt64

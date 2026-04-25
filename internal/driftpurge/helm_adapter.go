@@ -92,15 +92,17 @@ func (a *helmAdapter) Purge(ctx context.Context, tx *sql.Tx, row Row, actor stri
 		return fmt.Errorf("helm adapter: marshal snapshot id=%d: %w", inner.ID, err)
 	}
 
+	// Codex Phase-6 review fix: DELETE row first (in tx), then move file
+	// to trash. See pypi_adapter.go for the rationale.
+	if _, err := tx.ExecContext(ctx, `DELETE FROM helm_charts WHERE id = ?`, inner.ID); err != nil {
+		return fmt.Errorf("helm adapter: delete id=%d: %w", inner.ID, err)
+	}
+
 	path := a.pathFn(inner)
 	if _, err := a.trash.MoveWithSnapshot(ctx, path, "helm_chart_drift", inner.ID, actor, snapBytes); err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("helm adapter: trash move id=%d path=%q: %w", inner.ID, path, err)
 		}
-	}
-
-	if _, err := tx.ExecContext(ctx, `DELETE FROM helm_charts WHERE id = ?`, inner.ID); err != nil {
-		return fmt.Errorf("helm adapter: delete id=%d: %w", inner.ID, err)
 	}
 	return nil
 }

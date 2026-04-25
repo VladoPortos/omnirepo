@@ -90,17 +90,24 @@ func (a *pypiAdapter) Purge(ctx context.Context, tx *sql.Tx, row Row, actor stri
 		return fmt.Errorf("pypi adapter: marshal snapshot id=%d: %w", inner.ID, err)
 	}
 
+	// Codex Phase-6 review fix: DELETE row first (in tx), then move file
+	// to trash. The reverse order leaves a window where: file moved →
+	// caller's WriteTx rolls back the DELETE → row still exists pointing
+	// at a missing file (404 on download). With this order, a trash-move
+	// failure rolls back the DELETE cleanly: row + file both stay where
+	// they were.
+	if _, err := tx.ExecContext(ctx, `DELETE FROM pypi_files WHERE id = ?`, inner.ID); err != nil {
+		return fmt.Errorf("pypi adapter: delete id=%d: %w", inner.ID, err)
+	}
+
 	path := a.pathFn(inner)
 	if _, err := a.trash.MoveWithSnapshot(ctx, path, "pypi_file_drift", inner.ID, actor, snapBytes); err != nil {
 		// Legacy empty marker (source missing): sidecar still landed,
-		// row DELETE proceeds. Any other error is fatal — propagate.
+		// the DELETE above is the truth-of-record. Any other error is
+		// fatal — propagate so the caller's WriteTx rolls the DELETE back.
 		if !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("pypi adapter: trash move id=%d path=%q: %w", inner.ID, path, err)
 		}
-	}
-
-	if _, err := tx.ExecContext(ctx, `DELETE FROM pypi_files WHERE id = ?`, inner.ID); err != nil {
-		return fmt.Errorf("pypi adapter: delete id=%d: %w", inner.ID, err)
 	}
 	return nil
 }

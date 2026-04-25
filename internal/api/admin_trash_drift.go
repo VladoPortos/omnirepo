@@ -90,12 +90,28 @@ func (d Deps) handleDriftRestore(
 		return
 	}
 
-	// Per-kind UPSERT inside a single write tx.
+	// Codex Phase-6 review fix (Q2): file move FIRST, then UPSERT.
+	// Reverse order leaves a window where a successful UPSERT followed
+	// by a failed file move produces a row pointing at a missing file
+	// (visible to operators as a 404-on-download). With this order, a
+	// failed file move returns 500 cleanly with no DB pollution; a
+	// failed UPSERT after a successful file move leaves an orphan file
+	// at the destination, which the GC sweep cleans up later (worst
+	// case: wasted disk, no broken row visible to users).
 	if d.DB == nil {
 		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal,
 			"db not configured")
 		return
 	}
+
+	// Move the file back FIRST.
+	if err := d.Trash.Restore(r.Context(), childPath, dstPath); err != nil {
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal,
+			"trash file restore failed: "+err.Error())
+		return
+	}
+
+	// Per-kind UPSERT inside a single write tx.
 	if err := d.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
 		switch e.Kind {
 		case "pypi_file_drift":
@@ -131,13 +147,6 @@ func (d Deps) handleDriftRestore(
 	}); err != nil {
 		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal,
 			"restore row UPSERT failed: "+err.Error())
-		return
-	}
-
-	// Move the file back.
-	if err := d.Trash.Restore(r.Context(), childPath, dstPath); err != nil {
-		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal,
-			"trash file restore failed: "+err.Error())
 		return
 	}
 

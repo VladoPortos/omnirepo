@@ -91,15 +91,19 @@ func (a *rpmAdapter) Purge(ctx context.Context, tx *sql.Tx, row Row, actor strin
 		return fmt.Errorf("rpm adapter: marshal snapshot id=%d: %w", inner.ID, err)
 	}
 
+	// Codex Phase-6 review fix: DELETE row first (in tx), then move file
+	// to trash. See pypi_adapter.go for the rationale — reverse order
+	// can leak rows pointing at moved files when the caller's WriteTx
+	// rolls back the DELETE after a partial trash move.
+	if _, err := tx.ExecContext(ctx, `DELETE FROM rpm_packages WHERE id = ?`, inner.ID); err != nil {
+		return fmt.Errorf("rpm adapter: delete id=%d: %w", inner.ID, err)
+	}
+
 	path := a.pathFn(inner)
 	if _, err := a.trash.MoveWithSnapshot(ctx, path, "rpm_package_drift", inner.ID, actor, snapBytes); err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("rpm adapter: trash move id=%d path=%q: %w", inner.ID, path, err)
 		}
-	}
-
-	if _, err := tx.ExecContext(ctx, `DELETE FROM rpm_packages WHERE id = ?`, inner.ID); err != nil {
-		return fmt.Errorf("rpm adapter: delete id=%d: %w", inner.ID, err)
 	}
 	return nil
 }

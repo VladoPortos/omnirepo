@@ -179,6 +179,106 @@ func (r *S3MultipartRepo) ListParts(ctx context.Context, uploadID string) ([]S3M
 	return out, rows.Err()
 }
 
+// ListUploadsForBucketPaginated returns up to (limit+1) rows so the caller
+// can compute IsTruncated. Rows are ordered by (key, upload_id) for stable
+// cursor pagination across pages.
+//
+// Cursor semantics: pass markerKey="" + markerUploadID="" for the first page.
+// On subsequent pages pass the (key, upload_id) of the LAST INCLUDED row from
+// the previous page; this helper returns rows strictly AFTER that pair under
+// the lexicographic (key, upload_id) order.
+//
+// Limit clamping: values <=0 or >1000 collapse to the AWS-spec default of
+// 1000. The SQL applies LIMIT (?+1) so callers can detect truncation by
+// comparing len(rows) > limit.
+//
+// Prefix: empty string disables the prefix filter. Non-empty prefix is
+// applied as a `key LIKE prefix || '%'` predicate, which composes with the
+// cursor predicate via AND.
+//
+// All inputs are SQL bind parameters — no string concatenation, no SQL
+// injection surface (threat T-02-05-04).
+func (r *S3MultipartRepo) ListUploadsForBucketPaginated(ctx context.Context, bucketID int64, prefix, markerKey, markerUploadID string, limit int) ([]S3MultipartUpload, error) {
+	if limit <= 0 || limit > 1000 {
+		limit = 1000
+	}
+	rows, err := r.db.Reader.QueryContext(ctx, `
+		SELECT id, upload_id, bucket_id, key, initiated_by_user_id, initiated_by_s3_key_id, initiated_at, metadata_json
+		  FROM s3_multipart_uploads
+		 WHERE bucket_id = ?
+		   AND (? = '' OR key LIKE ? || '%')
+		   AND (? = '' OR (key, upload_id) > (?, ?))
+		 ORDER BY key, upload_id
+		 LIMIT ? + 1
+	`, bucketID, prefix, prefix, markerKey, markerKey, markerUploadID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("s3_multipart_uploads: list paginated: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []S3MultipartUpload
+	for rows.Next() {
+		var u S3MultipartUpload
+		var initiated string
+		var userID, s3KeyID sql.NullInt64
+		if err := rows.Scan(&u.ID, &u.UploadID, &u.BucketID, &u.Key,
+			&userID, &s3KeyID, &initiated, &u.MetadataJSON); err != nil {
+			return nil, fmt.Errorf("s3_multipart_uploads: scan paginated: %w", err)
+		}
+		if userID.Valid {
+			v := userID.Int64
+			u.InitiatedByUserID = &v
+		}
+		if s3KeyID.Valid {
+			v := s3KeyID.Int64
+			u.InitiatedByS3KeyID = &v
+		}
+		u.InitiatedAt, _ = time.Parse("2006-01-02T15:04:05.000Z", initiated)
+		out = append(out, u)
+	}
+	return out, rows.Err()
+}
+
+// ListPartsPaginated returns up to (limit+1) parts for uploadID whose
+// part_number is strictly greater than markerPartNumber, ordered ascending.
+//
+// Cursor semantics: pass markerPartNumber=0 for the first page. On subsequent
+// pages pass the part_number of the LAST INCLUDED part from the previous
+// page. The SQL uses `part_number > ?` so the marker row itself is excluded.
+//
+// Limit clamping: values <=0 or >1000 collapse to the AWS-spec default of
+// 1000. The SQL applies LIMIT (?+1) so callers can detect truncation by
+// comparing len(parts) > limit.
+//
+// All inputs are SQL bind parameters (threat T-02-05-04).
+func (r *S3MultipartRepo) ListPartsPaginated(ctx context.Context, uploadID string, markerPartNumber int, limit int) ([]S3MultipartPart, error) {
+	if limit <= 0 || limit > 1000 {
+		limit = 1000
+	}
+	rows, err := r.db.Reader.QueryContext(ctx, `
+		SELECT id, upload_id, part_number, size_bytes, md5, uploaded_at
+		  FROM s3_multipart_parts
+		 WHERE upload_id = ? AND part_number > ?
+		 ORDER BY part_number ASC
+		 LIMIT ? + 1
+	`, uploadID, markerPartNumber, limit)
+	if err != nil {
+		return nil, fmt.Errorf("s3_multipart_parts: list paginated: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []S3MultipartPart
+	for rows.Next() {
+		var p S3MultipartPart
+		var uploaded string
+		if err := rows.Scan(&p.ID, &p.UploadID, &p.PartNumber, &p.SizeBytes, &p.MD5, &uploaded); err != nil {
+			return nil, fmt.Errorf("s3_multipart_parts: scan paginated: %w", err)
+		}
+		p.UploadedAt, _ = time.Parse("2006-01-02T15:04:05.000Z", uploaded)
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
 // DeleteUpload drops the upload row. ON DELETE CASCADE removes part rows.
 func (r *S3MultipartRepo) DeleteUpload(ctx context.Context, tx *sql.Tx, uploadID string) error {
 	if _, err := tx.ExecContext(ctx,

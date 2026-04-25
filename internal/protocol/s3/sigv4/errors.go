@@ -20,6 +20,12 @@ var (
 	ErrInvalidAccessKeyId = errors.New("sigv4: invalid access key id")
 	ErrSignatureMismatch  = errors.New("sigv4: signature mismatch")
 	ErrInvalidRequest     = errors.New("sigv4: invalid request")
+
+	// ErrContentSHA256Mismatch is returned by the chi-side PutObject
+	// intercept when the streamed body's sha256 differs from the value the
+	// client signed in x-amz-content-sha256 (S3HARD-03, audit finding #2).
+	// Maps to AWS S3's `XAmzContentSHA256Mismatch` 400 envelope.
+	ErrContentSHA256Mismatch = errors.New("sigv4: x-amz-content-sha256 mismatch")
 )
 
 // ErrSkew is returned when the request's x-amz-date is farther from server
@@ -111,6 +117,9 @@ func mapError(err error) (status int, code, msg string) {
 	case errors.Is(err, ErrInvalidRequest):
 		return http.StatusBadRequest, "InvalidRequest",
 			"The request is invalid for this service."
+	case errors.Is(err, ErrContentSHA256Mismatch):
+		return http.StatusBadRequest, "XAmzContentSHA256Mismatch",
+			"The provided 'x-amz-content-sha256' header does not match what was computed."
 	default:
 		return http.StatusInternalServerError, "InternalError",
 			"We encountered an internal error. Please try again."

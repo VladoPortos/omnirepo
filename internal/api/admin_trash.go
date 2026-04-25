@@ -6,8 +6,6 @@
 package api
 
 import (
-	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"

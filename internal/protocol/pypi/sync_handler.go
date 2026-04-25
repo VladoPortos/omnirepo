@@ -28,6 +28,7 @@ import (
 
 	"github.com/dxc-internal/omnirepo/internal/audit"
 	"github.com/dxc-internal/omnirepo/internal/config"
+	"github.com/dxc-internal/omnirepo/internal/driftpurge"
 	"github.com/dxc-internal/omnirepo/internal/httpx"
 	"github.com/dxc-internal/omnirepo/internal/jobs"
 	"github.com/dxc-internal/omnirepo/internal/metadata"
@@ -71,6 +72,11 @@ type SyncDeps struct {
 	// Phase 8 Plan 02 (M2.6): sync-jobs repo for throttled byte-level
 	// progress emit. Nil-safe — if unwired, progress.Set is a no-op.
 	SyncJobs *metadata.SyncJobsRepo
+	// Trash is the soft-delete primitive used by v1.5 Phase 6 drift purge
+	// (DRIFTPURGE-01..05) to move drifted file blobs into the trash root
+	// before deleting their pypi_files row. Nil-safe — when nil, drift
+	// purge is structurally skipped even if repo.DriftPurge is true.
+	Trash storage.Trash
 }
 
 // SyncHandler is the sync-pool handler for kind="pypi_sync".
@@ -170,14 +176,22 @@ func (h *SyncHandler) Handle(ctx context.Context, payload string, projectID, rep
 	// can emit byte-level progress with a stable totalBytes denominator
 	// (sum of PEP 691 file.size entries). Filter + idempotency checks run
 	// in the collect pass so already-present files don't inflate total.
+	//
+	// v1.5 Phase 6 (DRIFTPURGE-01): the same loop also captures the full
+	// upstream key set (every accepted upstream file, not just the to-fetch
+	// subset) so the end-of-Handle drift step can compute local\upstream
+	// without re-parsing. Digest is the bare hex from PEP 691 hashes.sha256;
+	// we re-prefix to "sha256:<hex>" so the projection matches the digest
+	// stored on pypi_files rows (per-D-12 PyPI key C slot).
 	type fileToFetch struct {
 		project string
 		file    UpstreamFile
 	}
 	var (
-		toFetch         []fileToFetch
-		totalBytes      int64
-		downloadErrors  []error
+		toFetch        []fileToFetch
+		upstreamKeys   []driftpurge.Key
+		totalBytes     int64
+		downloadErrors []error
 	)
 	for _, project := range projects {
 		if err := ctx.Err(); err != nil {
@@ -213,6 +227,20 @@ func (h *SyncHandler) Handle(ctx context.Context, payload string, projectID, rep
 			if !isSafeMirrorFilename(f.Filename) {
 				continue
 			}
+			// v1.5 Phase 6 (DRIFTPURGE-01): record this upstream file's
+			// drift key (D-12 PyPI projection: {project_normalized,
+			// filename, digest}). Locally-stored rows carry the
+			// "sha256:<hex>" digest form; re-prefix the bare PEP 691 hex
+			// so set membership matches.
+			var keyDigest string
+			if f.SHA256 != "" {
+				keyDigest = "sha256:" + strings.ToLower(f.SHA256)
+			}
+			upstreamKeys = append(upstreamKeys, driftpurge.Key{
+				A: project,
+				B: f.Filename,
+				C: keyDigest,
+			})
 			// Idempotency by filename — matches pypi_files UNIQUE(repo_id, filename) (D-15).
 			if existing, ferr := h.deps.PyPIFiles.FindByFilename(ctx, repoID, f.Filename); ferr == nil && existing != nil {
 				continue
@@ -306,6 +334,80 @@ func (h *SyncHandler) Handle(ctx context.Context, payload string, projectID, rep
 	}
 
 	_ = progress.Set(ctx, "done", atomic.LoadInt64(&accumulatedDone), totalBytes)
+
+	// v1.5 Phase 6 — Drift purge (DRIFTPURGE-01..05). Runs after upload
+	// success (D-07) and before SetFilesSynced. Failed syncs return via
+	// h.fail(...) earlier in the function, so this step is structurally
+	// unreachable on partial-sync paths (D-11). Only fires when the repo
+	// has the per-mirror toggle on and Trash is wired (test/dev paths
+	// that omit Trash structurally skip drift).
+	if repo.DriftPurge && h.deps.Trash != nil {
+		adapter := driftpurge.NewPyPIAdapter(
+			upstreamKeys,
+			h.deps.PyPIFiles,
+			h.deps.Trash,
+			func(row *metadata.PyPIFile) string {
+				// Mirror the ingest path used by fetchAndCommit:
+				// {project}/pypi/{repo}/packages/{filename}.
+				key := strings.Join([]string{proj.Name, "pypi", repo.Name, "packages", row.Filename}, "/")
+				return filepath.Join(h.deps.RepoRoot, filepath.FromSlash(key))
+			},
+		)
+		var report driftpurge.DriftReport
+		if err := h.deps.DB.WriteTx(ctx, func(tx *sql.Tx) error {
+			var rerr error
+			report, rerr = driftpurge.Run(ctx, tx, repo.ID, "", adapter)
+			return rerr
+		}); err != nil {
+			return h.fail(ctx, repo.ID, pl, startedAt, fmt.Errorf("drift purge: %w", err))
+		}
+
+		switch {
+		case report.Skipped:
+			// D-08 / D-20: empty-upstream guard tripped.
+			// SetSummaryDriftPurged NOT called per D-21 absence rule.
+			if h.deps.Audit != nil {
+				_ = h.deps.Audit.Record(ctx, audit.Event{
+					Kind:       audit.EvtMirrorDriftPurgeSkipped,
+					TargetKind: "repo",
+					TargetID:   strconv.FormatInt(repo.ID, 10),
+					Details: map[string]any{
+						"protocol":     "pypi",
+						"reason":       report.Reason,
+						"local_count":  int64(report.LocalCount),
+						"sync_job_id":  jobID,
+						"upstream_url": pl.UpstreamURL,
+					},
+				})
+			}
+		case report.PurgedCount > 0:
+			// D-19: drift purged with count > 0 — emit audit + summary.
+			if h.deps.Audit != nil {
+				_ = h.deps.Audit.Record(ctx, audit.Event{
+					Kind:       audit.EvtMirrorDriftPurged,
+					TargetKind: "repo",
+					TargetID:   strconv.FormatInt(repo.ID, 10),
+					Details: map[string]any{
+						"protocol":     "pypi",
+						"count":        int64(report.PurgedCount),
+						"sample":       report.Sample,
+						"sync_job_id":  jobID,
+						"upstream_url": pl.UpstreamURL,
+					},
+				})
+			}
+			if h.deps.SyncJobs != nil {
+				_ = h.deps.SyncJobs.SetSummaryDriftPurged(ctx, jobID, int64(report.PurgedCount))
+			}
+		default:
+			// D-10: zero-count drift run is run-evidence only; no audit
+			// emission, but stamp the summary integer so the sync record
+			// carries proof drift detection ran.
+			if h.deps.SyncJobs != nil {
+				_ = h.deps.SyncJobs.SetSummaryDriftPurged(ctx, jobID, 0)
+			}
+		}
+	}
 
 	// D-03 closure: persist per-job file count once so the UI pill can
 	// render "Sync complete · N files · X MB". Safe to read filesAdded

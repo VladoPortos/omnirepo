@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/md5"
+	"database/sql"
 	"encoding/hex"
 	"errors"
 	"io"
@@ -313,6 +314,206 @@ func TestSweepOrphanMultiparts_LeavesFreshAlone(t *testing.T) {
 	}
 	if _, err := metadata.NewS3MultipartRepo(f.db).FindUpload(context.Background(), string(id)); err != nil {
 		t.Fatalf("fresh upload swept: %v", err)
+	}
+}
+
+// -- Plan 02-05 ListMultipartUploads / ListParts pagination tests ----------
+// (S3HARD-09 / S3HARD-10)
+
+// seedMPU creates n multipart uploads in `bucket` with keys k1..kn (no body)
+// and returns the upload IDs in lexicographic key order.
+func seedMPU(t *testing.T, f *fixture, bucket string, keys []string) map[string]gofakes3.UploadID {
+	t.Helper()
+	out := map[string]gofakes3.UploadID{}
+	for _, k := range keys {
+		id, err := f.b.CreateMultipartUpload(bucket, k, nil)
+		if err != nil {
+			t.Fatalf("seed mpu %s: %v", k, err)
+		}
+		out[k] = id
+	}
+	return out
+}
+
+func TestListMultipartUploads_PaginationTruncation(t *testing.T) {
+	f := newFixture(t)
+	if err := f.b.CreateBucket("bkt"); err != nil {
+		t.Fatal(err)
+	}
+	ids := seedMPU(t, f, "bkt", []string{"k1", "k2", "k3"})
+
+	// Page 1: limit=2 → returns 2 results, IsTruncated=true.
+	page1, err := f.b.ListMultipartUploads("bkt", nil, gofakes3.Prefix{}, 2)
+	if err != nil {
+		t.Fatalf("page1: %v", err)
+	}
+	if len(page1.Uploads) != 2 {
+		t.Fatalf("page1: want 2 uploads, got %d", len(page1.Uploads))
+	}
+	if !page1.IsTruncated {
+		t.Fatalf("page1: want IsTruncated=true")
+	}
+	if page1.NextKeyMarker != "k2" {
+		t.Fatalf("page1 NextKeyMarker: want k2, got %q", page1.NextKeyMarker)
+	}
+	if page1.NextUploadIDMarker != ids["k2"] {
+		t.Fatalf("page1 NextUploadIDMarker: want %s, got %s", ids["k2"], page1.NextUploadIDMarker)
+	}
+
+	// Page 2: cursor at (k2, ids[k2]) → returns k3 only, IsTruncated=false.
+	marker := &gofakes3.UploadListMarker{Object: page1.NextKeyMarker, UploadID: page1.NextUploadIDMarker}
+	page2, err := f.b.ListMultipartUploads("bkt", marker, gofakes3.Prefix{}, 2)
+	if err != nil {
+		t.Fatalf("page2: %v", err)
+	}
+	if len(page2.Uploads) != 1 {
+		t.Fatalf("page2: want 1 upload, got %d", len(page2.Uploads))
+	}
+	if page2.IsTruncated {
+		t.Fatalf("page2: want IsTruncated=false")
+	}
+	if page2.NextKeyMarker != "" {
+		t.Fatalf("page2 NextKeyMarker: want empty, got %q", page2.NextKeyMarker)
+	}
+	if page2.Uploads[0].Key != "k3" {
+		t.Fatalf("page2: want k3, got %s", page2.Uploads[0].Key)
+	}
+}
+
+func TestListParts_PaginationTruncation(t *testing.T) {
+	f := newFixture(t)
+	if err := f.b.CreateBucket("bkt"); err != nil {
+		t.Fatal(err)
+	}
+	id, err := f.b.CreateMultipartUpload("bkt", "k", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Seed 5 parts directly via the repo (avoid the 5 MiB minimum-size /
+	// 10000-part-limit overhead of UploadPart).
+	if err := f.db.WriteTx(context.Background(), func(tx *sql.Tx) error {
+		mpr := metadata.NewS3MultipartRepo(f.db)
+		for i := 1; i <= 5; i++ {
+			if err := mpr.AddPart(context.Background(), tx, &metadata.S3MultipartPart{
+				UploadID: string(id), PartNumber: i, SizeBytes: int64(i), MD5: "m",
+			}); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("seed parts: %v", err)
+	}
+
+	// Page 1: marker=0 limit=3 → 3 parts, IsTruncated=true, NextPartNumberMarker=3.
+	res1, err := f.b.ListParts("bkt", "k", id, 0, 3)
+	if err != nil {
+		t.Fatalf("page1: %v", err)
+	}
+	if len(res1.Parts) != 3 {
+		t.Fatalf("page1: want 3, got %d", len(res1.Parts))
+	}
+	if !res1.IsTruncated {
+		t.Fatalf("page1: want IsTruncated=true")
+	}
+	if res1.NextPartNumberMarker != 3 {
+		t.Fatalf("page1 NextPartNumberMarker: want 3, got %d", res1.NextPartNumberMarker)
+	}
+
+	// Page 2: marker=3 limit=3 → 2 parts (4, 5), IsTruncated=false.
+	res2, err := f.b.ListParts("bkt", "k", id, 3, 3)
+	if err != nil {
+		t.Fatalf("page2: %v", err)
+	}
+	if len(res2.Parts) != 2 {
+		t.Fatalf("page2: want 2, got %d", len(res2.Parts))
+	}
+	if res2.IsTruncated {
+		t.Fatalf("page2: want IsTruncated=false")
+	}
+	if res2.Parts[0].PartNumber != 4 || res2.Parts[1].PartNumber != 5 {
+		t.Fatalf("page2 parts: %+v", res2.Parts)
+	}
+}
+
+func TestListMultipartUploads_AppliesAWSDefault(t *testing.T) {
+	f := newFixture(t)
+	if err := f.b.CreateBucket("bkt"); err != nil {
+		t.Fatal(err)
+	}
+	// Seed 3 uploads. limit=0 → SDK default 1000 → all 3 returned, no truncation.
+	seedMPU(t, f, "bkt", []string{"k1", "k2", "k3"})
+	res, err := f.b.ListMultipartUploads("bkt", nil, gofakes3.Prefix{}, 0)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(res.Uploads) != 3 {
+		t.Fatalf("want 3 uploads under default, got %d", len(res.Uploads))
+	}
+	if res.IsTruncated {
+		t.Fatalf("want IsTruncated=false under default")
+	}
+	if res.MaxUploads != 1000 {
+		t.Fatalf("want MaxUploads=1000 (clamped default), got %d", res.MaxUploads)
+	}
+}
+
+func TestListParts_AppliesAWSDefault(t *testing.T) {
+	f := newFixture(t)
+	if err := f.b.CreateBucket("bkt"); err != nil {
+		t.Fatal(err)
+	}
+	id, err := f.b.CreateMultipartUpload("bkt", "k", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.db.WriteTx(context.Background(), func(tx *sql.Tx) error {
+		mpr := metadata.NewS3MultipartRepo(f.db)
+		for i := 1; i <= 3; i++ {
+			if err := mpr.AddPart(context.Background(), tx, &metadata.S3MultipartPart{
+				UploadID: string(id), PartNumber: i, SizeBytes: int64(i), MD5: "m",
+			}); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	res, err := f.b.ListParts("bkt", "k", id, 0, 0)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(res.Parts) != 3 {
+		t.Fatalf("want 3 parts under default, got %d", len(res.Parts))
+	}
+	if res.IsTruncated {
+		t.Fatal("want IsTruncated=false under default")
+	}
+	if res.MaxParts != 1000 {
+		t.Fatalf("want MaxParts=1000 (clamped default), got %d", res.MaxParts)
+	}
+}
+
+func TestListMultipartUploads_NoTruncationOnExactMatch(t *testing.T) {
+	f := newFixture(t)
+	if err := f.b.CreateBucket("bkt"); err != nil {
+		t.Fatal(err)
+	}
+	// Off-by-one regression guard: 2 uploads, limit=2 → no truncation.
+	seedMPU(t, f, "bkt", []string{"k1", "k2"})
+	res, err := f.b.ListMultipartUploads("bkt", nil, gofakes3.Prefix{}, 2)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(res.Uploads) != 2 {
+		t.Fatalf("want 2 uploads, got %d", len(res.Uploads))
+	}
+	if res.IsTruncated {
+		t.Fatal("want IsTruncated=false on exact-match (off-by-one regression)")
+	}
+	if res.NextKeyMarker != "" {
+		t.Fatalf("want empty NextKeyMarker, got %q", res.NextKeyMarker)
 	}
 }
 

@@ -161,12 +161,20 @@ func validateObjectKey(key string) error {
 }
 
 // findBucketID looks up (id, name, exists?) for a bucket. Soft-deleted rows
-// (deleted_at IS NOT NULL) are treated as not-found.
+// (deleted_at IS NOT NULL) are treated as not-found, AS ARE rows whose owning
+// project is soft-deleted (LIFECYCLE-06). The two filters are independent —
+// a bucket can be soft-deleted while its project is live, and a bucket can
+// be live while its project is soft-deleted (in the window between project
+// soft-delete and the cascade landing, or if the cascade missed the row).
 func (b *Backend) findBucketID(ctx context.Context, name string) (int64, bool, error) {
 	var id int64
-	err := b.DB.Reader.QueryRowContext(ctx,
-		`SELECT id FROM s3_buckets WHERE name=? AND deleted_at IS NULL`, name,
-	).Scan(&id)
+	err := b.DB.Reader.QueryRowContext(ctx, `
+		SELECT s.id
+		  FROM s3_buckets s
+		  INNER JOIN projects p ON p.id = s.project_id
+		 WHERE s.name = ? AND s.deleted_at IS NULL
+		       AND p.deleted_at IS NULL
+	`, name).Scan(&id)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return 0, false, nil
@@ -177,13 +185,18 @@ func (b *Backend) findBucketID(ctx context.Context, name string) (int64, bool, e
 }
 
 // FindBucketProjectID returns the project_id for the named bucket. Returns
-// (0, false, nil) when the bucket does not exist or is soft-deleted. This is
-// the public entry point that Plan 07 middleware uses for auth.Can dispatch.
+// (0, false, nil) when the bucket does not exist, is soft-deleted, or its
+// owning project is soft-deleted (LIFECYCLE-06). This is the public entry
+// point that Plan 07 middleware uses for auth.Can dispatch.
 func (b *Backend) FindBucketProjectID(ctx context.Context, name string) (int64, bool, error) {
 	var projectID int64
-	err := b.DB.Reader.QueryRowContext(ctx,
-		`SELECT project_id FROM s3_buckets WHERE name=? AND deleted_at IS NULL`, name,
-	).Scan(&projectID)
+	err := b.DB.Reader.QueryRowContext(ctx, `
+		SELECT s.project_id
+		  FROM s3_buckets s
+		  INNER JOIN projects p ON p.id = s.project_id
+		 WHERE s.name = ? AND s.deleted_at IS NULL
+		       AND p.deleted_at IS NULL
+	`, name).Scan(&projectID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return 0, false, nil
@@ -285,16 +298,26 @@ type BucketInfo struct {
 // ListBucketsForProject returns every non-deleted bucket owned by projectID,
 // ordered by name. Used by the REST /projects/{name}/s3-buckets list endpoint
 // and by projectDetailResponse to surface bucket sizes in the UI.
+//
+// LIFECYCLE-06 defensive filter: even though the REST upstream gates this
+// endpoint on the project being live, the JOIN to projects + `p.deleted_at
+// IS NULL` ensures a stale projectID for a soft-deleted project returns an
+// empty list rather than leaking buckets. Belt-and-braces.
+//
+// The `b.` table alias was renamed to `s.` (s3_buckets) so the additional
+// JOIN to projects (alias `p`) reads uniformly.
 func (b *Backend) ListBucketsForProject(ctx context.Context, projectID int64) ([]BucketInfo, error) {
 	rows, err := b.DB.Reader.QueryContext(ctx, `
-		SELECT b.id, b.name, b.created_at,
+		SELECT s.id, s.name, s.created_at,
 		       COALESCE(SUM(o.size_bytes), 0) AS size_bytes,
 		       COUNT(o.id)                    AS object_count
-		FROM s3_buckets b
-		LEFT JOIN s3_objects o ON o.bucket_id = b.id
-		WHERE b.project_id = ? AND b.deleted_at IS NULL
-		GROUP BY b.id
-		ORDER BY b.name
+		  FROM s3_buckets s
+		  INNER JOIN projects p ON p.id = s.project_id
+		  LEFT  JOIN s3_objects o ON o.bucket_id = s.id
+		 WHERE s.project_id = ? AND s.deleted_at IS NULL
+		       AND p.deleted_at IS NULL
+		 GROUP BY s.id
+		 ORDER BY s.name
 	`, projectID)
 	if err != nil {
 		return nil, fmt.Errorf("backend: list buckets: %w", err)
@@ -312,17 +335,20 @@ func (b *Backend) ListBucketsForProject(ctx context.Context, projectID int64) ([
 }
 
 // GetBucketForProject returns one bucket's info (with size+count) if it
-// belongs to projectID. Returns (_, false, nil) if not found / wrong project.
+// belongs to projectID. Returns (_, false, nil) if not found, wrong project,
+// or owning project soft-deleted (LIFECYCLE-06).
 func (b *Backend) GetBucketForProject(ctx context.Context, projectID int64, name string) (BucketInfo, bool, error) {
 	var bi BucketInfo
 	err := b.DB.Reader.QueryRowContext(ctx, `
-		SELECT b.id, b.name, b.created_at,
+		SELECT s.id, s.name, s.created_at,
 		       COALESCE(SUM(o.size_bytes), 0) AS size_bytes,
 		       COUNT(o.id)                    AS object_count
-		FROM s3_buckets b
-		LEFT JOIN s3_objects o ON o.bucket_id = b.id
-		WHERE b.project_id = ? AND b.name = ? AND b.deleted_at IS NULL
-		GROUP BY b.id
+		  FROM s3_buckets s
+		  INNER JOIN projects p ON p.id = s.project_id
+		  LEFT  JOIN s3_objects o ON o.bucket_id = s.id
+		 WHERE s.project_id = ? AND s.name = ? AND s.deleted_at IS NULL
+		       AND p.deleted_at IS NULL
+		 GROUP BY s.id
 	`, projectID, name).Scan(&bi.ID, &bi.Name, &bi.CreatedAt, &bi.SizeBytes, &bi.ObjectCount)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {

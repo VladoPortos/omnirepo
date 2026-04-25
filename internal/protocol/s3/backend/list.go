@@ -11,12 +11,19 @@ import (
 	"github.com/johannesboyne/gofakes3"
 )
 
-// ListBuckets returns every non-deleted bucket in the installation.
+// ListBuckets returns every non-deleted bucket in the installation whose
+// owning project is also live (LIFECYCLE-06). The JOIN to projects with
+// `p.deleted_at IS NULL` gates buckets in the window between project
+// soft-delete and the cascade landing.
 func (b *Backend) ListBuckets() ([]gofakes3.BucketInfo, error) {
 	ctx := context.Background()
-	rows, err := b.DB.Reader.QueryContext(ctx,
-		`SELECT name, created_at FROM s3_buckets WHERE deleted_at IS NULL ORDER BY name ASC`,
-	)
+	rows, err := b.DB.Reader.QueryContext(ctx, `
+		SELECT s.name, s.created_at
+		  FROM s3_buckets s
+		  INNER JOIN projects p ON p.id = s.project_id
+		 WHERE s.deleted_at IS NULL AND p.deleted_at IS NULL
+		 ORDER BY s.name ASC
+	`)
 	if err != nil {
 		return nil, fmt.Errorf("backend: list buckets: %w", err)
 	}

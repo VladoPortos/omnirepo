@@ -459,6 +459,201 @@ func TestDeleteBucket_RefusesNonEmpty(t *testing.T) {
 	}
 }
 
+// -- LIFECYCLE-06 lookup-hardening tests -----------------------------------
+//
+// All seven tests below use a raw UPDATE on `projects.deleted_at` rather than
+// going through ProjectsRepo.SoftDelete — the plan 01-01 cascade would mask
+// the lookup-hardening behavior we're testing here (the cascade also
+// soft-deletes the bucket row, which would trip the `s.deleted_at IS NULL`
+// filter that's already in place pre-this-plan). We need to test the new
+// `p.deleted_at IS NULL` JOIN filter in isolation.
+
+// rawSoftDeleteProject soft-deletes via raw SQL, decoupled from plan 01-01
+// cascade. Used only by lookup-hardening tests in this file.
+func rawSoftDeleteProject(t *testing.T, f *fixture, projectID int64) {
+	t.Helper()
+	if _, err := f.db.Writer.ExecContext(context.Background(),
+		`UPDATE projects SET deleted_at = CURRENT_TIMESTAMP WHERE id = ?`, projectID,
+	); err != nil {
+		t.Fatalf("raw soft-delete project %d: %v", projectID, err)
+	}
+}
+
+// TestBackend_FindBucketID_DeletedProject pins LIFECYCLE-06: soft-deleting
+// the parent project causes findBucketID (via the public BucketExists
+// surface) to return (false, nil) — same shape as a missing bucket.
+func TestBackend_FindBucketID_DeletedProject(t *testing.T) {
+	f := newFixture(t)
+	if err := f.b.CreateBucket("bucket-dp"); err != nil {
+		t.Fatal(err)
+	}
+	// Sanity: live project + live bucket exists.
+	ok, err := f.b.BucketExists("bucket-dp")
+	if err != nil || !ok {
+		t.Fatalf("pre-soft-delete: ok=%v err=%v", ok, err)
+	}
+
+	rawSoftDeleteProject(t, f, f.projectID)
+
+	ok, err = f.b.BucketExists("bucket-dp")
+	if err != nil {
+		t.Fatalf("post-soft-delete err=%v", err)
+	}
+	if ok {
+		t.Fatalf("post-soft-delete BucketExists=true; want false (deleted-project filter not applied)")
+	}
+}
+
+// TestBackend_FindBucketProjectID_DeletedProject: same setup, exercises
+// the FindBucketProjectID public method directly.
+func TestBackend_FindBucketProjectID_DeletedProject(t *testing.T) {
+	f := newFixture(t)
+	if err := f.b.CreateBucket("bucket-fbpid"); err != nil {
+		t.Fatal(err)
+	}
+	pid, ok, err := f.b.FindBucketProjectID(context.Background(), "bucket-fbpid")
+	if err != nil || !ok || pid != f.projectID {
+		t.Fatalf("pre: pid=%d ok=%v err=%v", pid, ok, err)
+	}
+
+	rawSoftDeleteProject(t, f, f.projectID)
+
+	pid, ok, err = f.b.FindBucketProjectID(context.Background(), "bucket-fbpid")
+	if err != nil {
+		t.Fatalf("post err=%v", err)
+	}
+	if ok {
+		t.Fatalf("post: ok=true pid=%d; want (0, false, nil) (deleted-project filter not applied)", pid)
+	}
+	if pid != 0 {
+		t.Fatalf("post: pid=%d; want 0", pid)
+	}
+}
+
+// TestBackend_FindBucketID_LiveProjectStillWorks pins regression check —
+// the new JOIN must not break the happy path.
+func TestBackend_FindBucketID_LiveProjectStillWorks(t *testing.T) {
+	f := newFixture(t)
+	if err := f.b.CreateBucket("bucket-live"); err != nil {
+		t.Fatal(err)
+	}
+	ok, err := f.b.BucketExists("bucket-live")
+	if err != nil || !ok {
+		t.Fatalf("BucketExists: ok=%v err=%v", ok, err)
+	}
+}
+
+// TestBackend_FindBucketID_BucketSoftDeleted_LiveProject pins that the
+// existing `s3_buckets.deleted_at IS NULL` filter is preserved — a
+// soft-deleted bucket on a LIVE project must still return (false, nil).
+func TestBackend_FindBucketID_BucketSoftDeleted_LiveProject(t *testing.T) {
+	f := newFixture(t)
+	if err := f.b.CreateBucket("bucket-localdel"); err != nil {
+		t.Fatal(err)
+	}
+	// Soft-delete the bucket row only (project stays live).
+	if _, err := f.db.Writer.ExecContext(context.Background(),
+		`UPDATE s3_buckets SET deleted_at = CURRENT_TIMESTAMP WHERE name = ?`, "bucket-localdel",
+	); err != nil {
+		t.Fatalf("soft-delete bucket: %v", err)
+	}
+	ok, err := f.b.BucketExists("bucket-localdel")
+	if err != nil {
+		t.Fatalf("err=%v", err)
+	}
+	if ok {
+		t.Fatalf("BucketExists=true after soft-delete; want false (s.deleted_at filter regression)")
+	}
+}
+
+// TestBackend_ListBuckets_DeletedProjectFiltered pins that ListBuckets
+// omits buckets whose project is soft-deleted, even when the bucket row
+// itself is live (cascade may not have fired yet, or this code is the
+// independent gate beyond the cascade).
+func TestBackend_ListBuckets_DeletedProjectFiltered(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	// Bucket on the live default project.
+	if err := f.b.CreateBucket("bucket-p1-live"); err != nil {
+		t.Fatal(err)
+	}
+	// Second project + bucket. Soft-delete the second project; its bucket
+	// row stays live but must not appear in ListBuckets.
+	if _, err := f.db.Writer.ExecContext(ctx, `INSERT INTO projects(name) VALUES ('s3proj-dead')`); err != nil {
+		t.Fatalf("seed project: %v", err)
+	}
+	var deadPID int64
+	if err := f.db.Reader.QueryRowContext(ctx, `SELECT id FROM projects WHERE name='s3proj-dead'`).Scan(&deadPID); err != nil {
+		t.Fatalf("find project: %v", err)
+	}
+	if err := f.b.CreateBucketForProject("bucket-p2-deadproj", deadPID); err != nil {
+		t.Fatalf("create bucket on second project: %v", err)
+	}
+	rawSoftDeleteProject(t, f, deadPID)
+
+	out, err := f.b.ListBuckets()
+	if err != nil {
+		t.Fatalf("ListBuckets: %v", err)
+	}
+	names := map[string]bool{}
+	for _, bi := range out {
+		names[bi.Name] = true
+	}
+	if !names["bucket-p1-live"] {
+		t.Fatalf("bucket-p1-live missing from ListBuckets: %+v", names)
+	}
+	if names["bucket-p2-deadproj"] {
+		t.Fatalf("bucket-p2-deadproj leaked into ListBuckets (deleted-project filter not applied): %+v", names)
+	}
+}
+
+// TestBackend_ListBucketsForProject_DeletedProjectEmpty pins the defensive
+// filter on the REST-side ListBucketsForProject — soft-deleted projects
+// return empty (not an error).
+func TestBackend_ListBucketsForProject_DeletedProjectEmpty(t *testing.T) {
+	f := newFixture(t)
+	if err := f.b.CreateBucket("bucket-lbfp"); err != nil {
+		t.Fatal(err)
+	}
+	// Sanity.
+	pre, err := f.b.ListBucketsForProject(context.Background(), f.projectID)
+	if err != nil || len(pre) != 1 {
+		t.Fatalf("pre: %d %v", len(pre), err)
+	}
+	rawSoftDeleteProject(t, f, f.projectID)
+
+	post, err := f.b.ListBucketsForProject(context.Background(), f.projectID)
+	if err != nil {
+		t.Fatalf("post err: %v", err)
+	}
+	if len(post) != 0 {
+		t.Fatalf("post: %d buckets returned; want 0 (deleted-project filter not applied)", len(post))
+	}
+}
+
+// TestBackend_GetBucketForProject_DeletedProjectFalse pins the defensive
+// filter on GetBucketForProject — soft-deleted projects return (_, false, nil).
+func TestBackend_GetBucketForProject_DeletedProjectFalse(t *testing.T) {
+	f := newFixture(t)
+	if err := f.b.CreateBucket("bucket-gbfp"); err != nil {
+		t.Fatal(err)
+	}
+	bi, ok, err := f.b.GetBucketForProject(context.Background(), f.projectID, "bucket-gbfp")
+	if err != nil || !ok || bi.Name != "bucket-gbfp" {
+		t.Fatalf("pre: ok=%v name=%q err=%v", ok, bi.Name, err)
+	}
+
+	rawSoftDeleteProject(t, f, f.projectID)
+
+	bi, ok, err = f.b.GetBucketForProject(context.Background(), f.projectID, "bucket-gbfp")
+	if err != nil {
+		t.Fatalf("post err: %v", err)
+	}
+	if ok {
+		t.Fatalf("post: ok=true name=%q; want (_, false, nil)", bi.Name)
+	}
+}
+
 // -- helpers --------------------------------------------------------------
 
 func bucketID(t *testing.T, f *fixture, name string) int64 {

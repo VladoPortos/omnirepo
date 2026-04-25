@@ -225,6 +225,29 @@ func (r *SyncJobsRepo) SetFilesSynced(ctx context.Context, jobID, files int64) e
 	return nil
 }
 
+// SetSummaryDriftBlocked merges a `drift_blocked` integer key into
+// the sync_jobs.summary JSON blob (v1.7 / UIBACK-03). Emitted when
+// the percent-threshold guard tripped — the count of rows the guard
+// prevented from being purged. The UI surfaces this as a
+// "Drift purge blocked: N rows pending confirmation" banner with an
+// override button that re-triggers the sync with force=true.
+//
+// Mirrors SetSummaryDriftPurged's json_set semantics so sibling keys
+// from other writers (drift_purged, future drift_skipped) survive in
+// the same blob without one writer clobbering another.
+func (r *SyncJobsRepo) SetSummaryDriftBlocked(ctx context.Context, jobID, count int64) error {
+	_, err := r.db.Writer.ExecContext(ctx, `
+		UPDATE sync_jobs
+		SET summary    = json_set(summary, '$.drift_blocked', ?),
+		    updated_at = CURRENT_TIMESTAMP
+		WHERE id = ?
+	`, count, jobID)
+	if err != nil {
+		return fmt.Errorf("sync_jobs: set summary.drift_blocked %d: %w", jobID, err)
+	}
+	return nil
+}
+
 // SetSummaryDriftPurged merges a `drift_purged` integer key into the
 // sync_jobs.summary JSON blob (v1.5 Phase 6 / DRIFTPURGE-03, D-21).
 // Emitted unconditionally by each protocol sync_handler after a

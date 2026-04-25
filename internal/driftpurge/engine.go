@@ -50,10 +50,17 @@ type Row interface {
 
 // DriftReport is the outcome of a single driftpurge.Run call.
 //
-// Skipped=true means the empty-upstream guard (D-08) tripped and
-// adapter.Purge was NOT invoked. LocalCount carries the number of
-// rows that WOULD have been vulnerable so the caller can emit
-// mirror.drift_purge_skipped with diagnostics (D-20).
+// Skipped=true means a safety guard tripped and adapter.Purge was NOT
+// invoked. Reason carries the guard token:
+//   - "upstream_empty"      — the D-08 empty-upstream guard
+//   - "threshold_exceeded"  — the v1.7 percent-threshold guard
+//                              (UIBACK-03). BlockedCount carries the
+//                              would-purge count so the caller can
+//                              stamp sync_jobs.summary.drift_blocked
+//                              and surface an admin-confirm override.
+// LocalCount carries the number of rows that WOULD have been
+// vulnerable so the caller can emit mirror.drift_purge_skipped with
+// diagnostics (D-20).
 //
 // PurgedCount is the number of rows successfully purged. On partial
 // failure (adapter.Purge returned an error mid-iteration) PurgedCount
@@ -65,13 +72,18 @@ type Row interface {
 // populated on successful full-iteration runs (Skipped=false, err=nil).
 // On partial failure it contains the sample computed BEFORE iteration
 // started (so audit can still emit the intended sample).
+//
+// BlockedCount is non-zero only when Skipped=true and
+// Reason=="threshold_exceeded": the count of rows the guard prevented
+// from being purged.
 type DriftReport struct {
-	Protocol    string
-	PurgedCount int
-	Sample      []string
-	Skipped     bool
-	Reason      string
-	LocalCount  int
+	Protocol     string
+	PurgedCount  int
+	Sample       []string
+	Skipped      bool
+	Reason       string
+	LocalCount   int
+	BlockedCount int
 }
 
 // DriftAdapter is implemented by each per-protocol adapter (see
@@ -102,18 +114,42 @@ type DriftAdapter interface {
 // empty-upstream safety guard trips.
 const reasonUpstreamEmpty = "upstream_empty"
 
+// reasonThresholdExceeded is the v1.7 reason string emitted when the
+// percent-threshold guard (UIBACK-03) blocks a drift run that would
+// purge more than thresholdPct of local rows. The caller surfaces
+// this via sync_jobs.summary.drift_blocked + an admin-confirm
+// override flow that re-triggers the sync with force=true.
+const reasonThresholdExceeded = "threshold_exceeded"
+
 // sampleLimit caps the filename sample per D-18.
 const sampleLimit = 20
 
 // Run executes drift detection + purge for one repo. See package doc
 // for invariants. actor is the users.login of the caller (system
 // sync leaves this empty).
+//
+// thresholdPct controls the v1.7 percent-threshold safety guard
+// (UIBACK-03). When > 0 and force is false, a drift count exceeding
+// thresholdPct of local-row count is BLOCKED — the report is set with
+// Skipped=true, Reason="threshold_exceeded", BlockedCount=len(drift),
+// and adapter.Purge is NOT invoked. thresholdPct == 0 disables the
+// guard entirely. force=true bypasses the guard regardless of
+// thresholdPct (operator-confirmed override path).
+//
+// The guard is the SECOND-line check: the upstream-empty guard
+// (D-08) runs first and short-circuits before drift is computed, and
+// the per-mirror drift_purge=false default still gates whether Run
+// is called at all. With this guard in place, an operator who
+// enabled drift_purge AND has a misconfigured upstream still gets
+// one more chance to notice before the mirror is wiped.
 func Run(
 	ctx context.Context,
 	tx *sql.Tx,
 	repoID int64,
 	actor string,
 	adapter DriftAdapter,
+	thresholdPct int,
+	force bool,
 ) (DriftReport, error) {
 	report := DriftReport{Protocol: adapter.Protocol()}
 
@@ -169,7 +205,21 @@ func Run(
 		report.Sample = append(report.Sample, drift[i].SampleFilename())
 	}
 
-	// 7. Iterate drift and purge each row. Stop on first error —
+	// 7. Percent-threshold guard (UIBACK-03). Compares drift count
+	//    against thresholdPct of local-row count using integer
+	//    cross-multiplication so the check is exact at any scale
+	//    (no float division, no rounding ambiguity). force=true
+	//    bypasses the guard for operator-confirmed overrides;
+	//    thresholdPct==0 disables the guard entirely.
+	if thresholdPct > 0 && !force && len(local) > 0 &&
+		len(drift)*100 > thresholdPct*len(local) {
+		report.Skipped = true
+		report.Reason = reasonThresholdExceeded
+		report.BlockedCount = len(drift)
+		return report, nil
+	}
+
+	// 8. Iterate drift and purge each row. Stop on first error —
 	//    the caller's tx decides rollback vs partial-commit.
 	for _, row := range drift {
 		if err := adapter.Purge(ctx, tx, row, actor); err != nil {

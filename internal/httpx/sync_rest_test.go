@@ -258,6 +258,68 @@ func TestSync_MirrorNonEmptyBodyRejected(t *testing.T) {
 	}
 }
 
+// TestSync_MirrorBodyAcceptsForceDriftThreshold — UIBACK-03 (v1.7).
+//
+// Mirror repos normally reject any body (sync.mirror_overrides_not_allowed),
+// but a body whose ONLY non-zero field is `force_drift_threshold: true`
+// is accepted as a per-call confirmation flag. The flag must propagate
+// into the persisted payload_json so the per-protocol handler can read
+// it back via SyncPayload.ForceDriftThreshold.
+func TestSync_MirrorBodyAcceptsForceDriftThreshold(t *testing.T) {
+	s := setupSyncTestServer(t)
+	resp, err := http.Post(s.srv.URL+"/projects/demo/repos/deb/ubuntu-focal/sync",
+		"application/json",
+		bytes.NewReader([]byte(`{"force_drift_threshold":true}`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusAccepted {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 202; body=%s", resp.StatusCode, body)
+	}
+	var out map[string]any
+	_ = json.NewDecoder(resp.Body).Decode(&out)
+	jobID, ok := out["job_id"].(float64)
+	if !ok {
+		t.Fatalf("missing job_id: %+v", out)
+	}
+	var payload string
+	_ = s.db.Reader.QueryRow(`SELECT payload_json FROM sync_jobs WHERE id=?`, int64(jobID)).Scan(&payload)
+	if !strings.Contains(payload, `"force_drift_threshold":true`) {
+		t.Fatalf("payload missing force_drift_threshold: %s", payload)
+	}
+	// Mirror config still came from the repo row, not the body.
+	if !strings.Contains(payload, "archive.ubuntu.com") {
+		t.Fatalf("payload missing mirror URL: %s", payload)
+	}
+}
+
+// TestSync_MirrorBodyRejectsForceDriftThresholdAlongsideOverrides —
+// UIBACK-03 narrow exception: only `force_drift_threshold` alone is
+// allowed for mirror repos. Combining it with an upstream_url override
+// keeps the strict 400 path so operators can't accidentally flip the
+// mirror's locked URL by including it next to the confirmation flag.
+func TestSync_MirrorBodyRejectsForceDriftThresholdAlongsideOverrides(t *testing.T) {
+	s := setupSyncTestServer(t)
+	resp, err := http.Post(s.srv.URL+"/projects/demo/repos/deb/ubuntu-focal/sync",
+		"application/json",
+		bytes.NewReader([]byte(`{"force_drift_threshold":true,"upstream_url":"https://other.example"}`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", resp.StatusCode)
+	}
+	var out map[string]any
+	_ = json.NewDecoder(resp.Body).Decode(&out)
+	code, _ := out["error"].(string)
+	if !strings.Contains(code, "mirror_overrides_not_allowed") {
+		t.Fatalf("code = %q, want *mirror_overrides_not_allowed; body=%+v", code, out)
+	}
+}
+
 // TestSync_NonMirrorBodyDriven asserts the v1.0 body-driven path still
 // works for non-mirror repos.
 func TestSync_NonMirrorBodyDriven(t *testing.T) {

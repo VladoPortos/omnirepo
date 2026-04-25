@@ -97,6 +97,18 @@ type RegenConfig struct {
 type SyncConfig struct {
 	MaxParallelDownloadsPerJob int           `koanf:"max_parallel_downloads_per_job"`
 	UpstreamHTTPTimeout        time.Duration `koanf:"upstream_http_timeout"`
+
+	// DriftPurgeThresholdPct is the v1.7 percent-threshold guard for
+	// drift purges (UIBACK-03). When set to a value > 0, a drift run
+	// whose drift count exceeds this fraction of the local-row count
+	// (drift*100 > pct*local) is BLOCKED instead of executed — the
+	// engine sets DriftReport.Skipped + Reason="threshold_exceeded"
+	// and the protocol sync handler stamps sync_jobs.summary
+	// .drift_blocked = N so the UI can surface an admin-confirm
+	// override flow. 0 disables the guard (the existing two safety
+	// nets — drift_purge=false default + empty-upstream guard — stay
+	// in force regardless). Default 50.
+	DriftPurgeThresholdPct int `koanf:"drift_purge_threshold_pct"`
 }
 
 // SigningConfig tunes the per-repo OpenPGP signing key generation
@@ -287,6 +299,7 @@ func Defaults() Config {
 		Sync: SyncConfig{
 			MaxParallelDownloadsPerJob: 4,
 			UpstreamHTTPTimeout:        60 * time.Second,
+			DriftPurgeThresholdPct:     50,
 		},
 		Signing: SigningConfig{
 			GPGKeyBits: 4096,

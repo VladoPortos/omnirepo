@@ -54,6 +54,11 @@ type SyncPayload struct {
 	UpstreamURL string      `json:"upstream_url"`
 	CredID      *int64      `json:"cred_id,omitempty"`
 	Filter      *SyncFilter `json:"filter,omitempty"`
+	// v1.7 / UIBACK-03: operator-confirmed override of the percent-
+	// threshold drift-purge guard. Threaded through from the /sync
+	// REST body. Set true after the operator clicked "Override and
+	// purge" on a previous sync that returned summary.drift_blocked.
+	ForceDriftThreshold bool `json:"force_drift_threshold,omitempty"`
 }
 
 // SyncDeps bundles dependencies for the PyPI sync handler.
@@ -357,13 +362,40 @@ func (h *SyncHandler) Handle(ctx context.Context, payload string, projectID, rep
 		var report driftpurge.DriftReport
 		if err := h.deps.DB.WriteTx(ctx, func(tx *sql.Tx) error {
 			var rerr error
-			report, rerr = driftpurge.Run(ctx, tx, repo.ID, "", adapter)
+			report, rerr = driftpurge.Run(
+				ctx, tx, repo.ID, "", adapter,
+				h.deps.Cfg.DriftPurgeThresholdPct, pl.ForceDriftThreshold,
+			)
 			return rerr
 		}); err != nil {
 			return h.fail(ctx, repo.ID, pl, startedAt, fmt.Errorf("drift purge: %w", err))
 		}
 
 		switch {
+		case report.Skipped && report.Reason == "threshold_exceeded":
+			// UIBACK-03: percent-threshold guard tripped. Stamp
+			// summary.drift_blocked so the UI can render the override
+			// banner; reuse EvtMirrorDriftPurgeSkipped (the audit
+			// reason enum was pre-extended for this in events.go).
+			if h.deps.SyncJobs != nil {
+				_ = h.deps.SyncJobs.SetSummaryDriftBlocked(ctx, jobID, int64(report.BlockedCount))
+			}
+			if h.deps.Audit != nil {
+				_ = h.deps.Audit.Record(ctx, audit.Event{
+					Kind:       audit.EvtMirrorDriftPurgeSkipped,
+					TargetKind: "repo",
+					TargetID:   strconv.FormatInt(repo.ID, 10),
+					Details: map[string]any{
+						"protocol":      "pypi",
+						"reason":        report.Reason,
+						"local_count":   int64(report.LocalCount),
+						"blocked_count": int64(report.BlockedCount),
+						"threshold_pct": int64(h.deps.Cfg.DriftPurgeThresholdPct),
+						"sync_job_id":   jobID,
+						"upstream_url":  pl.UpstreamURL,
+					},
+				})
+			}
 		case report.Skipped:
 			// D-08 / D-20: empty-upstream guard tripped.
 			// SetSummaryDriftPurged NOT called per D-21 absence rule.

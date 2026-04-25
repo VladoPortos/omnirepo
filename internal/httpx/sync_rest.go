@@ -106,6 +106,17 @@ type SyncRequest struct {
 	CredID      *int64          `json:"cred_id,omitempty"`
 	Filter      json.RawMessage `json:"filter,omitempty"` // protocol-specific opaque blob
 	Suite       string          `json:"suite,omitempty"`  // deb only
+	// ForceDriftThreshold is the v1.7 / UIBACK-03 operator-confirmed
+	// override for the percent-threshold drift-purge guard. Mirror
+	// repos accept this field even though they reject other
+	// override fields (sync.mirror_overrides_not_allowed) — it is
+	// not an "override" in the lock-at-creation sense; it's a
+	// per-call confirmation that the operator has reviewed the
+	// blocked-purge banner and wants the next sync to proceed
+	// despite the guard. Threaded into the per-protocol payload
+	// JSON as `force_drift_threshold` so each sync handler picks
+	// it up via SyncPayload.ForceDriftThreshold.
+	ForceDriftThreshold bool `json:"force_drift_threshold,omitempty"`
 }
 
 // MountSyncRoutes wires the sync REST endpoint onto r. Caller is responsible
@@ -193,10 +204,28 @@ func (d SyncRESTDeps) handleSync(w http.ResponseWriter, r *http.Request) {
 	// Phase 8 Plan 01 (MIRROR-05): mirror repos read config from the repo
 	// row; a non-empty body would risk operators accidentally overriding the
 	// locked-at-creation filter/URL. Reject with 400 before anything else.
+	//
+	// v1.7 / UIBACK-03 narrow exception: a body whose ONLY non-zero field
+	// is `force_drift_threshold` is allowed for mirror repos — it's a
+	// per-call confirmation flag, not an override of the locked config.
+	// Any other field present (upstream_url/cred_id/filter/suite) keeps
+	// the strict rejection path.
+	var mirrorForceDriftThreshold bool
 	if repo.IsMirror && !bodyEmpty {
-		writeJSONErr(w, http.StatusBadRequest, codeSyncMirrorOverridesNotAllowed,
-			"mirror repos read config from the repo row; do not send a body")
-		return
+		var probe SyncRequest
+		if perr := json.Unmarshal(bodyBytes, &probe); perr != nil {
+			writeJSONErr(w, http.StatusBadRequest, codeSyncInvalidRequestBody,
+				"invalid JSON: "+perr.Error())
+			return
+		}
+		hasOverrides := probe.UpstreamURL != "" || probe.CredID != nil ||
+			len(probe.Filter) > 0 || probe.Suite != ""
+		if hasOverrides {
+			writeJSONErr(w, http.StatusBadRequest, codeSyncMirrorOverridesNotAllowed,
+				"mirror repos read config from the repo row; do not send a body")
+			return
+		}
+		mirrorForceDriftThreshold = probe.ForceDriftThreshold
 	}
 
 	// Phase 8 Plan 01 (MIRROR-04): one-in-flight-sync-per-repo.
@@ -221,7 +250,9 @@ func (d SyncRESTDeps) handleSync(w http.ResponseWriter, r *http.Request) {
 	// Branch on IsMirror to source the sync payload.
 	var req SyncRequest
 	if repo.IsMirror {
-		// bodyEmpty asserted above; read config from the repo row.
+		// Mirror config comes from the repo row; only the v1.7
+		// force_drift_threshold confirmation flag (if any) flows in
+		// from the request body.
 		req.UpstreamURL = repo.MirrorUpstreamURL
 		if repo.MirrorCredID != nil {
 			v := *repo.MirrorCredID
@@ -230,6 +261,7 @@ func (d SyncRESTDeps) handleSync(w http.ResponseWriter, r *http.Request) {
 		if repo.MirrorFilterJSON != "" {
 			req.Filter = json.RawMessage(repo.MirrorFilterJSON)
 		}
+		req.ForceDriftThreshold = mirrorForceDriftThreshold
 	} else {
 		// Non-mirror repos keep the v1.0 body-driven flow verbatim.
 		if !bodyEmpty {
@@ -301,6 +333,13 @@ func (d SyncRESTDeps) handleSync(w http.ResponseWriter, r *http.Request) {
 	}
 	if repoType == "deb" && req.Suite != "" {
 		payload["suite"] = req.Suite
+	}
+	// v1.7 / UIBACK-03: thread the operator-confirm flag into the
+	// per-protocol payload. Each handler's SyncPayload picks it up
+	// via the `force_drift_threshold` JSON tag and forwards it to
+	// driftpurge.Run as the `force` parameter.
+	if req.ForceDriftThreshold {
+		payload["force_drift_threshold"] = true
 	}
 	buf, merr := json.Marshal(payload)
 	if merr != nil {

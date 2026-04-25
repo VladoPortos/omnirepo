@@ -57,7 +57,7 @@ func TestRun_EmptyUpstreamGuard(t *testing.T) {
 		upstream:  []Key{},
 		localRows: []Row{mkRow("a"), mkRow("b"), mkRow("c")},
 	}
-	rep, err := Run(context.Background(), nil, 42, "alice", a)
+	rep, err := Run(context.Background(), nil, 42, "alice", a, 0, false)
 	if err != nil {
 		t.Fatalf("Run returned err: %v", err)
 	}
@@ -80,7 +80,7 @@ func TestRun_EmptyUpstreamGuard(t *testing.T) {
 
 func TestRun_EmptyUpstream_EmptyLocal(t *testing.T) {
 	a := &fakeAdapter{protocol: "test", upstream: []Key{}, localRows: []Row{}}
-	rep, err := Run(context.Background(), nil, 1, "", a)
+	rep, err := Run(context.Background(), nil, 1, "", a, 0, false)
 	if err != nil {
 		t.Fatalf("Run err: %v", err)
 	}
@@ -98,7 +98,7 @@ func TestRun_NoDrift(t *testing.T) {
 		upstream:  []Key{mkKey("a"), mkKey("b"), mkKey("c")},
 		localRows: []Row{mkRow("a"), mkRow("b"), mkRow("c")},
 	}
-	rep, err := Run(context.Background(), nil, 1, "", a)
+	rep, err := Run(context.Background(), nil, 1, "", a, 0, false)
 	if err != nil {
 		t.Fatalf("Run err: %v", err)
 	}
@@ -119,7 +119,7 @@ func TestRun_FullDrift(t *testing.T) {
 		upstream:  []Key{mkKey("a")},
 		localRows: []Row{mkRow("a"), mkRow("d"), mkRow("e")},
 	}
-	rep, err := Run(context.Background(), nil, 1, "", a)
+	rep, err := Run(context.Background(), nil, 1, "", a, 0, false)
 	if err != nil {
 		t.Fatalf("Run err: %v", err)
 	}
@@ -144,7 +144,7 @@ func TestRun_Sample20Cap(t *testing.T) {
 	}
 	// 1 ('a' in upstream) + 25 (b..z) = 26 local rows; drift = 25.
 	a := &fakeAdapter{protocol: "test", upstream: upstream, localRows: local}
-	rep, err := Run(context.Background(), nil, 1, "", a)
+	rep, err := Run(context.Background(), nil, 1, "", a, 0, false)
 	if err != nil {
 		t.Fatalf("Run err: %v", err)
 	}
@@ -175,7 +175,7 @@ func TestRun_SampleLexOrderFromScrambledInput(t *testing.T) {
 		mkRow("apple"),
 		mkRow("mango"),
 	}
-	rep, err := Run(context.Background(), nil, 1, "", a)
+	rep, err := Run(context.Background(), nil, 1, "", a, 0, false)
 	if err != nil {
 		t.Fatalf("Run err: %v", err)
 	}
@@ -196,12 +196,145 @@ func TestRun_LocalRowsError(t *testing.T) {
 		upstream: []Key{mkKey("a")},
 		localErr: errors.New("db boom"),
 	}
-	_, err := Run(context.Background(), nil, 1, "", a)
+	_, err := Run(context.Background(), nil, 1, "", a, 0, false)
 	if err == nil {
 		t.Fatal("Run err = nil, want non-nil")
 	}
 	if !strings.Contains(err.Error(), "driftpurge: load local rows") {
 		t.Errorf("err = %v, want to contain 'driftpurge: load local rows'", err)
+	}
+}
+
+// TestRun_ThresholdGuard_Trips — UIBACK-03 (v1.7).
+// Threshold 50, 4 local rows, 3 of which drift (75%). Expect Skipped
+// with reason="threshold_exceeded" and BlockedCount=3; Purge MUST not
+// be called.
+func TestRun_ThresholdGuard_Trips(t *testing.T) {
+	a := &fakeAdapter{
+		protocol:  "test",
+		upstream:  []Key{mkKey("keep")},
+		localRows: []Row{mkRow("keep"), mkRow("a"), mkRow("b"), mkRow("c")},
+	}
+	rep, err := Run(context.Background(), nil, 1, "", a, 50, false)
+	if err != nil {
+		t.Fatalf("Run err: %v", err)
+	}
+	if !rep.Skipped {
+		t.Errorf("Skipped = false, want true (3/4 drift > 50%%)")
+	}
+	if rep.Reason != "threshold_exceeded" {
+		t.Errorf("Reason = %q, want threshold_exceeded", rep.Reason)
+	}
+	if rep.BlockedCount != 3 {
+		t.Errorf("BlockedCount = %d, want 3", rep.BlockedCount)
+	}
+	if len(a.purgeCalls) != 0 {
+		t.Errorf("Purge called %d times, want 0 (threshold guard must short-circuit)", len(a.purgeCalls))
+	}
+}
+
+// TestRun_ThresholdGuard_BoundaryAtThreshold — exactly at threshold
+// (drift*100 == threshold*local) is NOT blocked (strict inequality).
+// 2 of 4 = 50% with threshold 50 → proceeds.
+func TestRun_ThresholdGuard_BoundaryAtThreshold(t *testing.T) {
+	a := &fakeAdapter{
+		protocol:  "test",
+		upstream:  []Key{mkKey("a"), mkKey("b")},
+		localRows: []Row{mkRow("a"), mkRow("b"), mkRow("c"), mkRow("d")},
+	}
+	rep, err := Run(context.Background(), nil, 1, "", a, 50, false)
+	if err != nil {
+		t.Fatalf("Run err: %v", err)
+	}
+	if rep.Skipped {
+		t.Errorf("Skipped = true, want false (50%% == threshold; strict > only)")
+	}
+	if rep.PurgedCount != 2 {
+		t.Errorf("PurgedCount = %d, want 2", rep.PurgedCount)
+	}
+}
+
+// TestRun_ThresholdGuard_DisabledByZero — thresholdPct=0 disables the
+// guard entirely so even 100% drift purges through.
+func TestRun_ThresholdGuard_DisabledByZero(t *testing.T) {
+	a := &fakeAdapter{
+		protocol:  "test",
+		upstream:  []Key{mkKey("nope")}, // no local row matches
+		localRows: []Row{mkRow("a"), mkRow("b"), mkRow("c")},
+	}
+	rep, err := Run(context.Background(), nil, 1, "", a, 0, false)
+	if err != nil {
+		t.Fatalf("Run err: %v", err)
+	}
+	if rep.Skipped {
+		t.Errorf("Skipped = true, want false (thresholdPct=0 disables guard)")
+	}
+	if rep.PurgedCount != 3 {
+		t.Errorf("PurgedCount = %d, want 3", rep.PurgedCount)
+	}
+}
+
+// TestRun_ThresholdGuard_ForceBypasses — force=true bypasses the
+// threshold guard regardless of how high the drift fraction is.
+func TestRun_ThresholdGuard_ForceBypasses(t *testing.T) {
+	a := &fakeAdapter{
+		protocol:  "test",
+		upstream:  []Key{mkKey("keep")},
+		localRows: []Row{mkRow("keep"), mkRow("a"), mkRow("b"), mkRow("c"), mkRow("d")},
+	}
+	// 4/5 drift = 80% > 50 threshold; force=true bypasses.
+	rep, err := Run(context.Background(), nil, 1, "", a, 50, true)
+	if err != nil {
+		t.Fatalf("Run err: %v", err)
+	}
+	if rep.Skipped {
+		t.Errorf("Skipped = true, want false (force=true bypasses threshold)")
+	}
+	if rep.PurgedCount != 4 {
+		t.Errorf("PurgedCount = %d, want 4", rep.PurgedCount)
+	}
+	if rep.BlockedCount != 0 {
+		t.Errorf("BlockedCount = %d, want 0 (no block fired)", rep.BlockedCount)
+	}
+}
+
+// TestRun_ThresholdGuard_LocalEmpty_NoBlock — guard only meaningful
+// when local has rows. An empty local repo with empty upstream stays
+// the no-op path; an empty local with non-empty upstream is also a
+// no-op (no drift possible).
+func TestRun_ThresholdGuard_LocalEmpty_NoBlock(t *testing.T) {
+	a := &fakeAdapter{
+		protocol:  "test",
+		upstream:  []Key{mkKey("a"), mkKey("b")},
+		localRows: []Row{},
+	}
+	rep, err := Run(context.Background(), nil, 1, "", a, 50, false)
+	if err != nil {
+		t.Fatalf("Run err: %v", err)
+	}
+	if rep.Skipped {
+		t.Errorf("Skipped = true, want false (empty local cannot trip threshold)")
+	}
+}
+
+// TestRun_ThresholdGuard_OrderedAfterEmptyUpstream — the empty-
+// upstream guard (D-08) takes precedence over the threshold guard so
+// the existing audit reason stays "upstream_empty" for that case.
+func TestRun_ThresholdGuard_OrderedAfterEmptyUpstream(t *testing.T) {
+	a := &fakeAdapter{
+		protocol:  "test",
+		upstream:  []Key{},
+		localRows: []Row{mkRow("a"), mkRow("b")},
+	}
+	rep, err := Run(context.Background(), nil, 1, "", a, 50, false)
+	if err != nil {
+		t.Fatalf("Run err: %v", err)
+	}
+	if !rep.Skipped {
+		t.Fatalf("Skipped = false, want true")
+	}
+	if rep.Reason != "upstream_empty" {
+		t.Errorf("Reason = %q, want upstream_empty (must precede threshold check)", rep.Reason)
 	}
 }
 
@@ -214,7 +347,7 @@ func TestRun_PurgeErrorMidIteration(t *testing.T) {
 		localRows:  []Row{mkRow("keep"), mkRow("a"), mkRow("b"), mkRow("c")},
 		purgeErrAt: 3,
 	}
-	rep, err := Run(context.Background(), nil, 1, "", a)
+	rep, err := Run(context.Background(), nil, 1, "", a, 0, false)
 	if err == nil {
 		t.Fatal("Run err = nil, want non-nil on Purge failure")
 	}

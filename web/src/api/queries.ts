@@ -1425,21 +1425,39 @@ export function usePullExternal(projectName: string, repoName: string) {
  * flip to "done", so we only kick off a best-effort invalidation here
  * for fast-path (<500ms) jobs.
  */
+// SyncRepoVariables is the optional body shape accepted by the v1.7
+// /sync endpoint for mirror repos. Empty/undefined sends a body-less
+// POST (the original Phase 8 behaviour that reads config from the
+// repo row). When `forceDriftThreshold` is true the body is
+// `{"force_drift_threshold":true}`, the v1.7 / UIBACK-03
+// operator-confirm flag that bypasses the percent-threshold drift-
+// purge guard for the next sync.
+export interface SyncRepoVariables {
+  forceDriftThreshold?: boolean;
+}
+
 export function useSyncRepo(
   projectName: string,
   repoType: string,
   repoName: string,
 ) {
   const qc = useQueryClient();
-  return useMutation<SyncEnqueueResponse, Error, void>({
-    mutationFn: () =>
-      // POST with NO body — a non-empty body would trip the backend's
-      // mirror-overrides check (see internal/httpx/sync_rest.go:172). The
-      // trailing `{}` sent by earlier revisions JSON-encoded to 2 bytes,
-      // which is not whitespace, and produced a 400 sync.mirror_overrides_not_allowed.
-      api.post<SyncEnqueueResponse>(
+  return useMutation<SyncEnqueueResponse, Error, SyncRepoVariables | void>({
+    mutationFn: (vars) => {
+      // The default empty-body call: a non-empty body would trip the
+      // backend's mirror-overrides check (see
+      // internal/httpx/sync_rest.go) UNLESS the body is exactly the
+      // narrow exception `{"force_drift_threshold":true}` which v1.7
+      // accepts as a per-call confirmation flag.
+      const body =
+        vars && vars.forceDriftThreshold
+          ? { force_drift_threshold: true }
+          : undefined;
+      return api.post<SyncEnqueueResponse>(
         `/projects/${enc(projectName)}/repos/${enc(repoType)}/${enc(repoName)}/sync`,
-      ),
+        body,
+      );
+    },
     onSuccess: () => {
       qc.invalidateQueries({
         queryKey: ['repo-content', projectName, repoType, repoName],

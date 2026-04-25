@@ -22,7 +22,9 @@ func runDriftAdapter(t *testing.T, db *metadata.DB, repoID int64, actor string, 
 	var report driftpurge.DriftReport
 	if err := db.WriteTx(ctx, func(tx *sql.Tx) error {
 		var rerr error
-		report, rerr = driftpurge.Run(ctx, tx, repoID, actor, adapter)
+		// thresholdPct=0 disables the v1.7 percent-threshold guard so the
+		// per-protocol adapter tests focus on adapter mechanics.
+		report, rerr = driftpurge.Run(ctx, tx, repoID, actor, adapter, 0, false)
 		return rerr
 	}); err != nil {
 		t.Fatalf("driftpurge.Run: %v", err)

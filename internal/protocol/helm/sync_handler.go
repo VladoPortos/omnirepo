@@ -41,6 +41,9 @@ type SyncPayload struct {
 	UpstreamURL string      `json:"upstream_url"`
 	CredID      *int64      `json:"cred_id,omitempty"`
 	Filter      *SyncFilter `json:"filter,omitempty"`
+	// v1.7 / UIBACK-03: operator-confirmed override of the percent-
+	// threshold drift-purge guard. See pypi.SyncPayload for full docs.
+	ForceDriftThreshold bool `json:"force_drift_threshold,omitempty"`
 }
 
 // SyncDeps bundles dependencies for the Helm sync handler.
@@ -407,13 +410,37 @@ func (h *SyncHandler) Handle(ctx context.Context, payload string, projectID, rep
 		var report driftpurge.DriftReport
 		if err := h.deps.DB.WriteTx(ctx, func(tx *sql.Tx) error {
 			var rerr error
-			report, rerr = driftpurge.Run(ctx, tx, repo.ID, "", adapter)
+			report, rerr = driftpurge.Run(
+				ctx, tx, repo.ID, "", adapter,
+				h.deps.Cfg.DriftPurgeThresholdPct, pl.ForceDriftThreshold,
+			)
 			return rerr
 		}); err != nil {
 			return h.fail(ctx, repo.ID, pl, startedAt, fmt.Errorf("drift purge: %w", err))
 		}
 
 		switch {
+		case report.Skipped && report.Reason == "threshold_exceeded":
+			// UIBACK-03: percent-threshold guard tripped.
+			if h.deps.SyncJobs != nil {
+				_ = h.deps.SyncJobs.SetSummaryDriftBlocked(ctx, jobID, int64(report.BlockedCount))
+			}
+			if h.deps.Audit != nil {
+				_ = h.deps.Audit.Record(ctx, audit.Event{
+					Kind:       audit.EvtMirrorDriftPurgeSkipped,
+					TargetKind: "repo",
+					TargetID:   strconv.FormatInt(repo.ID, 10),
+					Details: map[string]any{
+						"protocol":      "helm",
+						"reason":        report.Reason,
+						"local_count":   int64(report.LocalCount),
+						"blocked_count": int64(report.BlockedCount),
+						"threshold_pct": int64(h.deps.Cfg.DriftPurgeThresholdPct),
+						"sync_job_id":   jobID,
+						"upstream_url":  pl.UpstreamURL,
+					},
+				})
+			}
 		case report.Skipped:
 			if h.deps.Audit != nil {
 				_ = h.deps.Audit.Record(ctx, audit.Event{

@@ -1,7 +1,6 @@
 package deb
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
@@ -27,14 +26,17 @@ import (
 // Flow:
 //  1. Resolve repo + auth (project member).
 //  2. Validate pool subpath (traversal, NUL, .deb suffix).
-//  3. Cap body via MaxBytesReader; tee into sha256 + in-memory buffer.
-//  4. Stage to tmp file; Parse → 400 invalid_package on failure.
+//  3. Cap body via MaxBytesReader.
+//  4. Stream body to tmp file under the repo root via
+//     io.MultiWriter(tmpF, sha256.Hasher); re-open tmp as io.Reader for
+//     ParseDeb (memory bounded by OS write buffer — STREAMIO-02).
+//     Parse → 400 invalid_package on failure.
 //  5. Architecture comes from ctrl.Architecture (NOT the client). suite/
 //     component come from ?suite= / ?component= query params, with sensible
 //     defaults (first-declared suite, "main").
 //  6. apt_suites.FindByTuple(repo, suite, component, arch) → 400
 //     unknown_suite_or_component on miss.
-//  7. Promote tmp → pool path via PathStore.Put (atomic).
+//  7. Re-open tmp file and promote to pool path via PathStore.Put (atomic).
 //  8. One writer tx: deb_packages upsert + IndexDEBDelete + IndexDEB +
 //     SetMetadataState(dirty) + optional auto-scan enqueue.
 //  9. Audit + coalescer.Kick → 201.
@@ -67,11 +69,37 @@ func (h *Handler) put(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, h.maxPutBytes)
 	defer func() { _ = r.Body.Close() }()
 
-	var buf bytes.Buffer
-	hasher := sha256.New()
-	tee := io.TeeReader(r.Body, hasher)
-	size, err := io.Copy(&buf, tee)
+	// Stream the request body to a temp file under the repo root while
+	// computing sha256 in one pass. ParseDeb takes io.Reader, so after the
+	// stream-write completes we re-open the file (twice — once for
+	// ParseDeb, once for PathStore.Put). Two opens, not two reads of the
+	// body — the OS page cache covers the actual bytes (STREAMIO-02 /
+	// audit finding #3).
+	tmpDir := filepath.Join(h.repoRoot, ".tmp-deb-uploads")
+	if err := os.MkdirAll(tmpDir, 0o750); err != nil {
+		slog.ErrorContext(r.Context(), "deb.put.mkdir_tmp_failed",
+			slog.String("incident_id", chimw.GetReqID(r.Context())),
+			slog.Any("err", err),
+		)
+		http.Error(w, "storage error", http.StatusInternalServerError)
+		return
+	}
+	tmpF, err := os.CreateTemp(tmpDir, "deb-upload-*.deb")
 	if err != nil {
+		slog.ErrorContext(r.Context(), "deb.put.tmp_create_failed",
+			slog.String("incident_id", chimw.GetReqID(r.Context())),
+			slog.Any("err", err),
+		)
+		http.Error(w, "storage error", http.StatusInternalServerError)
+		return
+	}
+	tmpPath := tmpF.Name()
+	defer func() { _ = os.Remove(tmpPath) }()
+
+	hasher := sha256.New()
+	size, err := io.Copy(io.MultiWriter(tmpF, hasher), r.Body)
+	if err != nil {
+		_ = tmpF.Close()
 		var maxErr *http.MaxBytesError
 		if errors.As(err, &maxErr) {
 			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
@@ -85,9 +113,29 @@ func (h *Handler) put(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
+	if err := tmpF.Close(); err != nil {
+		slog.ErrorContext(r.Context(), "deb.put.tmp_close_failed",
+			slog.String("incident_id", chimw.GetReqID(r.Context())),
+			slog.String("tmp_path", tmpPath),
+			slog.Any("err", err),
+		)
+		http.Error(w, "storage error", http.StatusInternalServerError)
+		return
+	}
 
-	// Parse control from the in-memory body.
-	ctrl, perr := ParseDeb(bytes.NewReader(buf.Bytes()))
+	// Parse control from the staged tmp file (re-opened as io.Reader).
+	parseF, perr := os.Open(tmpPath)
+	if perr != nil {
+		slog.ErrorContext(r.Context(), "deb.put.tmp_reopen_failed",
+			slog.String("incident_id", chimw.GetReqID(r.Context())),
+			slog.String("tmp_path", tmpPath),
+			slog.Any("err", perr),
+		)
+		http.Error(w, "storage error", http.StatusInternalServerError)
+		return
+	}
+	ctrl, perr := ParseDeb(parseF)
+	_ = parseF.Close()
 	if perr != nil {
 		h.auditEvent(r, audit.EvtDEBUpload, filename, "rejected", map[string]any{
 			"project": res.project.Name,
@@ -135,8 +183,21 @@ func (h *Handler) put(w http.ResponseWriter, r *http.Request) {
 	digest := hex.EncodeToString(hasher.Sum(nil))
 
 	// Write to pool via PathStore (atomic tmp+fsync+rename underneath).
+	// Re-open the temp file as the source — *os.File satisfies io.Reader
+	// without allocating a full-body buffer (STREAMIO-02).
 	storageKey := storageKeyForPool(res.project.Name, res.repo.Name, poolPath)
-	if _, err := h.pathStore.Put(r.Context(), storageKey, bytes.NewReader(buf.Bytes())); err != nil {
+	putF, err := os.Open(tmpPath)
+	if err != nil {
+		slog.ErrorContext(r.Context(), "deb.put.tmp_reopen_failed",
+			slog.String("incident_id", chimw.GetReqID(r.Context())),
+			slog.String("tmp_path", tmpPath),
+			slog.Any("err", err),
+		)
+		http.Error(w, "storage error", http.StatusInternalServerError)
+		return
+	}
+	if _, err := h.pathStore.Put(r.Context(), storageKey, putF); err != nil {
+		_ = putF.Close()
 		slog.ErrorContext(r.Context(), "deb.put.storage_failed",
 			slog.String("incident_id", chimw.GetReqID(r.Context())),
 			slog.String("filename", filename),
@@ -145,6 +206,7 @@ func (h *Handler) put(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
+	_ = putF.Close()
 
 	if err := h.db.WriteTx(r.Context(), func(tx *sql.Tx) error {
 		if _, err := h.debPackages.Insert(r.Context(), tx, &metadata.DEBPackage{

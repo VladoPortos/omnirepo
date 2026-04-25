@@ -1,7 +1,6 @@
 package helm
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
@@ -67,29 +66,11 @@ func (h *Handler) putChart(w http.ResponseWriter, r *http.Request, res resolved)
 	r.Body = http.MaxBytesReader(w, r.Body, h.maxPutBytes)
 	defer func() { _ = r.Body.Close() }()
 
-	// Buffer + hash in one pass. Charts are small (<5 MiB typical); the
-	// memory buffer lets us parse-before-promote without a second read.
-	var buf bytes.Buffer
-	hasher := sha256.New()
-	tee := io.TeeReader(r.Body, hasher)
-	size, err := io.Copy(&buf, tee)
-	if err != nil {
-		var maxErr *http.MaxBytesError
-		if errors.As(err, &maxErr) {
-			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
-			return
-		}
-		slog.ErrorContext(r.Context(), "helm.put.read_body_failed",
-			slog.String("incident_id", chimw.GetReqID(r.Context())),
-			slog.String("filename", res.filename),
-			slog.Any("err", err),
-		)
-		http.Error(w, "storage error", http.StatusInternalServerError)
-		return
-	}
-
-	// Write to a sibling tmp file under the repo root's uploads area so Parse
-	// can open it; gofiles path avoids a second in-memory copy for the parser.
+	// Stream chart body to a temp file under the repo root so memory stays
+	// bounded by parser need (~1 KB Chart.yaml), not chart size. The prior
+	// full-body in-memory staging pattern let an authenticated project
+	// member drive container RSS toward the 5 GiB upload cap (audit
+	// finding #3 / STREAMIO-03).
 	tmpDir := filepath.Join(h.repoRoot, ".tmp-helm-uploads")
 	if err := os.MkdirAll(tmpDir, 0o750); err != nil {
 		slog.ErrorContext(r.Context(), "helm.put.mkdir_tmp_failed",
@@ -110,11 +91,19 @@ func (h *Handler) putChart(w http.ResponseWriter, r *http.Request, res resolved)
 	}
 	tmpPath := tmpF.Name()
 	defer func() { _ = os.Remove(tmpPath) }()
-	if _, err := tmpF.Write(buf.Bytes()); err != nil {
+
+	hasher := sha256.New()
+	size, err := io.Copy(io.MultiWriter(tmpF, hasher), r.Body)
+	if err != nil {
 		_ = tmpF.Close()
-		slog.ErrorContext(r.Context(), "helm.put.tmp_write_failed",
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+			return
+		}
+		slog.ErrorContext(r.Context(), "helm.put.read_body_failed",
 			slog.String("incident_id", chimw.GetReqID(r.Context())),
-			slog.String("tmp_path", tmpPath),
+			slog.String("filename", res.filename),
 			slog.Any("err", err),
 		)
 		http.Error(w, "storage error", http.StatusInternalServerError)
@@ -145,10 +134,23 @@ func (h *Handler) putChart(w http.ResponseWriter, r *http.Request, res resolved)
 
 	digest := "sha256:" + hex.EncodeToString(hasher.Sum(nil))
 
-	// Promote the buffered bytes into the canonical PathStore key via the
+	// Promote the staged tmp file into the canonical PathStore key via the
 	// atomic path-store Put (temp+fsync+rename inside PathStore.Put).
+	// Re-open the temp file as the source — *os.File satisfies io.Reader
+	// without allocating a full-body buffer (STREAMIO-03).
 	storageKey := storageKeyFor(res.project.Name, res.repo.Name, res.filename)
-	if _, err := h.pathStore.Put(r.Context(), storageKey, bytes.NewReader(buf.Bytes())); err != nil {
+	putF, err := os.Open(tmpPath)
+	if err != nil {
+		slog.ErrorContext(r.Context(), "helm.put.tmp_reopen_failed",
+			slog.String("incident_id", chimw.GetReqID(r.Context())),
+			slog.String("tmp_path", tmpPath),
+			slog.Any("err", err),
+		)
+		http.Error(w, "storage error", http.StatusInternalServerError)
+		return
+	}
+	if _, err := h.pathStore.Put(r.Context(), storageKey, putF); err != nil {
+		_ = putF.Close()
 		slog.ErrorContext(r.Context(), "helm.put.storage_failed",
 			slog.String("incident_id", chimw.GetReqID(r.Context())),
 			slog.String("filename", res.filename),
@@ -157,6 +159,7 @@ func (h *Handler) putChart(w http.ResponseWriter, r *http.Request, res resolved)
 		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
+	_ = putF.Close()
 
 	// Single writer tx: helm_charts upsert + FTS5 refresh + metadata_state
 	// + optional auto-scan enqueue.

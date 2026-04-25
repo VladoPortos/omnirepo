@@ -1,7 +1,6 @@
 package rpm
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
@@ -23,11 +22,13 @@ import (
 //
 // Flow:
 //  1. Resolve repo + auth (project member).
-//  2. Cap body via MaxBytesReader; tee into sha256 + in-memory buffer.
-//  3. Stage to a tmp file under the repo root so rpm.Parse can open it.
+//  2. Cap body via MaxBytesReader.
+//  3. Stream body straight to a tmp file under the repo root via
+//     io.MultiWriter(tmpF, sha256.Hasher) so rpm.Parse can open it
+//     (memory bounded by OS write buffer, not artifact size — STREAMIO-01).
 //  4. Parse RPM header → reject 400 invalid_package on failure.
 //  5. Validate filename matches NEVRA — defense in depth.
-//  6. Promote via PathStore.Put (atomic temp+fsync+rename).
+//  6. Re-open tmp file and promote via PathStore.Put (atomic temp+fsync+rename).
 //  7. Single writer tx: rpm_packages upsert + IndexRPMDelete + IndexRPM +
 //     SetMetadataState(dirty) + optional auto-scan enqueue.
 //  8. After commit: audit + coalescer.Kick → 201.
@@ -49,25 +50,12 @@ func (h *Handler) put(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, h.maxPutBytes)
 	defer func() { _ = r.Body.Close() }()
 
-	var buf bytes.Buffer
-	hasher := sha256.New()
-	tee := io.TeeReader(r.Body, hasher)
-	size, err := io.Copy(&buf, tee)
-	if err != nil {
-		var maxErr *http.MaxBytesError
-		if errors.As(err, &maxErr) {
-			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
-			return
-		}
-		slog.ErrorContext(r.Context(), "rpm.put.read_body_failed",
-			slog.String("incident_id", chimw.GetReqID(r.Context())),
-			slog.String("filename", res.filename),
-			slog.Any("err", err),
-		)
-		http.Error(w, "storage error", http.StatusInternalServerError)
-		return
-	}
-
+	// Stream the request body straight to a temp file under the repo root
+	// while computing sha256 in one pass. Memory consumption stays bounded
+	// by the OS write buffer (~256 KiB) regardless of artifact size — the
+	// previous full-body in-memory staging pattern let an authenticated
+	// project member drive container RSS toward the 5 GiB upload cap
+	// (audit finding #3 / STREAMIO-01).
 	tmpDir := filepath.Join(h.repoRoot, ".tmp-rpm-uploads")
 	if err := os.MkdirAll(tmpDir, 0o750); err != nil {
 		slog.ErrorContext(r.Context(), "rpm.put.mkdir_tmp_failed",
@@ -88,11 +76,19 @@ func (h *Handler) put(w http.ResponseWriter, r *http.Request) {
 	}
 	tmpPath := tmpF.Name()
 	defer func() { _ = os.Remove(tmpPath) }()
-	if _, err := tmpF.Write(buf.Bytes()); err != nil {
+
+	hasher := sha256.New()
+	size, err := io.Copy(io.MultiWriter(tmpF, hasher), r.Body)
+	if err != nil {
 		_ = tmpF.Close()
-		slog.ErrorContext(r.Context(), "rpm.put.tmp_write_failed",
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+			return
+		}
+		slog.ErrorContext(r.Context(), "rpm.put.read_body_failed",
 			slog.String("incident_id", chimw.GetReqID(r.Context())),
-			slog.String("tmp_path", tmpPath),
+			slog.String("filename", res.filename),
 			slog.Any("err", err),
 		)
 		http.Error(w, "storage error", http.StatusInternalServerError)
@@ -143,7 +139,21 @@ func (h *Handler) put(w http.ResponseWriter, r *http.Request) {
 	parsed.Digest = digest
 
 	storageKey := storageKeyFor(res.project.Name, res.repo.Name, res.filename)
-	if _, err := h.pathStore.Put(r.Context(), storageKey, bytes.NewReader(buf.Bytes())); err != nil {
+	// Re-open the temp file as the source for PathStore.Put — the OS page
+	// cache covers the bytes we just wrote, and *os.File satisfies io.Reader
+	// without allocating a full-body buffer (STREAMIO-01).
+	putF, err := os.Open(tmpPath)
+	if err != nil {
+		slog.ErrorContext(r.Context(), "rpm.put.tmp_reopen_failed",
+			slog.String("incident_id", chimw.GetReqID(r.Context())),
+			slog.String("tmp_path", tmpPath),
+			slog.Any("err", err),
+		)
+		http.Error(w, "storage error", http.StatusInternalServerError)
+		return
+	}
+	if _, err := h.pathStore.Put(r.Context(), storageKey, putF); err != nil {
+		_ = putF.Close()
 		slog.ErrorContext(r.Context(), "rpm.put.storage_failed",
 			slog.String("incident_id", chimw.GetReqID(r.Context())),
 			slog.String("filename", res.filename),
@@ -152,6 +162,7 @@ func (h *Handler) put(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
+	_ = putF.Close()
 
 	if err := h.db.WriteTx(r.Context(), func(tx *sql.Tx) error {
 		if _, err := h.rpmPackages.Insert(r.Context(), tx, &metadata.RPMPackage{

@@ -1,0 +1,12 @@
+-- 035_repos_drift_purge_and_sync_summary.down.sql
+-- Symmetry / documentation file. The migration runner is up-only
+-- (see internal/metadata/migrations/runner.go); there is no
+-- automated path that runs this. SQLite prior to 3.35 does not
+-- support `ALTER TABLE ... DROP COLUMN` natively, and the live
+-- SQLite version bundled via modernc.org/sqlite supports it but
+-- OmniRepo never rolls back a migration in production — data
+-- loss on down is by design documented here rather than executed.
+--
+-- Conceptual rollback:
+--   ALTER TABLE repos      DROP COLUMN drift_purge;
+--   ALTER TABLE sync_jobs  DROP COLUMN summary;

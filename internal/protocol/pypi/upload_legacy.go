@@ -409,12 +409,28 @@ func (h *Handler) deletePackage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
+	// Atomic delete ordering (CONTEXT D-01, D-02; audit finding #6): stat
+	// first to set fileOnDisk (preserves partial-state heal). Commit the
+	// DB tx BEFORE trash.Move so a tx rollback never moves the file. The
+	// prior silent-discard of trash.Move's error is replaced with explicit
+	// error propagation (CONTEXT D-02 — operator must see trash failures).
 	abs := filepath.Join(h.repoRoot, filepath.FromSlash(
 		packageStorageKey(res.project.Name, res.repo.Name, filename),
 	))
+	fileOnDisk := false
 	if _, statErr := os.Stat(abs); statErr == nil {
-		_, _ = h.trash.Move(r.Context(), abs, "pypi-file", res.repo.ID, auth.ActorLoginFromContext(r.Context()))
+		fileOnDisk = true
+	} else if !errors.Is(statErr, os.ErrNotExist) {
+		slog.ErrorContext(r.Context(), "pypi.delete.stat_failed",
+			slog.String("incident_id", chimw.GetReqID(r.Context())),
+			slog.String("filename", filename),
+			slog.Any("err", statErr),
+		)
+		http.Error(w, "storage error", http.StatusInternalServerError)
+		return
 	}
+	// (else ENOENT → fileOnDisk stays false; the tx heals the orphaned row.)
+
 	if err := h.db.WriteTx(r.Context(), func(tx *sql.Tx) error {
 		if err := h.pypiFiles.Delete(r.Context(), tx, row.ID); err != nil {
 			return err
@@ -432,6 +448,22 @@ func (h *Handler) deletePackage(w http.ResponseWriter, r *http.Request) {
 		)
 		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
+	}
+
+	// Tx committed → row is gone. If the file was on disk at the start of
+	// the request, move it to trash now. A failure here leaves the file
+	// orphaned at abs (no row pointing at it); we surface 500 so the
+	// operator notices (CONTEXT D-02, D-05).
+	if fileOnDisk {
+		if _, err := h.trash.Move(r.Context(), abs, "pypi-file", res.repo.ID, auth.ActorLoginFromContext(r.Context())); err != nil {
+			slog.ErrorContext(r.Context(), "pypi.delete.trash_failed_post_commit",
+				slog.String("incident_id", chimw.GetReqID(r.Context())),
+				slog.String("filename", filename),
+				slog.Any("err", err),
+			)
+			http.Error(w, "storage error", http.StatusInternalServerError)
+			return
+		}
 	}
 	if h.coalescer != nil {
 		h.coalescer.Get(res.repo.ID).Kick()

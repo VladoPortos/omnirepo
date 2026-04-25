@@ -592,7 +592,15 @@ func (d Deps) handleMe(w http.ResponseWriter, r *http.Request) {
 
 func (d Deps) handleDeleteMe(w http.ResponseWriter, r *http.Request) {
 	a, _ := auth.ActorFromContext(r.Context())
-	if err := d.Users.Delete(r.Context(), a.ID); err != nil {
+	// wt4 F-04.1: must use the last-super-admin-aware delete here too —
+	// otherwise the lone super-admin can self-delete via DELETE /me and
+	// brick the air-gapped instance (no way back into /admin/*).
+	// handleDeleteUser enforces the same invariant; both paths must.
+	if err := d.Users.DeleteEnforceLastSuperAdmin(r.Context(), a.ID); err != nil {
+		if errors.Is(err, metadata.ErrLastSuperAdmin) {
+			writeJSONError(w, r, http.StatusConflict, ErrConflict, "cannot delete your account — promote another user to super-admin first")
+			return
+		}
 		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return
 	}

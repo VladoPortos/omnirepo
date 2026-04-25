@@ -414,6 +414,44 @@ func TestDeleteMe(t *testing.T) {
 	}
 }
 
+// wt4 F-04.1 — DELETE /me must reject when the actor is the only live
+// super-admin. Without this guard the operator can self-delete their way
+// out of the air-gapped instance, leaving no path back into /admin/*.
+// Mirrors the invariant on DELETE /admin/users/{login}.
+func TestDeleteMe_LastSuperAdminBlocked(t *testing.T) {
+	s := newTestServer(t)
+	seedTestUser(t, s.db, "lone", "l@x", true, false)
+	cookie, _, _ := s.login(t, "lone", "pw-lone")
+	resp, body := s.do(t, "DELETE", "/api/v1/me", cookie, nil)
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("status=%d, want 409 conflict; body=%+v", resp.StatusCode, body)
+	}
+	if code, _ := body["code"].(string); code != "resource.conflict" {
+		t.Fatalf("envelope code=%q, want resource.conflict", code)
+	}
+	resp2, body2 := s.do(t, "GET", "/api/v1/me", cookie, nil)
+	if resp2.StatusCode != 200 {
+		t.Fatalf("session should still be live after rejected delete; got %d", resp2.StatusCode)
+	}
+	if login, _ := body2["login"].(string); login != "lone" {
+		t.Fatalf("user should still be live; /me login=%q", login)
+	}
+}
+
+// wt4 F-04.1 follow-up — when a SECOND super-admin exists, self-delete
+// of the first is allowed (the invariant is "at least one remaining",
+// not "no super-admins ever delete").
+func TestDeleteMe_SuperAdminAllowedWhenAnotherExists(t *testing.T) {
+	s := newTestServer(t)
+	seedTestUser(t, s.db, "first", "f@x", true, false)
+	seedTestUser(t, s.db, "second", "s@x", true, false)
+	cookie, _, _ := s.login(t, "first", "pw-first")
+	resp, _ := s.do(t, "DELETE", "/api/v1/me", cookie, nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("status=%d, want 200; second admin still exists", resp.StatusCode)
+	}
+}
+
 // -----------------------------------------------------------------------------
 // Admin users
 // -----------------------------------------------------------------------------

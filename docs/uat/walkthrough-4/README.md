@@ -34,7 +34,7 @@
 | 13 | [batch-13-scanning.md](batch-13-scanning.md) | Trivy DB + auto-scan + SBOM + severity gates | Trivy DB + Playwright | ✅ (1 follow-up) |
 | 14 | [batch-14-admin.md](batch-14-admin.md) | TLS · audit · trash · GC · DB health | Playwright + curl | ✅ |
 | 15 | [batch-15-cross-cutting.md](batch-15-cross-cutting.md) | Search · dashboard · API docs · a11y · console | Playwright | ✅ |
-| 16 | [batch-16-v17-deltas.md](batch-16-v17-deltas.md) | Drift surfacing · % threshold · bundle cold-load | Playwright | ⬜ |
+| 16 | [batch-16-v17-deltas.md](batch-16-v17-deltas.md) | Drift surfacing · % threshold · bundle cold-load | Playwright | ✅ |
 
 Legend: ⬜ not started · 🟨 in progress · ✅ passed clean · 🟥 blocker · ♻ retest needed
 

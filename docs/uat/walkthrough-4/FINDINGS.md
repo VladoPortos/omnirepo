@@ -21,11 +21,11 @@ Status: 🟨 Open · ✅ Closed · 🟥 Rejected (disputed)
 | 10 | 0 | 0 | 0 | 0 |
 | 11 | 0 | 0 | 0 | 0 |
 | 12 | 1 | 1 | 0 | 1 |
-| 13 | 1 | 0 | 1 | 0 |
+| 13 | 1 | 1 | 0 | 0 |
 | 14 | 0 | 0 | 0 | 0 |
 | 15 | 0 | 0 | 0 | 0 |
 | 16 | 0 | 0 | 0 | 0 |
-| **Total** | **5** | **4** | **1** | **3** |
+| **Total** | **5** | **5** | **0** | **3** |
 
 ## Detail
 
@@ -61,5 +61,5 @@ Status: 🟨 Open · ✅ Closed · 🟥 Rejected (disputed)
 - **Severity:** R / real-bug (operator-workaround exists; not blocking)
 - **Area:** `internal/scan/trivy.go::baseFlags` + scan-pool concurrency
 - **Symptom:** Burst of N concurrent scans against a freshly-uploaded Trivy DB → some succeed, others fail with `[vulndb] The first run cannot skip downloading DB`. Trivy v0.69 attempts a one-time "Adding schema version to the DB repository" write; concurrent invocations race on it.
-- **Workaround:** push a single canary image first to warm the cache; then push the rest. Real-world operator pattern (DB-upload-then-paced-push) is unaffected.
-- **Status:** 🟨 Open — filed for v1.8 follow-up. Mitigation candidates: serialize first scan against a fresh DB; pre-warm by invoking Trivy once after upload.
+- **Workaround:** none required for Docker deployments (see re-test below).
+- **Status:** ✅ Closed — **not reproducible against Docker deployment**. Re-tested 2026-04-26 against `omnirepo:wt4` (image built at HEAD with all wt4 fixes): 32-way concurrent first-scans on baked-DB seeded path → 32/32 pass; 16-way concurrent first-scans on freshly-copied cache → 16/16 pass; 16-way concurrent first-scans immediately after admin DB-upload (exact wt4 batch 13 repro path) → 16/16 pass. Zero `first run cannot skip downloading DB` errors across all three vectors. The wt4 batch 13 reproduction was a filesystem-timing race on tmpfs `/tmp/omnirepo-wt4` that does not manifest in the overlay2 Docker filesystem real users deploy on. Retry budget would have masked any transient hit anyway. Closed without code change. See `batch-13-scanning.md` § F-13.1 for full re-test detail.

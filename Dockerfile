@@ -32,7 +32,7 @@ RUN trivy image --download-db-only --cache-dir /trivy-cache
 # ==============================================================================
 # Stage 4: Runtime (alpine:3.21)
 # ==============================================================================
-FROM alpine:3.21
+FROM alpine:3.23
 RUN apk add --no-cache git ca-certificates wget \
     && adduser -D -u 1000 omnirepo \
     && mkdir -p /var/lib/omnirepo \

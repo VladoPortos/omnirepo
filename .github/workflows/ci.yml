@@ -134,12 +134,15 @@ jobs:
         # Read test/conformance/images.txt and `docker pull` each entry at
         # its pinned sha256 digest. Failure here = supply-chain mismatch.
         # No untrusted input reaches the shell — the file is checked-in
-        # repo content, gated by code review.
+        # repo content, gated by code review. Skips Phase-4+ "key=value"
+        # named handles (consumed by their own jobs); only the bare
+        # "<image>:<tag>@sha256:..." rows belong to Phase 3.
         run: |
           set -euo pipefail
           while IFS= read -r line; do
             case "$line" in ''|\#*) continue ;; esac
             image=$(printf '%s\n' "$line" | awk '{print $1}')
+            case "$image" in *=*) continue ;; esac
             echo "pulling $image"
             docker pull "$image"
           done < test/conformance/images.txt

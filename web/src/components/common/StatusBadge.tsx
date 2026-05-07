@@ -84,7 +84,6 @@ export function StatusBadge({
 
   if (iconOnly) {
     if (import.meta.env.DEV && !label) {
-      // eslint-disable-next-line no-console
       console.warn(
         'StatusBadge: iconOnly requires a label for aria-label.',
       );

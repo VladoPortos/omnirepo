@@ -74,7 +74,6 @@ export function EmptyState({
     const hasTo = primaryCTA.to !== undefined;
     const hasOnClick = primaryCTA.onClick !== undefined;
     if (!primaryCTA.disabled && hasTo === hasOnClick) {
-      // eslint-disable-next-line no-console
       console.warn(
         'EmptyState: primaryCTA must provide exactly one of `to` or `onClick` ' +
           '(or `disabled: true`).',

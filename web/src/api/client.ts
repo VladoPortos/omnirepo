@@ -281,7 +281,7 @@ class ApiClient {
           resolve();
           return;
         }
-        let parsed: unknown = null;
+        let parsed: unknown;
         try {
           parsed = JSON.parse(xhr.responseText);
         } catch {

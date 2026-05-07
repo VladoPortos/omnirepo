@@ -196,7 +196,7 @@ export function SyncHistoryDialog({
               aria-hidden="true"
             />
             <div className="flex-1">
-              <div className="font-medium">
+              <div className="font-semibold">
                 Drift purge blocked: {latestBlocked.toLocaleString()} row
                 {latestBlocked === 1 ? '' : 's'} pending confirmation
               </div>

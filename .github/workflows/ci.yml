@@ -35,6 +35,18 @@ jobs:
         # for local dev); CI MUST install it so the gate fires.
         run: sudo apt-get update && sudo apt-get install -y shellcheck
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build frontend
+        # web/embed.go has `//go:embed dist/*`, so `web/dist/` must exist
+        # before any Go compilation (lint, build, test). `make frontend`
+        # does `npm ci && npm run build` and produces web/dist/.
+        run: make frontend
+
       - name: Lint
         run: make lint
 

@@ -13,9 +13,11 @@
 #      CVEs that wouldn't show up in a fs scan because they live in
 #      apk-installed packages, not in our source tree.
 #
-# Findings → SARIF → Security tab. Reporting only on this private repo
-# (`exit-code: 0`) — fail loudly later by flipping the exit-code if a
-# clean baseline is established and we want to gate merges on CRITICAL.
+# Findings → SARIF artifacts (kept as downloadable workflow artifacts;
+# GitHub Code Scanning upload is paid for private repos and is off until
+# the repo is public or GHAS is enabled). Reporting only on this private
+# repo (`exit-code: 0`) — fail loudly later by flipping the exit-code if
+# a clean baseline is established and we want to gate merges on CRITICAL.
 name: Trivy
 
 on:
@@ -40,7 +42,6 @@ jobs:
 
     permissions:
       contents: read
-      security-events: write
 
     steps:
       - name: Checkout
@@ -59,12 +60,17 @@ jobs:
           output: trivy-fs.sarif
           exit-code: "0" # report only — don't fail the run on findings
 
-      - name: Upload Trivy filesystem SARIF
+      # Code Scanning SARIF upload requires GitHub Advanced Security on
+      # private repos. Until GHAS is enabled (or repo goes public), save
+      # the SARIF as a downloadable artifact instead. Swap back to
+      # github/codeql-action/upload-sarif when Code Scanning is on.
+      - name: Upload Trivy filesystem SARIF artifact
         if: always()
-        uses: github/codeql-action/upload-sarif@e46ed2cbd01164d986452f91f178727624ae40d7 # v4.35.3
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          sarif_file: trivy-fs.sarif
-          category: trivy-fs
+          name: trivy-fs-sarif
+          path: trivy-fs.sarif
+          retention-days: 30
 
   trivy-config:
     name: Trivy config scan (Dockerfile)
@@ -73,7 +79,6 @@ jobs:
 
     permissions:
       contents: read
-      security-events: write
 
     steps:
       - name: Checkout
@@ -89,12 +94,13 @@ jobs:
           output: trivy-config.sarif
           exit-code: "0"
 
-      - name: Upload Trivy config SARIF
+      - name: Upload Trivy config SARIF artifact
         if: always()
-        uses: github/codeql-action/upload-sarif@e46ed2cbd01164d986452f91f178727624ae40d7 # v4.35.3
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          sarif_file: trivy-config.sarif
-          category: trivy-config
+          name: trivy-config-sarif
+          path: trivy-config.sarif
+          retention-days: 30
 
   trivy-image:
     name: Trivy image scan (production Dockerfile)
@@ -103,7 +109,6 @@ jobs:
 
     permissions:
       contents: read
-      security-events: write
 
     steps:
       - name: Checkout
@@ -134,9 +139,10 @@ jobs:
           exit-code: "0"
           ignore-unfixed: true # OS CVEs without a fix → noise
 
-      - name: Upload Trivy image SARIF
+      - name: Upload Trivy image SARIF artifact
         if: always()
-        uses: github/codeql-action/upload-sarif@e46ed2cbd01164d986452f91f178727624ae40d7 # v4.35.3
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          sarif_file: trivy-image.sarif
-          category: trivy-image
+          name: trivy-image-sarif
+          path: trivy-image.sarif
+          retention-days: 30

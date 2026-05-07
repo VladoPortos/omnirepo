@@ -64,6 +64,18 @@ jobs:
           go-version: "1.25"
           cache: false
 
+      # Build the React frontend first so `//go:embed dist/*` in
+      # web/embed.go finds the bundle when CodeQL extracts Go.
+      - uses: actions/setup-node@v4
+        if: matrix.language == 'go' || matrix.language == 'javascript-typescript'
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build frontend (so go:embed dist/* resolves)
+        run: cd web && npm ci --no-audit --no-fund && npm run build
+
       - name: Initialize CodeQL
         uses: github/codeql-action/init@e46ed2cbd01164d986452f91f178727624ae40d7 # v4.35.3
         with:
@@ -81,3 +93,20 @@ jobs:
         uses: github/codeql-action/analyze@e46ed2cbd01164d986452f91f178727624ae40d7 # v4.35.3
         with:
           category: /language:${{ matrix.language }}
+          # GitHub Advanced Security (Code Scanning alerts) is paid for
+          # private repos. With it off, the upload step 403s with
+          # "Code scanning is not enabled for this repository" and the
+          # whole job goes red even though the analysis succeeded.
+          # Save SARIF as a downloadable artifact instead. When GHAS is
+          # turned on (e.g. by going public), flip `upload` back to
+          # `always` and remove the artifact step.
+          upload: never
+          output: sarif-results
+
+      - name: Upload SARIF as workflow artifact
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: codeql-sarif-${{ matrix.language }}
+          path: sarif-results
+          retention-days: 30

@@ -84,6 +84,16 @@ jobs:
           go-version: '1.25'
           cache: true
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build frontend
+        # web/embed.go has //go:embed dist/*; required before any Go compile.
+        run: make frontend
+
       - name: Install crane (pinned v0.21.5)
         run: |
           go install github.com/google/go-containerregistry/cmd/crane@v0.21.5
@@ -110,6 +120,15 @@ jobs:
         with:
           go-version: '1.25'
           cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build frontend
+        run: make frontend
 
       - name: Pre-pull pinned base images
         # Read test/conformance/images.txt and `docker pull` each entry at
@@ -143,6 +162,15 @@ jobs:
           go-version: '1.25'
           cache: true
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build frontend
+        run: make frontend
+
       - name: Pre-pull aws-cli image
         run: |
           set -euo pipefail
@@ -173,6 +201,15 @@ jobs:
         with:
           go-version: '1.25'
           cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build frontend
+        run: make frontend
 
       - name: Pre-pull git-client image
         run: |
@@ -205,6 +242,15 @@ jobs:
         with:
           go-version: '1.25'
           cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build frontend
+        run: make frontend
 
       - name: Install git
         run: sudo apt-get update && sudo apt-get install -y git

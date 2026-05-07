@@ -1,0 +1,104 @@
+# Dependabot — automated dependency vulnerability scanning + update PRs.
+#
+# Watches four ecosystems:
+#   1. gomod          — Go modules (go.mod at repo root, vendor tree)
+#   2. npm            — React + Vite + Tailwind frontend in /web
+#   3. github-actions — workflow files in this directory
+#   4. docker         — base images in the multi-stage Dockerfile
+#                       (node:22-alpine, golang:1.25-alpine,
+#                        aquasec/trivy:0.69.3, alpine:3.21)
+#
+# Schedule: weekly. Avoids PR storms while keeping deps fresh enough that
+# CVE-fix updates land within ~7 days. Bump to "daily" for faster
+# security response.
+#
+# Grouping: minor + patch updates batch into one PR per ecosystem so
+# routine bumps don't drown the inbox; majors get their own PRs because
+# they're more likely to need attention.
+version: 2
+updates:
+  # ----- Go module (root) -----
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Europe/Bratislava
+    open-pull-requests-limit: 10
+    groups:
+      gomod-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+    # vendor/ is committed (offline-build invariant). Dependabot updates
+    # go.mod + go.sum but does NOT re-vendor — `go mod vendor` must run
+    # locally before merge. The Makefile `vendor` target documents this.
+    labels:
+      - dependencies
+      - go
+
+  # ----- React frontend -----
+  - package-ecosystem: npm
+    directory: /web
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Europe/Bratislava
+    open-pull-requests-limit: 10
+    groups:
+      npm-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+    labels:
+      - dependencies
+      - npm
+
+  # ----- GitHub Actions -----
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Europe/Bratislava
+    open-pull-requests-limit: 5
+    groups:
+      gha-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+    labels:
+      - dependencies
+      - github-actions
+
+  # ----- Docker base images -----
+  # Major-version bumps for node and golang are ignored: we ride the
+  # active LTS / project-pinned line and decide when to move by hand.
+  # Drop the relevant ignore block when ready to upgrade.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Europe/Bratislava
+    open-pull-requests-limit: 5
+    ignore:
+      - dependency-name: "node"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "golang"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "alpine"
+        update-types: ["version-update:semver-major"]
+    labels:
+      - dependencies
+      - docker

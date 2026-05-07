@@ -1,0 +1,48 @@
+# govulncheck — Go's official vulnerability checker.
+#
+# Reads our go.mod + binary call graph and reports CVEs from the Go
+# vulnerability database (https://vuln.go.dev) that we **actually call**
+# (not just transitively import). Lower false-positive rate than CVE-feed
+# scanners that flag every imported module.
+#
+# Complements Trivy (broad, multi-ecosystem, vendor-tree CVE matching)
+# and CodeQL (static query patterns). govulncheck is Go-specific and
+# call-graph-aware.
+name: govulncheck
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "15 3 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  govulncheck:
+    name: govulncheck (Go module vuln scan)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version: "1.25"
+          cache: true
+
+      - name: Run govulncheck
+        uses: golang/govulncheck-action@b625fbe08f3bccbe446d94fbf87fcc875a4f50ee # v1.0.4
+        with:
+          go-version-input: "1.25"
+          go-package: ./...
+          # Allow workflow to surface findings without blocking the run
+          # while we establish a clean baseline. Once main is clean, drop
+          # this and let real vulns fail the gate.
+          check-latest: true

@@ -111,19 +111,19 @@ const (
 	// downstream plans (03-02..03-07) have a single enumeration point;
 	// the concrete emissions happen in those plans' handlers and sync-job
 	// runners. TestEveryStateChangingActionEmitsEvent covers the emit path.
-	EvtSigningKeyCreated   EventKind = "signing_key.created"
-	EvtSigningKeyRotated   EventKind = "signing_key.rotated"
-	EvtSigningKeyUsed      EventKind = "signing_key.used"
-	EvtRPMUpload           EventKind = "rpm.upload"
-	EvtRPMDelete           EventKind = "rpm.delete"
-	EvtDEBUpload           EventKind = "deb.upload"
-	EvtDEBDelete           EventKind = "deb.delete"
-	EvtPyPIUpload          EventKind = "pypi.upload"
-	EvtPyPIDelete          EventKind = "pypi.delete"
-	EvtHelmUpload          EventKind = "helm.upload"
-	EvtHelmDelete          EventKind = "helm.delete"
-	EvtRepoMetadataRegen   EventKind = "repo.metadata.regen"
-	EvtRepoMetadataFailed  EventKind = "repo.metadata.failed"
+	EvtSigningKeyCreated  EventKind = "signing_key.created"
+	EvtSigningKeyRotated  EventKind = "signing_key.rotated"
+	EvtSigningKeyUsed     EventKind = "signing_key.used"
+	EvtRPMUpload          EventKind = "rpm.upload"
+	EvtRPMDelete          EventKind = "rpm.delete"
+	EvtDEBUpload          EventKind = "deb.upload"
+	EvtDEBDelete          EventKind = "deb.delete"
+	EvtPyPIUpload         EventKind = "pypi.upload"
+	EvtPyPIDelete         EventKind = "pypi.delete"
+	EvtHelmUpload         EventKind = "helm.upload"
+	EvtHelmDelete         EventKind = "helm.delete"
+	EvtRepoMetadataRegen  EventKind = "repo.metadata.regen"
+	EvtRepoMetadataFailed EventKind = "repo.metadata.failed"
 
 	// Phase 3 Plan 06 — SYNC-05 sync-from-external (D-18). One per-job
 	// lifecycle event each, plus a coarse heartbeat (every 50 files). The

@@ -120,6 +120,7 @@ var validSeverities = map[string]struct{}{
 //  5. Passwords and tokens never persist as plaintext.
 //  6. settings.seeded_from_bootstrap and settings.bootstrap_sha256 are written
 //     inside the same tx so the audit trail is immediate and atomic.
+//
 // RepoCreateHookFn is the signature for the composed repo-create hook.
 // When non-nil, ApplyBootstrap calls it inside the same tx for each repo so
 // that git bare repos get initialized, signing keys get generated, etc.

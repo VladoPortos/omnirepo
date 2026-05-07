@@ -196,7 +196,9 @@ func TestRepoContent_DockerIndexTag_ScanningWinsOverDone(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status=%d body=%s", resp.StatusCode, raw)
 	}
-	var page struct{ Items []map[string]any `json:"items"` }
+	var page struct {
+		Items []map[string]any `json:"items"`
+	}
 	_ = json.Unmarshal(raw, &page)
 	extra, _ := page.Items[0]["extra"].(map[string]any)
 	if got := extra["scan_status"]; got != "pending" {

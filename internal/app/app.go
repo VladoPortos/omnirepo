@@ -739,9 +739,9 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 		// places. Without this the pull endpoint relied on $PATH while
 		// the scan runner used the configured absolute path — same
 		// install, two different binaries when not on PATH.
-		TrivyBinary: cfg.Trivy.BinaryPath,
-		TLSCertPath: cfg.TLS.CertPath,
-		TLSKeyPath:  cfg.TLS.KeyPath,
+		TrivyBinary:          cfg.Trivy.BinaryPath,
+		TLSCertPath:          cfg.TLS.CertPath,
+		TLSKeyPath:           cfg.TLS.KeyPath,
 		Audit:                auditLogger,
 		Trash:                storage.NewTrash(filepath.Join(cfg.DataRoot, "trash")),
 		Locks:                storage.NewLocks(),

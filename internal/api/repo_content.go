@@ -100,12 +100,12 @@ func deriveScanSeverity(status, summaryJSON string) string {
 // every other per-type field lives under Extra so the frontend can destructure
 // what it needs without a new DTO per protocol.
 type RepoContentEntry struct {
-	ID           int64          `json:"id"`
-	Name         string         `json:"name"`
-	Version      string         `json:"version,omitempty"`
-	SizeBytes    int64          `json:"size_bytes"`
-	UploadedAt   string         `json:"uploaded_at"`
-	ScanSeverity string         `json:"scan_severity,omitempty"`
+	ID           int64  `json:"id"`
+	Name         string `json:"name"`
+	Version      string `json:"version,omitempty"`
+	SizeBytes    int64  `json:"size_bytes"`
+	UploadedAt   string `json:"uploaded_at"`
+	ScanSeverity string `json:"scan_severity,omitempty"`
 	// LatestScanID is the id of the newest scan row for this artifact,
 	// omitted when the artifact has never been scanned. The UI uses it
 	// to deep-link to the standalone scan report page.

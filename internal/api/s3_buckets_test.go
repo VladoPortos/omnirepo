@@ -88,13 +88,13 @@ func newTestServerWithS3Buckets(t *testing.T) *testServer {
 }
 
 type s3BucketFixture struct {
-	s              *testServer
-	aliceCookie    string
-	carolCookie    string
-	superCookie    string
-	projName       string
-	projID         int64
-	otherProjName  string
+	s             *testServer
+	aliceCookie   string
+	carolCookie   string
+	superCookie   string
+	projName      string
+	projID        int64
+	otherProjName string
 }
 
 func setupS3BucketFixture(t *testing.T) *s3BucketFixture {

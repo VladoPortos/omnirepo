@@ -22,8 +22,8 @@ import (
 )
 
 func TestGitkitCompiles(t *testing.T) {
-	var _ gk.Config         // struct exists
-	var _ = gk.New          // constructor exists
-	var _ gk.Receiver       // receiver plumbing exists
-	_ = (*gk.Server)(nil)   // server type exists
+	var _ gk.Config       // struct exists
+	var _ = gk.New        // constructor exists
+	var _ gk.Receiver     // receiver plumbing exists
+	_ = (*gk.Server)(nil) // server type exists
 }

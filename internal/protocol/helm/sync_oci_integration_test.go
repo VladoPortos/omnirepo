@@ -972,4 +972,3 @@ func TestOCISync_TagRebound_SuccessfulCommitFiresSideEffects(t *testing.T) {
 		t.Errorf("after successful rebound rows=%+v; want 1 row digest=%s", rows, newDigest)
 	}
 }
-

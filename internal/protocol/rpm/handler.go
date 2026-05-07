@@ -2,12 +2,13 @@
 // /<project>/rpm/<repo>/... per RPM-01..05.
 //
 // Routes:
-//   GET    /public-key.asc           — armored public key (lock-free cache)
-//   GET    /repodata/*               — repodata files (lock-free disk serve)
-//   GET    /packages/{filename}      — .rpm download (severity-gated)
-//   HEAD   /packages/{filename}      — .rpm headers
-//   PUT    /packages/{filename}      — .rpm upload (parse + DB + FTS + Kick)
-//   DELETE /packages/{filename}      — soft-delete via trash
+//
+//	GET    /public-key.asc           — armored public key (lock-free cache)
+//	GET    /repodata/*               — repodata files (lock-free disk serve)
+//	GET    /packages/{filename}      — .rpm download (severity-gated)
+//	HEAD   /packages/{filename}      — .rpm headers
+//	PUT    /packages/{filename}      — .rpm upload (parse + DB + FTS + Kick)
+//	DELETE /packages/{filename}      — soft-delete via trash
 package rpm
 
 import (

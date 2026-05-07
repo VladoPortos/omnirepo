@@ -85,13 +85,13 @@ func newTestServerWithS3Keys(t *testing.T) (*testServer, *omrcrypto.AEAD) {
 }
 
 type s3KeyFixture struct {
-	s                    *testServer
-	aead                 *omrcrypto.AEAD
-	aliceCookie          string
-	carolCookie          string
-	superCookie          string
-	projName             string
-	projID               int64
+	s           *testServer
+	aead        *omrcrypto.AEAD
+	aliceCookie string
+	carolCookie string
+	superCookie string
+	projName    string
+	projID      int64
 }
 
 func setupS3KeyFixture(t *testing.T) *s3KeyFixture {

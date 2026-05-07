@@ -1,15 +1,15 @@
 // Package rpm — regen factory. Rebuilds <repoRoot>/<project>/rpm/<repo>/
 // repodata/* on disk under the per-repo mutex (D-09, D-10, D-11):
 //
-//   1. SetMetadataState=regenerating
-//   2. List rpm_packages → build primary/filelists/other.xml.gz
-//   3. WriteAndRename hash-named files (D-10)
-//   4. WriteRepomd referencing the hash-named files; WriteAndRename repomd.xml
-//   5. Re-read repomd.xml from disk → DetachSign (signing privArmored fetched
-//      via SigningKeysRepo.LookupPrivate; in-memory string explicitly dropped
-//      after sign) → WriteAndRename repomd.xml.asc
-//   6. sweepStale removes prior content-hash files
-//   7. SetMetadataState=clean + audit EvtRepoMetadataRegen + EvtSigningKeyUsed
+//  1. SetMetadataState=regenerating
+//  2. List rpm_packages → build primary/filelists/other.xml.gz
+//  3. WriteAndRename hash-named files (D-10)
+//  4. WriteRepomd referencing the hash-named files; WriteAndRename repomd.xml
+//  5. Re-read repomd.xml from disk → DetachSign (signing privArmored fetched
+//     via SigningKeysRepo.LookupPrivate; in-memory string explicitly dropped
+//     after sign) → WriteAndRename repomd.xml.asc
+//  6. sweepStale removes prior content-hash files
+//  7. SetMetadataState=clean + audit EvtRepoMetadataRegen + EvtSigningKeyUsed
 package rpm
 
 import (

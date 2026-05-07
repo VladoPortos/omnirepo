@@ -117,7 +117,7 @@ func (d Deps) mountProjectsFull(r chi.Router) {
 type projectListItem struct {
 	ID            int64     `json:"id"`
 	Name          string    `json:"name"`
-	DescriptionMD string   `json:"description_md"`
+	DescriptionMD string    `json:"description_md"`
 	MemberCount   int       `json:"member_count"`
 	RepoCount     int       `json:"repo_count"`
 	SizeBytes     int64     `json:"size_bytes"`
@@ -126,16 +126,16 @@ type projectListItem struct {
 
 // projectDetailResponse is the full project detail.
 type projectDetailResponse struct {
-	ID            int64            `json:"id"`
-	Name          string           `json:"name"`
-	DescriptionMD string           `json:"description_md"`
-	CreatedAt     time.Time        `json:"created_at"`
-	Members       []projectMember  `json:"members"`
-	Repos         []projectRepo    `json:"repos"`
+	ID            int64           `json:"id"`
+	Name          string          `json:"name"`
+	DescriptionMD string          `json:"description_md"`
+	CreatedAt     time.Time       `json:"created_at"`
+	Members       []projectMember `json:"members"`
+	Repos         []projectRepo   `json:"repos"`
 	// Buckets is the S3 bucket list for this project, with live
 	// size_bytes / object_count (F-S3-B, walkthrough 2026-04-17). Absent
 	// when the S3 backend is not wired into Deps.
-	Buckets       []projectBucket  `json:"buckets"`
+	Buckets []projectBucket `json:"buckets"`
 }
 
 type projectMember struct {
@@ -149,7 +149,7 @@ type projectRepo struct {
 	ID            int64     `json:"id"`
 	Type          string    `json:"type"`
 	Name          string    `json:"name"`
-	DescriptionMD string   `json:"description_md"`
+	DescriptionMD string    `json:"description_md"`
 	SizeBytes     int64     `json:"size_bytes"`
 	AutoScan      bool      `json:"auto_scan"`
 	PublicRead    bool      `json:"public_read"`
@@ -389,14 +389,14 @@ func (d Deps) handleProjectActivity(w http.ResponseWriter, r *http.Request) {
 	defer func() { _ = rows.Close() }()
 
 	type activityItem struct {
-		ID         int64   `json:"id"`
-		Action     string  `json:"action"`
-		ActorID    *int64  `json:"actor_user_id,omitempty"`
-		TargetKind string  `json:"target_kind"`
-		TargetID   string  `json:"target_id"`
-		Outcome    string  `json:"outcome,omitempty"`
-		Details    string  `json:"details,omitempty"`
-		CreatedAt  string  `json:"created_at"`
+		ID         int64  `json:"id"`
+		Action     string `json:"action"`
+		ActorID    *int64 `json:"actor_user_id,omitempty"`
+		TargetKind string `json:"target_kind"`
+		TargetID   string `json:"target_id"`
+		Outcome    string `json:"outcome,omitempty"`
+		Details    string `json:"details,omitempty"`
+		CreatedAt  string `json:"created_at"`
 	}
 
 	items := make([]activityItem, 0)

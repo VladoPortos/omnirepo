@@ -20,11 +20,11 @@ const trashMetaFile = "omnirepo-trash.json"
 
 // TrashEntry describes one soft-deleted tree under the trash root.
 type TrashEntry struct {
-	Path          string    // absolute path on disk (the holder dir)
-	MovedAt       time.Time // parsed from the directory name unix-ts prefix
-	Kind          string    // "repo", "project", "user", "s3-bucket", ...
-	OriginalID    int64     // numeric id from the caller
-	OriginalPath  string    // original on-disk path (pre-move). Empty for
+	Path         string    // absolute path on disk (the holder dir)
+	MovedAt      time.Time // parsed from the directory name unix-ts prefix
+	Kind         string    // "repo", "project", "user", "s3-bucket", ...
+	OriginalID   int64     // numeric id from the caller
+	OriginalPath string    // original on-disk path (pre-move). Empty for
 	// legacy entries written before audit finding #2 fix; callers MUST
 	// fall back for those.
 	DeletedByUser string // F-15: users.login of the actor who triggered the

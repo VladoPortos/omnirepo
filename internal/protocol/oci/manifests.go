@@ -5,14 +5,14 @@
 //  1. Manifest body stored byte-for-byte as BLOB (Pitfall 5). GET
 //     responds with the stored bytes; no re-marshal.
 //  2. Manifest PUT runs in one writer tx that:
-//       - inserts the docker_manifests row
-//       - upserts the tag pointer, resolving the prior digest
-//       - for tag overwrite: decrements refs on blobs only referenced by
-//         the prior manifest (Pitfall 1 ref-delta)
-//       - for each new referenced blob: blobs.IncRef + blobs.Touch
-//       - for child manifest digests in an index: manifests.IncRef
-//       - writes artifacts_fts row (D-40)
-//       - (if auto_scan) enqueues a scans row
+//     - inserts the docker_manifests row
+//     - upserts the tag pointer, resolving the prior digest
+//     - for tag overwrite: decrements refs on blobs only referenced by
+//     the prior manifest (Pitfall 1 ref-delta)
+//     - for each new referenced blob: blobs.IncRef + blobs.Touch
+//     - for child manifest digests in an index: manifests.IncRef
+//     - writes artifacts_fts row (D-40)
+//     - (if auto_scan) enqueues a scans row
 //  3. Manifest DELETE removes the row AND decrements per-referenced-blob
 //     refs in one tx (Pitfall 7). Tag-form DELETE only unlinks the tag
 //     unless it was the last reference, then it cascades.

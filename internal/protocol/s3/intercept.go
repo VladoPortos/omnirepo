@@ -58,21 +58,21 @@ const (
 //     verifier inside gofakes3 enforces per-chunk integrity)
 //
 // Hex-mode enforcement path:
-//  - Stage r.Body to a temp file in the bucket-shared tmpRoot, computing
-//    sha256 inline via io.TeeReader.
-//  - On mismatch: os.Remove(tmp), return AWS-shape XAmzContentSHA256Mismatch
-//    HTTP 400 via sigv4.WriteError (D-05). next.ServeHTTP is NEVER called.
-//  - On match: re-open the temp file, replace r.Body with the re-issued
-//    reader, forward to next. The temp file is removed by the deferred
-//    os.Remove once next returns.
+//   - Stage r.Body to a temp file in the bucket-shared tmpRoot, computing
+//     sha256 inline via io.TeeReader.
+//   - On mismatch: os.Remove(tmp), return AWS-shape XAmzContentSHA256Mismatch
+//     HTTP 400 via sigv4.WriteError (D-05). next.ServeHTTP is NEVER called.
+//   - On match: re-open the temp file, replace r.Body with the re-issued
+//     reader, forward to next. The temp file is removed by the deferred
+//     os.Remove once next returns.
 //
 // Threat coverage (T-02-03-01..06 — see Plan 02-03 <threat_model>):
-//  - T-02-03-01 (signed SHA-A but sent SHA-B): mitigated by the compare.
-//  - T-02-03-02 (missing PayloadSHA): mitigated by step 3 fail-closed.
-//  - T-02-03-04 (DoS via large rejected body): documented accepted cost
-//    — the body must be fully read to compute the streamed sha; cleanup
-//    via deferred os.Remove.
-//  - T-02-03-06 (multipart accidental enforcement): mitigated by step 2.
+//   - T-02-03-01 (signed SHA-A but sent SHA-B): mitigated by the compare.
+//   - T-02-03-02 (missing PayloadSHA): mitigated by step 3 fail-closed.
+//   - T-02-03-04 (DoS via large rejected body): documented accepted cost
+//     — the body must be fully read to compute the streamed sha; cleanup
+//     via deferred os.Remove.
+//   - T-02-03-06 (multipart accidental enforcement): mitigated by step 2.
 func interceptPutObject(b *backend.Backend) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

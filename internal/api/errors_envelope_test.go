@@ -76,8 +76,8 @@ func TestNormalizeLegacyCode_Table(t *testing.T) {
 		{"has spaces", "legacy.has_spaces"},
 
 		// Edge cases.
-		{"", "api.unknown"},              // empty → sentinel
-		{"123bad", "legacy.x_123bad"},    // leading digit guarded by x_
+		{"", "api.unknown"},           // empty → sentinel
+		{"123bad", "legacy.x_123bad"}, // leading digit guarded by x_
 	}
 	for _, tc := range cases {
 		t.Run(tc.in, func(t *testing.T) {

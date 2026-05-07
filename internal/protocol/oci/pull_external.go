@@ -64,11 +64,11 @@ const maxPullExternalRequestBodyBytes = 64 * 1024
 
 // PullExternalRequest is the REST POST body shape.
 type PullExternalRequest struct {
-	SrcImage   string `json:"src_image"`
-	DstTag     string `json:"dst_tag,omitempty"`
-	CredID     int64  `json:"cred_id,omitempty"`
-	SrcUser    string `json:"src_username,omitempty"`
-	SrcPass    string `json:"src_password,omitempty"`
+	SrcImage string `json:"src_image"`
+	DstTag   string `json:"dst_tag,omitempty"`
+	CredID   int64  `json:"cred_id,omitempty"`
+	SrcUser  string `json:"src_username,omitempty"`
+	SrcPass  string `json:"src_password,omitempty"`
 }
 
 // PullExternalJob is the payload_json shape persisted in sync_jobs. For v1
@@ -557,10 +557,10 @@ func (p *PullExternalHandler) commitManifest(
 // api/oci_actions.go (out-of-tree from the /v2 router). It lives on the OCI
 // Handler so it can reuse the same project/repo resolution + auth helpers.
 type PullExternalREST struct {
-	h       *Handler
-	creds   *metadata.UpstreamCredsRepo
-	jobs    *metadata.SyncJobsRepo
-	kick    func()
+	h     *Handler
+	creds *metadata.UpstreamCredsRepo
+	jobs  *metadata.SyncJobsRepo
+	kick  func()
 }
 
 // NewPullExternalREST constructs the REST handler. kick is the sync-pool

@@ -24,7 +24,6 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-
 )
 
 // TestGCScaled_1000Manifests_NoRegressions is the UAT #5 scaled

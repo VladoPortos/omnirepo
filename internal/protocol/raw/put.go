@@ -18,7 +18,6 @@ import (
 	"github.com/dxc-internal/omnirepo/internal/metadata"
 )
 
-
 // put handles PUT /<project>/raw/<repo>/<path...>.
 //
 // Flow:

@@ -23,15 +23,15 @@ import (
 // ociFixture boots a fully-wired /v2 handler plus a user with a known
 // password so the tests can exercise Basic → JWT → Bearer flows end-to-end.
 type ociFixture struct {
-	t       *testing.T
-	db      *metadata.DB
-	users   *metadata.UsersRepo
-	apiKeys *metadata.APIKeysRepo
-	repos   *metadata.ReposRepo
+	t        *testing.T
+	db       *metadata.DB
+	users    *metadata.UsersRepo
+	apiKeys  *metadata.APIKeysRepo
+	repos    *metadata.ReposRepo
 	projects *metadata.ProjectsRepo
-	srv     *httptest.Server
-	handler *oci.Handler
-	secret  []byte
+	srv      *httptest.Server
+	handler  *oci.Handler
+	secret   []byte
 	// A freshly-created user:
 	userID   int64
 	login    string

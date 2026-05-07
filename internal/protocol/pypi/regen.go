@@ -20,14 +20,14 @@ import (
 // pypi_files for a single repo. Constructed by app.phase3_pypi.wirePyPI;
 // the factory closes over RepoID at construction time.
 type RegenDeps struct {
-	DB         *metadata.DB
-	Repos      *metadata.ReposRepo
-	Projects   *metadata.ProjectsRepo
-	PyPIFiles  *metadata.PyPIFilesRepo
-	Audit      audit.Logger
-	Locks      storage.Locks
-	RepoRoot   string
-	RepoID     int64
+	DB        *metadata.DB
+	Repos     *metadata.ReposRepo
+	Projects  *metadata.ProjectsRepo
+	PyPIFiles *metadata.PyPIFilesRepo
+	Audit     audit.Logger
+	Locks     storage.Locks
+	RepoRoot  string
+	RepoID    int64
 	// PackagesURLPrefix is the relative or absolute prefix prepended to
 	// each per-file Simple href. Defaults to "../../packages/" so a Simple
 	// page at /<proj>/pypi/<repo>/simple/<name>/ resolves the file at

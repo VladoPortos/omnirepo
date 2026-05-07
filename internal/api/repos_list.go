@@ -31,11 +31,11 @@ func (d Deps) mountReposList(r chi.Router) {
 // for the single-repo endpoint; keeping the projections aligned lets
 // the UI reuse one TypeScript interface for both.
 type repoListItem struct {
-	ID              int64     `json:"id"`
-	Type            string    `json:"type"`
-	Name            string    `json:"name"`
-	DescriptionMD   string    `json:"description_md"`
-	SizeBytes       int64     `json:"size_bytes"`
+	ID            int64  `json:"id"`
+	Type          string `json:"type"`
+	Name          string `json:"name"`
+	DescriptionMD string `json:"description_md"`
+	SizeBytes     int64  `json:"size_bytes"`
 	// F-T15: ItemCount is the per-type artifact count (see repoItemCountExpr).
 	ItemCount       int64     `json:"item_count"`
 	AutoScan        bool      `json:"auto_scan"`
@@ -101,7 +101,7 @@ func (d Deps) handleListRepos(w http.ResponseWriter, r *http.Request) {
 			ID: rr.ID, Type: rr.Type, Name: rr.Name,
 			DescriptionMD: rr.DescriptionMD, SizeBytes: sizes[rr.ID],
 			ItemCount: itemCounts[rr.ID],
-			AutoScan: rr.AutoScan, PublicRead: rr.PublicRead,
+			AutoScan:  rr.AutoScan, PublicRead: rr.PublicRead,
 			BlockOnSeverity: rr.BlockOnSeverity, CreatedAt: rr.CreatedAt,
 
 			// Phase 8 Plan 04 (MIRROR-16..21) mirror fields.
@@ -152,16 +152,16 @@ type syncJobItem struct {
 	// SyncJobsRepo.SetFilesSynced (NOT through the throttled progress
 	// path). 0 for running jobs; the UI pill renders the "N files" piece
 	// of "Sync complete · N files · X MB" when this is > 0.
-	FilesSynced int64  `json:"files_synced"`
+	FilesSynced int64 `json:"files_synced"`
 	// Summary is the raw JSON blob from sync_jobs.summary (migration 035,
 	// default '{}' so the field is always emittable). Currently carries
 	// `drift_purged: int` (DRIFTPURGE-03) and, when the v1.7 percent-
 	// threshold guard tripped, `drift_blocked: int` (UIBACK-03). Future
 	// summary writers add sibling keys via json_set so consumers can
 	// parse only the keys they care about.
-	Summary     string `json:"summary"`
-	CreatedAt   string `json:"created_at"`
-	UpdatedAt   string `json:"updated_at"`
+	Summary   string `json:"summary"`
+	CreatedAt string `json:"created_at"`
+	UpdatedAt string `json:"updated_at"`
 }
 
 func (d Deps) handleListSyncJobs(w http.ResponseWriter, r *http.Request) {

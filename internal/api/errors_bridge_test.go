@@ -49,17 +49,17 @@ func TestInferClassFromStatus(t *testing.T) {
 		status int
 		want   httperr.Class
 	}{
-		{http.StatusBadRequest, httperr.ClassValidation},           // 400
-		{http.StatusUnauthorized, httperr.ClassPermission},         // 401
-		{http.StatusForbidden, httperr.ClassPermission},            // 403
-		{http.StatusNotFound, httperr.ClassValidation},             // 404 — no Retry offered for missing resources
-		{http.StatusConflict, httperr.ClassValidation},             // 409
+		{http.StatusBadRequest, httperr.ClassValidation},            // 400
+		{http.StatusUnauthorized, httperr.ClassPermission},          // 401
+		{http.StatusForbidden, httperr.ClassPermission},             // 403
+		{http.StatusNotFound, httperr.ClassValidation},              // 404 — no Retry offered for missing resources
+		{http.StatusConflict, httperr.ClassValidation},              // 409
 		{http.StatusRequestEntityTooLarge, httperr.ClassValidation}, // 413
-		{http.StatusUnprocessableEntity, httperr.ClassValidation},  // 422
-		{http.StatusTooManyRequests, httperr.ClassTransient},       // 429
-		{http.StatusInternalServerError, httperr.ClassTransient},   // 500
-		{http.StatusBadGateway, httperr.ClassTransient},            // 502
-		{http.StatusServiceUnavailable, httperr.ClassTransient},    // 503
+		{http.StatusUnprocessableEntity, httperr.ClassValidation},   // 422
+		{http.StatusTooManyRequests, httperr.ClassTransient},        // 429
+		{http.StatusInternalServerError, httperr.ClassTransient},    // 500
+		{http.StatusBadGateway, httperr.ClassTransient},             // 502
+		{http.StatusServiceUnavailable, httperr.ClassTransient},     // 503
 	}
 	for _, tc := range cases {
 		got := inferClassFromStatus(tc.status)

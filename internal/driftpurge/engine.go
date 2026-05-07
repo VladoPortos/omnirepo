@@ -54,10 +54,11 @@ type Row interface {
 // invoked. Reason carries the guard token:
 //   - "upstream_empty"      — the D-08 empty-upstream guard
 //   - "threshold_exceeded"  — the v1.7 percent-threshold guard
-//                              (UIBACK-03). BlockedCount carries the
-//                              would-purge count so the caller can
-//                              stamp sync_jobs.summary.drift_blocked
-//                              and surface an admin-confirm override.
+//     (UIBACK-03). BlockedCount carries the
+//     would-purge count so the caller can
+//     stamp sync_jobs.summary.drift_blocked
+//     and surface an admin-confirm override.
+//
 // LocalCount carries the number of rows that WOULD have been
 // vulnerable so the caller can emit mirror.drift_purge_skipped with
 // diagnostics (D-20).

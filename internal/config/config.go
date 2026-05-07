@@ -209,9 +209,9 @@ type AuthConfig struct {
 }
 
 type ScanConfig struct {
-	AutoScanDefault   bool          `koanf:"auto_scan_default"`
-	DBWarnAgeDays     int           `koanf:"db_warn_age_days"`
-	SeverityCacheTTL  time.Duration `koanf:"severity_cache_ttl"`
+	AutoScanDefault  bool          `koanf:"auto_scan_default"`
+	DBWarnAgeDays    int           `koanf:"db_warn_age_days"`
+	SeverityCacheTTL time.Duration `koanf:"severity_cache_ttl"`
 }
 
 type AirGapConfig struct {

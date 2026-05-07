@@ -90,9 +90,9 @@ func TestPasswordValid(t *testing.T) {
 		{"", true},
 		{"a", true},
 		{"abc", true},
-		{"1234567", true},          // 7 chars: floor minus one
-		{"12345678", false},        // 8 chars: at floor
-		{"Adm1n!Passw0rd", false},  // realistic
+		{"1234567", true},         // 7 chars: floor minus one
+		{"12345678", false},       // 8 chars: at floor
+		{"Adm1n!Passw0rd", false}, // realistic
 		{strings.Repeat("x", 64), false},
 	}
 	for _, tc := range cases {

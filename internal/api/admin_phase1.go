@@ -177,9 +177,9 @@ func (d Deps) sessionHardTTL() time.Duration {
 // router so they bypass the api middleware chain.
 func Mount(r chi.Router, d Deps) {
 	midDeps := authmw.Deps{
-		Users:          d.Users,
-		Sessions:       d.Sessions,
-		APIKeys:        d.APIKeys,
+		Users:    d.Users,
+		Sessions: d.Sessions,
+		APIKeys:  d.APIKeys,
 		// F-T8: wire Projects so SessionOrAPIKey accepts the
 		// project:<name>:<key> Basic variant as well as the generic
 		// user:<api-key> shape. Without this, /api/v1 silently falls back

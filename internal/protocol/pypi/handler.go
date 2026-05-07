@@ -41,10 +41,10 @@ type Deps struct {
 	Projects *metadata.ProjectsRepo
 	Members  *metadata.MembersRepo
 
-	PyPIFiles    *metadata.PyPIFilesRepo
-	Scans        *metadata.ScansRepo
-	Coalescer    *regen.Registry
-	PEP694       *PEP694Sessions
+	PyPIFiles *metadata.PyPIFilesRepo
+	Scans     *metadata.ScansRepo
+	Coalescer *regen.Registry
+	PEP694    *PEP694Sessions
 
 	Path  storage.PathStore
 	Trash storage.Trash

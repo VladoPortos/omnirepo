@@ -328,4 +328,3 @@ func TestRPMSync_OversizedMetadataRejected(t *testing.T) {
 	_ = fmt.Sprint // keep "fmt" import used unconditionally
 	_ = errors.Is  // keep "errors" import live for the package-pattern parity with the artifact test
 }
-

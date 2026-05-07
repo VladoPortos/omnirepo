@@ -325,10 +325,10 @@ func TestGC_TrashRetentionSweep(t *testing.T) {
 	// the timestamp to exercise the retention boundary.
 	now := time.Now().Unix()
 	old := []int64{
-		now - int64(48*time.Hour/time.Second),  // very old → delete
-		now - int64(36*time.Hour/time.Second),  // old → delete
-		now - int64(25*time.Hour/time.Second),  // just over → delete
-		now - int64(2*time.Hour/time.Second),   // recent → keep
+		now - int64(48*time.Hour/time.Second),   // very old → delete
+		now - int64(36*time.Hour/time.Second),   // old → delete
+		now - int64(25*time.Hour/time.Second),   // just over → delete
+		now - int64(2*time.Hour/time.Second),    // recent → keep
 		now - int64(10*time.Minute/time.Second), // very recent → keep
 	}
 	for i, ts := range old {

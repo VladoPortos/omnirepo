@@ -462,8 +462,10 @@ func TestPruneRepoFTS_Idempotent(t *testing.T) {
 
 // TestPruneRepoFTS_KeepsSharedCVEButDropsExclusiveCVE — D-11 invariant.
 // Two repos repoA (id=42) and repoB (id=43). One scan each. Vulnerabilities:
-//   scanA → CVE-A (exclusive to repoA), CVE-B (shared), CVE-C (exclusive to repoA)
-//   scanB → CVE-B (shared)
+//
+//	scanA → CVE-A (exclusive to repoA), CVE-B (shared), CVE-C (exclusive to repoA)
+//	scanB → CVE-B (shared)
+//
 // PruneRepoFTS(repoA) must keep CVE-B (still owned by repoB live), drop CVE-A
 // and CVE-C. cves_fts ends with 1 row.
 func TestPruneRepoFTS_KeepsSharedCVEButDropsExclusiveCVE(t *testing.T) {

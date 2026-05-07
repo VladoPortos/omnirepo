@@ -47,11 +47,11 @@ const maxRepoPatchBodyBytes = 64 * 1024
 // while the second segment keeps the operator-facing token verbatim so
 // tests, docs, and grep-based plan-check assertions resolve directly.
 const (
-	codeRepoMirrorTypeUnsupported    = "repo.mirror_type_unsupported"
-	codeRepoMirrorURLInvalid         = "repo.mirror_url_invalid"
-	codeRepoMirrorFilterInvalid      = "repo.mirror_filter_invalid"
-	codeRepoMirrorURLImmutable       = "repo.mirror_url_immutable"
-	codeRepoMirrorCredWrongProject   = "repo.mirror_cred_wrong_project"
+	codeRepoMirrorTypeUnsupported  = "repo.mirror_type_unsupported"
+	codeRepoMirrorURLInvalid       = "repo.mirror_url_invalid"
+	codeRepoMirrorFilterInvalid    = "repo.mirror_filter_invalid"
+	codeRepoMirrorURLImmutable     = "repo.mirror_url_immutable"
+	codeRepoMirrorCredWrongProject = "repo.mirror_cred_wrong_project"
 	// codeRepoDriftPurgeMirrorOnly (v1.5 Phase 6 / DRIFTPURGE-04, D-17):
 	// drift_purge=true is only meaningful on mirror repos. A non-mirror
 	// repo has no upstream to diff against; accepting the flag would
@@ -106,15 +106,15 @@ type repoPatchRequest struct {
 // is a nullable pointer so JSON emits `null` (not omitted) when unset —
 // lets the UI distinguish "no cred configured" from "field missing".
 type repoResponse struct {
-	ID              int64     `json:"id"`
-	ProjectID       int64     `json:"project_id"`
-	Type            string    `json:"type"`
-	Name            string    `json:"name"`
-	DescriptionMD   string    `json:"description_md"`
-	AutoScan        bool      `json:"auto_scan"`
-	BlockOnSeverity string    `json:"block_on_severity"`
-	PublicRead      bool      `json:"public_read"`
-	SizeBytes       int64     `json:"size_bytes"`
+	ID              int64  `json:"id"`
+	ProjectID       int64  `json:"project_id"`
+	Type            string `json:"type"`
+	Name            string `json:"name"`
+	DescriptionMD   string `json:"description_md"`
+	AutoScan        bool   `json:"auto_scan"`
+	BlockOnSeverity string `json:"block_on_severity"`
+	PublicRead      bool   `json:"public_read"`
+	SizeBytes       int64  `json:"size_bytes"`
 	// F-T15: ItemCount renders "42 packages · 180 MB" in the repo header.
 	// Meaning depends on type — see repoItemCountExpr. 0 is a valid empty
 	// repo; callers can suppress the badge if desired.

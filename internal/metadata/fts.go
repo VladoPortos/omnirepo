@@ -6,7 +6,7 @@
 // immediately. No triggers, no async indexer.
 //
 // The three virtual tables (repos_fts, artifacts_fts, cves_fts) live in
-// 001_initial.up.sql and use content='' (external content disabled). We
+// 001_initial.up.sql and use content=” (external content disabled). We
 // manage rows by explicit INSERT/DELETE — FTS5's "external content"
 // rebuild machinery is not in play.
 package metadata

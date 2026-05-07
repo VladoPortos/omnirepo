@@ -60,17 +60,17 @@ func TestSanitizeUpstreamErr_ScrubsAuthHeader(t *testing.T) {
 // -----------------------------------------------------------------------------
 
 type mockUpstream struct {
-	t          *testing.T
-	requireBasic bool
-	user       string
-	pass       string
-	manifestBody []byte
-	manifestMT   string
+	t              *testing.T
+	requireBasic   bool
+	user           string
+	pass           string
+	manifestBody   []byte
+	manifestMT     string
 	manifestDigest string
-	blobs      map[string][]byte // digest -> bytes
-	tag        string            // tag name, e.g. "v1"
-	imageName  string            // e.g. "lib/app"
-	srv        *httptest.Server
+	blobs          map[string][]byte // digest -> bytes
+	tag            string            // tag name, e.g. "v1"
+	imageName      string            // e.g. "lib/app"
+	srv            *httptest.Server
 }
 
 func newMockUpstream(t *testing.T, imageName, tag string, requireBasic bool) *mockUpstream {
@@ -192,8 +192,8 @@ func digestOf(b []byte) string {
 // pullFixture wires a manifestFixture + a mock upstream + a PullExternalHandler.
 type pullFixture struct {
 	*manifestFixture
-	up   *mockUpstream
-	pull *oci.PullExternalHandler
+	up    *mockUpstream
+	pull  *oci.PullExternalHandler
 	creds *metadata.UpstreamCredsRepo
 }
 

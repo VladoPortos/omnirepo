@@ -163,16 +163,16 @@ func (d Deps) handleListAudit(w http.ResponseWriter, r *http.Request) {
 	defer func() { _ = rows.Close() }()
 
 	type item struct {
-		ID         int64           `json:"id"`
-		Timestamp  string          `json:"timestamp"`
-		Actor      *string         `json:"actor,omitempty"`
-		IP         *string         `json:"ip,omitempty"`
-		UserAgent  *string         `json:"user_agent,omitempty"`
-		Action     string          `json:"action"`
-		TargetKind *string         `json:"target_kind,omitempty"`
-		TargetID   *string         `json:"target_id,omitempty"`
-		Outcome    *string         `json:"outcome,omitempty"`
-		Details    *string         `json:"details,omitempty"`
+		ID         int64   `json:"id"`
+		Timestamp  string  `json:"timestamp"`
+		Actor      *string `json:"actor,omitempty"`
+		IP         *string `json:"ip,omitempty"`
+		UserAgent  *string `json:"user_agent,omitempty"`
+		Action     string  `json:"action"`
+		TargetKind *string `json:"target_kind,omitempty"`
+		TargetID   *string `json:"target_id,omitempty"`
+		Outcome    *string `json:"outcome,omitempty"`
+		Details    *string `json:"details,omitempty"`
 	}
 
 	var items []item
@@ -185,7 +185,7 @@ func (d Deps) handleListAudit(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		items = append(items, item{
-			ID:         row.ID,
+			ID: row.ID,
 			// Emit fixed-width ISO-8601 (audit.DBTimestampLayout) so the
 			// next_cursor round-trip stays lex-aligned with stored
 			// occurred_at. Scan(&row.OccurredAt) accepts any of the three

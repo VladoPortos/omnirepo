@@ -319,8 +319,10 @@ func TestSearchAll_RPMSearch(t *testing.T) {
 // -----------------------------------------------------------------------------
 
 // seedSearchTwoRepos seeds two live projects + repos:
-//   project pA / repo rA (id=1, type=rpm, name='alpha')
-//   project pB / repo rB (id=2, type=rpm, name='bravo')
+//
+//	project pA / repo rA (id=1, type=rpm, name='alpha')
+//	project pB / repo rB (id=2, type=rpm, name='bravo')
+//
 // FTS rows for both repos are populated for repos_fts, artifacts_fts, rpm_fts,
 // deb_fts, pypi_fts, helm_fts. Caller can then soft-delete rB or pB to
 // exercise the arm filter.

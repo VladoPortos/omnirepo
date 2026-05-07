@@ -143,11 +143,11 @@ func (r *ReposRepo) CreateInTx(
 // post-creation; FilterJSON + CredID + ScanOnSync can be edited via
 // ReposRepo.Update. CredID may be nil (public upstream archives).
 type MirrorConfig struct {
-	IsMirror     bool
-	UpstreamURL  string
-	FilterJSON   string
-	CredID       *int64
-	ScanOnSync   bool
+	IsMirror    bool
+	UpstreamURL string
+	FilterJSON  string
+	CredID      *int64
+	ScanOnSync  bool
 }
 
 // SetMirrorConfigInTx flips the 5 mirror columns on repoID. Intended to be

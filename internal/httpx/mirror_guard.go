@@ -13,13 +13,13 @@
 //
 // Two variants exist because OmniRepo's protocol mounts are split:
 //
-//   MirrorGuard        — reads {type} from chi URL params. OCI uses this
-//                        via /v2/{project}/{type}/{repo}/... so the same
-//                        middleware covers docker + helm-OCI routes.
-//   MirrorGuardFixed   — takes a hard-coded type string. APT/RPM/PyPI/Helm
-//                        mount hard-coded /{project}/deb|rpm|pypi|helm/
-//                        {repo}/... so the guard supplies the type
-//                        directly.
+//	MirrorGuard        — reads {type} from chi URL params. OCI uses this
+//	                     via /v2/{project}/{type}/{repo}/... so the same
+//	                     middleware covers docker + helm-OCI routes.
+//	MirrorGuardFixed   — takes a hard-coded type string. APT/RPM/PyPI/Helm
+//	                     mount hard-coded /{project}/deb|rpm|pypi|helm/
+//	                     {repo}/... so the guard supplies the type
+//	                     directly.
 package httpx
 
 import (

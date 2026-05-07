@@ -268,4 +268,3 @@ func snapshotPrimary(repodata string) (string, error) {
 	}
 	return filepath.Base(matches[0]), nil
 }
-

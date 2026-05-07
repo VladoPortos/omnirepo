@@ -701,4 +701,3 @@ func (d Deps) handleTrivyDBHistory(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
-

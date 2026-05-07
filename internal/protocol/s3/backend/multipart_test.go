@@ -54,7 +54,7 @@ func TestCreateMultipartUpload_SetsUpDiskAndRow(t *testing.T) {
 	if err := f.b.CreateBucket("bucket1"); err != nil {
 		t.Fatal(err)
 	}
-	id, err := fixtureCreateMPU(t, f,"bucket1", "big.bin", map[string]string{"Content-Type": "application/zip"})
+	id, err := fixtureCreateMPU(t, f, "bucket1", "big.bin", map[string]string{"Content-Type": "application/zip"})
 	if err != nil {
 		t.Fatalf("create mpu: %v", err)
 	}
@@ -81,7 +81,7 @@ func TestUploadPart_WritesAtomicallyAndRecordsMD5(t *testing.T) {
 	if err := f.b.CreateBucket("bucket1"); err != nil {
 		t.Fatal(err)
 	}
-	id, err := fixtureCreateMPU(t, f,"bucket1", "k", nil)
+	id, err := fixtureCreateMPU(t, f, "bucket1", "k", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +114,7 @@ func TestUploadPart_RejectsOversizePart(t *testing.T) {
 	if err := f.b.CreateBucket("bucket1"); err != nil {
 		t.Fatal(err)
 	}
-	id, err := fixtureCreateMPU(t, f,"bucket1", "k", nil)
+	id, err := fixtureCreateMPU(t, f, "bucket1", "k", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,7 +130,7 @@ func TestUploadPart_UpsertOnDuplicatePartNumber(t *testing.T) {
 	if err := f.b.CreateBucket("bucket1"); err != nil {
 		t.Fatal(err)
 	}
-	id, err := fixtureCreateMPU(t, f,"bucket1", "k", nil)
+	id, err := fixtureCreateMPU(t, f, "bucket1", "k", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,16 +157,17 @@ func TestUploadPart_UpsertOnDuplicatePartNumber(t *testing.T) {
 // code compute and assert the hand-derived vector.
 //
 // Expected ETag derivation (standard S3):
-//   part1_md5 = md5(5 MiB of 0x00)
-//   part2_md5 = md5(5 MiB of 0x00) (same)
-//   concat    = part1_md5_raw || part2_md5_raw (32 bytes)
-//   etag      = md5(concat) + "-2"
+//
+//	part1_md5 = md5(5 MiB of 0x00)
+//	part2_md5 = md5(5 MiB of 0x00) (same)
+//	concat    = part1_md5_raw || part2_md5_raw (32 bytes)
+//	etag      = md5(concat) + "-2"
 func TestCompleteMultipart_KnownVector(t *testing.T) {
 	f := newFixture(t)
 	if err := f.b.CreateBucket("bucket1"); err != nil {
 		t.Fatal(err)
 	}
-	id, err := fixtureCreateMPU(t, f,"bucket1", "k", map[string]string{"Content-Type": "application/octet-stream"})
+	id, err := fixtureCreateMPU(t, f, "bucket1", "k", map[string]string{"Content-Type": "application/octet-stream"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -224,7 +225,7 @@ func TestCompleteMultipart_RejectsETagMismatch(t *testing.T) {
 	if err := f.b.CreateBucket("bucket1"); err != nil {
 		t.Fatal(err)
 	}
-	id, _ := fixtureCreateMPU(t, f,"bucket1", "k", nil)
+	id, _ := fixtureCreateMPU(t, f, "bucket1", "k", nil)
 	body := bytes.Repeat([]byte{1}, 5*1024*1024)
 	etag, _ := f.b.UploadPart("bucket1", "k", id, 1, int64(len(body)), bytes.NewReader(body))
 	body2 := bytes.Repeat([]byte{2}, 5*1024*1024)
@@ -251,7 +252,7 @@ func TestCompleteMultipart_IdempotencyBoundary_SecondCompleteFails(t *testing.T)
 	if err := f.b.CreateBucket("bucket1"); err != nil {
 		t.Fatal(err)
 	}
-	id, _ := fixtureCreateMPU(t, f,"bucket1", "k", nil)
+	id, _ := fixtureCreateMPU(t, f, "bucket1", "k", nil)
 	body := bytes.Repeat([]byte{0}, 5*1024*1024)
 	etag, _ := f.b.UploadPart("bucket1", "k", id, 1, int64(len(body)), bytes.NewReader(body))
 	complete := &gofakes3.CompleteMultipartUploadRequest{
@@ -271,7 +272,7 @@ func TestCompleteMultipart_RejectsSmallNonLastPart(t *testing.T) {
 	if err := f.b.CreateBucket("bucket1"); err != nil {
 		t.Fatal(err)
 	}
-	id, _ := fixtureCreateMPU(t, f,"bucket1", "k", nil)
+	id, _ := fixtureCreateMPU(t, f, "bucket1", "k", nil)
 	// First part only 1 MiB — below 5 MiB minimum.
 	small := bytes.Repeat([]byte{0}, 1*1024*1024)
 	etag1, err := f.b.UploadPart("bucket1", "k", id, 1, int64(len(small)), bytes.NewReader(small))
@@ -297,7 +298,7 @@ func TestAbortMultipart_RemovesRowsAndStaging(t *testing.T) {
 	if err := f.b.CreateBucket("bucket1"); err != nil {
 		t.Fatal(err)
 	}
-	id, _ := fixtureCreateMPU(t, f,"bucket1", "k", nil)
+	id, _ := fixtureCreateMPU(t, f, "bucket1", "k", nil)
 	body := bytes.Repeat([]byte{0}, 5*1024*1024)
 	_, _ = f.b.UploadPart("bucket1", "k", id, 1, int64(len(body)), bytes.NewReader(body))
 	if err := f.b.AbortMultipartUpload("bucket1", "k", id); err != nil {
@@ -317,7 +318,7 @@ func TestSweepOrphanMultiparts_AbortsOld(t *testing.T) {
 	if err := f.b.CreateBucket("bucket1"); err != nil {
 		t.Fatal(err)
 	}
-	id, _ := fixtureCreateMPU(t, f,"bucket1", "k", nil)
+	id, _ := fixtureCreateMPU(t, f, "bucket1", "k", nil)
 	// Force initiated_at into the past.
 	if _, err := f.db.Writer.ExecContext(context.Background(),
 		`UPDATE s3_multipart_uploads SET initiated_at='2020-01-01T00:00:00.000Z' WHERE upload_id=?`, string(id)); err != nil {
@@ -338,7 +339,7 @@ func TestSweepOrphanMultiparts_LeavesFreshAlone(t *testing.T) {
 	if err := f.b.CreateBucket("bucket1"); err != nil {
 		t.Fatal(err)
 	}
-	id, _ := fixtureCreateMPU(t, f,"bucket1", "k", nil)
+	id, _ := fixtureCreateMPU(t, f, "bucket1", "k", nil)
 	cutoff := time.Now().Add(-24 * time.Hour)
 	if _, _, err := f.b.SweepOrphanMultiparts(context.Background(), cutoff); err != nil {
 		t.Fatal(err)
@@ -357,7 +358,7 @@ func seedMPU(t *testing.T, f *fixture, bucket string, keys []string) map[string]
 	t.Helper()
 	out := map[string]gofakes3.UploadID{}
 	for _, k := range keys {
-		id, err := fixtureCreateMPU(t, f,bucket, k, nil)
+		id, err := fixtureCreateMPU(t, f, bucket, k, nil)
 		if err != nil {
 			t.Fatalf("seed mpu %s: %v", k, err)
 		}
@@ -416,7 +417,7 @@ func TestListParts_PaginationTruncation(t *testing.T) {
 	if err := f.b.CreateBucket("bkt"); err != nil {
 		t.Fatal(err)
 	}
-	id, err := fixtureCreateMPU(t, f,"bkt", "k", nil)
+	id, err := fixtureCreateMPU(t, f, "bkt", "k", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -494,7 +495,7 @@ func TestListParts_AppliesAWSDefault(t *testing.T) {
 	if err := f.b.CreateBucket("bkt"); err != nil {
 		t.Fatal(err)
 	}
-	id, err := fixtureCreateMPU(t, f,"bkt", "k", nil)
+	id, err := fixtureCreateMPU(t, f, "bkt", "k", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -554,7 +555,7 @@ func TestGetObject_NoRangeAfterMultipartComplete(t *testing.T) {
 	if err := f.b.CreateBucket("bucket1"); err != nil {
 		t.Fatal(err)
 	}
-	id, _ := fixtureCreateMPU(t, f,"bucket1", "k", nil)
+	id, _ := fixtureCreateMPU(t, f, "bucket1", "k", nil)
 	body := bytes.Repeat([]byte{0xaa}, 5*1024*1024)
 	etag, _ := f.b.UploadPart("bucket1", "k", id, 1, int64(len(body)), bytes.NewReader(body))
 	complete := &gofakes3.CompleteMultipartUploadRequest{

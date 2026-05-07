@@ -135,9 +135,9 @@ func (h *Handler) Handle(ctx context.Context, scan *metadata.Scan) error {
 	defer func() { _ = os.RemoveAll(tmp) }()
 
 	var (
-		result    Result
-		err       error
-		skipScan  bool
+		result     Result
+		err        error
+		skipScan   bool
 		skipReason string
 	)
 	switch scan.ArtifactKind {

@@ -222,4 +222,3 @@ func dispatchBody(r *http.Request, cs, secret string, parsed *parsedAuthz, amzDa
 		return BodyModeSHA256, cs, nil
 	}
 }
-

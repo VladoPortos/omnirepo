@@ -2,8 +2,8 @@
 //
 // Mounts two REST endpoints under the already-auth'd /api/v1 subtree:
 //
-//   POST /api/v1/projects/{name}/repos/docker/{repo}/pull-external
-//   POST /api/v1/projects/{name}/repos/docker/{repo}/promote
+//	POST /api/v1/projects/{name}/repos/docker/{repo}/pull-external
+//	POST /api/v1/projects/{name}/repos/docker/{repo}/promote
 //
 // Both handlers live on the OCI Handler (internal/protocol/oci) so they
 // reuse its project/repo resolution, auth helpers, audit emitter, and

@@ -134,12 +134,15 @@ func RunBootIntegrityCheck(ctx context.Context, db *DB, settings *SettingsRepo, 
 // also written.
 //
 // source="boot"   — called from RunBootIntegrityCheck at app startup. Does
-//                   NOT write last_manual_at (that key is reserved for
-//                   operator-triggered runs).
+//
+//	NOT write last_manual_at (that key is reserved for
+//	operator-triggered runs).
+//
 // source="manual" — called from plan 10-03's POST /admin/db/health/check
-//                   goroutine. Writes last_manual_at=now RFC3339 so the
-//                   GET /admin/db/health endpoint can surface the last
-//                   manual run timestamp across process restarts.
+//
+//	goroutine. Writes last_manual_at=now RFC3339 so the
+//	GET /admin/db/health endpoint can surface the last
+//	manual run timestamp across process restarts.
 //
 // Returns (status, durationMs) so the manual-trigger goroutine can update
 // the in-process lease (dbHealthJob.lastStatus / lastRunAt) without

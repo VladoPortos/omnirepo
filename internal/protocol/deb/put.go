@@ -210,19 +210,19 @@ func (h *Handler) put(w http.ResponseWriter, r *http.Request) {
 
 	if err := h.db.WriteTx(r.Context(), func(tx *sql.Tx) error {
 		if _, err := h.debPackages.Insert(r.Context(), tx, &metadata.DEBPackage{
-			RepoID:          res.repo.ID,
-			SuiteID:         suiteRow.ID,
-			Package:         ctrl.Package,
-			Version:         ctrl.Version,
-			Architecture:    ctrl.Architecture,
-			Maintainer:      ctrl.Maintainer,
-			Section:         ctrl.Section,
-			Priority:        ctrl.Priority,
-			Depends:         ctrl.Depends,
-			Description:     ctrl.Description,
-			SizeBytes:       size,
-			Digest:          "sha256:" + digest,
-			Filename:        filename,
+			RepoID:       res.repo.ID,
+			SuiteID:      suiteRow.ID,
+			Package:      ctrl.Package,
+			Version:      ctrl.Version,
+			Architecture: ctrl.Architecture,
+			Maintainer:   ctrl.Maintainer,
+			Section:      ctrl.Section,
+			Priority:     ctrl.Priority,
+			Depends:      ctrl.Depends,
+			Description:  ctrl.Description,
+			SizeBytes:    size,
+			Digest:       "sha256:" + digest,
+			Filename:     filename,
 			// F-T6: store the real pool-relative path so Packages.gz can emit
 			// it verbatim as the Filename field (apt needs it to fetch the
 			// .deb — the old synthesised path dropped `main/` and broke apt).

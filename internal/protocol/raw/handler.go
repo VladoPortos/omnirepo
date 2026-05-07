@@ -57,9 +57,9 @@ type Deps struct {
 	// (CR-01). Nil in legacy call sites falls back to a conservative deny
 	// on private repos for non-super-admin users.
 	Members *metadata.MembersRepo
-	Path     storage.PathStore
-	Trash    storage.Trash
-	Audit    audit.Logger
+	Path    storage.PathStore
+	Trash   storage.Trash
+	Audit   audit.Logger
 
 	// SeverityGate is plugged in by 02-09; nil = no-op.
 	SeverityGate SeverityGateFn
@@ -301,6 +301,7 @@ func (h *Handler) resolveRepoAndPathWithMode(w http.ResponseWriter, r *http.Requ
 //   - cleaned path must not start with "/" (post-trim) — defense in depth
 //
 // strict adds one extra rule, applied only on write paths (PUT):
+//
 //   - any segment whose percent-decoded form is "", ".", or ".." → error.
 //     (F-12.1: chi v5 selectively decodes wildcard URL params — most
 //     percent-encodings are decoded before the handler sees them, but

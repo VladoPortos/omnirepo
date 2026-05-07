@@ -369,8 +369,8 @@ func runPartialThenConverges(t *testing.T, maxParallel int) {
 		got[r.Name+"@"+r.Version] = r.Digest
 	}
 	wantTriples := map[string]string{
-		"nginx@1.0.0":    wantD1,
-		"redis@7.0.0":    wantD2,
+		"nginx@1.0.0":     wantD1,
+		"redis@7.0.0":     wantD2,
 		"postgres@15.0.0": wantD3,
 	}
 	for k, wantDigest := range wantTriples {

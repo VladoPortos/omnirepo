@@ -67,7 +67,7 @@ func TestAdminTrivy_DBUpload(t *testing.T) {
 	// the upload.
 	tarBuf := createFakeTarGz(t, map[string]string{
 		"metadata.json": `{"Version": 2, "UpdatedAt": "2026-04-22T00:00:00Z"}`,
-		"trivy.db":      fakeTrivyDBBytes(2<<20), // 2 MiB
+		"trivy.db":      fakeTrivyDBBytes(2 << 20), // 2 MiB
 	})
 
 	// Upload via multipart.
@@ -138,7 +138,7 @@ func TestAdminTrivy_DBUpload_RejectsNonTrivyArchive(t *testing.T) {
 	}{
 		{"no trivy.db at root", map[string]string{
 			"metadata.json": `{"Version": 2}`,
-			"db/trivy.db":   fakeTrivyDBBytes(2<<20),
+			"db/trivy.db":   fakeTrivyDBBytes(2 << 20),
 		}},
 		{"trivy.db too small", map[string]string{
 			"metadata.json": `{"Version": 2}`,
@@ -150,7 +150,7 @@ func TestAdminTrivy_DBUpload_RejectsNonTrivyArchive(t *testing.T) {
 		}},
 		{"bad metadata.json", map[string]string{
 			"metadata.json": `not valid json`,
-			"trivy.db":      fakeTrivyDBBytes(2<<20),
+			"trivy.db":      fakeTrivyDBBytes(2 << 20),
 		}},
 		// Codex batch-13 Q2: a 2 MiB non-BoltDB file passes the size
 		// floor + filename check. Without the magic-byte sniff it would
@@ -262,7 +262,7 @@ func TestAdminTrivy_DBHistory_AfterUpload(t *testing.T) {
 
 	tarBuf := createFakeTarGz(t, map[string]string{
 		"metadata.json": `{"Version": 2, "UpdatedAt": "2026-04-22T00:00:00Z"}`,
-		"trivy.db":      fakeTrivyDBBytes(2<<20),
+		"trivy.db":      fakeTrivyDBBytes(2 << 20),
 	})
 	var body bytes.Buffer
 	w := multipart.NewWriter(&body)
@@ -443,7 +443,7 @@ func TestAdminTrivy_HonorsCustomDBDir(t *testing.T) {
 	// Needs a realistic tarball shape so the F-13.1 validator accepts it.
 	tarBuf := createFakeTarGz(t, map[string]string{
 		"metadata.json": `{"Version": 2}`,
-		"trivy.db":      fakeTrivyDBBytes(2<<20),
+		"trivy.db":      fakeTrivyDBBytes(2 << 20),
 		"new-marker":    "v2",
 	})
 	var upBody bytes.Buffer

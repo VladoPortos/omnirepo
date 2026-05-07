@@ -35,11 +35,11 @@ type trivyReportOS struct {
 }
 
 type trivyReportBlock struct {
-	Target            string                `json:"Target"`
-	Class             string                `json:"Class"`
-	Type              string                `json:"Type"`
-	Vulnerabilities   []trivyReportVuln     `json:"Vulnerabilities"`
-	Misconfigurations []trivyReportMisconf  `json:"Misconfigurations"`
+	Target            string               `json:"Target"`
+	Class             string               `json:"Class"`
+	Type              string               `json:"Type"`
+	Vulnerabilities   []trivyReportVuln    `json:"Vulnerabilities"`
+	Misconfigurations []trivyReportMisconf `json:"Misconfigurations"`
 }
 
 type trivyReportVuln struct {

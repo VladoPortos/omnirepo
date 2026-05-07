@@ -13,9 +13,9 @@ import "testing"
 // resolve to the same (project, type, repo) triple.
 func TestParseFromRepoShapes(t *testing.T) {
 	cases := []struct {
-		raw                               string
-		wantProject, wantType, wantRepo   string
-		wantOK                            bool
+		raw                             string
+		wantProject, wantType, wantRepo string
+		wantOK                          bool
 	}{
 		{"proj/app", "proj", "docker", "app", true},
 		{"proj/docker/app", "proj", "docker", "app", true},

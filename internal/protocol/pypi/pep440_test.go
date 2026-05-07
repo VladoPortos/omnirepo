@@ -64,10 +64,10 @@ func TestValidate(t *testing.T) {
 
 		// Negative: letter-prefixed / malformed shapes.
 		{"abc", true},
-		{"1.0.0+", true},      // trailing + with no local body
-		{"2do-1.0.0", true},   // F-07.5 Q1 motivating case
-		{"1.0.0!2.0", true},   // epoch in wrong position (post-release slot)
-		{"v1.0", true},        // leading `v` — caller strips if desired
+		{"1.0.0+", true},    // trailing + with no local body
+		{"2do-1.0.0", true}, // F-07.5 Q1 motivating case
+		{"1.0.0!2.0", true}, // epoch in wrong position (post-release slot)
+		{"v1.0", true},      // leading `v` — caller strips if desired
 	}
 
 	for _, c := range cases {

@@ -4,14 +4,14 @@
 // POST /api/v1/projects/{name}/repos and PATCH
 // /api/v1/projects/{name}/repos/{type}/{repo}:
 //
-//   A. mirror_type_unsupported — is_mirror=true only with deb/rpm/pypi/helm
-//   B. mirror_url_invalid      — upstream URL must be http(s) with a host
-//   C. mirror_filter_invalid   — filter JSON must decode into the protocol
-//                                 SyncFilter shape
-//   D. mirror_cred_wrong_project — mirror_cred_id must belong to the same
-//                                   project as the repo (T-08-01-07)
-//   E. mirror_url_immutable    — PATCH cannot change is_mirror or
-//                                 mirror_upstream_url
+//	A. mirror_type_unsupported — is_mirror=true only with deb/rpm/pypi/helm
+//	B. mirror_url_invalid      — upstream URL must be http(s) with a host
+//	C. mirror_filter_invalid   — filter JSON must decode into the protocol
+//	                              SyncFilter shape
+//	D. mirror_cred_wrong_project — mirror_cred_id must belong to the same
+//	                                project as the repo (T-08-01-07)
+//	E. mirror_url_immutable    — PATCH cannot change is_mirror or
+//	                              mirror_upstream_url
 //
 // Validation is JSON-shape-only here; the repo-layer migration ensures
 // mirror_filter_json round-trips as TEXT. We deliberately do NOT import the
@@ -348,9 +348,9 @@ func validateMirrorFilter(repoType string, filter json.RawMessage) (bool, json.R
 func filterHasUniqueKeys(raw json.RawMessage) bool {
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	type frame struct {
-		seen       map[string]struct{}
-		isObject   bool
-		expectKey  bool
+		seen      map[string]struct{}
+		isObject  bool
+		expectKey bool
 	}
 	var stack []*frame
 	for {

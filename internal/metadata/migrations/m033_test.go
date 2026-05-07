@@ -52,7 +52,7 @@ func TestMigration033_DropsMislabeledPrerelease(t *testing.T) {
 			t.Fatalf("seed pypi_fts %s: %v", version, err)
 		}
 	}
-	seed("sdist", "rc1", "widget-1.0.0-rc1.tar.gz", "sha256:rc1")          // broken (F-07.5)
+	seed("sdist", "rc1", "widget-1.0.0-rc1.tar.gz", "sha256:rc1")         // broken (F-07.5)
 	seed("sdist", "1.2.3", "widget-1.2.3.tar.gz", "sha256:canonical")     // canonical
 	seed("wheel", "1.0.0", "widget-1.0.0-py3-none-any.whl", "sha256:wh1") // wheel
 	// Defensive: a wheel with a non-digit version (hypothetical, legacy).

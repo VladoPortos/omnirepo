@@ -33,8 +33,8 @@ func TestValidateRawPath(t *testing.T) {
 		{"mid traversal", "a/../b", "", true, false},
 		{"leading dot", "./a", "", true, false},
 		{"mid dot", "a/./b", "", true, false},
-		{"double slash", "a//b", "", true, false},        // empty middle segment
-		{"nul byte", "a/\x00/b", "", true, false},        // NUL byte
+		{"double slash", "a//b", "", true, false}, // empty middle segment
+		{"nul byte", "a/\x00/b", "", true, false}, // NUL byte
 		{"multi-level traversal", "a/b/../../c", "", true, false},
 		// F-12.1 — percent-encoded traversal must not slip through writes,
 		// but reads still resolve them (legacy-row backward compat: no

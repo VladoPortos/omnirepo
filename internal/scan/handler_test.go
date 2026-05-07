@@ -22,21 +22,21 @@ import (
 // FakeRunner. seedDockerArtifact creates a project, repo, manifest, blob,
 // and pending scan row ready for Handle.
 type scanFixture struct {
-	t       *testing.T
-	db      *metadata.DB
+	t        *testing.T
+	db       *metadata.DB
 	dataRoot string
-	cas     storage.CAS
-	runner  *scan.FakeRunner
-	cache   *scan.SeverityCache
-	audit   audit.Logger
-	scans   *metadata.ScansRepo
-	vulns   *metadata.VulnerabilitiesRepo
-	mfs     *metadata.DockerManifestsRepo
-	rawf    *metadata.RawFilesRepo
-	repos   *metadata.ReposRepo
-	projs   *metadata.ProjectsRepo
-	blobs   *metadata.DockerBlobsRepo
-	handler *scan.Handler
+	cas      storage.CAS
+	runner   *scan.FakeRunner
+	cache    *scan.SeverityCache
+	audit    audit.Logger
+	scans    *metadata.ScansRepo
+	vulns    *metadata.VulnerabilitiesRepo
+	mfs      *metadata.DockerManifestsRepo
+	rawf     *metadata.RawFilesRepo
+	repos    *metadata.ReposRepo
+	projs    *metadata.ProjectsRepo
+	blobs    *metadata.DockerBlobsRepo
+	handler  *scan.Handler
 }
 
 func newScanFixture(t *testing.T) *scanFixture {
@@ -380,8 +380,7 @@ func TestHandler_UnknownArtifactKind_PermFails(t *testing.T) {
 		t.Fatalf("Handle returned error (should permFail and return nil): %v", err)
 	}
 	var status string
-	if err := f.db.Reader.QueryRowContext(ctx, `SELECT status FROM scans WHERE id=?`, sid,
-	).Scan(&status); err != nil {
+	if err := f.db.Reader.QueryRowContext(ctx, `SELECT status FROM scans WHERE id=?`, sid).Scan(&status); err != nil {
 		t.Fatal(err)
 	}
 	if status != "failed" {

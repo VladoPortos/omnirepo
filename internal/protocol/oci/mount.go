@@ -17,18 +17,18 @@ import (
 // per OCI Distribution Spec v1.1 §4.2.2.
 //
 // Semantics:
-//   * The 'from' parameter identifies a source repo in the form
+//   - The 'from' parameter identifies a source repo in the form
 //     "<project>/<type>/<repo>" or "<project>/<repo>" (shorthand —
 //     type is inferred as "docker").
-//   * Auth:
-//       - actor must have repo.read on the source repo
-//       - actor must have repo.write (modeled via ActionUpdateRepo) on
-//         the destination repo
-//   * If the blob already exists in CAS → 201 Created with Location header.
+//   - Auth:
+//   - actor must have repo.read on the source repo
+//   - actor must have repo.write (modeled via ActionUpdateRepo) on
+//     the destination repo
+//   - If the blob already exists in CAS → 201 Created with Location header.
 //     We briefly register the digest in blob_uploads to block GC during
 //     the response, mirroring RESEARCH Pattern 3. The actual refcount
 //     bump happens on the subsequent manifest PUT (02-07).
-//   * If the blob does NOT exist in CAS → fall back to starting a normal
+//   - If the blob does NOT exist in CAS → fall back to starting a normal
 //     chunked upload session, per OCI spec. The response becomes a 202
 //     from blobUploadPost.
 func (h *Handler) blobMount(w http.ResponseWriter, r *http.Request) {

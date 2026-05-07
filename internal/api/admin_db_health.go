@@ -482,21 +482,21 @@ func computeRetryAfterSec(lastRunAt time.Time, window time.Duration) int {
 // authmw.RequireCan(auth.ActionTriggerGC); no in-handler auth checks.
 //
 // Flow:
-//   1. Acquire dbHealthJob.mu (blocking Lock — see <lock_semantics> in the
-//      plan context; critical section is sub-millisecond state transitions).
-//   2. If state == "running" → 409 integrity_check.already_running (with
-//      details.job_started_at).
-//   3. Else check rate-limit window (lastRunAt + 1h > now) → 429
-//      integrity_check.rate_limited (with details.retry_after_seconds and
-//      Retry-After HTTP header).
-//   4. Else acquire lease: state="running", startedAt=now.
-//   5. Emit admin.integrity_check.triggered audit event (actor captured
-//      from request context before the goroutine launches).
-//   6. Launch detached-context goroutine (10-min timeout — matches
-//      admin_trivy.go's pattern). The goroutine's defer+recover() releases
-//      the lease on panic (Pitfall 10.4). RunIntegrityCheckNow handles
-//      the .completed/.failed audit emit itself.
-//   7. Return 202 Accepted with {job_started_at: RFC3339}.
+//  1. Acquire dbHealthJob.mu (blocking Lock — see <lock_semantics> in the
+//     plan context; critical section is sub-millisecond state transitions).
+//  2. If state == "running" → 409 integrity_check.already_running (with
+//     details.job_started_at).
+//  3. Else check rate-limit window (lastRunAt + 1h > now) → 429
+//     integrity_check.rate_limited (with details.retry_after_seconds and
+//     Retry-After HTTP header).
+//  4. Else acquire lease: state="running", startedAt=now.
+//  5. Emit admin.integrity_check.triggered audit event (actor captured
+//     from request context before the goroutine launches).
+//  6. Launch detached-context goroutine (10-min timeout — matches
+//     admin_trivy.go's pattern). The goroutine's defer+recover() releases
+//     the lease on panic (Pitfall 10.4). RunIntegrityCheckNow handles
+//     the .completed/.failed audit emit itself.
+//  7. Return 202 Accepted with {job_started_at: RFC3339}.
 //
 // Lock is held ONLY during state transitions — never across the
 // integrity_check PRAGMA itself.
@@ -600,14 +600,14 @@ func (d Deps) handleDBHealthCheck(w http.ResponseWriter, r *http.Request) {
 // spinning up an HTTP request.
 //
 // Lifecycle:
-//   1. defer recovers panics (Pitfall 10.4 — lease must be released even
-//      if RunIntegrityCheckNow panics mid-flight) and flips state back to
-//      "idle" with lastStatus="panicked" so subsequent POSTs don't 409.
-//   2. Call integrityCheckRunner (= metadata.RunIntegrityCheckNow) with a
-//      detached context (10-min cap, matching admin_trivy.go's runTrivyDBPull).
-//      RunIntegrityCheckNow handles the .completed/.failed audit emit itself.
-//   3. On normal return: flip state back to "idle", stamp lastRunAt=now
-//      (drives the rate-limit window for subsequent POSTs), lastStatus=result.
+//  1. defer recovers panics (Pitfall 10.4 — lease must be released even
+//     if RunIntegrityCheckNow panics mid-flight) and flips state back to
+//     "idle" with lastStatus="panicked" so subsequent POSTs don't 409.
+//  2. Call integrityCheckRunner (= metadata.RunIntegrityCheckNow) with a
+//     detached context (10-min cap, matching admin_trivy.go's runTrivyDBPull).
+//     RunIntegrityCheckNow handles the .completed/.failed audit emit itself.
+//  3. On normal return: flip state back to "idle", stamp lastRunAt=now
+//     (drives the rate-limit window for subsequent POSTs), lastStatus=result.
 //
 // The lease is only ever held under dbHealthJob.mu for sub-ms transitions;
 // the PRAGMA itself runs outside the lock.

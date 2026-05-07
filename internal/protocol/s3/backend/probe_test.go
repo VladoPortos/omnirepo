@@ -38,10 +38,10 @@ func (stubBackend) ListBuckets() ([]gofakes3.BucketInfo, error) { return nil, ni
 func (stubBackend) ListBucket(name string, prefix *gofakes3.Prefix, page gofakes3.ListBucketPage) (*gofakes3.ObjectList, error) {
 	return nil, nil
 }
-func (stubBackend) CreateBucket(name string) error                              { return nil }
-func (stubBackend) BucketExists(name string) (bool, error)                      { return false, nil }
-func (stubBackend) DeleteBucket(name string) error                              { return nil }
-func (stubBackend) ForceDeleteBucket(name string) error                         { return nil }
+func (stubBackend) CreateBucket(name string) error         { return nil }
+func (stubBackend) BucketExists(name string) (bool, error) { return false, nil }
+func (stubBackend) DeleteBucket(name string) error         { return nil }
+func (stubBackend) ForceDeleteBucket(name string) error    { return nil }
 func (stubBackend) GetObject(bucketName, objectName string, r *gofakes3.ObjectRangeRequest) (*gofakes3.Object, error) {
 	return nil, nil
 }

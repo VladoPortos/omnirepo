@@ -15,7 +15,7 @@ type SBOMFormat string
 // expects so callers can pass them through unchanged.
 const (
 	FormatCycloneDX SBOMFormat = "cyclonedx"
-	FormatSPDX     SBOMFormat = "spdx-json"
+	FormatSPDX      SBOMFormat = "spdx-json"
 )
 
 // Runner is the stable façade over Trivy (D-21). All methods are safe to call

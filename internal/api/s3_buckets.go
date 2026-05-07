@@ -55,11 +55,11 @@ type s3BucketItem struct {
 }
 
 type s3ObjectItem struct {
-	Key         string    `json:"key"`
-	SizeBytes   int64     `json:"size_bytes"`
-	ETag        string    `json:"etag"`
-	ContentType string    `json:"content_type,omitempty"`
-	SHA256      string    `json:"sha256,omitempty"`
+	Key          string    `json:"key"`
+	SizeBytes    int64     `json:"size_bytes"`
+	ETag         string    `json:"etag"`
+	ContentType  string    `json:"content_type,omitempty"`
+	SHA256       string    `json:"sha256,omitempty"`
 	LastModified time.Time `json:"last_modified"`
 }
 
@@ -105,8 +105,8 @@ func (d Deps) resolveBucketAccess(w http.ResponseWriter, r *http.Request, writeA
 	}
 	if allowed, reason := auth.Can(r.Context(), actor, action,
 		auth.Target{Kind: "project", ProjectID: p.ID}); !allowed {
-			writeJSONError(w, r, http.StatusForbidden, ErrForbidden, reason)
-			return 0, "", auth.Actor{}, false
+		writeJSONError(w, r, http.StatusForbidden, ErrForbidden, reason)
+		return 0, "", auth.Actor{}, false
 	}
 	return p.ID, p.Name, actor, true
 }
@@ -233,8 +233,8 @@ func (d Deps) handleDeleteS3Bucket(w http.ResponseWriter, r *http.Request) {
 		TargetKind: "s3_bucket",
 		TargetID:   name,
 		Details: map[string]any{
-			"project": projectName,
-			"name":    name,
+			"project":              projectName,
+			"name":                 name,
 			"size_bytes_at_delete": info.SizeBytes,
 		},
 	}, actor)

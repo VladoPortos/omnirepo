@@ -382,7 +382,7 @@ func runS3BucketCreateDelete(t *testing.T, f *auditAttrFixture) {
 func runS3KeyCreateRevoke(t *testing.T, f *auditAttrFixture) {
 	t.Helper()
 	if f.am.name == "project_key" {
-		t.Skipf("s3_access_keys.created_by_user_id is NOT NULL FK to users(id); "+
+		t.Skipf("s3_access_keys.created_by_user_id is NOT NULL FK to users(id); " +
 			"project-owned-key creator attribution is out of Plan 03-02 scope")
 	}
 	label := "audit-s3key-" + f.am.name

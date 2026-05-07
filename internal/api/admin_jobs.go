@@ -5,13 +5,13 @@
 // Background Jobs card. Shape is LOCKED at D-06 (CONTEXT.md) — do not add
 // or remove keys without a CONTEXT change.
 //
-//     {
-//       "running":          int,
-//       "queued":            int,         // maps to sync_jobs.status='pending'
-//       "failed_last_24h":   int,
-//       "last_completed_at": "RFC3339" | null,
-//       "last_failed_at":    "RFC3339" | null
-//     }
+//	{
+//	  "running":          int,
+//	  "queued":            int,         // maps to sync_jobs.status='pending'
+//	  "failed_last_24h":   int,
+//	  "last_completed_at": "RFC3339" | null,
+//	  "last_failed_at":    "RFC3339" | null
+//	}
 //
 // Reuses the existing ActionTriggerGC super-admin gate (CONTEXT §D-06 — we
 // do not introduce a new policy action for a read-only summary).

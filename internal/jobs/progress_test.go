@@ -16,8 +16,8 @@ type fakeProgressRepo struct {
 }
 
 type progressCall struct {
-	jobID      int64
-	step       string
+	jobID       int64
+	step        string
 	done, total int64
 }
 

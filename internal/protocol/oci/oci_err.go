@@ -9,18 +9,18 @@ import (
 // everything the skeleton (plan 02-05) and the downstream 02-06/02-07
 // handlers emit.
 const (
-	ErrCodeUnauthorized     = "UNAUTHORIZED"
-	ErrCodeDenied           = "DENIED"
-	ErrCodeUnsupported      = "UNSUPPORTED"
-	ErrCodeUnknown          = "UNKNOWN"
-	ErrCodeNameUnknown      = "NAME_UNKNOWN"
-	ErrCodeManifestUnk      = "MANIFEST_UNKNOWN"
-	ErrCodeManifestInvalid  = "MANIFEST_INVALID"
-	ErrCodeDigestInvalid    = "DIGEST_INVALID"
-	ErrCodeBlobUnknown      = "BLOB_UNKNOWN"
-	ErrCodeNameInvalid      = "NAME_INVALID"
-	ErrCodeSizeInvalid      = "SIZE_INVALID"
-	ErrCodeTagInvalid       = "TAG_INVALID"
+	ErrCodeUnauthorized    = "UNAUTHORIZED"
+	ErrCodeDenied          = "DENIED"
+	ErrCodeUnsupported     = "UNSUPPORTED"
+	ErrCodeUnknown         = "UNKNOWN"
+	ErrCodeNameUnknown     = "NAME_UNKNOWN"
+	ErrCodeManifestUnk     = "MANIFEST_UNKNOWN"
+	ErrCodeManifestInvalid = "MANIFEST_INVALID"
+	ErrCodeDigestInvalid   = "DIGEST_INVALID"
+	ErrCodeBlobUnknown     = "BLOB_UNKNOWN"
+	ErrCodeNameInvalid     = "NAME_INVALID"
+	ErrCodeSizeInvalid     = "SIZE_INVALID"
+	ErrCodeTagInvalid      = "TAG_INVALID"
 	// ErrCodeBlobUploadInvalid is returned when a client-supplied upload
 	// session identifier is malformed (e.g., not a UUID; WR-02).
 	ErrCodeBlobUploadInvalid = "BLOB_UPLOAD_INVALID"

@@ -36,7 +36,7 @@ func TestWritePackagesRoundTrip(t *testing.T) {
 func TestWritePackagesTrailingNewlineMatch(t *testing.T) {
 	// Anti-pattern guard: Packages.gz must gzip the SAME bytes as Packages.
 	entries := []PackagesEntry{{
-		Control: "Package: a\nVersion: 1\nArchitecture: amd64\nDescription: x\n",
+		Control:  "Package: a\nVersion: 1\nArchitecture: amd64\nDescription: x\n",
 		Filename: "pool/a/a/a_1_amd64.deb", Size: 1,
 		MD5: "d", SHA256: "s",
 	}}
@@ -69,7 +69,7 @@ func TestWriteReleaseMandatoryFields(t *testing.T) {
 		Date:          time.Date(2026, 4, 15, 12, 0, 0, 0, time.UTC),
 		Files: []ReleaseFileEntry{
 			{Path: "main/binary-amd64/Packages", Size: 123,
-				MD5: "d41d8cd98f00b204e9800998ecf8427e",
+				MD5:    "d41d8cd98f00b204e9800998ecf8427e",
 				SHA256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"},
 		},
 	})

@@ -128,12 +128,12 @@ type gcStatusResponse struct {
 // package may grow later) are parsed out of the sync_jobs.log JSON column.
 func (d Deps) handleGCStatus(w http.ResponseWriter, r *http.Request) {
 	var (
-		id          int64
-		status      string
-		leasedAt    sql.NullTime
-		updatedAt   time.Time
-		createdAt   time.Time
-		logPayload  string
+		id         int64
+		status     string
+		leasedAt   sql.NullTime
+		updatedAt  time.Time
+		createdAt  time.Time
+		logPayload string
 	)
 	err := d.DB.Reader.QueryRowContext(r.Context(), `
 		SELECT id, status, leased_at, updated_at, created_at, log

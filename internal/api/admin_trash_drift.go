@@ -24,11 +24,12 @@ import (
 // handleDriftRestore restores a single drift-purge trash entry: validate
 // sidecar row_snapshot → resolve repo_id → UPSERT row in a write tx →
 // move file back via Trash.Restore → emit audit. Returns
-//   409 restore.conflict.repo_missing — when snapshot.repo_id refs an
-//        absent or soft-deleted repo (D-05).
-//   500 ErrInternal — sidecar malformed, row repo unconfigured, or
-//        UPSERT/file-move failure.
-//   200 {"status": "ok"} — success.
+//
+//	409 restore.conflict.repo_missing — when snapshot.repo_id refs an
+//	     absent or soft-deleted repo (D-05).
+//	500 ErrInternal — sidecar malformed, row repo unconfigured, or
+//	     UPSERT/file-move failure.
+//	200 {"status": "ok"} — success.
 func (d Deps) handleDriftRestore(
 	w http.ResponseWriter,
 	r *http.Request,

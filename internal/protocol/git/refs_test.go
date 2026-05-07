@@ -692,4 +692,3 @@ func seedUserAndMembership(t *testing.T, db *metadata.DB, projectID int64) {
 		t.Fatalf("seed member: %v", err)
 	}
 }
-

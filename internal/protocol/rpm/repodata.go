@@ -2,11 +2,12 @@
 // other.xml.gz, and the repomd.xml index per the createrepo_c on-disk layout.
 //
 // Namespaces:
-//   common: http://linux.duke.edu/metadata/common
-//   rpm:    http://linux.duke.edu/metadata/rpm
-//   filelists: http://linux.duke.edu/metadata/filelists
-//   other:  http://linux.duke.edu/metadata/other
-//   repomd: http://linux.duke.edu/metadata/repo
+//
+//	common: http://linux.duke.edu/metadata/common
+//	rpm:    http://linux.duke.edu/metadata/rpm
+//	filelists: http://linux.duke.edu/metadata/filelists
+//	other:  http://linux.duke.edu/metadata/other
+//	repomd: http://linux.duke.edu/metadata/repo
 //
 // All Write* functions return both the gzipped bytes (as written to disk) and
 // the matching hash + size pairs the regen step needs to populate repomd.xml's

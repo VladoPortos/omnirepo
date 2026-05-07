@@ -208,8 +208,8 @@ func TestEncodePath(t *testing.T) {
 		{"/foo", "/foo"},
 		{"/foo/bar baz/qux", "/foo/bar%20baz/qux"},
 		{"/a+b", "/a%2Bb"},
-		{"/~tilde", "/~tilde"},             // ~ is unreserved
-		{"/caf\u00e9", "/caf%C3%A9"},       // UTF-8 é
+		{"/~tilde", "/~tilde"},                         // ~ is unreserved
+		{"/caf\u00e9", "/caf%C3%A9"},                   // UTF-8 é
 		{"/already%20encoded", "/already%2520encoded"}, // we re-encode '%' per RFC for s3 no-double-encode path segments (input is raw not pre-encoded in our contract)
 	}
 	for _, c := range cases {

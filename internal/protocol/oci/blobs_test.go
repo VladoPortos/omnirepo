@@ -880,15 +880,15 @@ func TestBlobUpload_ForbiddenActor(t *testing.T) {
 
 // TestBlobUploadSurvivesConcurrentGC is the SCAN-12 regression gate.
 // Sequence:
-//   1. PATCH an upload fully (tmp file exists, no CAS yet).
-//   2. Simulate a GC run that reads the blob_uploads exclusion set and
-//      then blocks before sweeping — we coordinate via channels.
-//   3. PUT the upload. Inside PUT, blob_uploads.Start happens BEFORE
-//      cas.PutFromPath. So if the simulated GC ran BEFORE PUT started,
-//      the blob_uploads row wasn't in its snapshot, but the CAS file
-//      ALSO wasn't there — GC would have nothing to delete. If the
-//      simulated GC runs AFTER PUT started, the blob_uploads row IS in
-//      its snapshot and GC skips the digest.
+//  1. PATCH an upload fully (tmp file exists, no CAS yet).
+//  2. Simulate a GC run that reads the blob_uploads exclusion set and
+//     then blocks before sweeping — we coordinate via channels.
+//  3. PUT the upload. Inside PUT, blob_uploads.Start happens BEFORE
+//     cas.PutFromPath. So if the simulated GC ran BEFORE PUT started,
+//     the blob_uploads row wasn't in its snapshot, but the CAS file
+//     ALSO wasn't there — GC would have nothing to delete. If the
+//     simulated GC runs AFTER PUT started, the blob_uploads row IS in
+//     its snapshot and GC skips the digest.
 //
 // Either ordering preserves the blob. The test drives the harder case:
 // GC takes its snapshot, then PUT runs to completion, then GC tries to

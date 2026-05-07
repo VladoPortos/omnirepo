@@ -278,10 +278,10 @@ func (h *SyncHandler) Handle(ctx context.Context, payload string, projectID, rep
 			TargetKind: "repo",
 			TargetID:   strconv.FormatInt(repoID, 10),
 			Details: map[string]any{
-				"repo_id":       repoID,
-				"project":       proj.Name,
-				"sample_paths":  lfsPaths,
-				"upstream_url":  pl.UpstreamURL,
+				"repo_id":      repoID,
+				"project":      proj.Name,
+				"sample_paths": lfsPaths,
+				"upstream_url": pl.UpstreamURL,
 			},
 		})
 	}

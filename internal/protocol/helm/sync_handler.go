@@ -633,13 +633,13 @@ func (h *SyncHandler) fetchAndCommit(ctx context.Context, projectName string, re
 //  3. Pull chart bytes only when the digest is new or different.
 //  4. Tag-rebound handling when the existing row's digest differs from
 //     the newly-pulled chart-layer digest (D-02):
-//       - Soft-delete the prior on-disk tgz via Trash.Move with kind
-//         "oci_tag_rebound" (distinct from the generic mirror-replaced
-//         label; lets operators grep CVE-driven republication timelines
-//         without a JOIN).
-//       - Emit EvtOciTagRebound with the full D-05 details shape:
-//         {name, version, old_digest, new_digest, upstream_url, repo_id,
-//          replaced_at}.
+//     - Soft-delete the prior on-disk tgz via Trash.Move with kind
+//     "oci_tag_rebound" (distinct from the generic mirror-replaced
+//     label; lets operators grep CVE-driven republication timelines
+//     without a JOIN).
+//     - Emit EvtOciTagRebound with the full D-05 details shape:
+//     {name, version, old_digest, new_digest, upstream_url, repo_id,
+//     replaced_at}.
 //  5. Commit-tail — Put bytes → Parse → helm_charts.Insert (which does
 //     UPSERT on (repo_id,name,version) so the replacement row lands in
 //     place of the old one automatically).

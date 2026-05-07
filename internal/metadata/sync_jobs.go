@@ -18,13 +18,13 @@ type SyncJobsRepo struct{ db *DB }
 
 // SyncJob is the in-memory projection of a leased sync_jobs row.
 type SyncJob struct {
-	ID         int64
-	Kind       string
-	ProjectID  int64 // 0 when NULL
-	RepoID     int64 // 0 when NULL
+	ID          int64
+	Kind        string
+	ProjectID   int64 // 0 when NULL
+	RepoID      int64 // 0 when NULL
 	PayloadJSON string
-	Attempts   int64
-	LeaseID    string
+	Attempts    int64
+	LeaseID     string
 
 	// Phase 8 Plan 01 / 02 (MIRROR-08..12) — byte-level progress tracking.
 	// Workers call SetProgress to advance; the REST /jobs/{id} endpoint
@@ -364,7 +364,7 @@ func (r *SyncJobsRepo) GetInflightTx(ctx context.Context, tx *sql.Tx, repoID int
 // started_at — rather than failing the whole request).
 func parseSyncJobTimestamp(raw string) time.Time {
 	for _, layout := range []string{
-		"2006-01-02 15:04:05",                    // SQLite CURRENT_TIMESTAMP
+		"2006-01-02 15:04:05",                     // SQLite CURRENT_TIMESTAMP
 		"2006-01-02 15:04:05.999999999 -0700 MST", // time.Time.String()
 		"2006-01-02T15:04:05Z",                    // RFC3339 (future-proof)
 		"2006-01-02T15:04:05.000Z",                // milli-UTC (future-proof)

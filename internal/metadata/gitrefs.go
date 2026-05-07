@@ -22,10 +22,10 @@ import (
 type GitRefType string
 
 const (
-	GitRefBranch    GitRefType = "branch"
-	GitRefTag       GitRefType = "tag"
-	GitRefSymbolic  GitRefType = "symbolic" // HEAD and similar
-	GitRefOther     GitRefType = "other"
+	GitRefBranch   GitRefType = "branch"
+	GitRefTag      GitRefType = "tag"
+	GitRefSymbolic GitRefType = "symbolic" // HEAD and similar
+	GitRefOther    GitRefType = "other"
 )
 
 // GitRef mirrors one git_refs row.

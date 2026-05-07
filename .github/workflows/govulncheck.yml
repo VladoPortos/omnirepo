@@ -27,11 +27,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
-    # Use vendored deps so govulncheck doesn't try to fetch from the
-    # module proxy (the project commits vendor/ and runs every Go
-    # invocation with -mod=vendor — see the Makefile).
-    env:
-      GOFLAGS: -mod=vendor
+    # Note: do NOT set `GOFLAGS=-mod=vendor` at job scope. The action
+    # runs `go install golang.org/x/vuln/cmd/govulncheck@latest` first,
+    # which errors with `cannot query module due to -mod=vendor`. When
+    # govulncheck later analyses our module, Go 1.14+ auto-detects
+    # vendor mode from the presence of vendor/ + go.mod (`go 1.25.0`).
 
     steps:
       - name: Checkout

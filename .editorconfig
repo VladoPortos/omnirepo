@@ -1,0 +1,41 @@
+# EditorConfig — https://editorconfig.org
+# Picked up automatically by VS Code, GoLand/IntelliJ, Vim, Emacs, Sublime,
+# Zed, Helix, and most others. Keeps tab/space, EOL, and charset
+# consistent across editors so diffs stay clean.
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 2
+
+# Go is gofmt-formatted with tabs — do not let editors strip them.
+[*.go]
+indent_style = tab
+indent_size = 4
+
+# Make requires hard tabs for recipe lines, otherwise it errors with
+# "missing separator". Don't expand them to spaces.
+[Makefile]
+indent_style = tab
+
+# Python — PEP 8: 4-space indent.
+[*.py]
+indent_size = 4
+
+# Shell — 4-space indent matches the Makefile-embedded snippets and
+# docs/operations/scheduled-sync.md style.
+[*.sh]
+indent_size = 4
+
+# JSON / YAML / TOML — 2-space indent (web ecosystem default).
+[*.{json,yml,yaml,toml}]
+indent_size = 2
+
+# Markdown — preserve trailing whitespace because two-space line breaks
+# are syntactically meaningful in CommonMark.
+[*.md]
+trim_trailing_whitespace = false

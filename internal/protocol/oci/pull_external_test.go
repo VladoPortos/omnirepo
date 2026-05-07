@@ -71,9 +71,6 @@ type mockUpstream struct {
 	tag        string            // tag name, e.g. "v1"
 	imageName  string            // e.g. "lib/app"
 	srv        *httptest.Server
-	// first500 flips true after the first manifest GET; used by the retry
-	// test to simulate a transient upstream error.
-	first500 bool
 }
 
 func newMockUpstream(t *testing.T, imageName, tag string, requireBasic bool) *mockUpstream {

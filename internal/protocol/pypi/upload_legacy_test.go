@@ -161,10 +161,10 @@ func TestUpload_ConcurrentFirstUploads_ExactlyOneWins(t *testing.T) {
 			<-start
 			resp := twineUpload(t, f.srv.URL, "proj1", "concurrent", filename, wheel, "bdist_wheel", f.basicAuth())
 			defer func() { _ = resp.Body.Close() }()
-			switch {
-			case resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusCreated:
+			switch resp.StatusCode {
+			case http.StatusOK, http.StatusCreated:
 				atomic.AddInt64(&ok, 1)
-			case resp.StatusCode == http.StatusConflict:
+			case http.StatusConflict:
 				atomic.AddInt64(&conflict, 1)
 			default:
 				atomic.AddInt64(&other, 1)

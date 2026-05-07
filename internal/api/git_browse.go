@@ -545,7 +545,7 @@ func diffTrees(from, to *object.Tree) ([]diffFile, diffStats) {
 	var changes object.Changes
 	if from == nil {
 		// Enumerate the whole target tree as additions.
-		to.Files().ForEach(func(f *object.File) error {
+		_ = to.Files().ForEach(func(f *object.File) error {
 			patch, additions := blobAsAddPatch(f)
 			files = append(files, diffFile{
 				Path:   f.Name,
@@ -624,12 +624,12 @@ func blobAsAddPatch(f *object.File) (string, int) {
 		return "", 0
 	}
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("diff --git a/%s b/%s\n", f.Name, f.Name))
+	fmt.Fprintf(&b, "diff --git a/%s b/%s\n", f.Name, f.Name)
 	b.WriteString("new file\n")
 	b.WriteString("--- /dev/null\n")
-	b.WriteString(fmt.Sprintf("+++ b/%s\n", f.Name))
+	fmt.Fprintf(&b, "+++ b/%s\n", f.Name)
 	lines := strings.Split(strings.TrimRight(contents, "\n"), "\n")
-	b.WriteString(fmt.Sprintf("@@ -0,0 +1,%d @@\n", len(lines)))
+	fmt.Fprintf(&b, "@@ -0,0 +1,%d @@\n", len(lines))
 	adds := 0
 	for _, ln := range lines {
 		b.WriteString("+")

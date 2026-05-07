@@ -146,7 +146,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "open %s: %v\n", *path, err)
 		os.Exit(3)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	body, err := ExtractSnippet(f, *id)
 	switch {

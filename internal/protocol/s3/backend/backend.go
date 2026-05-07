@@ -337,7 +337,7 @@ func (b *Backend) ListBucketsForProject(ctx context.Context, projectID int64) ([
 	if err != nil {
 		return nil, fmt.Errorf("backend: list buckets: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []BucketInfo
 	for rows.Next() {
 		var bi BucketInfo

@@ -17,7 +17,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -320,11 +319,6 @@ func (sf SyncFilter) AcceptProject(normalizedProject string) bool {
 		}
 	}
 	return false
-}
-
-// joinFilenameURL is a small helper used by tests to compose canonical URLs.
-func joinFilenameURL(base, filename string) string {
-	return strings.TrimRight(base, "/") + "/" + path.Base(filename)
 }
 
 // isInstallableExt reports whether filename has a suffix pip will actually

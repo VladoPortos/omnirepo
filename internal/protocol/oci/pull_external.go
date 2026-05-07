@@ -694,10 +694,11 @@ func (p *PullExternalREST) Handle(w http.ResponseWriter, r *http.Request) {
 				"job_id":  jobID,
 			},
 		}
-		if actor.Kind == auth.ActorKindUser {
+		switch actor.Kind {
+		case auth.ActorKindUser:
 			id := actor.ID
 			ev.ActorUserID = &id
-		} else if actor.Kind == auth.ActorKindAPIKey {
+		case auth.ActorKindAPIKey:
 			id := actor.APIKeyID
 			ev.ActorAPIKeyID = &id
 		}

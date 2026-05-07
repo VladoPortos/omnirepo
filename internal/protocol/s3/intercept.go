@@ -164,7 +164,7 @@ func interceptPutObject(b *backend.Backend) func(http.Handler) http.Handler {
 				sigv4.WriteError(w, r, sigv4.ErrInvalidRequest)
 				return
 			}
-			defer reopened.Close()
+			defer func() { _ = reopened.Close() }()
 			r.Body = io.NopCloser(reopened)
 			next.ServeHTTP(w, r)
 		})

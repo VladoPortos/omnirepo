@@ -2,7 +2,6 @@ package oci
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"path/filepath"
 	"strings"
@@ -299,13 +298,6 @@ func (h *Handler) Mount(parent chi.Router) {
 func (h *Handler) ping(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Docker-Distribution-API-Version", "registry/2.0")
 	w.WriteHeader(http.StatusOK)
-}
-
-// notImplementedYet is the placeholder for routes downstream plans own.
-// Returns 501 with an OCI error envelope so test suites flag it clearly.
-func (h *Handler) notImplementedYet(w http.ResponseWriter, r *http.Request) {
-	writeOCIErr(w, http.StatusNotImplemented, ErrCodeUnsupported,
-		errors.New("route not implemented in plan 02-05; will land in 02-06/02-07"))
 }
 
 // attachAnonymous is the AnonymousReadOK callback that wires an anonymous

@@ -116,10 +116,7 @@ func TestUserAPIKey_RejectsDuplicateLiveName(t *testing.T) {
 		// Fallback: the list endpoint actually returns a bare array.
 		// s.do wraps bare arrays under "items" in the test helper only for admin
 		// responses — hit it with a raw client to be robust.
-		arr := listAPIKeys(t, s, cookie)
-		for _, m := range arr {
-			items = append(items, m)
-		}
+		items = append(items, listAPIKeys(t, s, cookie)...)
 	}
 	if len(items) == 0 {
 		t.Fatalf("expected at least one key in list")

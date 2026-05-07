@@ -2,32 +2,12 @@ package api_test
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"testing"
 
 	"github.com/dxc-internal/omnirepo/internal/api"
 	"github.com/dxc-internal/omnirepo/internal/metadata"
 )
-
-// rbacSeedProject creates a project and returns its ID. Uses direct DB access
-// so we don't depend on the handler under test.
-func rbacSeedProject(t *testing.T, db *metadata.DB, name string) int64 {
-	t.Helper()
-	var id int64
-	err := db.WriteTx(context.Background(), func(tx *sql.Tx) error {
-		res, err := tx.ExecContext(context.Background(), `INSERT INTO projects(name) VALUES (?)`, name)
-		if err != nil {
-			return err
-		}
-		id, _ = res.LastInsertId()
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("rbacSeedProject: %v", err)
-	}
-	return id
-}
 
 // rbacAddMember directly inserts a project_members row (bypasses handler).
 func rbacAddMember(t *testing.T, db *metadata.DB, projectID, userID int64, role string) {

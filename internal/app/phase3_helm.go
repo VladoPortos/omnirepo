@@ -28,17 +28,6 @@ type helmDeps struct {
 	locks       storage.Locks
 }
 
-// wireHelmResult bundles the registry and the OCI helm-mirror hook so
-// app.Run can pass the hook into the OCI handler while still holding on to
-// the registry for shutdown. Plan 07-04 S-03b.
-type wireHelmResult struct {
-	registry *regen.Registry
-	// mirrorHook is the adapter passed to oci.Deps.HelmMirror. nil if the
-	// OCI handler has not been constructed yet; app.Run attaches it via
-	// the `wireHelmMirror` helper below after the CAS is available.
-	mirrorHook oci.HelmMirrorHook
-}
-
 // wireHelm constructs the Helm handler + its per-repo regen coalescer
 // registry and mounts routes on router. The regen factory is wired to
 // helm.RegenFor (Task 2) so uploads trigger index.yaml regeneration.

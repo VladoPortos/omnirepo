@@ -28,13 +28,6 @@ import (
 	"github.com/dxc-internal/omnirepo/internal/storage"
 )
 
-// fakeDigest returns a 64-hex sha256 digest derived from i so each test
-// row has a unique deterministic digest.
-func fakeDigest(i int) string {
-	sum := sha256.Sum256([]byte(fmt.Sprintf("blob-%d", i)))
-	return "sha256:" + hex.EncodeToString(sum[:])
-}
-
 // gcFixture wires every dependency the GC handler needs against a real
 // in-memory DB + tmp data root + real CAS/Trash. Tests then call h.Handle
 // directly with a synthetic job id.

@@ -164,13 +164,11 @@ func (h *Handler) materializePackage(ctx context.Context, dstDir, kind string, r
 	_ = os.MkdirAll(extracted, 0o750)
 	switch kind {
 	case "helm":
-		if err := extractTarGz(rawCopy, extracted); err != nil {
-			// Swallow — Trivy still scans the raw .tgz dir below.
-		}
+		// Swallow — Trivy still scans the raw .tgz dir below.
+		_ = extractTarGz(rawCopy, extracted)
 	case "pypi":
-		if err := extractWheel(rawCopy, extracted, artifactID); err != nil {
-			// Same: raw .whl still present.
-		}
+		// Same: raw .whl still present.
+		_ = extractWheel(rawCopy, extracted, artifactID)
 	case "deb":
 		_ = extractDeb(rawCopy, extracted)
 	case "rpm":
@@ -422,7 +420,7 @@ func extractTarInto(tr *tar.Reader, dstDir string) error {
 			if err := os.MkdirAll(target, 0o750); err != nil {
 				return err
 			}
-		case tar.TypeReg, tar.TypeRegA:
+		case tar.TypeReg:
 			if err := os.MkdirAll(filepath.Dir(target), 0o750); err != nil {
 				return err
 			}

@@ -397,12 +397,6 @@ func (d Deps) handlePurgeTrash(w http.ResponseWriter, r *http.Request) {
 	writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "trash entry not found")
 }
 
-// trashEntryID builds a stable identifier for trash entries using the
-// unix timestamp, kind, and original ID.
-func trashEntryID(ts int64, kind string, origID int64) string {
-	return strconv.FormatInt(ts, 10) + "-" + kind + "-" + strconv.FormatInt(origID, 10)
-}
-
 // formatRetention renders a Duration as a coarse "Nd Nh" / "Nh Nm" label
 // for the admin Trash UI. Negative values render with a leading "-"
 // (entry is GC-eligible; sweep is best-effort so it can linger).

@@ -375,11 +375,10 @@ func TestOCISync_DedupSkipsPull(t *testing.T) {
 func TestOCISync_TagRebound(t *testing.T) {
 	chartOld := buildOCIChartTGZ(t, "nginx", "1.2.3")
 	oldDigest := sha256OfBytes(chartOld)
-	chartNew := append([]byte{}, chartOld...)
-	// Perturb a single tar-content byte so the new chart is a distinct
+	// Perturb the chart byte-stream so the new chart is a distinct
 	// artifact with a distinct sha256 — the tar is gzipped so we cannot
 	// simply flip a byte; rebuild with a tweaked description.
-	chartNew = makeChartTGZ(t, "nginx", "1.2.3", "1.2.3", "nginx rebuilt chart", nil)
+	chartNew := makeChartTGZ(t, "nginx", "1.2.3", "1.2.3", "nginx rebuilt chart", nil)
 	newDigest := sha256OfBytes(chartNew)
 	if oldDigest == newDigest {
 		t.Fatalf("fixture invalid: old and new digests collide")

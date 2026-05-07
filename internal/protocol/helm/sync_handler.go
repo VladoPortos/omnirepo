@@ -302,7 +302,6 @@ func (h *SyncHandler) Handle(ctx context.Context, payload string, projectID, rep
 		select {
 		case sem <- struct{}{}:
 		case <-ctx.Done():
-			break
 		}
 		if ctx.Err() != nil {
 			break

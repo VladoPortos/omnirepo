@@ -71,7 +71,6 @@ func manifestRefs(body []byte) (refs []string, isIndex bool, err error) {
 		refs = append(refs, d)
 	}
 	if mfs, ok := raw["manifests"].([]any); ok {
-		isIndex = true
 		for _, m := range mfs {
 			mm, ok := m.(map[string]any)
 			if !ok {

@@ -291,7 +291,7 @@ func readSdistPKGINFOFromTarGz(p string) (map[string]any, error) {
 		if err != nil {
 			return nil, fmt.Errorf("pypi: tar next: %w", err)
 		}
-		if h.Typeflag != tar.TypeReg && h.Typeflag != tar.TypeRegA {
+		if h.Typeflag != tar.TypeReg {
 			continue
 		}
 		// Match either "<top>/PKG-INFO" or "./<top>/PKG-INFO".

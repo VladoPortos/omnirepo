@@ -471,7 +471,6 @@ type gitProgressSink struct {
 	ctx             context.Context
 	step            string
 	objectsReceived int64
-	bytesReceived   int64
 }
 
 // Write is called by go-git's sideband demuxer with each progress line.

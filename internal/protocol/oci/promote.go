@@ -219,10 +219,11 @@ func (p *PromoteREST) Handle(w http.ResponseWriter, r *http.Request) {
 				"size_bytes": len(srcManifest.Body),
 			},
 		}
-		if actor.Kind == auth.ActorKindUser {
+		switch actor.Kind {
+		case auth.ActorKindUser:
 			id := actor.ID
 			ev.ActorUserID = &id
-		} else if actor.Kind == auth.ActorKindAPIKey {
+		case auth.ActorKindAPIKey:
 			id := actor.APIKeyID
 			ev.ActorAPIKeyID = &id
 		}

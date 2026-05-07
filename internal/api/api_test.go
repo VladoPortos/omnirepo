@@ -72,7 +72,7 @@ func TestAPI_Projects(t *testing.T) {
 	}
 
 	// List projects.
-	r, body = s.do(t, "GET", "/api/v1/projects", cookie, nil)
+	r, _ = s.do(t, "GET", "/api/v1/projects", cookie, nil)
 	if r.StatusCode != 200 {
 		t.Fatalf("list projects code=%d", r.StatusCode)
 	}

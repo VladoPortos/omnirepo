@@ -4,7 +4,6 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
-	"io"
 	"net/http"
 	"regexp"
 	"strings"
@@ -198,10 +197,10 @@ func Verify(r *http.Request, lookup SecretLookup, skew time.Duration) (*VerifyRe
 // dispatchBody decides how the payload-hash string appears in the canonical
 // request and wraps r.Body when STREAMING is in use.
 func dispatchBody(r *http.Request, cs, secret string, parsed *parsedAuthz, amzDate string) (BodyMode, string, error) {
-	switch {
-	case cs == "UNSIGNED-PAYLOAD":
+	switch cs {
+	case "UNSIGNED-PAYLOAD":
 		return BodyModeUnsignedPayload, "UNSIGNED-PAYLOAD", nil
-	case cs == "STREAMING-AWS4-HMAC-SHA256-PAYLOAD":
+	case "STREAMING-AWS4-HMAC-SHA256-PAYLOAD":
 		// Swap r.Body with a chunk-verifying reader. The seed signature is
 		// the header signature; subsequent chunk signatures chain off the
 		// previous chunk's signature.
@@ -209,7 +208,7 @@ func dispatchBody(r *http.Request, cs, secret string, parsed *parsedAuthz, amzDa
 		reader := NewChunkedReader(r.Body, parsed.Signature, parsed.Scope, amzDate, kSigning)
 		r.Body = reader
 		return BodyModeStreamingSigned, "STREAMING-AWS4-HMAC-SHA256-PAYLOAD", nil
-	case cs == "":
+	case "":
 		// No content-sha256 header — treat as if client signed hex(sha256("")).
 		empty := sha256.Sum256(nil)
 		return BodyModeSHA256, hex.EncodeToString(empty[:]), nil
@@ -224,6 +223,3 @@ func dispatchBody(r *http.Request, cs, secret string, parsed *parsedAuthz, amzDa
 	}
 }
 
-// readerNoop is a trivial NopCloser for Request bodies that arrived as
-// io.NopCloser already. Exposed for tests.
-func readerNoop(r io.Reader) io.ReadCloser { return io.NopCloser(r) }

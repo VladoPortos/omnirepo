@@ -534,7 +534,7 @@ func downloadAndHashWithProgress(ctx context.Context, client *http.Client, urlSt
 		return nil, 0, "", fmt.Errorf("%s -> %d", urlStr, resp.StatusCode)
 	}
 	hasher := sha256.New()
-	var reader io.Reader = io.TeeReader(resp.Body, hasher)
+	var reader = io.TeeReader(resp.Body, hasher)
 	if progress != nil && accumulatedDone != nil {
 		reader = &jobs.CountingReader{R: reader, OnRead: func(n int) {
 			done := atomic.AddInt64(accumulatedDone, int64(n))

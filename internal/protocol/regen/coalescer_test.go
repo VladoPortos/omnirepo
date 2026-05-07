@@ -53,10 +53,7 @@ func TestCoalescerMaxWaitFires(t *testing.T) {
 	}()
 	// Observe at least one fire inside maxWait + slack.
 	deadline := time.After(1 * time.Second)
-	for {
-		if calls.Load() >= 1 {
-			break
-		}
+	for calls.Load() < 1 {
 		select {
 		case <-deadline:
 			close(stop)

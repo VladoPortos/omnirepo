@@ -348,11 +348,6 @@ func insertProject(ctx context.Context, tx *sql.Tx, p BootstrapProject) (int64, 
 	return id, nil
 }
 
-func insertRepo(ctx context.Context, tx *sql.Tx, projectID int64, r BootstrapRepo) error {
-	_, err := insertRepoReturningID(ctx, tx, projectID, r)
-	return err
-}
-
 func insertRepoReturningID(ctx context.Context, tx *sql.Tx, projectID int64, r BootstrapRepo) (int64, error) {
 	autoScan := int64(1)
 	if r.AutoScan != nil {

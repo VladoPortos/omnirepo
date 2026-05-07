@@ -50,3 +50,10 @@ web/vite.config.d.ts
 # similar local workflows. Per project standard "no docs unless
 # explicitly required", these stay out of the tree.
 docs/reports/
+
+# Local-only working notes. Kept on disk for in-progress sessions, not
+# pushed to the repo. Add new patterns here as they appear.
+/NEXT-SESSION-ISSUES.md
+/WALKTHROUGH-FINDINGS-*.md
+/test-findings.md
+/test.md

@@ -1,0 +1,55 @@
+# govulncheck — Go's official vulnerability checker.
+#
+# Reads our go.mod + binary call graph and reports CVEs from the Go
+# vulnerability database (https://vuln.go.dev) that we **actually call**
+# (not just transitively import). Lower false-positive rate than CVE-feed
+# scanners that flag every imported module.
+#
+# Complements Trivy (broad, multi-ecosystem, vendor-tree CVE matching)
+# and CodeQL (static query patterns). govulncheck is Go-specific and
+# call-graph-aware.
+name: govulncheck
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "15 3 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  govulncheck:
+    name: govulncheck (Go module vuln scan)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    # Note: do NOT set `GOFLAGS=-mod=vendor` at job scope. The action
+    # runs `go install golang.org/x/vuln/cmd/govulncheck@latest` first,
+    # which errors with `cannot query module due to -mod=vendor`. When
+    # govulncheck later analyses our module, Go 1.14+ auto-detects
+    # vendor mode from the presence of vendor/ + go.mod (`go 1.25.0`).
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version: "1.25"
+          cache: true
+
+      - name: Run govulncheck
+        uses: golang/govulncheck-action@b625fbe08f3bccbe446d94fbf87fcc875a4f50ee # v1.0.4
+        with:
+          go-version-input: "1.25"
+          go-package: ./...
+          # CRITICAL: disable the action's internal `actions/checkout` —
+          # we already did one on a SHA-pinned v6 above. Running it again
+          # tries to re-set http.<github>.extraheader, producing a
+          # `Duplicate header: Authorization` 400 from github.com.
+          repo-checkout: false

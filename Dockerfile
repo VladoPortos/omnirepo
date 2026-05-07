@@ -26,7 +26,7 @@ RUN go build -mod=vendor -trimpath \
 # ==============================================================================
 # Stage 3: Fetch Trivy binary + bake DB
 # ==============================================================================
-FROM aquasec/trivy:0.69.3 AS trivy
+FROM aquasec/trivy:0.70.0 AS trivy
 RUN trivy image --download-db-only --cache-dir /trivy-cache
 
 # ==============================================================================

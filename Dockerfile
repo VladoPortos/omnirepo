@@ -11,7 +11,7 @@ RUN npm run build
 # ==============================================================================
 # Stage 2: Build Go binary (with embedded SPA)
 # ==============================================================================
-FROM golang:1.25-alpine AS go-build
+FROM golang:1.26-alpine AS go-build
 RUN apk add --no-cache git
 WORKDIR /src
 COPY go.mod go.sum ./
@@ -26,13 +26,13 @@ RUN go build -mod=vendor -trimpath \
 # ==============================================================================
 # Stage 3: Fetch Trivy binary + bake DB
 # ==============================================================================
-FROM aquasec/trivy:0.69.3 AS trivy
+FROM aquasec/trivy:0.70.0 AS trivy
 RUN trivy image --download-db-only --cache-dir /trivy-cache
 
 # ==============================================================================
-# Stage 4: Runtime (alpine:3.21)
+# Stage 4: Runtime (alpine:3.23)
 # ==============================================================================
-FROM alpine:3.21
+FROM alpine:3.23
 RUN apk add --no-cache git ca-certificates wget \
     && adduser -D -u 1000 omnirepo \
     && mkdir -p /var/lib/omnirepo \

@@ -27,6 +27,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
+    # Use vendored deps so govulncheck doesn't try to fetch from the
+    # module proxy (the project commits vendor/ and runs every Go
+    # invocation with -mod=vendor — see the Makefile).
+    env:
+      GOFLAGS: -mod=vendor
+
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -42,7 +48,8 @@ jobs:
         with:
           go-version-input: "1.25"
           go-package: ./...
-          # Allow workflow to surface findings without blocking the run
-          # while we establish a clean baseline. Once main is clean, drop
-          # this and let real vulns fail the gate.
-          check-latest: true
+          # CRITICAL: disable the action's internal `actions/checkout` —
+          # we already did one on a SHA-pinned v6 above. Running it again
+          # tries to re-set http.<github>.extraheader, producing a
+          # `Duplicate header: Authorization` 400 from github.com.
+          repo-checkout: false

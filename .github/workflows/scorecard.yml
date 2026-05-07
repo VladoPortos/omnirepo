@@ -6,13 +6,31 @@
 # permissions", "unpinned third-party actions") show up in the Security
 # tab.
 #
-# Runs weekly + on every push to main. NOTE: this repo is **private**, so
-# `publish_results: false` — the public badge endpoint at
-# api.securityscorecards.dev only accepts public repos. A subset of
-# Scorecard checks (branch-protection visibility, CI-tests detection,
-# license discoverability) work fully on private repos; others
-# (CII-Best-Practices, Dependency-Update-Tool federation) report N/A.
-# The Security-tab SARIF upload still gives full local visibility.
+# ----------------------------------------------------------------------
+# PRIVATE REPO SETUP (REQUIRED — workflow no-ops without this):
+# ----------------------------------------------------------------------
+# On private repos the default GITHUB_TOKEN is too restricted to run
+# Scorecard's checks (it 400s on `ListCommits`, `BranchProtection`, etc.
+# — observed first run: "Resource not accessible by integration").
+#
+# To enable, create a fine-grained PAT with READ-ONLY access to this
+# repo, granting these scopes:
+#   - Repository permissions:
+#       Administration: read    (branch protection)
+#       Contents:       read    (commits, file listings)
+#       Issues:         read    (CII-best-practices indirection)
+#       Metadata:       read    (always required)
+#       Pull requests:  read    (code review checks)
+#   - No write scopes; no organization scopes.
+# Save it as a repository secret named: SCORECARD_TOKEN
+#
+# Once the secret exists, this workflow runs end-to-end. Until then the
+# guard step below short-circuits with a warning so it doesn't gate
+# unrelated PRs in red.
+#
+# Note: `publish_results: false` is fixed — the public badge endpoint at
+# api.securityscorecards.dev only accepts public repos. SARIF still
+# uploads to the repo's Security tab regardless.
 name: Scorecard
 
 on:
@@ -40,22 +58,38 @@ jobs:
       contents: read
       actions: read
 
+    # Gate on the PAT secret — avoids a permanent red workflow on
+    # private repos pre-setup. Workflow runs but no-ops with a warning
+    # until SCORECARD_TOKEN is provisioned.
+    env:
+      HAS_SCORECARD_TOKEN: ${{ secrets.SCORECARD_TOKEN != '' }}
+
     steps:
+      - name: Notice (skipped — no SCORECARD_TOKEN)
+        if: env.HAS_SCORECARD_TOKEN != 'true'
+        run: echo "::warning::SCORECARD_TOKEN secret not set — skipping. See workflow header comment for PAT setup."
+
       - name: Checkout code
+        if: env.HAS_SCORECARD_TOKEN == 'true'
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
 
       - name: Run Scorecard
+        if: env.HAS_SCORECARD_TOKEN == 'true'
         uses: ossf/scorecard-action@4eaacf0543bb3f2c246792bd56e8cdeffafb205a # v2.4.3
         with:
           results_file: results.sarif
           results_format: sarif
+          # PAT for private-repo API access. Required scopes documented
+          # in the workflow header comment above.
+          repo_token: ${{ secrets.SCORECARD_TOKEN }}
           # Private repo — do NOT publish to securityscorecards.dev.
           # Flip to true if/when the repo is made public.
           publish_results: false
 
       - name: Upload artifact (SARIF)
+        if: env.HAS_SCORECARD_TOKEN == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: SARIF file
@@ -63,6 +97,7 @@ jobs:
           retention-days: 5
 
       - name: Upload to Security tab
+        if: env.HAS_SCORECARD_TOKEN == 'true'
         uses: github/codeql-action/upload-sarif@e46ed2cbd01164d986452f91f178727624ae40d7 # v4.35.3
         with:
           sarif_file: results.sarif

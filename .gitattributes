@@ -66,3 +66,8 @@ vendor/** -text
 # still be reviewable on demand.
 go.sum                linguist-generated
 web/package-lock.json linguist-generated
+
+# Test fixtures must keep their exact bytes — line endings, NULs,
+# canonical request format, etc. SigV4 .creq/.sreq/.sts hashes break
+# silently if normalized.
+**/testdata/** -text

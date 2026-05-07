@@ -15,7 +15,7 @@
   "dependencies": {
     "@base-ui/react": "^1.4.0",
     "@dicebear/collection": "9.2.2",
-    "@dicebear/core": "9.2.2",
+    "@dicebear/core": "9.4.2",
     "@milkdown/kit": "^7.20.0",
     "@milkdown/react": "^7.20.0",
     "@milkdown/theme-nord": "^7.20.0",

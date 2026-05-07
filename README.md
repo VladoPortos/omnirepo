@@ -1,5 +1,13 @@
 # OmniRepo
 
+[![CI](https://github.com/VladoPortos/omnirepo/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/VladoPortos/omnirepo/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/VladoPortos/omnirepo/actions/workflows/codeql.yml/badge.svg?branch=main)](https://github.com/VladoPortos/omnirepo/actions/workflows/codeql.yml)
+[![Trivy](https://github.com/VladoPortos/omnirepo/actions/workflows/trivy.yml/badge.svg?branch=main)](https://github.com/VladoPortos/omnirepo/actions/workflows/trivy.yml)
+[![govulncheck](https://github.com/VladoPortos/omnirepo/actions/workflows/govulncheck.yml/badge.svg?branch=main)](https://github.com/VladoPortos/omnirepo/actions/workflows/govulncheck.yml)
+[![Scorecard](https://github.com/VladoPortos/omnirepo/actions/workflows/scorecard.yml/badge.svg?branch=main)](https://github.com/VladoPortos/omnirepo/actions/workflows/scorecard.yml)
+[![Dependabot](https://img.shields.io/badge/dependabot-enabled-025E8C?logo=dependabot)](https://github.com/VladoPortos/omnirepo/security/dependabot)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+
 **A single self-hosted container that serves every artifact type your team produces or consumes — OCI images, RPM/APT/PyPI/Helm packages, Git repos, S3 buckets, and raw blobs — with built-in vulnerability scanning, project-scoped access control, and zero outbound network calls at runtime.**
 
 Designed as a focused, simpler alternative to JFrog Artifactory or Sonatype Nexus for small-to-mid corporate and air-gapped environments.

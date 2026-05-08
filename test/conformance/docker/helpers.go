@@ -82,7 +82,10 @@ func bootApp(t *testing.T) *bootFixture {
 	cfg := config.Defaults()
 	cfg.DataRoot = dataRoot
 	cfg.Bootstrap.Path = bsPath
-	cfg.Server.ExternalHostnames = []string{"localhost"}
+	// Leave ExternalHostnames empty so the OCI Bearer challenge realm
+	// falls back to r.Host (127.0.0.1:<dynamic-port>). Pinning it to
+	// "localhost" pointed crane at http://localhost/v2/token (no port),
+	// which it cannot reach.
 
 	httpLn, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

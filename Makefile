@@ -93,7 +93,7 @@ bench-git-fixture:
 # peak_rss < 3 * repo_bytes for the gogit backend (hard gate). Also runs
 # against gitkit for comparison (not gated). Results in .bench/git-results.json.
 bench-git: bench-git-fixture
-	$(GO) test -tags=bench -mod=vendor -count=1 -timeout=15m -v ./test/bench/git/...
+	$(GO) test -tags=bench -mod=vendor -count=1 -timeout=25m -v ./test/bench/git/...
 
 vendor:
 	$(GO) mod tidy

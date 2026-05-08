@@ -86,11 +86,16 @@ func bootAppWithS3Bucket(t *testing.T) *s3Fixture {
 	cfg.Bootstrap.Path = bsPath
 	cfg.Server.ExternalHostnames = []string{"localhost", "host.docker.internal"}
 
-	httpLn, err := net.Listen("tcp", "127.0.0.1:0")
+	// Bind on 0.0.0.0 (all interfaces) so containers spawned via DinD can
+	// reach the test server through host.docker.internal -> docker bridge IP
+	// (Linux: --add-host host-gateway). 127.0.0.1 is reachable only from
+	// the host's loopback, not from the docker bridge network. Mirrors the
+	// pattern git conformance helpers already use.
+	httpLn, err := net.Listen("tcp", "0.0.0.0:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	httpsLn, err := net.Listen("tcp", "127.0.0.1:0")
+	httpsLn, err := net.Listen("tcp", "0.0.0.0:0")
 	if err != nil {
 		_ = httpLn.Close()
 		t.Fatal(err)

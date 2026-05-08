@@ -231,17 +231,17 @@ jobs:
         run: make conformance-git
 
   # Phase 4 TEST-07 gate: git clone memory benchmark. Generates a
-  # deterministic 200 MB bare repo, launches omnirepo as a child process,
+  # deterministic ~1.3 GB bare repo, launches omnirepo as a child process,
   # clones against it while sampling /proc/<pid>/status VmRSS at 50 ms.
   # Hard gate: peak_rss < 3 * repo_bytes for the gogit backend.
   # Also runs gitkit for comparison (not gated). JSON artifact archived.
   #
-  # continue-on-error: the bench has a known regression where the test's
-  # fixture-presence probe doesn't reuse the Makefile-level pre-generated
-  # fixture, and the bootstrap repo-init hook (post-Phase 3) collides
-  # with the test's pre-symlinked fixture path. Reproduces locally; needs
-  # a test-side rewrite of the bootstrap path. Surface results without
-  # gating the CI workflow until that lands.
+  # continue-on-error: kept on for runtime cost — the fixture build is
+  # ~15 min on a cold runner and each backend clone is several minutes.
+  # The test itself is reliable (bootstrap-collision rewrite shipped:
+  # the empty bare from the Phase 3 repo-create hook is swapped for the
+  # fixture symlink AFTER /healthz, so InitBare no longer fights the
+  # fixture). Drop continue-on-error if the bench should gate CI.
   bench-git:
     runs-on: ubuntu-24.04
     needs: build-test

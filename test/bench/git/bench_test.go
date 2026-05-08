@@ -108,15 +108,12 @@ func runBenchForBackend(t *testing.T, omnirepoPath, bareRepoPath string, repoByt
 		t.Fatal(err)
 	}
 
-	// Symlink the fixture bare repo into the data root so omnirepo serves it.
-	gitRepoDir := filepath.Join(dataRoot, "repos", "bench", "git")
-	if err := os.MkdirAll(gitRepoDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	linkPath := filepath.Join(gitRepoDir, "big.git")
-	if err := os.Symlink(bareRepoPath, linkPath); err != nil {
-		t.Fatalf("symlink fixture: %v", err)
-	}
+	// The fixture bare repo gets symlinked into the data root AFTER
+	// bootstrap completes — see step "swap empty bare for fixture" below.
+	// Pre-symlinking here would collide with the bootstrap repo-create hook
+	// (Phase 3 composedRepoCreateHook calls gitpkg.InitBare → go-git
+	// PlainInit → ErrTargetDirNotEmpty when the path is non-empty).
+	linkPath := filepath.Join(dataRoot, "repos", "bench", "git", "big.git")
 
 	// Write a minimal config YAML.
 	cfgYAML := fmt.Sprintf(`data_root: %s
@@ -165,10 +162,27 @@ server:
 	httpPort := discoverPort(t, stderrPipe, 30*time.Second, "http.listen")
 	t.Logf("omnirepo HTTP port: %d", httpPort)
 
-	// Wait for the server to be healthy.
+	// Wait for the server to be healthy. Bootstrap (and therefore the
+	// repo-create hook that InitBares an empty bare at linkPath) runs
+	// before the HTTP listeners accept; a 200 from /healthz means we can
+	// swap the empty bare for the fixture symlink without racing.
 	healthClient := &http.Client{Timeout: 10 * time.Second}
 	healthURL := fmt.Sprintf("http://127.0.0.1:%d/healthz", httpPort)
 	waitHealthy(t, healthURL, healthClient, 30*time.Second)
+
+	// Swap the bootstrap-initialised empty bare for a symlink to the
+	// 200 MB fixture. The git protocol handler is stateless — it opens
+	// the bare at request time via gogit.PlainOpen, so substituting the
+	// directory between bootstrap and the first git request is safe.
+	// git_refs in the DB still says HEAD → refs/heads/main, but the
+	// metadata table is not consulted by the upload-pack flow; clone
+	// reads refs straight off disk.
+	if err := os.RemoveAll(linkPath); err != nil {
+		t.Fatalf("remove bootstrap-initialised bare %q: %v", linkPath, err)
+	}
+	if err := os.Symlink(bareRepoPath, linkPath); err != nil {
+		t.Fatalf("symlink fixture into data root: %v", err)
+	}
 
 	// Start RSS sampler.
 	samplerCtx, samplerCancel := context.WithCancel(context.Background())

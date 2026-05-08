@@ -84,11 +84,14 @@ func bootAppWithRepo(t *testing.T, repoType string) *bootFixture {
 	cfg.Regen.DebounceMs = 10
 	cfg.Regen.MaxWaitMs = 100
 
-	httpLn, err := net.Listen("tcp", "127.0.0.1:0")
+	// Bind 0.0.0.0 so DinD helm reaches host.docker.internal -> docker
+	// bridge IP (Linux: --add-host host-gateway). 127.0.0.1 is reachable
+	// only from the host's loopback.
+	httpLn, err := net.Listen("tcp", "0.0.0.0:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	httpsLn, err := net.Listen("tcp", "127.0.0.1:0")
+	httpsLn, err := net.Listen("tcp", "0.0.0.0:0")
 	if err != nil {
 		_ = httpLn.Close()
 		t.Fatal(err)

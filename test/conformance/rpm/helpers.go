@@ -80,11 +80,14 @@ func bootAppWithRepo(t *testing.T, repoType string) *bootFixture {
 	cfg.Bootstrap.Path = bsPath
 	cfg.Server.ExternalHostnames = []string{"localhost", "host.docker.internal"}
 
-	httpLn, err := net.Listen("tcp", "127.0.0.1:0")
+	// Bind 0.0.0.0 so DinD dnf reaches host.docker.internal -> docker
+	// bridge IP (Linux: --add-host host-gateway). 127.0.0.1 is reachable
+	// only from the host's loopback.
+	httpLn, err := net.Listen("tcp", "0.0.0.0:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	httpsLn, err := net.Listen("tcp", "127.0.0.1:0")
+	httpsLn, err := net.Listen("tcp", "0.0.0.0:0")
 	if err != nil {
 		_ = httpLn.Close()
 		t.Fatal(err)

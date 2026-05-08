@@ -192,6 +192,18 @@ test-git-conformance: conformance-git
 conformance-all:
 	$(GO) test -mod=vendor -tags=conformance -count=1 -timeout=15m ./test/conformance/...
 
+# Phase 3 protocols only (rpm + deb + pypi + helm). The CI matrix runs
+# docker / s3 / git in dedicated jobs (different env requirements:
+# docker needs crane, s3 needs aws-cli DinD, git needs git binary), so
+# the phase-3 job uses this scoped target to avoid pulling those tests
+# into a runner that doesn't satisfy their prerequisites.
+conformance-phase3:
+	$(GO) test -mod=vendor -tags=conformance -count=1 -timeout=15m \
+		./test/conformance/deb/... \
+		./test/conformance/helm/... \
+		./test/conformance/pypi/... \
+		./test/conformance/rpm/...
+
 # conformance is an alias of conformance-all for callers that just want
 # "the conformance gate" without thinking about per-protocol granularity.
 conformance: conformance-all

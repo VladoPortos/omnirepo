@@ -66,7 +66,7 @@ jobs:
 
       # Build the React frontend first so `//go:embed dist/*` in
       # web/embed.go finds the bundle when CodeQL extracts Go.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         if: matrix.language == 'go' || matrix.language == 'javascript-typescript'
         with:
           node-version: '24'

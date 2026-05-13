@@ -226,10 +226,6 @@ github.com/containerd/platforms
 ## explicit; go 1.24.0
 github.com/containerd/stargz-snapshotter/estargz
 github.com/containerd/stargz-snapshotter/estargz/errorutil
-# github.com/cyphar/filepath-securejoin v0.6.1
-## explicit; go 1.18
-github.com/cyphar/filepath-securejoin
-github.com/cyphar/filepath-securejoin/internal/consts
 # github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc
 ## explicit
 github.com/davecgh/go-spew/spew
@@ -288,7 +284,7 @@ github.com/go-git/gcfg/v2
 github.com/go-git/gcfg/v2/scanner
 github.com/go-git/gcfg/v2/token
 github.com/go-git/gcfg/v2/types
-# github.com/go-git/go-billy/v6 v6.0.0-20260328065524-593ae452e14d
+# github.com/go-git/go-billy/v6 v6.0.0-alpha.1
 ## explicit; go 1.25.0
 github.com/go-git/go-billy/v6
 github.com/go-git/go-billy/v6/helper/chroot
@@ -635,7 +631,7 @@ golang.org/x/oauth2/internal
 ## explicit; go 1.25.0
 golang.org/x/sync/errgroup
 golang.org/x/sync/semaphore
-# golang.org/x/sys v0.43.0
+# golang.org/x/sys v0.44.0
 ## explicit; go 1.25.0
 golang.org/x/sys/cpu
 golang.org/x/sys/plan9

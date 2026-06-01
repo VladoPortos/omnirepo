@@ -1,0 +1,62 @@
+bin/
+# Vendored conformance binaries (see test/conformance/bin/README.md). We
+# track the directory (.gitkeep) and its README but not the binaries.
+!test/conformance/bin/
+test/conformance/bin/*
+!test/conformance/bin/.gitkeep
+!test/conformance/bin/README.md
+*.test
+*.out
+.idea/
+/var/lib/omnirepo/
+coverage.txt
+.bench/
+.planning/
+.playwright-mcp/
+.remember/
+example-before.png
+iana-after.png
+/omnirepo
+
+# Vite dev cache (not used at runtime)
+.vite/
+
+# Dev screenshots — regenerated per session. Tracked visual references
+# live under ui-test/; anything dropped at the repo root is a scratch
+# artifact and shouldn't be committed.
+/*.png
+
+# Local agent/editor tooling state that occasionally appears at the repo
+# root.
+/.codex
+
+# Stray TS→JS compilation output (Vite builds into dist/, these are accidental)
+web/src/**/*.js
+!web/src/**/*.config.js
+test-results/
+
+# Stale tsc-emitted vite config artifacts. vite reads vite.config.ts;
+# the .js/.d.ts variants shadow edits and produce silent build-config
+# regressions (BUNDLE-01..03 hit this once already).
+web/vite.config.js
+web/vite.config.d.ts
+
+# Local editor/agent session state (per-developer, never shared).
+.claude/
+
+# Local generated reports from dev workflows. Per project standard "no
+# docs unless explicitly required", these stay out of the tree.
+docs/reports/
+
+# Local-only working notes and AI-assisted-dev artifacts. Kept on disk
+# for in-progress sessions, not pushed to the repo. Add new patterns
+# here as they appear.
+/NEXT-SESSION-ISSUES.md
+/WALKTHROUGH-FINDINGS-*.md
+/test-findings.md
+/test.md
+/tools.md
+/CLAUDE.md
+/CODE-REVIEW-1.0.md
+/docs/uat/walkthrough-3/
+/docs/uat/walkthrough-4/

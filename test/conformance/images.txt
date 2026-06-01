@@ -1,0 +1,21 @@
+# Base images for DinD conformance.
+# Digests pinned per image+tag pair to prevent tag-swap supply-chain attacks.
+# Refresh via:
+#   DOCKER_CONFIG=$(mktemp -d) docker buildx imagetools inspect <image:tag>
+#
+# Two line formats accepted:
+#   1. "<image>:<tag>@sha256:<hex>"             (Phase 3 base images — CI pre-pull iterates these)
+#   2. "<key>=<image>:<tag>@sha256:<hex>"       (Phase 4+ named handles — tests look up by key)
+#
+# CI pre-pull (test/conformance/images.txt → docker pull) consumes the
+# field before the first whitespace. Key=value lines must be stripped of
+# the "<key>=" prefix by the consumer before invoking `docker pull`.
+rockylinux/rockylinux:9@sha256:53f4c6dcb34e1403bd93207351f0af9a593610faeb7165cb8a037346765199b0
+debian:12-slim@sha256:4724b8cc51e33e398f0e2e15e18d5ec2851ff0c2280647e1310bc1642182655d
+python:3.12-alpine@sha256:7747d47f92cfca63a6e2b50275e23dba8407c30d8ae929a88ddd49a5d3f2d331
+alpine/helm:3.20@sha256:9f0e9c604ed9b194548a2cff1e9b620ca2e21709fabb5be75a85a2e17ce16b63
+
+# Phase 4 (S3 + Git) named handles — resolved 2026-04-16 via
+# DOCKER_CONFIG=$(mktemp -d) docker pull ... && docker inspect --format='{{index .RepoDigests 0}}'
+aws-cli=amazon/aws-cli:2.17.0@sha256:643507c10ada7964ca6157b3d799f030b90577643da9955d319a77399ed80d73
+git-client=alpine/git:2.43.0@sha256:76fdb7210689fc26c6ff101c4adacf9d12d3d25a919a7d8ff42ebaef5bedba65

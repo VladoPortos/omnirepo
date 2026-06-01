@@ -1,0 +1,276 @@
+name: CI
+
+# Phase 1 CI workflow: binds every Phase 1 invariant gate to PR merges.
+# No untrusted event inputs are interpolated into run: blocks (no issue/PR
+# bodies, no commit messages, no head refs) — only fixed make / go commands.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  build-test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.25'
+          cache: true
+
+      - name: Install git (spike requirement)
+        run: sudo apt-get update && sudo apt-get install -y git
+
+      - name: Install golangci-lint
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b "$(go env GOPATH)/bin" v2.11.4
+
+      - name: Install shellcheck
+        # Phase 10 CRONDOCS-04 / D-25: `make test` → `make lint-docs`
+        # shellchecks the documented cron snippet in
+        # docs/operations/scheduled-sync.md. Without shellcheck on the
+        # runner the Makefile's skip-guard silently no-ops (intentional
+        # for local dev); CI MUST install it so the gate fires.
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build frontend
+        # web/embed.go has `//go:embed dist/*`, so `web/dist/` must exist
+        # before any Go compilation (lint, build, test). `make frontend`
+        # does `npm ci && npm run build` and produces web/dist/.
+        run: make frontend
+
+      - name: Lint
+        run: make lint
+
+      - name: Build
+        run: make build
+
+      - name: Unit tests + air-gap boot test
+        run: make test
+
+      - name: Air-gap invariant (explicit gate re-run)
+        run: make test-airgap
+
+      - name: SQLite contention bench
+        # D-42 acceptance bar: 30s duration, 16 workers, zero SQLITE_BUSY.
+        # The Makefile default is BENCH_DURATION=30s; we inherit it here
+        # rather than shortening in CI (WR-07). Adds ~25s to the pipeline,
+        # which is acceptable for a foundation P2 mitigation gate.
+        run: make bench-sqlite
+
+      # Phase 4 D-28: spike retired; production gogit+gitkit backends are
+      # covered by the default `make test` unit suite. No dedicated job.
+
+  # Phase 2 D-42 gate: OCI Distribution conformance suite driven by a real
+  # crane client against the running binary. Runs as a dedicated job so a
+  # missing/unstable crane doesn't gate the fast feedback loop of the
+  # build-test job above, but the job itself is required for merge.
+  conformance-oci:
+    runs-on: ubuntu-24.04
+    needs: build-test
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.25'
+          cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build frontend
+        # web/embed.go has //go:embed dist/*; required before any Go compile.
+        run: make frontend
+
+      - name: Install crane (pinned v0.21.5)
+        run: |
+          go install github.com/google/go-containerregistry/cmd/crane@v0.21.5
+          mkdir -p test/conformance/bin
+          cp "$(go env GOPATH)/bin/crane" test/conformance/bin/crane
+          chmod +x test/conformance/bin/crane
+
+      - name: Run OCI conformance suite
+        run: make conformance-oci
+
+  # Phase 3 D-31 gate: DinD client-conformance suites for the four package
+  # protocols. Drives real `dnf` (Rocky 9), `apt-get` (Debian 12),
+  # `pip`+`uv` (python:3.12-alpine), and `helm` (alpine/helm:3.20) clients
+  # against an in-process omnirepo. Required-for-merge on PRs touching
+  # Phase 3 paths. Base image digests are pinned in
+  # test/conformance/images.txt (D-30, T-03-07-01).
+  conformance-phase3:
+    runs-on: ubuntu-24.04
+    needs: build-test
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.25'
+          cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build frontend
+        run: make frontend
+
+      - name: Pre-pull pinned base images
+        # Read test/conformance/images.txt and `docker pull` each entry at
+        # its pinned sha256 digest. Failure here = supply-chain mismatch.
+        # No untrusted input reaches the shell — the file is checked-in
+        # repo content, gated by code review. Skips Phase-4+ "key=value"
+        # named handles (consumed by their own jobs); only the bare
+        # "<image>:<tag>@sha256:..." rows belong to Phase 3.
+        run: |
+          set -euo pipefail
+          while IFS= read -r line; do
+            case "$line" in ''|\#*) continue ;; esac
+            image=$(printf '%s\n' "$line" | awk '{print $1}')
+            case "$image" in *=*) continue ;; esac
+            echo "pulling $image"
+            docker pull "$image"
+          done < test/conformance/images.txt
+
+      - name: Run Phase 3 conformance suites (rpm/deb/pypi/helm)
+        run: make conformance-phase3
+
+  # Phase 4 D-45 gate: S3 conformance via aws-sdk-go-v2 + aws-cli DinD.
+  # Exercises SigV4 positive/negative matrix (SignatureDoesNotMatch,
+  # InvalidAccessKeyId, RequestTimeTooSkewed) and end-to-end `aws s3 cp`
+  # through a pinned aws-cli container.
+  s3-conformance:
+    runs-on: ubuntu-24.04
+    needs: build-test
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.25'
+          cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build frontend
+        run: make frontend
+
+      - name: Pre-pull aws-cli image
+        run: |
+          set -euo pipefail
+          while IFS= read -r line; do
+            case "$line" in ''|\#*) continue ;; esac
+            case "$line" in aws-cli=*)
+              image="${line#aws-cli=}"
+              echo "pulling $image"
+              docker pull "$image"
+              ;;
+            esac
+          done < test/conformance/images.txt
+
+      - name: Run S3 conformance suite
+        run: make conformance-s3
+
+  # Phase 4 D-46 gate: Git Smart-HTTP conformance via real `git` CLI (DinD).
+  # Drives clone/push/fetch/oversize-push across both gogit and gitkit backends
+  # using alpine/git:2.43 inside a container against an in-process omnirepo.
+  # Covers D-31 project-auth variant and bad-auth rejection.
+  git-conformance:
+    runs-on: ubuntu-24.04
+    needs: build-test
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.25'
+          cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build frontend
+        run: make frontend
+
+      - name: Pre-pull git-client image
+        run: |
+          set -euo pipefail
+          while IFS= read -r line; do
+            case "$line" in ''|\#*) continue ;; esac
+            case "$line" in git-client=*)
+              image="${line#git-client=}"
+              echo "pulling $image"
+              docker pull "$image"
+              ;;
+            esac
+          done < test/conformance/images.txt
+
+      - name: Run Git conformance suite
+        run: make conformance-git
+
+  # Phase 4 TEST-07 gate: git clone memory benchmark. Generates a
+  # deterministic ~1.3 GB bare repo, launches omnirepo as a child process,
+  # clones against it while sampling /proc/<pid>/status VmRSS at 50 ms.
+  # Hard gate: peak_rss < 3 * repo_bytes for the gogit backend.
+  # Also runs gitkit for comparison (not gated). JSON artifact archived.
+  #
+  # continue-on-error: kept on for runtime cost — the fixture build is
+  # ~15 min on a cold runner and each backend clone is several minutes.
+  # The test itself is reliable (bootstrap-collision rewrite shipped:
+  # the empty bare from the Phase 3 repo-create hook is swapped for the
+  # fixture symlink AFTER /healthz, so InitBare no longer fights the
+  # fixture). Drop continue-on-error if the bench should gate CI.
+  bench-git:
+    runs-on: ubuntu-24.04
+    needs: build-test
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.25'
+          cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build frontend
+        run: make frontend
+
+      - name: Install git
+        run: sudo apt-get update && sudo apt-get install -y git
+
+      - name: Run git memory bench (TEST-07)
+        run: make bench-git
+
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: git-bench-results
+          path: .bench/git-results.json

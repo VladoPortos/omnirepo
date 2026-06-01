@@ -1,0 +1,64 @@
+# OmniRepo server configuration (example).
+#
+# Search order (D-05):
+#   1. --config <path> flag (must exist; error if missing)
+#   2. $OMNIREPO_CONFIG (silent skip if missing)
+#   3. /var/lib/omnirepo/config/omnirepo.yaml (silent skip if missing)
+#   4. built-in defaults (D-07)
+#
+# Environment variables override YAML:
+#   OMNIREPO_SERVER__HTTP_PORT=9000 -> server.http_port=9000
+#   (double underscore is the nesting separator)
+
+server:
+  http_port: 8080
+  https_port: 8443
+  hostname: omnirepo.example.com
+
+  # Phase 4 Plan 03 — Git Smart-HTTP backend.
+  # Allowed: gogit | gitkit. Default: gogit (pure-Go, go-git v6).
+  # gitkit shells out to the `git` binary as a documented fallback.
+  git_backend: gogit
+
+  # Phase 4 Plan 03 — extra hostnames accepted for S3 virtual-host style
+  # routing (e.g. bucket.<hostname>/<key>). Empty by default. List every
+  # DNS name the corporate load balancer may forward S3 traffic under.
+  external_hostnames: []
+  # external_hostnames:
+  #   - omnirepo.example.com
+  #   - artifacts.example.com
+
+data_root: /var/lib/omnirepo
+
+tls:
+  cert_path: /var/lib/omnirepo/certs/server.crt
+  key_path: /var/lib/omnirepo/certs/server.key
+
+bootstrap:
+  path: /var/lib/omnirepo/config/bootstrap.json
+
+auth:
+  session_ttl: 12h
+  docker_jwt_ttl: 60m
+  sigv4_skew: 15m
+
+scan:
+  auto_scan_default: true
+  db_warn_age_days: 7
+
+air_gap:
+  allow_external_actions: true
+
+log:
+  level: info
+  format: json
+  audit_max_size_mb: 100
+  audit_keep: 10
+
+repos:
+  git:
+    # Phase 4 Plan 03 — per-install default cap on a single Git Smart-HTTP
+    # push payload, in bytes. 500 MiB by default (D-35). Per-repo override
+    # lives in the DB column repos.git_max_push_bytes (NULL = inherit).
+    # 0 reloads the built-in default; negative values are rejected.
+    max_push_bytes: 524288000

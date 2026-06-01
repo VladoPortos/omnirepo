@@ -1,0 +1,7 @@
+-- 034_project_members_role.down.sql
+-- The migration runner is up-only (runner.go applies *.up.sql in order and
+-- records in schema_migrations; *.down.sql is never executed). This file
+-- exists for symmetry and documents what a rollback would do if ever needed.
+-- Rolling back project_members.role requires the SQLite 12-step table rebuild
+-- (CREATE new table, INSERT SELECT, DROP, RENAME) — do NOT execute at runtime.
+-- Rolling back api_keys.role uses the same 12-step pattern.

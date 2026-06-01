@@ -1,0 +1,353 @@
+// Package helm — upstream parser.
+//
+// Fetches <upstream>/index.yaml, parses it via helm.sh/helm/v3/pkg/repo
+// LoadIndexFile, and yields one UpstreamEntry per chart version. Chart
+// digests come from the Helm index `digest:` field — a sha256 hex string
+// the sync handler uses for idempotency without a HEAD request.
+package helm
+
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
+
+	"github.com/Masterminds/semver/v3"
+	"github.com/vladoportos/omnirepo/internal/protocol/helm/ociclient"
+	"github.com/vladoportos/omnirepo/internal/streamio"
+	helmrepo "helm.sh/helm/v3/pkg/repo"
+)
+
+// maxIndexYAMLBytes caps the upstream index.yaml body. Test-overridable
+// (var, not const) so cap+1 oversized-upstream regression guards can run
+// without serving multi-MiB bodies. Production callers do not mutate it.
+//
+// This replaces the prior silent-truncation idiom (full-body read through a
+// LimitReader at 64 MiB) with an explicit streamio.ErrMetadataTooLarge
+// sentinel — same shape as the rpm/deb/pypi upstream_parse.go cap vars.
+var maxIndexYAMLBytes int64 = 64 * 1024 * 1024
+
+// EntrySourceKind classifies the fetch transport for a single upstream
+// index entry. Tagged onto UpstreamEntry so sync_handler.fetchAndCommit
+// can dispatch to HTTP vs OCI code paths.
+//
+// ParseUpstream sets Source from the entry's Path prefix:
+//   - "http://" or "https://" → EntrySourceHTTP
+//   - "oci://"               → EntrySourceOCI
+//   - anything else          → EntrySourceUnknown (skipped downstream)
+type EntrySourceKind int
+
+const (
+	// EntrySourceUnknown is the zero value — ParseUpstream assigns it to
+	// any path that lacks a recognized scheme prefix. The v1.2 sync
+	// handler's existing "skip unsupported" branch will drop these.
+	EntrySourceUnknown EntrySourceKind = iota
+	// EntrySourceHTTP is the pre-v1.4 default — chart tgz fetched over
+	// http(s) from the URL recorded in the upstream index.yaml.
+	EntrySourceHTTP
+	// EntrySourceOCI means the chart lives at an oci:// reference and
+	// must be pulled via the ociclient subpackage.
+	EntrySourceOCI
+)
+
+// String returns the short kind name used in audit/log output.
+func (k EntrySourceKind) String() string {
+	switch k {
+	case EntrySourceHTTP:
+		return "http"
+	case EntrySourceOCI:
+		return "oci"
+	default:
+		return "unknown"
+	}
+}
+
+// UpstreamEntry is one chart version yielded by ParseUpstream.
+type UpstreamEntry struct {
+	Path     string // absolute URL to fetch the .tgz
+	Digest   string // "sha256:<hex>" or "" if upstream omitted it
+	Size     int64
+	Filename string // canonical chart filename (<name>-<version>.tgz)
+	Metadata *helmrepo.ChartVersion
+	Source   EntrySourceKind // http vs oci vs unknown
+}
+
+// AuthCreds carries optional Basic / Bearer credentials.
+type AuthCreds struct {
+	User, Password, Token string
+}
+
+// SyncFilter narrows the per-entry yield. Names match the chart name
+// (case-insensitive); Globs match the candidate filename via filepath.Match.
+type SyncFilter struct {
+	Names []string
+	Globs []string
+}
+
+// ParseUpstream fetches the upstream index.yaml and invokes yield for each
+// chart version after applying filter. Returns the count of yielded
+// entries; yield errors short-circuit and are returned to the caller.
+func ParseUpstream(
+	ctx context.Context,
+	client *http.Client,
+	upstreamURL string,
+	creds AuthCreds,
+	filter SyncFilter,
+	yield func(UpstreamEntry) error,
+) (int, error) {
+	if client == nil {
+		client = http.DefaultClient
+	}
+	indexURL := strings.TrimRight(upstreamURL, "/") + "/index.yaml"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, indexURL, nil)
+	if err != nil {
+		return 0, fmt.Errorf("helm upstream: build req: %w", err)
+	}
+	applyCreds(req, creds)
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0, fmt.Errorf("helm upstream: get %s: %w", indexURL, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("helm upstream: %s -> %d", indexURL, resp.StatusCode)
+	}
+
+	// Fail-explicit on cap+1 instead of the previous silent-truncation idiom
+	// (full-body read through a LimitReader). The cap is a package-level var
+	// (not a const) only so tests can shrink it; no production caller mutates
+	// it.
+	body, err := streamio.ReadAllLimited(resp.Body, maxIndexYAMLBytes, streamio.ErrMetadataTooLarge)
+	if err != nil {
+		return 0, fmt.Errorf("helm upstream: read index.yaml: %w", err)
+	}
+	tmp, err := os.CreateTemp("", "helm-upstream-*.yaml")
+	if err != nil {
+		return 0, fmt.Errorf("helm upstream: tmp: %w", err)
+	}
+	tmpPath := tmp.Name()
+	defer func() { _ = os.Remove(tmpPath) }()
+	if _, err := tmp.Write(body); err != nil {
+		_ = tmp.Close()
+		return 0, fmt.Errorf("helm upstream: copy: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return 0, fmt.Errorf("helm upstream: close: %w", err)
+	}
+
+	idx, err := helmrepo.LoadIndexFile(tmpPath)
+	if err != nil {
+		return 0, fmt.Errorf("helm upstream: parse index.yaml: %w", err)
+	}
+
+	base, _ := url.Parse(strings.TrimRight(upstreamURL, "/") + "/")
+	count := 0
+	for chartName, versions := range idx.Entries {
+		if !filter.acceptName(chartName) {
+			continue
+		}
+		for _, v := range versions {
+			if v == nil {
+				continue
+			}
+			if len(v.URLs) == 0 {
+				continue
+			}
+			fetchURL := resolveURL(base, v.URLs[0])
+			filename := filepath.Base(fetchURL)
+			if !filter.acceptFilename(filename) {
+				continue
+			}
+			digest := ""
+			if v.Digest != "" {
+				digest = "sha256:" + strings.ToLower(strings.TrimPrefix(v.Digest, "sha256:"))
+			}
+			ent := UpstreamEntry{
+				Path:     fetchURL,
+				Digest:   digest,
+				Filename: filename,
+				Metadata: v,
+				Source:   classifyEntryPath(fetchURL),
+			}
+			if err := yield(ent); err != nil {
+				return count, err
+			}
+			count++
+		}
+	}
+	return count, nil
+}
+
+func (sf SyncFilter) acceptName(name string) bool {
+	if len(sf.Names) == 0 {
+		return true
+	}
+	lower := strings.ToLower(name)
+	for _, n := range sf.Names {
+		if strings.ToLower(n) == lower {
+			return true
+		}
+	}
+	return false
+}
+
+func (sf SyncFilter) acceptFilename(filename string) bool {
+	if len(sf.Globs) == 0 {
+		return true
+	}
+	for _, g := range sf.Globs {
+		if ok, _ := filepath.Match(g, filename); ok {
+			return true
+		}
+	}
+	return false
+}
+
+func applyCreds(req *http.Request, creds AuthCreds) {
+	switch {
+	case creds.Token != "":
+		req.Header.Set("Authorization", "Bearer "+creds.Token)
+	case creds.User != "" || creds.Password != "":
+		req.SetBasicAuth(creds.User, creds.Password)
+	}
+}
+
+func resolveURL(base *url.URL, href string) string {
+	if base == nil {
+		return href
+	}
+	rel, err := url.Parse(href)
+	if err != nil {
+		return href
+	}
+	return base.ResolveReference(rel).String()
+}
+
+// classifyEntryPath returns the EntrySourceKind for a post-resolveURL entry
+// path. Case-insensitive on the scheme. This tag lets fetchAndCommit
+// dispatch to HTTP vs OCI code paths without re-parsing the URL.
+func classifyEntryPath(path string) EntrySourceKind {
+	lower := strings.ToLower(path)
+	switch {
+	case strings.HasPrefix(lower, "oci://"):
+		return EntrySourceOCI
+	case strings.HasPrefix(lower, "http://"), strings.HasPrefix(lower, "https://"):
+		return EntrySourceHTTP
+	default:
+		return EntrySourceUnknown
+	}
+}
+
+// chartNameFromOCIRef returns the last path segment of an oci:// ref with
+// no tag (e.g. "oci://registry-1.docker.io/bitnamicharts/nginx" → "nginx").
+// Returns "" for refs that don't parse. Used by ParseOCIUpstream to derive
+// the helm chart name for filter matching and filename synthesis.
+func chartNameFromOCIRef(ref string) string {
+	trimmed := strings.TrimPrefix(strings.ToLower(ref), "oci://")
+	// Strip any tag suffix so pure-path refs and tagged refs both work.
+	if at := strings.LastIndex(trimmed, ":"); at > strings.LastIndex(trimmed, "/") {
+		trimmed = trimmed[:at]
+	}
+	trimmed = strings.TrimRight(trimmed, "/")
+	if idx := strings.LastIndex(trimmed, "/"); idx >= 0 && idx+1 < len(trimmed) {
+		return trimmed[idx+1:]
+	}
+	return ""
+}
+
+// ParseOCIUpstream enumerates tags for a pure oci:// helm upstream and
+// yields one UpstreamEntry per semver-parseable tag. The top-level URL
+// points at a single chart repo (e.g.
+// "oci://registry-1.docker.io/bitnamicharts/nginx"); each tag becomes a
+// chart version. This is the OCI equivalent of ParseUpstream for helm
+// mirrors whose upstream has no HTTP index.yaml.
+//
+// Semantics:
+//   - Tags that don't parse as SemVer are skipped silently. Helm requires
+//     SemVer for Chart.yaml:version; non-semver tags can't become chart
+//     versions anyway.
+//   - filter.Names — matched against the chart name derived from the ref's
+//     last path segment. A single-chart OCI upstream with a non-matching
+//     allowlist name yields zero entries (mirrors the HTTP behavior of
+//     filtering an index.yaml chart entry).
+//   - filter.Globs — matched against the synthetic filename
+//     "<chart>-<tag>.tgz".
+//   - Digest left empty — fetchAndCommitOCI calls Resolve to get the
+//     manifest digest and runs the dedup gate there. Pre-resolving here
+//     would double the registry round-trips for no benefit.
+//
+// The caller supplies an OCIClient; pass nil only for tests that stub out
+// tag enumeration upstream. A nil client returns a descriptive error so
+// the sync handler's fail() path records it in the audit log.
+func ParseOCIUpstream(
+	ctx context.Context,
+	client ociclient.Client,
+	upstreamURL string,
+	creds AuthCreds,
+	filter SyncFilter,
+	yield func(UpstreamEntry) error,
+) (int, error) {
+	if client == nil {
+		return 0, fmt.Errorf("helm oci upstream: OCIClient not wired")
+	}
+	chart := chartNameFromOCIRef(upstreamURL)
+	if chart == "" {
+		return 0, fmt.Errorf("helm oci upstream: cannot derive chart name from %q", upstreamURL)
+	}
+	if !filter.acceptName(chart) {
+		return 0, nil
+	}
+	ociCreds := ociclient.AuthCreds{User: creds.User, Password: creds.Password}
+	tags, err := client.ListTags(ctx, upstreamURL, ociCreds)
+	if err != nil {
+		return 0, fmt.Errorf("helm oci upstream: list tags %s: %w", upstreamURL, err)
+	}
+	count := 0
+	base := strings.TrimRight(strings.TrimSuffix(upstreamURL, "/"), ":")
+	for _, tag := range tags {
+		// Skip Bitnami's non-chart sidecar artifacts. Bitnami publishes a
+		// parallel tag <version>-metadata alongside every chart tag that
+		// carries vulnerability-scan + SBOM artifacts with a single-layer
+		// manifest. Helm's Pull requires ≥2 descriptors (config + chart
+		// layer) and bubbles up "manifest does not contain minimum number
+		// of descriptors" mid-sync, aborting the whole batch on one bad
+		// tag. Filter at enumeration time — cheaper than a failed Pull,
+		// and the convention is stable and documented upstream.
+		if isNonChartOCISidecarTag(tag) {
+			continue
+		}
+		if _, verr := semver.NewVersion(tag); verr != nil {
+			continue
+		}
+		filename := fmt.Sprintf("%s-%s.tgz", chart, tag)
+		if !filter.acceptFilename(filename) {
+			continue
+		}
+		ent := UpstreamEntry{
+			Path:     base + ":" + tag,
+			Filename: filename,
+			Source:   EntrySourceOCI,
+		}
+		if err := yield(ent); err != nil {
+			return count, err
+		}
+		count++
+	}
+	return count, nil
+}
+
+// isNonChartOCISidecarTag returns true when the tag follows a known
+// non-chart convention. Bitnami publishes "<ver>-metadata" as scan +
+// SBOM sidecars (single-layer manifests that aren't Helm charts); these
+// break Helm SDK Pull. Case-insensitive on the suffix.
+//
+// Kept as a named function so new conventions (e.g. "-cnab",
+// "-signature") can be added alongside without touching the main
+// filter loop.
+func isNonChartOCISidecarTag(tag string) bool {
+	lower := strings.ToLower(tag)
+	return strings.HasSuffix(lower, "-metadata")
+}

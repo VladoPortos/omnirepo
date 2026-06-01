@@ -1,0 +1,57 @@
+# Docker build context exclusions.
+#
+# Why this file exists: the Dockerfile does `COPY web/ ./` (stage 1) and
+# `COPY . .` (stage 2). Without a .dockerignore the host's stale, multi-GB
+# web/node_modules would overwrite the clean `npm ci` result (wrong frontend
+# deps in the release image), and local dev/working dirs would leak into the
+# build layers and balloon the context. Keep this in sync with .gitignore.
+
+# --- VCS ---
+.git
+.gitattributes
+.gitignore
+
+# --- Frontend deps & build artifacts (rebuilt inside the image) ---
+# `**/node_modules` is the load-bearing entry: stage 1 runs `npm ci` and must
+# NOT have it clobbered by the host copy. web/dist is produced by `npm run
+# build` in-image and re-supplied to the Go stage via COPY --from.
+**/node_modules
+web/dist
+web/.vite
+web/playwright-report
+web/test-results
+web/playwright/.cache
+
+# --- Go build output ---
+bin/
+out/
+
+# --- Local agent/editor & working dirs (never ship) ---
+.claude
+.planning
+.bench
+.playwright-mcp
+.remember
+.codex
+
+# --- Test / QA artifacts & screenshots ---
+test-results
+playwright-report
+ui-test
+*.png
+
+# --- Reviewer / working markdown (not part of the build) ---
+CODE-REVIEW-1.0.md
+NEXT-SESSION-ISSUES.md
+WALKTHROUGH-FINDINGS-2.md
+WALKTHROUGH-FINDINGS-*.md
+test-findings.md
+test.md
+tools.md
+
+# --- Editor / OS cruft ---
+.vscode
+.idea
+.editorconfig
+*.swp
+.DS_Store

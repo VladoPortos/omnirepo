@@ -1,0 +1,59 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+
+  settings:
+    errcheck:
+      # Standard "fire-and-forget" patterns where the error is either
+      # not actionable (HTTP response already in flight, log line, etc.)
+      # or already handled by a defer/return path the linter can't see.
+      exclude-functions:
+        # HTTP response writes — at this point the response status is
+        # already committed, the body is being streamed, and a write
+        # error means the client disconnected. There's nothing useful
+        # to do with the error.
+        - (net/http.ResponseWriter).Write
+        - fmt.Fprintf(net/http.ResponseWriter)
+        - fmt.Fprint(net/http.ResponseWriter)
+        - fmt.Fprintln(net/http.ResponseWriter)
+        - fmt.Fprintf(io.Writer)
+        - fmt.Fprint(io.Writer)
+        - fmt.Fprintln(io.Writer)
+
+  exclusions:
+    rules:
+      # Test files routinely call Close() and similar without checking
+      # error values — failure surfaces as the test itself failing on a
+      # later assertion. errcheck on tests is mostly noise.
+      - path: _test\.go$
+        linters:
+          - errcheck
+      # SA5011 (possible nil pointer dereference) in tests: every current hit
+      # is the canonical `if x == nil { t.Fatal(...) }` guard followed by a
+      # deref. t.Fatal terminates the goroutine, so the deref is unreachable
+      # on the nil path — these are staticcheck false positives (it does not
+      # always model t.Fatal as no-return). A genuine nil deref in a test only
+      # panics that test, never production. Scoped to SA5011 in tests so the
+      # rest of staticcheck still applies to test code.
+      - path: _test\.go$
+        text: "SA5011"
+        linters:
+          - staticcheck
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+formatters:
+  enable:
+    - gofmt

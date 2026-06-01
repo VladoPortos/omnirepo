@@ -1,0 +1,1445 @@
+/**
+ * Dashboard page.
+ * Row 1: Projects, Repositories, Users, Scan Findings (4 equal-height cards).
+ * Row 2: Composition row — 3 user-visible cards (Storage / Recent
+ *        Failures / Scan Findings Trend) + 3 admin-only cards (Background
+ *        Jobs / TLS Certificate / Trivy Database) gated on is_super_admin.
+ *        Each card renders a StatusBadge derived from dashboard-thresholds.ts
+ *        pure functions; cold-load uses SkeletonCard; fetch errors surface
+ *        via ErrorEnvelopeRenderer.
+ * Row 3: Full-width storage breakdown with progress bar + per-repo list.
+ * Row 4: Recent Activity + High-Severity Findings (with CVE details).
+ */
+
+import { Link } from 'react-router-dom';
+import { motion } from 'framer-motion';
+import {
+  FolderKanban,
+  FolderGit2,
+  Users,
+  ShieldAlert,
+  Plus,
+  Activity,
+  HardDrive,
+  Loader2,
+} from 'lucide-react';
+import { toast } from 'sonner';
+import { Card, CardContent, CardHeader, CardTitle, CardAction } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Skeleton } from '@/components/ui/skeleton';
+import { Progress } from '@/components/ui/progress';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
+import { SeverityBadge } from '@/components/common/SeverityBadge';
+import { SkeletonCard } from '@/components/common/SkeletonCard';
+import { SkeletonMetric } from '@/components/common/SkeletonMetric';
+import { StatusBadge, type StatusVariant } from '@/components/common/StatusBadge';
+import { EmptyState } from '@/components/common/EmptyState';
+import { ErrorEnvelopeRenderer } from '@/components/common/ErrorEnvelope';
+import {
+  useDashboard,
+  useDashboardStorage,
+  useMe,
+  useAdminJobsSummary,
+  useAdminTLSCurrent,
+  useAdminTrivyDBStatus,
+  useAdminDBHealth,
+  useTriggerDBHealthCheck,
+  type DBHealth,
+} from '@/api/queries';
+import { envelopeFromError, ApiError } from '@/api/client';
+import {
+  storageVariant,
+  failuresVariant,
+  scanFindingsVariant,
+  jobsVariant,
+  tlsVariant,
+  trivyDBVariant,
+  dbHealthVariant,
+} from '@/lib/dashboard-thresholds';
+import { formatBytes, formatDate } from '@/lib/format';
+import { activityTargetHref } from '@/lib/activity';
+import type {
+  StorageRepoRow,
+  DashboardVulnRow,
+  DashboardActivityItem,
+} from '@/api/types';
+
+const cardVariants = {
+  hidden: { opacity: 0, y: 12 },
+  visible: (i: number) => ({
+    opacity: 1,
+    y: 0,
+    transition: { delay: i * 0.05, duration: 0.2, ease: 'easeOut' as const },
+  }),
+};
+
+const repoTypeColor: Record<string, { dot: string; bar: string }> = {
+  docker: { dot: 'bg-blue-500', bar: '#3b82f6' },
+  rpm: { dot: 'bg-red-500', bar: '#ef4444' },
+  deb: { dot: 'bg-green-500', bar: '#22c55e' },
+  pypi: { dot: 'bg-yellow-500', bar: '#eab308' },
+  helm: { dot: 'bg-purple-500', bar: '#a855f7' },
+  git: { dot: 'bg-orange-500', bar: '#f97316' },
+  raw: { dot: 'bg-slate-500', bar: '#64748b' },
+  s3: { dot: 'bg-cyan-500', bar: '#06b6d4' },
+};
+const defaultColor = { dot: 'bg-gray-400', bar: '#9ca3af' };
+
+// storageStatusLabel — maps the storage threshold variant to its user-
+// facing label. Kept as a pure function so the label and the StatusBadge
+// share one source of truth.
+function storageStatusLabel(v: StatusVariant): string {
+  switch (v) {
+    case 'healthy':
+      return 'Healthy';
+    case 'warning':
+      return 'Filling up';
+    case 'failure':
+      return 'Nearly full';
+    case 'disabled':
+      return 'Not configured';
+    default:
+      return 'Unknown';
+  }
+}
+
+// failuresStatusLabel — Recent Failures card copy.
+function failuresStatusLabel(v: StatusVariant): string {
+  switch (v) {
+    case 'healthy':
+      return 'All clear';
+    case 'warning':
+      return 'Some failures';
+    case 'failure':
+      return 'Many failures';
+    default:
+      return 'Unknown';
+  }
+}
+
+// scanFindingsStatusLabel — Scan Findings Trend card copy.
+function scanFindingsStatusLabel(v: StatusVariant): string {
+  switch (v) {
+    case 'healthy':
+      return 'All clear';
+    case 'warning':
+      return 'Action needed';
+    case 'failure':
+      return 'Critical findings';
+    case 'disabled':
+      return 'No scans yet';
+    default:
+      return 'Unknown';
+  }
+}
+
+// jobsStatusLabel — Background Jobs card copy. jobsVariant only returns
+// healthy/warning/failure; the "maintenance" running-visual is overlaid
+// here based on the raw counts.
+function jobsStatusLabel(
+  v: StatusVariant,
+  running: number,
+  queued: number,
+  failedLast24h: number,
+  lastCompletedAt: string | null,
+): string {
+  if (v === 'failure') return 'Jobs failed';
+  // Still running/queued — surface "Running" over the generic healthy label.
+  if (running > 0 || queued > 0) return 'Running';
+  if (v === 'warning') return 'Some failed';
+  // healthy + nothing ever run → "No jobs yet".
+  if (failedLast24h === 0 && lastCompletedAt === null) return 'No jobs yet';
+  return 'Idle';
+}
+
+// tlsStatusLabel — TLS Certificate card copy.
+function tlsStatusLabel(v: StatusVariant): string {
+  switch (v) {
+    case 'healthy':
+      return 'Valid';
+    case 'warning':
+      return 'Expiring soon';
+    case 'failure':
+      return 'Expires urgently';
+    case 'disabled':
+      return 'Self-signed';
+    default:
+      return 'Unknown';
+  }
+}
+
+// trivyDBStatusLabel — Trivy Database card copy.
+function trivyDBStatusLabel(v: StatusVariant): string {
+  switch (v) {
+    case 'healthy':
+      return 'Fresh';
+    case 'warning':
+      return 'Stale';
+    case 'failure':
+      return 'Outdated';
+    case 'disabled':
+      return 'Not initialised';
+    default:
+      return 'Unknown';
+  }
+}
+
+// dbHealthStatusLabel — 3-state copy for the SQLite Health card.
+// dbHealthVariant() only returns healthy/warning/failure, so we don't
+// handle disabled/maintenance/neutral here.
+function dbHealthStatusLabel(v: StatusVariant): string {
+  switch (v) {
+    case 'healthy':
+      return 'Healthy';
+    case 'warning':
+      return 'WAL bloat';
+    case 'failure':
+      return 'Integrity failure';
+    default:
+      return 'Unknown';
+  }
+}
+
+// countRecentFailures — derive the Recent Failures C-2 count from the
+// existing dashboard.recent_activity[] field. The server already scopes
+// to the actor's visible projects (visibleProjectIDs in dashboard.go),
+// so no additional filtering is needed here. An event counts as a
+// "failure" when its action ends in `.failed` OR contains `error`.
+function countRecentFailures(events: DashboardActivityItem[] | undefined): {
+  count: number;
+  latest: DashboardActivityItem[];
+} {
+  if (!events) return { count: 0, latest: [] };
+  const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+  const matching = events.filter((e) => {
+    const ts = new Date(e.created_at).getTime();
+    if (Number.isNaN(ts) || ts < cutoff) return false;
+    const action = e.action.toLowerCase();
+    return action.endsWith('.failed') || action.includes('error');
+  });
+  return { count: matching.length, latest: matching.slice(0, 3) };
+}
+
+// daysUntil — return integer days between `now` and an RFC3339 string.
+// Negative values indicate the date is already in the past.
+function daysUntil(rfc3339: string | null | undefined): number {
+  if (!rfc3339) return 0;
+  const target = new Date(rfc3339).getTime();
+  if (Number.isNaN(target)) return 0;
+  return Math.floor((target - Date.now()) / (24 * 60 * 60 * 1000));
+}
+
+export function DashboardPage() {
+  const { data, isLoading, isError: dashIsError, error: dashError, refetch: dashRefetch } = useDashboard();
+  const { data: storageData, isLoading: storageLoading, isError: storageIsError, error: storageError, refetch: storageRefetch } = useDashboardStorage();
+
+  // Admin-only card hooks. The `enabled` gate prevents non-super-admin
+  // users from issuing a 403-generating request (server enforces
+  // RequireCan gates regardless).
+  const meQ = useMe();
+  const isSuperAdmin = !!meQ.data?.is_super_admin;
+  const jobsQ = useAdminJobsSummary(isSuperAdmin);
+  const tlsQ = useAdminTLSCurrent(isSuperAdmin);
+  const trivyQ = useAdminTrivyDBStatus(isSuperAdmin);
+  // 7th composition card, super-admin only.
+  // The refetchInterval inside useAdminDBHealth polls every 5 s while
+  // data.running=true and stops the moment the server reports idle,
+  // so the card's "Running…" label + spinner resolve without any
+  // client-side timer.
+  const dbHealthQ = useAdminDBHealth(isSuperAdmin);
+  const triggerDBHealthCheck = useTriggerDBHealthCheck();
+
+  // onClick handler for the Run-Now button — awaits the mutation so we
+  // can surface 429 rate-limit and 409 already-running envelopes as
+  // toasts. Both edge cases are uncommon because:
+  //   - 429 is gated by `can_run_now` which disables the button.
+  //   - 409 is only reachable if another tab/admin races the click.
+  const handleRunNow = () => {
+    triggerDBHealthCheck.mutate(undefined, {
+      onError: (err) => {
+        if (err instanceof ApiError) {
+          if (err.envelope.code === 'integrity_check.rate_limited') {
+            const secs = Number(
+              (err.envelope.details as Record<string, unknown> | undefined)
+                ?.retry_after_seconds ?? 0,
+            );
+            const mins = Math.ceil(secs / 60);
+            toast.error(
+              `Rate-limited: try again in ${mins} ${mins === 1 ? 'minute' : 'minutes'}.`,
+            );
+            return;
+          }
+          if (err.envelope.code === 'integrity_check.already_running') {
+            toast.error('A check is already in progress.');
+            return;
+          }
+        }
+        toast.error("Couldn't trigger the integrity check.");
+      },
+    });
+  };
+
+  const findings = data?.scan_findings;
+  const totalFindings =
+    (findings?.critical ?? 0) +
+    (findings?.high ?? 0) +
+    (findings?.medium ?? 0) +
+    (findings?.low ?? 0);
+
+  // Derived composition-card signals (undefined-safe; each card also
+  // guards on isLoading / isError independently).
+  const failuresData = countRecentFailures(data?.recent_activity);
+  // We have no first-class "never scanned" flag — treat the absence of
+  // any scan_findings object as "no scans yet". When we have a findings
+  // object with all zeros, it means scans ran and found nothing.
+  const neverScanned = !findings;
+  const criticalCount = findings?.critical ?? 0;
+
+  // Full-page loading state uses the canonical Skeleton* primitives.
+  // Once any dashboard slice resolves, we fall through to the real layout
+  // below where per-slice micro-skeletons handle independently loading
+  // tiles (storage, activity, severity lists, composition cards).
+  if (isLoading && storageLoading) {
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center justify-between">
+          <h1 className="text-[28px] font-semibold leading-tight">Dashboard</h1>
+        </div>
+
+        {/* Row 1: 3 metric tiles + 1 findings tile */}
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          <SkeletonMetric />
+          <SkeletonMetric />
+          <SkeletonMetric />
+          <SkeletonCard rows={2} />
+        </div>
+
+        {/* Row 2: Composition row — 6 skeleton slots. The admin-
+            only slots render unconditionally during cold load; once data
+            resolves, the real row conditionally renders them only when
+            is_super_admin. This intentionally over-counts skeletons at
+            cold-load rather than wait on `useMe()` to resolve before
+            showing any composition skeleton — keeping perceived TTFP
+            short matters more than exact slot count pre-hydration. */}
+        <div className="grid gap-4 xl:gap-6 grid-cols-1 md:grid-cols-2 xl:grid-cols-3">
+          <SkeletonCard rows={2} />
+          <SkeletonCard rows={3} />
+          <SkeletonCard rows={3} />
+          <SkeletonCard rows={3} />
+          <SkeletonCard rows={2} />
+          <SkeletonCard rows={2} />
+        </div>
+
+        {/* Row 3: Storage breakdown */}
+        <SkeletonCard rows={4} />
+
+        {/* Row 4: Activity + severity */}
+        <div className="grid gap-6 lg:grid-cols-2">
+          <SkeletonCard rows={5} />
+          <SkeletonCard rows={3} />
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <h1 className="text-[28px] font-semibold leading-tight">Dashboard</h1>
+        <div className="flex gap-2">
+          <Button variant="outline" size="sm" nativeButton={false} render={<Link to="/projects?create=1" />}>
+            <Plus className="mr-1.5 size-4" />
+            Create Project
+          </Button>
+        </div>
+      </div>
+
+      {/* Row 1: Projects, Repositories, Users, Scan Findings — uniform height */}
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        {[
+          {
+            title: 'Projects',
+            icon: FolderKanban,
+            value: data?.project_count ?? 0,
+          },
+          {
+            title: 'Repositories',
+            icon: FolderGit2,
+            value: data?.repo_count ?? 0,
+          },
+          {
+            title: 'Users',
+            icon: Users,
+            value: data?.user_count ?? 0,
+          },
+        ].map((card, i) => (
+          <motion.div
+            key={card.title}
+            custom={i}
+            initial="hidden"
+            animate="visible"
+            variants={cardVariants}
+          >
+            {isLoading ? (
+              <SkeletonMetric />
+            ) : (
+              <Card className="h-full">
+                <CardHeader>
+                  <div className="flex items-center justify-between">
+                    <CardTitle className="text-sm font-medium text-muted-foreground">
+                      {card.title}
+                    </CardTitle>
+                    <card.icon className="size-4 text-muted-foreground" />
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  <p className="text-3xl font-bold tabular-nums">{card.value}</p>
+                </CardContent>
+              </Card>
+            )}
+          </motion.div>
+        ))}
+
+        {/* Scan Findings card — same height via h-full */}
+        <motion.div
+          custom={3}
+          initial="hidden"
+          animate="visible"
+          variants={cardVariants}
+        >
+          {isLoading ? (
+            <SkeletonCard rows={2} />
+          ) : (
+            <Card className="h-full">
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <CardTitle className="text-sm font-medium text-muted-foreground">
+                    Scan Findings
+                  </CardTitle>
+                  <ShieldAlert className="size-4 text-muted-foreground" />
+                </div>
+              </CardHeader>
+              <CardContent>
+                <p className="text-3xl font-bold tabular-nums">{totalFindings}</p>
+                {totalFindings > 0 && (
+                  <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1">
+                    {(findings?.critical ?? 0) > 0 && (
+                      <span className="flex items-center gap-1 text-sm">
+                        <SeverityBadge severity="critical" />
+                        <span className="tabular-nums">{findings!.critical}</span>
+                      </span>
+                    )}
+                    {(findings?.high ?? 0) > 0 && (
+                      <span className="flex items-center gap-1 text-sm">
+                        <SeverityBadge severity="high" />
+                        <span className="tabular-nums">{findings!.high}</span>
+                      </span>
+                    )}
+                    {(findings?.medium ?? 0) > 0 && (
+                      <span className="flex items-center gap-1 text-sm">
+                        <SeverityBadge severity="medium" />
+                        <span className="tabular-nums">{findings!.medium}</span>
+                      </span>
+                    )}
+                    {(findings?.low ?? 0) > 0 && (
+                      <span className="flex items-center gap-1 text-sm">
+                        <SeverityBadge severity="low" />
+                        <span className="tabular-nums">{findings!.low}</span>
+                      </span>
+                    )}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          )}
+        </motion.div>
+      </div>
+
+      {/* Row 2: Composition row. Responsive grid: 1 col
+          at sm, 2 col at md (covers 1366×768 baseline), 3 col at xl.
+          StatusBadge variants ALL derive from dashboard-thresholds.ts
+          pure functions — no inline threshold decisions here. */}
+      <section aria-labelledby="composition-row-heading" className="space-y-4">
+        <h2 id="composition-row-heading" className="sr-only">
+          Status summary
+        </h2>
+        <div className="grid gap-4 xl:gap-6 grid-cols-1 md:grid-cols-2 xl:grid-cols-3">
+          <StorageStatusCard
+            isLoading={storageLoading}
+            isError={storageIsError}
+            error={storageError}
+            data={storageData}
+            onRetry={() => void storageRefetch()}
+          />
+          <RecentFailuresCard
+            isLoading={isLoading}
+            isError={dashIsError}
+            error={dashError}
+            count={failuresData.count}
+            latest={failuresData.latest}
+            isSuperAdmin={isSuperAdmin}
+            onRetry={() => void dashRefetch()}
+          />
+          <ScanFindingsTrendCard
+            isLoading={isLoading}
+            isError={dashIsError}
+            error={dashError}
+            criticalCount={criticalCount}
+            highCount={findings?.high ?? 0}
+            neverScanned={neverScanned}
+            onRetry={() => void dashRefetch()}
+          />
+          {isSuperAdmin && (
+            <>
+              <BackgroundJobsCard
+                isLoading={jobsQ.isLoading}
+                isError={jobsQ.isError}
+                error={jobsQ.error}
+                data={jobsQ.data}
+                onRetry={() => void jobsQ.refetch()}
+              />
+              <TLSCertCard
+                isLoading={tlsQ.isLoading}
+                isError={tlsQ.isError}
+                error={tlsQ.error}
+                data={tlsQ.data}
+                onRetry={() => void tlsQ.refetch()}
+              />
+              <TrivyDBCard
+                isLoading={trivyQ.isLoading}
+                isError={trivyQ.isError}
+                error={trivyQ.error}
+                data={trivyQ.data}
+                onRetry={() => void trivyQ.refetch()}
+              />
+              <DBHealthCard
+                isLoading={dbHealthQ.isLoading}
+                isError={dbHealthQ.isError}
+                error={dbHealthQ.error}
+                data={dbHealthQ.data}
+                onRetry={() => void dbHealthQ.refetch()}
+                onTrigger={handleRunNow}
+                isTriggering={triggerDBHealthCheck.isPending}
+              />
+            </>
+          )}
+        </div>
+      </section>
+
+      {/* Row 3: Full-width storage breakdown */}
+      <motion.div custom={4} initial="hidden" animate="visible" variants={cardVariants}>
+        {storageLoading ? (
+          <SkeletonCard rows={4} />
+        ) : (
+          <Card>
+            <CardHeader>
+              <div className="flex items-center gap-2">
+                <HardDrive className="size-4 text-muted-foreground" />
+                <CardTitle>Storage</CardTitle>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <StorageBreakdown
+                totalBytes={storageData?.total_bytes ?? 0}
+                usedBytes={storageData?.used_bytes ?? 0}
+                repos={storageData?.repos ?? []}
+              />
+            </CardContent>
+          </Card>
+        )}
+      </motion.div>
+
+      {/* Row 4: Activity feed + high severity findings */}
+      <div className="grid gap-6 lg:grid-cols-2">
+        <Card>
+          <CardHeader>
+            <div className="flex items-center gap-2">
+              <Activity className="size-4 text-muted-foreground" />
+              <CardTitle>Recent Activity</CardTitle>
+            </div>
+          </CardHeader>
+          <CardContent>
+            {isLoading ? (
+              <div className="space-y-3">
+                {Array.from({ length: 5 }).map((_, i) => (
+                  <div key={i} className="flex gap-3">
+                    <Skeleton className="h-4 w-24" />
+                    <Skeleton className="h-4 flex-1" />
+                  </div>
+                ))}
+              </div>
+            ) : data?.recent_activity && data.recent_activity.length > 0 ? (
+              <div className="space-y-3">
+                {data.recent_activity.slice(0, 20).map((event) => {
+                  const href = activityTargetHref(event.action, event.target_id);
+                  const content = (
+                    <>
+                      <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
+                        {formatDate(event.created_at)}
+                      </span>
+                      <span className="flex-1">
+                        <span className="font-medium">{event.action}</span>{' '}
+                        <span className="text-muted-foreground">{event.target_id}</span>
+                      </span>
+                    </>
+                  );
+                  return href ? (
+                    <Link
+                      key={event.id}
+                      to={href}
+                      className="flex items-start gap-3 text-sm rounded-md px-1 -mx-1 py-0.5 hover:bg-muted/40 transition-colors"
+                    >
+                      {content}
+                    </Link>
+                  ) : (
+                    <div key={event.id} className="flex items-start gap-3 text-sm">
+                      {content}
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              // "No recent activity." rendered via EmptyState. No CTA —
+              // activity appears implicitly from user actions elsewhere.
+              <EmptyState
+                icon={Activity}
+                title="No recent activity"
+                description="Actions you and your teammates take will appear here."
+              />
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <div className="flex items-center gap-2">
+              <ShieldAlert className="size-4 text-destructive" />
+              <CardTitle>High-Severity Findings</CardTitle>
+            </div>
+          </CardHeader>
+          <CardContent>
+            {isLoading ? (
+              <div className="space-y-3">
+                {Array.from({ length: 3 }).map((_, i) => (
+                  <Skeleton key={i} className="h-6 w-full" />
+                ))}
+              </div>
+            ) : data?.high_severity && data.high_severity.length > 0 ? (
+              <HighSeverityList items={data.high_severity} />
+            ) : (
+              // The positive zero-CVE copy is a goal state (zero CVEs =
+              // win), NOT an absence-of-data surface, so we use an inline
+              // StatusBadge instead of an EmptyState — the previous
+              // exclamation-framed sentence is retired.
+              <div className="flex items-center gap-2">
+                <StatusBadge status="healthy" label="All clear" size="sm" />
+                <span className="text-sm text-muted-foreground">
+                  No critical or high severity findings.
+                </span>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+// =============================================================================
+// Composition cards
+// -----------------------------------------------------------------------------
+// Each card is a self-contained component so individual loading / error
+// states stay local. All six follow the same pattern:
+//   Card > CardHeader (CardTitle + CardAction with StatusBadge) > CardContent
+// Cold load replaces the whole card with <SkeletonCard>; error replaces
+// the content with <ErrorEnvelopeRenderer mode="inline">.
+// =============================================================================
+
+type CompositionCardCommon = {
+  isLoading: boolean;
+  isError: boolean;
+  error: unknown;
+  onRetry: () => void;
+};
+
+// -- Storage Status (user-visible) -------------------------------------------
+
+function StorageStatusCard({
+  isLoading,
+  isError,
+  error,
+  data,
+  onRetry,
+}: CompositionCardCommon & { data: { total_bytes: number; used_bytes: number; repos: StorageRepoRow[] } | undefined }) {
+  if (isLoading || !data) {
+    return <SkeletonCard rows={2} />;
+  }
+  const used = data.used_bytes ?? 0;
+  const total = data.total_bytes ?? 0;
+  const variant = storageVariant(used, total);
+  const topRepos = (data.repos ?? [])
+    .slice(0, 3)
+    .map((r) => `${r.project}/${r.name}`)
+    .join(', ');
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Storage</CardTitle>
+        <CardAction>
+          <StatusBadge status={variant} label={storageStatusLabel(variant)} size="sm" />
+        </CardAction>
+      </CardHeader>
+      <CardContent>
+        {isError ? (
+          <ErrorEnvelopeRenderer
+            mode="inline"
+            envelope={envelopeFromError(error, "We couldn't load storage.")}
+            onRetry={onRetry}
+          />
+        ) : total <= 0 ? (
+          <p className="text-sm text-muted-foreground">Disk total not reported yet.</p>
+        ) : (
+          <>
+            <p className="text-sm tabular-nums">
+              {formatBytes(used)} / {formatBytes(total)} used
+            </p>
+            {topRepos ? (
+              <p className="mt-1 text-xs text-muted-foreground truncate">
+                Top: {topRepos}
+              </p>
+            ) : null}
+            <Button
+              variant="link"
+              size="sm"
+              className="px-0 mt-2"
+              nativeButton={false}
+              render={<a href="#storage">View storage details →</a>}
+            />
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// -- Recent Failures (user-visible) ------------------------------------------
+
+function RecentFailuresCard({
+  isLoading,
+  isError,
+  error,
+  count,
+  latest,
+  isSuperAdmin,
+  onRetry,
+}: CompositionCardCommon & {
+  count: number;
+  latest: DashboardActivityItem[];
+  isSuperAdmin: boolean;
+}) {
+  if (isLoading) {
+    return <SkeletonCard rows={3} />;
+  }
+  const variant = failuresVariant(count);
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Recent Failures</CardTitle>
+        <CardAction>
+          <StatusBadge status={variant} label={failuresStatusLabel(variant)} size="sm" />
+        </CardAction>
+      </CardHeader>
+      <CardContent>
+        {isError ? (
+          <ErrorEnvelopeRenderer
+            mode="inline"
+            envelope={envelopeFromError(error, "We couldn't load recent activity.")}
+            onRetry={onRetry}
+          />
+        ) : count === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            No failures in the last 24 hours.
+          </p>
+        ) : (
+          <>
+            <p className="text-sm tabular-nums">
+              {count} failed in the last 24h
+            </p>
+            {latest.length > 0 && (
+              <ul className="mt-2 space-y-1">
+                {latest.map((event) => (
+                  <li
+                    key={event.id}
+                    className="text-xs text-muted-foreground truncate tabular-nums"
+                  >
+                    {formatDate(event.created_at)} · {event.action} {event.target_id}
+                  </li>
+                ))}
+              </ul>
+            )}
+            {isSuperAdmin ? (
+              <Button
+                variant="link"
+                size="sm"
+                className="px-0 mt-2"
+                nativeButton={false}
+                render={<Link to="/admin/audit">View full audit log →</Link>}
+              />
+            ) : null}
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// -- Scan Findings Trend (user-visible) --------------------------------------
+
+function ScanFindingsTrendCard({
+  isLoading,
+  isError,
+  error,
+  criticalCount,
+  highCount,
+  neverScanned,
+  onRetry,
+}: CompositionCardCommon & {
+  criticalCount: number;
+  highCount: number;
+  neverScanned: boolean;
+}) {
+  if (isLoading) {
+    return <SkeletonCard rows={3} />;
+  }
+  const variant = scanFindingsVariant(criticalCount, neverScanned);
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Scan Findings Trend</CardTitle>
+        <CardAction>
+          <StatusBadge
+            status={variant}
+            label={scanFindingsStatusLabel(variant)}
+            size="sm"
+          />
+        </CardAction>
+      </CardHeader>
+      <CardContent>
+        {isError ? (
+          <ErrorEnvelopeRenderer
+            mode="inline"
+            envelope={envelopeFromError(error, "We couldn't load scan findings.")}
+            onRetry={onRetry}
+          />
+        ) : neverScanned ? (
+          <p className="text-sm text-muted-foreground">
+            Trigger a scan from any repo to populate trend data.
+          </p>
+        ) : (
+          <>
+            <p className="text-sm tabular-nums">
+              {criticalCount} critical, {highCount} high
+            </p>
+            <Button
+              variant="link"
+              size="sm"
+              className="px-0 mt-2"
+              nativeButton={false}
+              render={
+                <Link to="/search?kind=cve&severity=critical,high">
+                  View findings →
+                </Link>
+              }
+            />
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// -- Background Jobs (admin-only) --------------------------------------------
+
+function BackgroundJobsCard({
+  isLoading,
+  isError,
+  error,
+  data,
+  onRetry,
+}: CompositionCardCommon & {
+  data: {
+    running: number;
+    queued: number;
+    failed_last_24h: number;
+    last_completed_at: string | null;
+    last_failed_at: string | null;
+  } | undefined;
+}) {
+  if (isLoading || !data) {
+    return <SkeletonCard rows={3} />;
+  }
+  const variant = jobsVariant(
+    data.running,
+    data.queued,
+    data.failed_last_24h,
+    data.last_completed_at,
+  );
+  const label = jobsStatusLabel(
+    variant,
+    data.running,
+    data.queued,
+    data.failed_last_24h,
+    data.last_completed_at,
+  );
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Background Jobs</CardTitle>
+        <CardAction>
+          <StatusBadge status={variant} label={label} size="sm" />
+        </CardAction>
+      </CardHeader>
+      <CardContent>
+        {isError ? (
+          <ErrorEnvelopeRenderer
+            mode="inline"
+            envelope={envelopeFromError(error, "We couldn't load jobs status.")}
+            onRetry={onRetry}
+          />
+        ) : (
+          <>
+            <p className="text-sm tabular-nums">
+              {data.running} running, {data.queued} queued
+            </p>
+            {data.failed_last_24h > 0 && (
+              <p className="mt-1 text-sm text-muted-foreground tabular-nums">
+                {data.failed_last_24h} failed in last 24h
+              </p>
+            )}
+            {data.last_completed_at && (
+              <p className="mt-1 text-xs text-muted-foreground tabular-nums">
+                Last completed {formatDate(data.last_completed_at)}
+              </p>
+            )}
+            <Button
+              variant="link"
+              size="sm"
+              className="px-0 mt-2"
+              nativeButton={false}
+              render={<Link to="/admin/gc">Manage garbage collection →</Link>}
+            />
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// -- TLS Certificate (admin-only) --------------------------------------------
+
+function TLSCertCard({
+  isLoading,
+  isError,
+  error,
+  data,
+  onRetry,
+}: CompositionCardCommon & {
+  data: { not_after: string; source: 'self-signed' | 'uploaded'; subject: string } | undefined;
+}) {
+  if (isLoading) {
+    return <SkeletonCard rows={2} />;
+  }
+  const hasUploadedCert = data?.source === 'uploaded';
+  const daysRemaining = data ? daysUntil(data.not_after) : 0;
+  const variant = tlsVariant(daysRemaining, hasUploadedCert);
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>TLS Certificate</CardTitle>
+        <CardAction>
+          <StatusBadge status={variant} label={tlsStatusLabel(variant)} size="sm" />
+        </CardAction>
+      </CardHeader>
+      <CardContent>
+        {isError ? (
+          <ErrorEnvelopeRenderer
+            mode="inline"
+            envelope={envelopeFromError(error, "We couldn't load TLS status.")}
+            onRetry={onRetry}
+          />
+        ) : !hasUploadedCert ? (
+          <p className="text-sm text-muted-foreground">
+            Using the default self-signed certificate.
+          </p>
+        ) : (
+          <p className="text-sm tabular-nums">
+            {daysRemaining >= 0
+              ? `${daysRemaining} ${daysRemaining === 1 ? 'day' : 'days'} remaining`
+              : `Expired ${Math.abs(daysRemaining)} ${Math.abs(daysRemaining) === 1 ? 'day' : 'days'} ago`}
+          </p>
+        )}
+        <p className="mt-1 text-xs text-muted-foreground">
+          Source: {hasUploadedCert ? 'Uploaded' : 'Self-signed'}
+        </p>
+        <Button
+          variant="link"
+          size="sm"
+          className="px-0 mt-2"
+          nativeButton={false}
+          render={<Link to="/admin/tls">Manage certificate →</Link>}
+        />
+      </CardContent>
+    </Card>
+  );
+}
+
+// -- Trivy Database (admin-only) ---------------------------------------------
+
+function TrivyDBCard({
+  isLoading,
+  isError,
+  error,
+  data,
+  onRetry,
+}: CompositionCardCommon & {
+  data: { version: string; source: string; age_hours: number } | undefined;
+}) {
+  if (isLoading) {
+    return <SkeletonCard rows={2} />;
+  }
+  // everInitialised: a meta row exists (version non-empty and source is
+  // not 'none'). The 'baked-in' source with version='unknown' still
+  // counts as initialised because scans CAN run — the age is simply
+  // unknown, which trivyDBVariant folds into the warning bucket when
+  // ageDays is -1 (negative, below warn threshold) via its own logic.
+  // To stay close to the "not initialised" copy we treat the source
+  // 'none' case as the only "never initialised" state.
+  const everInitialised = !!data && data.source !== 'none';
+  const ageDays = data && data.age_hours >= 0 ? Math.floor(data.age_hours / 24) : 0;
+  const variant = trivyDBVariant(ageDays, everInitialised);
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Trivy Database</CardTitle>
+        <CardAction>
+          <StatusBadge status={variant} label={trivyDBStatusLabel(variant)} size="sm" />
+        </CardAction>
+      </CardHeader>
+      <CardContent>
+        {isError ? (
+          <ErrorEnvelopeRenderer
+            mode="inline"
+            envelope={envelopeFromError(error, "We couldn't load Trivy status.")}
+            onRetry={onRetry}
+          />
+        ) : !everInitialised ? (
+          <p className="text-sm text-muted-foreground">
+            Upload a Trivy DB tarball to enable scanning.
+          </p>
+        ) : data && data.age_hours < 0 ? (
+          <p className="text-sm tabular-nums">Age unknown (baked-in)</p>
+        ) : (
+          <p className="text-sm tabular-nums">Updated {ageDays} {ageDays === 1 ? 'day' : 'days'} ago</p>
+        )}
+        <Button
+          variant="link"
+          size="sm"
+          className="px-0 mt-2"
+          nativeButton={false}
+          render={<Link to="/admin/trivy">Manage Trivy DB →</Link>}
+        />
+      </CardContent>
+    </Card>
+  );
+}
+
+// -- SQLite Health (admin-only) ----------------------------------------------
+
+/**
+ * DBHealthCard — SQLite DB health + manual integrity-check trigger.
+ *
+ * Layout:
+ *   - CardTitle "SQLite Health" + StatusBadge in CardAction slot.
+ *   - Headline: `Integrity <OK|FAIL> · checked <relative-age>`.
+ *   - 2-col detail grid: Size (with tooltip), WAL, Journal, Free, Driver.
+ *   - Footer: inline "Run integrity check now" link-button.
+ *
+ * Threshold sources:
+ *   - Status variant: dbHealthVariant(status, wal.bytes, wal.warn_over_bytes).
+ *     `wal.warn_over_bytes` is ALWAYS read from the server payload —
+ *     never hardcoded.
+ *   - Rate-limit eligibility: `data.can_run_now` + `data.next_available_at`
+ *     are server-computed. The frontend never recomputes.
+ *
+ * Tooltip N-minute invariant (static-on-render):
+ *   `minutesUntilAvailable` is computed ONCE at render from
+ *   `Date.parse(next_available_at) - Date.now()`. No setInterval, no
+ *   useEffect-based live tick. Drift up to 5 s (the refetch window) is
+ *   accepted; the polling refetch is the update vehicle.
+ */
+type DBHealthCardProps = CompositionCardCommon & {
+  data: DBHealth | undefined;
+  onTrigger: () => void;
+  isTriggering: boolean;
+};
+
+function DBHealthCard({
+  isLoading,
+  isError,
+  error,
+  data,
+  onRetry,
+  onTrigger,
+  isTriggering,
+}: DBHealthCardProps) {
+  // SkeletonCard with rows=4 — this card has more detail rows than the
+  // other composition cards (headline + 5 grid rows + footer). Only show
+  // skeleton during cold-load; error-without-data is handled in a
+  // separate branch so the title + Retry affordance surface.
+  if (isLoading) {
+    return <SkeletonCard rows={4} />;
+  }
+
+  // Error-without-data: cold-load failed OR refetch failed with empty
+  // cache. Render a shell card exposing the title + inline
+  // ErrorEnvelopeRenderer + Retry (mirrors TrivyDBCard error path).
+  // Without this branch, an initial GET 500 would crash on the
+  // `data.integrity` access below because `data` is undefined.
+  //
+  // Note: `isError && data` (error on refetch while previous payload is
+  // still cached) falls through to the normal render with stale data —
+  // TanStack Query behavior — and the inline error branch at
+  // `{isError ? … : …}` surfaces the retry affordance on top.
+  if (!data) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>SQLite Health</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <ErrorEnvelopeRenderer
+            mode="inline"
+            envelope={envelopeFromError(
+              error,
+              "We couldn't load DB health.",
+            )}
+            onRetry={onRetry}
+          />
+        </CardContent>
+      </Card>
+    );
+  }
+
+  const integrityStatus = data.integrity.status ?? '';
+  const integrityOk = integrityStatus === 'ok' || integrityStatus === '';
+  const variant = dbHealthVariant(
+    integrityStatus,
+    data.wal.bytes,
+    data.wal.warn_over_bytes,
+  );
+
+  // "checked <relative-age>": empty checked_at → "never" (pre-boot-hook).
+  const checkedLabel = data.integrity.checked_at
+    ? formatDate(data.integrity.checked_at)
+    : 'never';
+
+  // Single "Size" value surfaced; tooltip reveals the logical /
+  // freelist breakdown. Middot separator matches the sync-pill visual
+  // convention.
+  const sizeTooltip = `On-disk ${formatBytes(data.size.on_disk_bytes)} · Logical ${formatBytes(data.size.logical_bytes)} · Freelist ${data.size.freelist_count} pages (${formatBytes(data.size.freelist_bytes)})`;
+
+  // N computed ONCE at render — no setInterval. The polling refetch is
+  // the update vehicle; accepted drift is up to 5 s.
+  const minutesUntilAvailable = data.next_available_at
+    ? Math.max(
+        0,
+        Math.ceil((Date.parse(data.next_available_at) - Date.now()) / 60_000),
+      )
+    : 0;
+
+  // Button state resolution:
+  //   - Running: spinner + "Running…" label, disabled.
+  //   - Pending mutation: also disabled, "Running…" (server will echo
+  //     running=true on the next poll tick).
+  //   - Rate-limited (!can_run_now): disabled, tooltip shows N-minute
+  //     countdown; no live tick.
+  //   - Enabled: normal click.
+  const running = data.running || isTriggering;
+  const rateLimited = !running && !data.can_run_now;
+  const buttonDisabled = running || rateLimited;
+  const buttonLabel = running ? 'Running…' : 'Run integrity check now';
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>SQLite Health</CardTitle>
+        <CardAction>
+          <StatusBadge
+            status={variant}
+            label={dbHealthStatusLabel(variant)}
+            size="sm"
+          />
+        </CardAction>
+      </CardHeader>
+      <CardContent>
+        {isError ? (
+          <ErrorEnvelopeRenderer
+            mode="inline"
+            envelope={envelopeFromError(
+              error,
+              "We couldn't load DB health.",
+            )}
+            onRetry={onRetry}
+          />
+        ) : (
+          <>
+            {/* Headline — "Integrity OK · checked <age>". */}
+            <p className="text-sm tabular-nums">
+              Integrity {integrityOk ? 'OK' : 'FAIL'} · checked {checkedLabel}
+            </p>
+            {/* Compact 2-col detail grid.
+                `grid-cols-[auto_1fr]` sizes the label column tight and
+                lets values flex; `tabular-nums` aligns numeric values. */}
+            <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-sm tabular-nums">
+              <dt className="text-muted-foreground">Size</dt>
+              <dd>
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <span
+                        className="cursor-help underline decoration-dotted decoration-muted-foreground/50 underline-offset-2"
+                        aria-label={sizeTooltip}
+                      >
+                        {formatBytes(data.size.on_disk_bytes)}
+                      </span>
+                    }
+                  />
+                  <TooltipContent>{sizeTooltip}</TooltipContent>
+                </Tooltip>
+              </dd>
+              <dt className="text-muted-foreground">WAL</dt>
+              <dd
+                className={
+                  variant === 'warning'
+                    ? 'text-status-warning-foreground'
+                    : undefined
+                }
+              >
+                {formatBytes(data.wal.bytes)}
+              </dd>
+              <dt className="text-muted-foreground">Journal</dt>
+              <dd>{data.journal_mode || '—'}</dd>
+              <dt className="text-muted-foreground">Free</dt>
+              <dd>
+                {data.size.freelist_count}{' '}
+                {data.size.freelist_count === 1 ? 'page' : 'pages'}
+              </dd>
+              <dt className="text-muted-foreground">Driver</dt>
+              <dd className="truncate">{data.driver.label}</dd>
+            </dl>
+
+            {/* Inline link-button footer action. Run-Now button.
+                When rate-limited, wrapped in a Tooltip showing the
+                static-at-render "Available in N min" text. */}
+            {rateLimited ? (
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button
+                      variant="link"
+                      size="sm"
+                      className="px-0 mt-2"
+                      disabled
+                      aria-label={`Run integrity check now — available in ${minutesUntilAvailable} minutes`}
+                    >
+                      {buttonLabel}
+                    </Button>
+                  }
+                />
+                <TooltipContent>
+                  Available in {minutesUntilAvailable}{' '}
+                  {minutesUntilAvailable === 1 ? 'min' : 'min'}
+                </TooltipContent>
+              </Tooltip>
+            ) : (
+              <Button
+                variant="link"
+                size="sm"
+                className="px-0 mt-2"
+                disabled={buttonDisabled}
+                onClick={onTrigger}
+              >
+                {running && (
+                  <Loader2
+                    className="size-3.5 animate-spin"
+                    aria-hidden="true"
+                  />
+                )}
+                {buttonLabel}
+              </Button>
+            )}
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// =============================================================================
+// Existing legacy components (Row 3 + Row 4 detail renderers) — unchanged.
+// =============================================================================
+
+function HighSeverityList({ items }: { items: DashboardVulnRow[] }) {
+  return (
+    <div className="space-y-2">
+      {items.map((v, i) => (
+        <Link
+          key={`${v.cve_id}-${v.project}-${v.repo}-${i}`}
+          to={`/projects/${v.project}/${vulnRepoType(v)}/${v.repo}`}
+          className="flex items-start gap-2 text-sm rounded-md px-1 -mx-1 py-0.5 hover:bg-muted/40 transition-colors"
+        >
+          <SeverityBadge severity={v.severity.toLowerCase()} className="mt-0.5 shrink-0" />
+          <div className="min-w-0 flex-1">
+            <span className="font-mono font-medium">{v.cve_id}</span>
+            {v.occurrences > 1 && (
+              // Collapse duplicate rows into a single entry with an
+              // occurrence badge. Single-instance rows stay visually quiet.
+              <span
+                className="ml-1.5 rounded bg-muted px-1 py-0 text-[10px] font-medium tabular-nums text-muted-foreground"
+                title={`${v.occurrences} scanned artifacts in this repo share this CVE`}
+              >
+                ×{v.occurrences}
+              </span>
+            )}
+            <span className="mx-1.5 text-muted-foreground">in</span>
+            <span className="text-muted-foreground">
+              {v.project}/{v.repo}
+            </span>
+            {v.package && (
+              <span className="ml-1.5 text-xs text-muted-foreground">
+                ({v.package})
+              </span>
+            )}
+          </div>
+        </Link>
+      ))}
+    </div>
+  );
+}
+
+// vulnRepoType picks the URL protocol segment for a vulnerability row. The
+// dashboard API returns the field as `repo_type`; fall back to `docker` only
+// if the backend hasn't populated it yet for legacy rows.
+function vulnRepoType(v: DashboardVulnRow): string {
+  return v.repo_type || 'docker';
+}
+
+function StorageBreakdown({
+  totalBytes,
+  usedBytes,
+  repos,
+}: {
+  totalBytes: number;
+  usedBytes: number;
+  repos: StorageRepoRow[];
+}) {
+  const percentage = totalBytes > 0 ? Math.min(Math.round((usedBytes / totalBytes) * 100), 100) : 0;
+  // When total disk capacity is known, scale per-repo bars against it so
+  // each bar reads as "fraction of the whole volume" — matches the top
+  // gauge. Falls back to scaling against the largest repo when capacity
+  // is unknown so the chart still conveys relative size.
+  const maxRepoBytes = repos.length > 0 ? repos[0].size_bytes : 1;
+  const scaleDenominator = totalBytes > 0 ? totalBytes : maxRepoBytes;
+
+  return (
+    <div id="storage" className="space-y-5">
+      {/* Overall gauge */}
+      <div className="space-y-2">
+        <div className="flex items-baseline gap-2">
+          <span className="text-3xl font-bold tabular-nums">{formatBytes(usedBytes)}</span>
+          <span className="text-sm text-muted-foreground">
+            / {totalBytes > 0 ? formatBytes(totalBytes) : 'unknown'}
+          </span>
+          <span className="ml-auto text-sm text-muted-foreground tabular-nums">
+            {percentage}% used
+          </span>
+        </div>
+        <Progress value={percentage}>
+          <span className="sr-only">{percentage}% used</span>
+        </Progress>
+      </div>
+
+      {/* Per-repo breakdown — full-width bars with label inside */}
+      {repos.length === 0 ? (
+        // "No repositories with stored data." rendered via EmptyState.
+        <EmptyState
+          icon={HardDrive}
+          title="No stored data yet"
+          description="Repositories with artifacts will appear here once data lands."
+        />
+      ) : (
+        <div className="space-y-2">
+          {repos.map((repo) => {
+            // Proportional to total disk (or to the largest repo if total
+            // is unknown). No minimum floor — a repo that's 0.1% of disk
+            // should render as a hairline, not pretend to be 8%.
+            const rawPercent =
+              scaleDenominator > 0
+                ? (repo.size_bytes / scaleDenominator) * 100
+                : 0;
+            const barPercent = Math.min(rawPercent, 100);
+            const colors = repoTypeColor[repo.type] ?? defaultColor;
+            return (
+              <Link
+                key={`${repo.project}/${repo.type}/${repo.name}`}
+                to={`/projects/${repo.project}/${repo.type}/${repo.name}`}
+                className="block rounded-md p-1 -m-1 hover:bg-muted/40 transition-colors"
+              >
+                <div className="flex items-center gap-1.5 mb-0.5">
+                  <span className={`inline-block size-2 shrink-0 rounded-full ${colors.dot}`} />
+                  <span className="text-xs text-muted-foreground truncate flex-1">
+                    {repo.project} /{' '}
+                    <span className="font-medium text-foreground">{repo.name}</span>
+                    <span className="ml-1">({repo.type})</span>
+                  </span>
+                  <span className="text-xs font-medium tabular-nums text-muted-foreground shrink-0">
+                    {formatBytes(repo.size_bytes)}
+                  </span>
+                </div>
+                <div
+                  className="relative h-2 w-full rounded bg-muted/40 overflow-hidden"
+                  title={`${formatBytes(repo.size_bytes)} — ${rawPercent.toFixed(2)}% of ${totalBytes > 0 ? formatBytes(totalBytes) : 'largest repo'}`}
+                >
+                  <div
+                    className="absolute inset-y-0 left-0 rounded"
+                    style={{
+                      // Bars under 0.3% collapse to sub-pixel; clamp to a
+                      // 2px hairline so users still see the segment.
+                      width:
+                        rawPercent > 0 && rawPercent < 0.3
+                          ? '2px'
+                          : `${barPercent}%`,
+                      backgroundColor: colors.bar,
+                      opacity: 0.85,
+                    }}
+                  />
+                </div>
+              </Link>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}

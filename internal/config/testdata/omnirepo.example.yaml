@@ -1,0 +1,27 @@
+server:
+  http_port: 8080
+  https_port: 8443
+  hostname: omnirepo.example.com
+  external_hostnames:
+    - omnirepo.example.com
+    - artifacts.example.com
+data_root: /var/lib/omnirepo
+tls:
+  cert_path: /var/lib/omnirepo/certs/server.crt
+  key_path: /var/lib/omnirepo/certs/server.key
+bootstrap:
+  path: /var/lib/omnirepo/config/bootstrap.json
+auth:
+  session_ttl: 12h
+  docker_jwt_ttl: 60m
+  sigv4_skew: 15m
+scan:
+  auto_scan_default: true
+  db_warn_age_days: 7
+air_gap:
+  allow_external_actions: true
+log:
+  level: info
+  format: json
+  audit_max_size_mb: 100
+  audit_keep: 10

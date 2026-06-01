@@ -1,0 +1,11 @@
+-- The up migration deletes mis-labeled rows so the next sync re-inserts
+-- them with the fixed parser. Rollback cannot restore the lost rows —
+-- they originated from upstream JSON and are refetched on demand.
+-- No-op here; document the recovery path.
+--
+-- To restore after down-migrating: run a sync on every affected repo
+-- (admin UI → repo → Sync now). The mirror flow re-ingests every
+-- upstream file; broken rows stay broken only until the parser is
+-- downgraded, which would itself require reverting the up migration on
+-- parse.go — not a supported downgrade path.
+SELECT 1;

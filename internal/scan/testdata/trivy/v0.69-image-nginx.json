@@ -1,0 +1,41 @@
+{
+  "SchemaVersion": 2,
+  "ArtifactName": "nginx:1.14",
+  "ArtifactType": "container_image",
+  "Metadata": {"OS": {"Family": "debian", "Name": "9"}, "DBVersion": "2026-03-15"},
+  "Results": [
+    {
+      "Target": "nginx:1.14 (debian 9)",
+      "Class": "os-pkgs",
+      "Type": "debian",
+      "Vulnerabilities": [
+        {"VulnerabilityID":"CVE-2024-0001","PkgName":"libssl1.1","InstalledVersion":"1.1.1n-0+deb9u1","FixedVersion":"1.1.1n-0+deb9u2","Severity":"CRITICAL","Title":"openssl c1","Description":"d"},
+        {"VulnerabilityID":"CVE-2024-0002","PkgName":"libc6","InstalledVersion":"2.24-11+deb9u4","FixedVersion":"2.24-11+deb9u5","Severity":"CRITICAL","Title":"glibc c2","Description":"d"},
+        {"VulnerabilityID":"CVE-2024-0003","PkgName":"bash","InstalledVersion":"4.4-5","FixedVersion":"4.4-5+deb9u1","Severity":"CRITICAL","Title":"bash c3","Description":"d"},
+        {"VulnerabilityID":"CVE-2024-0004","PkgName":"openssh-client","InstalledVersion":"7.4p1-10","FixedVersion":"7.4p1-11","Severity":"CRITICAL","Title":"ssh c4","Description":"d"},
+        {"VulnerabilityID":"CVE-2024-0005","PkgName":"curl","InstalledVersion":"7.52.1-5","FixedVersion":"7.52.1-6","Severity":"CRITICAL","Title":"curl c5","Description":"d"},
+
+        {"VulnerabilityID":"CVE-2024-0101","PkgName":"zlib1g","InstalledVersion":"1:1.2.8.dfsg-5","FixedVersion":"1:1.2.8.dfsg-6","Severity":"HIGH","Title":"zlib h1","Description":"d"},
+        {"VulnerabilityID":"CVE-2024-0102","PkgName":"libgcrypt20","InstalledVersion":"1.7.6-2+deb9u3","FixedVersion":"1.7.6-2+deb9u4","Severity":"HIGH","Title":"gcrypt h2","Description":"d"},
+        {"VulnerabilityID":"CVE-2024-0103","PkgName":"libxml2","InstalledVersion":"2.9.4+dfsg1-2.2+deb9u2","FixedVersion":"2.9.4+dfsg1-2.2+deb9u3","Severity":"HIGH","Title":"xml h3","Description":"d"},
+        {"VulnerabilityID":"CVE-2024-0104","PkgName":"libsystemd0","InstalledVersion":"232-25+deb9u11","FixedVersion":"232-25+deb9u12","Severity":"HIGH","Title":"systemd h4","Description":"d"},
+        {"VulnerabilityID":"CVE-2024-0105","PkgName":"libpcre3","InstalledVersion":"2:8.39-3","FixedVersion":"2:8.39-4","Severity":"HIGH","Title":"pcre h5","Description":"d"},
+        {"VulnerabilityID":"CVE-2024-0106","PkgName":"libnghttp2-14","InstalledVersion":"1.18.1-1","FixedVersion":"1.18.1-2","Severity":"HIGH","Title":"nghttp2 h6","Description":"d"},
+        {"VulnerabilityID":"CVE-2024-0107","PkgName":"libsqlite3-0","InstalledVersion":"3.16.2-5+deb9u1","FixedVersion":"3.16.2-5+deb9u2","Severity":"HIGH","Title":"sqlite h7","Description":"d"},
+        {"VulnerabilityID":"CVE-2024-0108","PkgName":"libldap-2.4-2","InstalledVersion":"2.4.44+dfsg-5","FixedVersion":"2.4.44+dfsg-6","Severity":"HIGH","Title":"ldap h8","Description":"d"},
+        {"VulnerabilityID":"CVE-2024-0109","PkgName":"libidn2-0","InstalledVersion":"0.16-1+deb9u1","FixedVersion":"0.16-1+deb9u2","Severity":"HIGH","Title":"idn h9","Description":"d"},
+        {"VulnerabilityID":"CVE-2024-0110","PkgName":"libgnutls30","InstalledVersion":"3.5.8-5+deb9u4","FixedVersion":"3.5.8-5+deb9u5","Severity":"HIGH","Title":"gnutls h10","Description":"d"},
+        {"VulnerabilityID":"CVE-2024-0111","PkgName":"libkrb5-3","InstalledVersion":"1.15-1+deb9u1","FixedVersion":"1.15-1+deb9u2","Severity":"HIGH","Title":"krb5 h11","Description":"d"},
+        {"VulnerabilityID":"CVE-2024-0112","PkgName":"libtasn1-6","InstalledVersion":"4.10-1.1+deb9u1","FixedVersion":"4.10-1.1+deb9u2","Severity":"HIGH","Title":"tasn1 h12","Description":"d"},
+
+        {"VulnerabilityID":"CVE-2024-0201","PkgName":"perl-base","InstalledVersion":"5.24.1-3+deb9u5","FixedVersion":"5.24.1-3+deb9u6","Severity":"MEDIUM","Title":"perl m1","Description":"d"},
+        {"VulnerabilityID":"CVE-2024-0202","PkgName":"tar","InstalledVersion":"1.29b-1.1","FixedVersion":"1.29b-1.2","Severity":"MEDIUM","Title":"tar m2","Description":"d"},
+        {"VulnerabilityID":"CVE-2024-0203","PkgName":"gzip","InstalledVersion":"1.6-5+b1","FixedVersion":"1.6-5+b2","Severity":"MEDIUM","Title":"gzip m3","Description":"d"},
+        {"VulnerabilityID":"CVE-2024-0204","PkgName":"coreutils","InstalledVersion":"8.26-3","FixedVersion":"8.26-3+deb9u1","Severity":"MEDIUM","Title":"coreutils m4","Description":"d"},
+        {"VulnerabilityID":"CVE-2024-0205","PkgName":"sed","InstalledVersion":"4.4-1","FixedVersion":"4.4-1+deb9u1","Severity":"MEDIUM","Title":"sed m5","Description":"d"},
+        {"VulnerabilityID":"CVE-2024-0206","PkgName":"grep","InstalledVersion":"2.27-2","FixedVersion":"2.27-2+deb9u1","Severity":"MEDIUM","Title":"grep m6","Description":"d"},
+        {"VulnerabilityID":"CVE-2024-0207","PkgName":"findutils","InstalledVersion":"4.6.0+git+20161106-2","FixedVersion":"4.6.0+git+20161106-3","Severity":"MEDIUM","Title":"find m7","Description":"d"}
+      ]
+    }
+  ]
+}

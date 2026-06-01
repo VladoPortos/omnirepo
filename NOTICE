@@ -1,0 +1,126 @@
+OmniRepo
+Copyright 2026 OmniRepo Contributors
+
+This product is licensed under the Apache License, Version 2.0 (the
+"License"); you may not use this product except in compliance with the
+License. A copy of the License is distributed with this software in the
+file named LICENSE, and is also available at:
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+================================================================================
+
+This product bundles third-party software components, each under its own
+licence. Full licence texts are preserved in `vendor/<module-path>/LICENSE`
+inside the source distribution. Components that ship a `NOTICE` file
+under Apache-2.0 §4(d) are reproduced below.
+
+--------------------------------------------------------------------------------
+github.com/aws/aws-sdk-go-v2 — Apache-2.0
+(vendor/github.com/aws/aws-sdk-go-v2/NOTICE.txt)
+--------------------------------------------------------------------------------
+
+AWS SDK for Go
+Copyright 2015 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+Copyright 2014-2015 Stripe, Inc.
+
+--------------------------------------------------------------------------------
+github.com/aws/smithy-go — Apache-2.0
+(vendor/github.com/aws/smithy-go/NOTICE)
+--------------------------------------------------------------------------------
+
+Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+
+--------------------------------------------------------------------------------
+github.com/containerd/containerd — Apache-2.0
+(vendor/github.com/containerd/containerd/NOTICE)
+--------------------------------------------------------------------------------
+
+Docker
+Copyright 2012-2015 Docker, Inc.
+
+This product includes software developed at Docker, Inc.
+(https://www.docker.com).
+
+The following is courtesy of our legal counsel:
+
+Use and transfer of Docker may be subject to certain restrictions by the
+United States and other governments. It is your responsibility to ensure
+that your use and/or transfer does not violate applicable laws.
+
+For more information, please see https://www.bis.doc.gov
+
+See also https://www.apache.org/dev/crypto.html and/or seek legal counsel.
+
+--------------------------------------------------------------------------------
+github.com/docker/cli — Apache-2.0
+(vendor/github.com/docker/cli/NOTICE)
+--------------------------------------------------------------------------------
+
+Docker
+Copyright 2012-2017 Docker, Inc.
+
+This product includes software developed at Docker, Inc.
+(https://www.docker.com).
+
+This product contains software (https://github.com/creack/pty) developed
+by Keith Rarick, licensed under the MIT License.
+
+The following is courtesy of our legal counsel:
+
+Use and transfer of Docker may be subject to certain restrictions by the
+United States and other governments. It is your responsibility to ensure
+that your use and/or transfer does not violate applicable laws.
+
+For more information, see https://www.bis.doc.gov
+
+See also https://www.apache.org/dev/crypto.html and/or seek legal counsel.
+
+--------------------------------------------------------------------------------
+google.golang.org/grpc — Apache-2.0
+(vendor/google.golang.org/grpc/NOTICE.txt)
+--------------------------------------------------------------------------------
+
+Copyright 2014 gRPC authors.
+
+--------------------------------------------------------------------------------
+gopkg.in/yaml.v3 — Apache-2.0 / MIT
+(vendor/gopkg.in/yaml.v3/NOTICE)
+--------------------------------------------------------------------------------
+
+Copyright 2011-2016 Canonical Ltd.
+
+--------------------------------------------------------------------------------
+go.yaml.in/yaml/v2 — Apache-2.0 / MIT
+(vendor/go.yaml.in/yaml/v2/NOTICE)
+--------------------------------------------------------------------------------
+
+Copyright 2011-2016 Canonical Ltd.
+
+--------------------------------------------------------------------------------
+go.yaml.in/yaml/v3 — Apache-2.0 / MIT
+(vendor/go.yaml.in/yaml/v3/NOTICE)
+--------------------------------------------------------------------------------
+
+Copyright 2011-2016 Canonical Ltd.
+
+--------------------------------------------------------------------------------
+sigs.k8s.io/randfill — Apache-2.0
+(vendor/sigs.k8s.io/randfill/NOTICE)
+--------------------------------------------------------------------------------
+
+This package was donated to the CNCF and includes contributions from the
+gofuzz project whose authors could not be reached for the CNCF CLA.
+The full text — listing the affected developers per CNCF CLA §7 — is
+preserved verbatim in vendor/sigs.k8s.io/randfill/NOTICE.
+
+================================================================================
+
+The complete set of third-party licences (Apache-2.0, BSD-3-Clause, MIT,
+ISC, MPL-2.0, SIL-OFL-1.1) for every vendored module is preserved at
+`vendor/<module-path>/LICENSE`. None of the bundled components carry
+licences incompatible with Apache-2.0 redistribution; in particular, no
+AGPLv3 or GPL-only code is included.
+
+If you redistribute OmniRepo (source or binary), this NOTICE file must
+travel with the distribution per Apache-2.0 §4(d).

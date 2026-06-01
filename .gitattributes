@@ -1,0 +1,73 @@
+# Default: treat as text, normalize to LF in the repo, check out as
+# native EOL on each platform. Stops the "LF will be replaced by CRLF"
+# warnings on Windows clones without forcing CRLF on disk.
+* text=auto eol=lf
+
+# Source / config — always LF, even on Windows checkouts. CRLF in any
+# of these breaks tooling (gofmt diff, shell scripts, JSON parsers,
+# Docker COPY into Linux images).
+*.go      text eol=lf
+*.mod     text eol=lf
+*.sum     text eol=lf
+*.proto   text eol=lf
+*.ts      text eol=lf
+*.tsx     text eol=lf
+*.js      text eol=lf
+*.jsx     text eol=lf
+*.json    text eol=lf
+*.yml     text eol=lf
+*.yaml    text eol=lf
+*.toml    text eol=lf
+*.md      text eol=lf
+*.sh      text eol=lf
+*.py      text eol=lf
+*.sql     text eol=lf
+*.css     text eol=lf
+*.html    text eol=lf
+Dockerfile*    text eol=lf
+Makefile       text eol=lf
+.gitignore     text eol=lf
+.gitattributes text eol=lf
+.editorconfig  text eol=lf
+
+# Windows-only files keep CRLF (cmd / batch refuse LF endings).
+*.bat     text eol=crlf
+*.cmd     text eol=crlf
+*.ps1     text eol=crlf
+
+# Binary — never normalize, never diff as text.
+*.png     binary
+*.jpg     binary
+*.jpeg    binary
+*.gif     binary
+*.ico     binary
+*.webp    binary
+*.svg     text eol=lf
+*.woff    binary
+*.woff2   binary
+*.ttf     binary
+*.eot     binary
+*.gz      binary
+*.tgz     binary
+*.tar     binary
+*.zip     binary
+*.7z      binary
+*.pdf     binary
+*.db      binary
+*.sqlite  binary
+*.sqlite3 binary
+
+# Vendor tree — preserve upstream EOLs; don't show in PR diffs by
+# default (linguist-vendored hides them from GitHub's diff view).
+vendor/** linguist-vendored
+vendor/** -text
+
+# Build artefacts and lockfiles that pollute diffs in the UI but must
+# still be reviewable on demand.
+go.sum                linguist-generated
+web/package-lock.json linguist-generated
+
+# Test fixtures must keep their exact bytes — line endings, NULs,
+# canonical request format, etc. SigV4 .creq/.sreq/.sts hashes break
+# silently if normalized.
+**/testdata/** -text

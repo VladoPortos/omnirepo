@@ -1,0 +1,66 @@
+/**
+ * Responsive hard gate.
+ *
+ * Asserts no horizontal PAGE scroll at 1366x768 on every canonical admin
+ * route. Table body horizontal scroll inside an `overflow-x-auto`
+ * wrapper is allowed (and expected on ProjectsPage + admin tables with
+ * 6+ columns, via the sticky-first-column pattern). What we forbid is
+ * the whole `document.documentElement` scrolling horizontally, which
+ * would push the sidebar + main content off-screen on a typical
+ * 1366x768 admin laptop.
+ *
+ * Auth bootstrap mirrors admin.spec.ts so the routes are reachable.
+ * must_change_password flow is handled via the API so the UI tests
+ * don't land on the change-password page.
+ */
+
+import { test, expect } from '@playwright/test';
+import { adminLoginAPI, resetServerState } from './helpers/auth';
+
+test.use({ viewport: { width: 1366, height: 768 } });
+
+test.describe('1366x768 horizontal-scroll gate', () => {
+  test.beforeEach(async ({ request }) => {
+    await adminLoginAPI(request);
+    await resetServerState(request);
+  });
+
+  // Six admin-surface routes. ProjectsPage + admin/* pages are where
+  // horizontal-scroll risk is highest because of 6+ column tables.
+  // stickyFirstColumn is enabled on Users/Audit/Trash and the
+  // overflow-x-auto wrapper is applied on ProjectsPage, which should
+  // make this gate green.
+  const adminRoutes = [
+    '/dashboard',
+    '/projects',
+    '/admin/users',
+    '/admin/audit',
+    '/admin/trash',
+    '/admin/trivy',
+  ];
+
+  for (const route of adminRoutes) {
+    test(`${route} has no horizontal page scroll at 1366x768`, async ({
+      page,
+    }) => {
+      await page.goto(route);
+      await page.waitForLoadState('networkidle');
+
+      // Extra settle time so any lazy-loaded tables can finish laying
+      // out. Without this, some pages evaluate scrollWidth before the
+      // table renders and the value races the real measurement.
+      await page.waitForTimeout(500);
+
+      const { scrollWidth, clientWidth } = await page.evaluate(() => ({
+        scrollWidth: document.documentElement.scrollWidth,
+        clientWidth: document.documentElement.clientWidth,
+      }));
+
+      expect(
+        scrollWidth,
+        `Page ${route} has horizontal scroll: scrollWidth=${scrollWidth} clientWidth=${clientWidth} at 1366x768. ` +
+          `Wide tables should have been wrapped in overflow-x-auto.`,
+      ).toBeLessThanOrEqual(clientWidth);
+    });
+  }
+});

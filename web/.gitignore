@@ -1,0 +1,12 @@
+node_modules/
+dist/
+*.local
+*.tsbuildinfo
+vite.config.js
+vite.config.d.ts
+src/main.js
+
+# Playwright runtime artifacts
+test-results/
+playwright-report/
+blob-report/

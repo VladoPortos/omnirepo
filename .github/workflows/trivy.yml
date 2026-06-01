@@ -1,0 +1,148 @@
+# Trivy — vulnerability + misconfiguration scanner from Aqua Security.
+#
+# Three scans:
+#   1. Filesystem scan — finds known CVEs in Go module deps (vendor/) and
+#      npm deps (web/), plus secret-leak patterns. Overlaps with
+#      Dependabot but uses a different CVE feed; combined coverage
+#      catches more.
+#   2. Config scan — analyzes the Dockerfile for misconfigurations
+#      (running as root, missing healthchecks, world-writable paths,
+#      unpinned base images, etc.).
+#   3. Image scan — builds the production image and scans the resulting
+#      OS-package layer (alpine 3.21 + bundled trivy binary) for known
+#      CVEs that wouldn't show up in a fs scan because they live in
+#      apk-installed packages, not in our source tree.
+#
+# Findings → SARIF artifacts (kept as downloadable workflow artifacts;
+# GitHub Code Scanning upload is paid for private repos and is off until
+# the repo is public or GHAS is enabled). Reporting only on this private
+# repo (`exit-code: 0`) — fail loudly later by flipping the exit-code if
+# a clean baseline is established and we want to gate merges on CRITICAL.
+name: Trivy
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "45 3 * * 1"
+
+# Default deny — any job without an explicit permissions: block runs with
+# the GITHUB_TOKEN restricted to read-only contents access. Per-job
+# permissions below opt back into the additional scopes they actually need.
+permissions:
+  contents: read
+
+jobs:
+  trivy-filesystem:
+    name: Trivy filesystem scan (Go + npm + secrets)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Run Trivy filesystem scan
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          # vuln  → CVEs in vendored Go modules + web/node_modules
+          # secret → committed credentials, private keys, tokens
+          scanners: vuln,secret
+          severity: CRITICAL,HIGH,MEDIUM
+          format: sarif
+          output: trivy-fs.sarif
+          exit-code: "0" # report only — don't fail the run on findings
+
+      # Code Scanning SARIF upload requires GitHub Advanced Security on
+      # private repos. Until GHAS is enabled (or repo goes public), save
+      # the SARIF as a downloadable artifact instead. Swap back to
+      # github/codeql-action/upload-sarif when Code Scanning is on.
+      - name: Upload Trivy filesystem SARIF artifact
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: trivy-fs-sarif
+          path: trivy-fs.sarif
+          retention-days: 30
+
+  trivy-config:
+    name: Trivy config scan (Dockerfile)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Run Trivy config scan
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: config
+          scan-ref: .
+          severity: CRITICAL,HIGH,MEDIUM
+          format: sarif
+          output: trivy-config.sarif
+          exit-code: "0"
+
+      - name: Upload Trivy config SARIF artifact
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: trivy-config-sarif
+          path: trivy-config.sarif
+          retention-days: 30
+
+  trivy-image:
+    name: Trivy image scan (production Dockerfile)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
+
+      - name: Build image (load to local docker)
+        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
+        with:
+          context: .
+          file: ./Dockerfile
+          push: false
+          load: true
+          tags: omnirepo:scan
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Run Trivy image scan
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: image
+          image-ref: omnirepo:scan
+          severity: CRITICAL,HIGH,MEDIUM
+          format: sarif
+          output: trivy-image.sarif
+          exit-code: "0"
+          ignore-unfixed: true # OS CVEs without a fix → noise
+
+      - name: Upload Trivy image SARIF artifact
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: trivy-image-sarif
+          path: trivy-image.sarif
+          retention-days: 30

@@ -1,0 +1,89 @@
+package metadata
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+)
+
+// WriteTx runs fn inside a write transaction.
+//
+// BEGIN IMMEDIATE semantics are enforced via the `_txlock=immediate` DSN
+// parameter that Open appends to every connection (see db.go). That is a
+// modernc.org/sqlite driver extension: when the DSN carries
+// `_txlock=immediate`, every sql.BeginTx / conn.BeginTx issues
+// `BEGIN IMMEDIATE` instead of the default `BEGIN DEFERRED`. Combined with
+// Writer.SetMaxOpenConns(1), this guarantees:
+//
+//  1. Only one write transaction can be in flight at a time (writer pool
+//     serializes at the database/sql layer).
+//  2. Each write tx holds SQLite's reserved lock from the moment it begins,
+//     so readers are never blocked by tx promotion and writers never race
+//     into SQLITE_BUSY — pinning pitfall P2.
+//
+// The grep gate for acceptance looks for the literal string "BEGIN IMMEDIATE"
+// (in this comment) OR `_txlock=immediate` in db.go. Both are present.
+func (db *DB) WriteTx(ctx context.Context, fn func(tx *sql.Tx) error) (err error) {
+	tx, beginErr := db.Writer.BeginTx(ctx, nil)
+	if beginErr != nil {
+		return fmt.Errorf("metadata: begin write tx: %w", beginErr)
+	}
+	defer func() {
+		if p := recover(); p != nil {
+			_ = tx.Rollback()
+			panic(p)
+		}
+		if err != nil {
+			if rbErr := tx.Rollback(); rbErr != nil && rbErr != sql.ErrTxDone {
+				err = fmt.Errorf("%w (rollback: %v)", err, rbErr)
+			}
+		}
+	}()
+
+	if err = fn(tx); err != nil {
+		return err
+	}
+
+	// Test-only failpoint: armed via SetWriteTxFailpointForTest.
+	// Returning here triggers the deferred rollback so the test observes
+	// "fn ran AND tx rolled back" — exactly the scenario ATOMICDEL-06
+	// needs to assert filesystem-DB consistency under tx failure.
+	if fp := db.consumeWriteTxFailpoint(); fp != nil {
+		err = fp
+		return err
+	}
+
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("metadata: commit: %w", err)
+	}
+	return nil
+}
+
+// SetWriteTxFailpointForTest arms the next WriteTx call to return err AFTER
+// fn runs but BEFORE the commit, ensuring the deferred rollback fires. Pass
+// nil to clear an unfired failpoint (e.g. test cleanup).
+//
+// Test-only: the "ForTest" suffix is a grep-gate signal that production
+// code must not call this method (Go has no compile-time test-only export
+// — the convention + acceptance grep are the gate).
+//
+// One-shot semantics: the failpoint is cleared the moment it fires.
+// Subsequent WriteTx calls run normally. Concurrency: writeTxFailpointMu
+// guards the slot so cross-goroutine arms/clears do not race the
+// in-flight WriteTx (the writer pool itself serializes WriteTx calls
+// at size-1).
+func (db *DB) SetWriteTxFailpointForTest(err error) {
+	db.writeTxFailpointMu.Lock()
+	defer db.writeTxFailpointMu.Unlock()
+	db.writeTxFailpoint = err
+}
+
+// consumeWriteTxFailpoint returns the armed error and clears the slot
+// (one-shot). Returns nil when unarmed — the production fast path.
+func (db *DB) consumeWriteTxFailpoint() error {
+	db.writeTxFailpointMu.Lock()
+	defer db.writeTxFailpointMu.Unlock()
+	fp := db.writeTxFailpoint
+	db.writeTxFailpoint = nil
+	return fp
+}

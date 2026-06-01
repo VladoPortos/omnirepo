@@ -1,0 +1,301 @@
+/**
+ * Unit tests for useJobProgress pure helpers.
+ *
+ * Design note — we deliberately avoid renderHook here:
+ *
+ * Exercising the hook via `renderHook` + `vi.useFakeTimers()` would
+ * require `@testing-library/react` + a DOM runtime (jsdom / happy-dom)
+ * which are NOT installed in this repo. Rather than expand the devDep
+ * footprint purely for a polling-cadence assertion, the hook was
+ * authored with its two decision points extracted as pure functions:
+ *
+ *   - `computeJobProgress(detail)` — JobDetail → JobProgress reshape
+ *     (idle-on-undefined, percent calculation, error wrapping).
+ *   - `pollingDecision(detail)` — the refetchInterval callback body
+ *     (500 ms while pending/running, `false` on done/failed).
+ *
+ * Testing those covers every correctness claim a renderHook-based test
+ * would have asserted, without React rendering. The hook itself is a
+ * 4-line call to `useQuery` that wires these helpers together; its
+ * behaviour is guaranteed by TanStack Query v5 (already vendored +
+ * battle-tested) plus the helpers below.
+ *
+ * If @testing-library/react + a DOM runtime are added later, this
+ * file can be extended with a renderHook-based smoke test — the
+ * helpers stay authoritative for logic; renderHook only needs to
+ * confirm they're wired correctly.
+ */
+
+import { describe, expect, it } from 'vitest';
+import {
+  computeJobProgress,
+  pollingDecision,
+  idleJobProgress,
+  POLL_INTERVAL_MS,
+} from '../hooks/useJobProgress';
+import type { JobDetail } from '../api/types';
+
+/** Small helper to build a JobDetail row with only the fields a test cares about. */
+function job(overrides: Partial<JobDetail>): JobDetail {
+  return {
+    id: 1,
+    kind: 'pull_external',
+    status: 'pending',
+    attempts: 0,
+    progress_bytes: 0,
+    total_bytes: 0,
+    current_step: '',
+    files_synced: 0,
+    summary: '{}',
+    created_at: '2026-04-20T00:00:00Z',
+    updated_at: '2026-04-20T00:00:00Z',
+    ...overrides,
+  };
+}
+
+describe('useJobProgress — idle behaviour', () => {
+  it('undefined detail returns idleJobProgress', () => {
+    const p = computeJobProgress(undefined);
+    expect(p).toEqual(idleJobProgress);
+    expect(p.isPolling).toBe(false);
+    expect(p.percent).toBeNull();
+    expect(p.error).toBeNull();
+  });
+
+  it('pollingDecision on undefined returns 500 ms (cold-start fetch)', () => {
+    expect(pollingDecision(undefined)).toBe(POLL_INTERVAL_MS);
+  });
+});
+
+describe('useJobProgress — polling cadence', () => {
+  it('running status keeps refetchInterval at 500 ms', () => {
+    const running = job({
+      status: 'running',
+      progress_bytes: 50,
+      total_bytes: 100,
+      current_step: 'layer 3 of 7',
+    });
+    expect(pollingDecision(running)).toBe(500);
+    // JobProgress also flips isPolling to true.
+    const p = computeJobProgress(running);
+    expect(p.isPolling).toBe(true);
+    expect(p.status).toBe('running');
+  });
+
+  it('pending status also polls every 500 ms', () => {
+    const pending = job({ status: 'pending' });
+    expect(pollingDecision(pending)).toBe(500);
+    expect(computeJobProgress(pending).isPolling).toBe(true);
+  });
+
+  it('done status returns false (polling stops)', () => {
+    const done = job({
+      status: 'done',
+      progress_bytes: 100,
+      total_bytes: 100,
+      current_step: 'done',
+    });
+    expect(pollingDecision(done)).toBe(false);
+    expect(computeJobProgress(done).isPolling).toBe(false);
+  });
+
+  it('failed status returns false (polling stops)', () => {
+    const failed = job({
+      status: 'failed',
+      progress_bytes: 42,
+      total_bytes: 100,
+      last_error: 'upstream unreachable',
+    });
+    expect(pollingDecision(failed)).toBe(false);
+    expect(computeJobProgress(failed).isPolling).toBe(false);
+  });
+});
+
+describe('useJobProgress — percent computation', () => {
+  it('50/200 → 25 (rounded)', () => {
+    const p = computeJobProgress(job({ progress_bytes: 50, total_bytes: 200 }));
+    expect(p.percent).toBe(25);
+    expect(p.progressBytes).toBe(50);
+    expect(p.totalBytes).toBe(200);
+  });
+
+  it('percent rounds to nearest integer (33.33% → 33)', () => {
+    const p = computeJobProgress(job({ progress_bytes: 1, total_bytes: 3 }));
+    expect(p.percent).toBe(33);
+  });
+
+  it('total_bytes === 0 yields percent=null (Helm step-based case)', () => {
+    const p = computeJobProgress(
+      job({
+        progress_bytes: 5,
+        total_bytes: 0,
+        current_step: 'chart 3 of 12 · redis-17.0.0.tgz',
+      }),
+    );
+    expect(p.percent).toBeNull();
+    expect(p.currentStep).toBe('chart 3 of 12 · redis-17.0.0.tgz');
+  });
+
+  it('completed job (progress == total) yields 100%', () => {
+    const p = computeJobProgress(
+      job({ status: 'done', progress_bytes: 100, total_bytes: 100 }),
+    );
+    expect(p.percent).toBe(100);
+    expect(p.isPolling).toBe(false);
+  });
+});
+
+describe('useJobProgress — defensive coercion', () => {
+  it('NaN progress_bytes coerces to 0 without throwing', () => {
+    const p = computeJobProgress(
+      // Simulate malformed wire payload. Cast through unknown so the
+      // test exercises the runtime coercion path — any future type
+      // tightening on JobDetail should not remove the runtime guard.
+      job({ progress_bytes: NaN as unknown as number, total_bytes: 100 }),
+    );
+    expect(p.progressBytes).toBe(0);
+    expect(p.percent).toBe(0);
+  });
+
+  it('null/undefined current_step coerces to empty string', () => {
+    const p = computeJobProgress(
+      job({ current_step: undefined as unknown as string }),
+    );
+    expect(p.currentStep).toBe('');
+  });
+});
+
+describe('useJobProgress — files_synced', () => {
+  it('plain integer passes through unchanged', () => {
+    const p = computeJobProgress(
+      job({
+        status: 'done',
+        progress_bytes: 1_048_576,
+        total_bytes: 1_048_576,
+        files_synced: 42,
+      }),
+    );
+    expect(p.filesSynced).toBe(42);
+  });
+
+  it('zero is preserved (running jobs / back-compat with legacy rows)', () => {
+    const p = computeJobProgress(
+      job({ status: 'running', progress_bytes: 100, total_bytes: 200 }),
+    );
+    expect(p.filesSynced).toBe(0);
+  });
+
+  it('NaN files_synced coerces to 0 (defensive wire-shape guard)', () => {
+    const p = computeJobProgress(
+      job({ files_synced: NaN as unknown as number }),
+    );
+    expect(p.filesSynced).toBe(0);
+  });
+
+  it('idleJobProgress exposes filesSynced=0 so pill cold-start is deterministic', () => {
+    expect(idleJobProgress.filesSynced).toBe(0);
+  });
+});
+
+describe('useJobProgress — error wrapping', () => {
+  it('failed status with last_error wraps into a transient-class envelope', () => {
+    const p = computeJobProgress(
+      job({
+        status: 'failed',
+        last_error: 'pull_external: remote.Get: connection refused',
+      }),
+    );
+    expect(p.error).not.toBeNull();
+    expect(p.error?.class).toBe('transient');
+    expect(p.error?.code).toBe('job.failed');
+    expect(p.error?.message).toContain('connection refused');
+  });
+
+  it('done status does not synthesise an error envelope', () => {
+    const p = computeJobProgress(job({ status: 'done' }));
+    expect(p.error).toBeNull();
+  });
+
+  it('failed status with empty last_error produces no error envelope', () => {
+    const p = computeJobProgress(job({ status: 'failed', last_error: '' }));
+    expect(p.error).toBeNull();
+  });
+});
+
+// Retry backoff + polling halts on 4xx.
+describe('useJobProgress — retry-backoff state', () => {
+  it('pending + attempts>=1 + last_error surfaces a transient "job.retrying" envelope', () => {
+    // Reproduces the bogus-host mirror sync: status stays `pending` with
+    // attempts=1 and last_error populated while the job-runner backoff
+    // timer elapses (1 minute for attempt 1). Pre-fix the UI rendered
+    // "Preparing…" with no error pill for up to 96 minutes (5 attempts).
+    const retrying = job({
+      status: 'pending',
+      attempts: 1,
+      last_error:
+        'rpm upstream: get http://rpm-not-here.invalid/repodata/repomd.xml: dial tcp: lookup rpm-not-here.invalid: no such host',
+    });
+    const p = computeJobProgress(retrying);
+    expect(p.error).not.toBeNull();
+    expect(p.error?.class).toBe('transient');
+    expect(p.error?.code).toBe('job.retrying');
+    expect(p.error?.message).toContain('no such host');
+    // isPolling stays true — next attempt may progress.
+    expect(p.isPolling).toBe(true);
+  });
+
+  it('pending + attempts=0 (pre-first-try) does NOT synthesise an error', () => {
+    const firstTry = job({ status: 'pending', attempts: 0 });
+    expect(computeJobProgress(firstTry).error).toBeNull();
+  });
+
+  it('pending + attempts>=1 WITHOUT last_error stays clean (legacy rows)', () => {
+    const legacy = job({ status: 'pending', attempts: 1, last_error: '' });
+    expect(computeJobProgress(legacy).error).toBeNull();
+  });
+
+  it('terminal failed status still emits job.failed (not job.retrying)', () => {
+    const terminal = job({
+      status: 'failed',
+      attempts: 5,
+      last_error: 'gave up after 5 attempts',
+    });
+    expect(computeJobProgress(terminal).error?.code).toBe('job.failed');
+  });
+});
+
+describe('useJobProgress — pollingDecision 4xx halt', () => {
+  it('stops polling when query error carries a 4xx status', () => {
+    // Repo deleted underneath while the SyncNowButton instance was
+    // polling its job id — the endpoint now returns 404 forever.
+    // Pre-fix: pollingDecision returned 500 (data undefined) and the
+    // hook hammered the endpoint twice per second indefinitely. Now:
+    // any 4xx halts the loop.
+    expect(
+      pollingDecision({ detail: undefined, error: { status: 404 } }),
+    ).toBe(false);
+    expect(
+      pollingDecision({ detail: undefined, error: { status: 403 } }),
+    ).toBe(false);
+    expect(
+      pollingDecision({ detail: undefined, error: { status: 401 } }),
+    ).toBe(false);
+  });
+
+  it('still polls on 5xx (transient server outage self-heals)', () => {
+    expect(
+      pollingDecision({ detail: undefined, error: { status: 503 } }),
+    ).toBe(POLL_INTERVAL_MS);
+  });
+
+  it('still polls when no error and data is undefined (first run)', () => {
+    expect(pollingDecision({ detail: undefined, error: null })).toBe(
+      POLL_INTERVAL_MS,
+    );
+  });
+
+  it('legacy single-arg signature (detail only) still works', () => {
+    expect(pollingDecision(job({ status: 'running' }))).toBe(POLL_INTERVAL_MS);
+    expect(pollingDecision(job({ status: 'done' }))).toBe(false);
+  });
+});

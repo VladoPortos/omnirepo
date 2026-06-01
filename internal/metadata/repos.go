@@ -555,11 +555,20 @@ func (r *ReposRepo) WipeDocker(ctx context.Context, tx *sql.Tx, repoID int64) (i
 		return 0, 0, err
 	}
 
-	// 2) Collect all blob digests referenced by these manifests.
-	refs := make(map[string]struct{})
+	// 2) Count how many manifests in THIS repo reference each blob digest. A
+	//    blob's ref_count is the number of manifests referencing it, so wiping
+	//    the repo must DecRef by that count — not once per distinct digest.
+	//    Decrementing once left blobs shared by N manifests in this repo stuck
+	//    at ref_count N-1, pinning the CAS bytes forever (they never reached
+	//    ref_count 0, so GC never reclaimed them). manifestBlobRefs mirrors the
+	//    OCI handler's blob accounting exactly — config+layers for image
+	//    manifests, nothing for an index (which references child manifests, not
+	//    blobs) — and dedups within a manifest, so each manifest contributes at
+	//    most 1 per blob, matching the per-manifest IncRef on push.
+	refs := make(map[string]int)
 	for _, mr := range manifests {
-		for _, d := range extractDigests(mr.body) {
-			refs[d] = struct{}{}
+		for _, d := range manifestBlobRefs(mr.body) {
+			refs[d]++
 		}
 	}
 
@@ -583,20 +592,20 @@ func (r *ReposRepo) WipeDocker(ctx context.Context, tx *sql.Tx, repoID int64) (i
 	//    freed. We DecRef via the row-aware UPDATE pattern and re-stat to
 	//    observe the resulting ref_count in the same tx.
 	var bytesFreed int64
-	for digest := range refs {
+	for digest, refN := range refs {
 		res, err := tx.ExecContext(ctx, `
 			UPDATE docker_blobs
-			SET ref_count = ref_count - 1, last_touched_at = CURRENT_TIMESTAMP
-			WHERE digest = ? AND ref_count > 0
-		`, digest)
+			SET ref_count = ref_count - ?, last_touched_at = CURRENT_TIMESTAMP
+			WHERE digest = ? AND ref_count >= ?
+		`, refN, digest, refN)
 		if err != nil {
 			return 0, 0, fmt.Errorf("repos: wipe docker decref %s: %w", digest, err)
 		}
 		n, _ := res.RowsAffected()
 		if n == 0 {
-			// Either the blob row was missing or ref_count was already 0.
-			// Neither case is fatal — a corrupt refcount is better left
-			// untouched; GC will reconcile via its own sweep.
+			// The blob row was missing, or its ref_count was below the number
+			// of manifests in this repo that referenced it (a corrupt
+			// refcount). Neither is fatal — leave it untouched; GC reconciles.
 			continue
 		}
 		// Re-stat to see if we dropped to 0.
@@ -715,39 +724,50 @@ func (r *ReposRepo) GetMetadataState(ctx context.Context, repoID int64) (state, 
 	return state, lastErr, nil
 }
 
-// extractDigests walks a manifest body and returns every "sha256:..." string
-// value appearing under a "digest" key. Tolerant to manifest-list / image-
-// index / single-manifest shapes because it traverses any JSON structure.
-// Bodies that fail to parse yield an empty slice — wipe treats the manifest
-// as referencing no blobs in that case (safer than erroring, because the row
-// still needs to be removed and the GC sweep will reclaim unreferenced
-// blobs).
-func extractDigests(body []byte) []string {
-	var raw any
+// manifestBlobRefs returns the blob digests an image manifest references —
+// config + layers, deduped — and nil for an image index / manifest list (which
+// references child MANIFESTS, not blobs) or a body that fails to parse.
+//
+// It deliberately mirrors the OCI handler's manifestRefs (config/layers for
+// image manifests; the "manifests" array marks an index) rather than walking
+// every "digest" key in the body. That symmetry is what makes WipeDocker's
+// DecRef set exactly equal the IncRef set the push path applied: a stray
+// "digest" elsewhere in the body (e.g. an OCI "subject" descriptor, which
+// points at a manifest, not a blob) was never IncRef'd as a blob and must not
+// be DecRef'd here, or a blob shared with another repo could be over-freed.
+func manifestBlobRefs(body []byte) []string {
+	var raw map[string]any
 	if err := json.Unmarshal(body, &raw); err != nil {
 		return nil
 	}
+	if _, isIndex := raw["manifests"].([]any); isIndex {
+		return nil // index → references child manifests, not blobs
+	}
 	seen := make(map[string]struct{})
-	var walk func(v any)
-	walk = func(v any) {
-		switch t := v.(type) {
-		case map[string]any:
-			if d, ok := t["digest"].(string); ok && strings.HasPrefix(d, "sha256:") {
-				seen[d] = struct{}{}
-			}
-			for _, child := range t {
-				walk(child)
-			}
-		case []any:
-			for _, child := range t {
-				walk(child)
-			}
+	var out []string
+	add := func(d string) {
+		if !strings.HasPrefix(d, "sha256:") {
+			return
+		}
+		if _, ok := seen[d]; ok {
+			return
+		}
+		seen[d] = struct{}{}
+		out = append(out, d)
+	}
+	if cfg, ok := raw["config"].(map[string]any); ok {
+		if d, ok := cfg["digest"].(string); ok {
+			add(d)
 		}
 	}
-	walk(raw)
-	out := make([]string, 0, len(seen))
-	for d := range seen {
-		out = append(out, d)
+	if layers, ok := raw["layers"].([]any); ok {
+		for _, l := range layers {
+			if lm, ok := l.(map[string]any); ok {
+				if d, ok := lm["digest"].(string); ok {
+					add(d)
+				}
+			}
+		}
 	}
 	return out
 }

@@ -40,7 +40,11 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 	}
 	filename := poolPath[strings.LastIndex(poolPath, "/")+1:]
 
-	row, err := h.findByFilename(r.Context(), res.repo.ID, filename)
+	// Look up by the exact pool path (storage_pool_path), not the basename: two
+	// packages can share a filename under different pool paths, and the rows we
+	// delete must be exactly the ones backing the file we trash. storage_pool_path
+	// is stored as this same validated pool path at upload (put.go).
+	row, err := h.findByPoolPath(r.Context(), res.repo.ID, poolPath)
 	if err != nil || row == nil {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
@@ -67,7 +71,13 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 	// (else ENOENT → fileOnDisk stays false; the tx heals the orphaned row.)
 
 	if err := h.db.WriteTx(r.Context(), func(tx *sql.Tx) error {
-		if err := h.debPackages.Delete(r.Context(), tx, row.ID); err != nil {
+		// A pool file is shared by every suite the package is published to
+		// (one deb_packages row per suite, same storage_pool_path). Remove
+		// ALL of them before the file is trashed below — deleting only the
+		// arbitrary LIMIT 1 row left the other suites pointing at a trashed
+		// file (downloads 404'd while the package still appeared in those
+		// suites' Packages indexes).
+		if _, err := h.debPackages.DeleteByStoragePoolPath(r.Context(), tx, res.repo.ID, poolPath); err != nil {
 			return err
 		}
 		if err := metadata.IndexDEBDelete(r.Context(), tx, res.repo.ID, row.Package, row.Version, row.Architecture); err != nil {
@@ -124,20 +134,21 @@ func (h *Handler) DeleteREST(w http.ResponseWriter, r *http.Request) {
 	h.delete(w, r)
 }
 
-// findByFilename returns the deb_packages row matching (repoID, filename).
-// Returns (nil, nil) on miss.
-func (h *Handler) findByFilename(ctx context.Context, repoID int64, filename string) (*metadata.DEBPackage, error) {
+// findByPoolPath returns any one deb_packages row backing the on-disk pool file
+// at storagePoolPath (rows for the same file across suites share it; LIMIT 1
+// gives the shared package/version/arch metadata). Returns (nil, nil) on miss.
+func (h *Handler) findByPoolPath(ctx context.Context, repoID int64, storagePoolPath string) (*metadata.DEBPackage, error) {
 	var p metadata.DEBPackage
 	var uploaded string
 	err := h.db.Reader.QueryRowContext(ctx, `
 		SELECT id, repo_id, suite_id, package, version, architecture,
 		       maintainer, section, priority, depends, description,
-		       size_bytes, digest, filename, uploaded_at
-		FROM deb_packages WHERE repo_id=? AND filename=? LIMIT 1
-	`, repoID, filename).Scan(
+		       size_bytes, digest, filename, storage_pool_path, uploaded_at
+		FROM deb_packages WHERE repo_id=? AND storage_pool_path=? LIMIT 1
+	`, repoID, storagePoolPath).Scan(
 		&p.ID, &p.RepoID, &p.SuiteID, &p.Package, &p.Version, &p.Architecture,
 		&p.Maintainer, &p.Section, &p.Priority, &p.Depends, &p.Description,
-		&p.SizeBytes, &p.Digest, &p.Filename, &uploaded,
+		&p.SizeBytes, &p.Digest, &p.Filename, &p.StoragePoolPath, &uploaded,
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {

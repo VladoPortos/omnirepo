@@ -353,6 +353,43 @@ func (h *Handler) decRefs(ctx context.Context, tx *sql.Tx, repoID int64, refs []
 	return nil
 }
 
+// reapManifestIfOrphaned deletes manifest `digest` in `repoID` — releasing its
+// referenced blob/child refs and removing the manifest row + FTS entry — but
+// ONLY when nothing references it anymore: no tag points at it AND its own
+// manifest ref_count (index-parent references) is 0. It is the shared
+// last-reference cascade used by the push tag-move path (and mirrors the
+// inline cascade in manifestDelete), keeping the invariant
+// "blob ref_count == number of manifests referencing it" exact.
+func (h *Handler) reapManifestIfOrphaned(ctx context.Context, tx *sql.Tx, repoID int64, digest string) error {
+	m, err := h.manifests.GetByDigestTx(ctx, tx, repoID, digest)
+	if err != nil {
+		return err
+	}
+	if m == nil {
+		return nil // already gone
+	}
+	tagCount, err := h.tags.CountForDigestTx(ctx, tx, repoID, digest)
+	if err != nil {
+		return err
+	}
+	if tagCount > 0 || m.RefCount > 0 {
+		return nil // still tagged, or referenced as an index child
+	}
+	refs, isIndex, rerr := manifestRefs(m.Body)
+	if rerr != nil {
+		// A stored body that no longer parses can't have its refs released
+		// safely — fail loudly rather than silently orphan blobs.
+		return fmt.Errorf("reap manifest %s: %w", digest, rerr)
+	}
+	if err := h.decRefs(ctx, tx, repoID, refs, isIndex); err != nil {
+		return err
+	}
+	if err := h.manifests.Delete(ctx, tx, repoID, digest); err != nil {
+		return err
+	}
+	return metadata.IndexArtifactDelete(ctx, tx, repoID, digest)
+}
+
 // resolveManifestRef returns the manifest digest for a /v2/.../manifests/<ref>
 // reference. `ref` is either a digest or a tag name. `image` scopes tag
 // resolution to a single OCI image inside the repo (empty for classic
@@ -634,51 +671,41 @@ func (h *Handler) writeManifestWithRefcounts(
 	}
 
 	tagged := reference != "" && !isDigestRef(reference)
+	var priorTagDigest string
+	var tagExisted bool
 	if tagged {
-		// Peek the tag's current binding (tx-scoped) BEFORE writing it. Upsert
-		// collapses "new tag" and "unchanged re-push" to an empty priorDigest,
-		// so its return cannot distinguish them; ResolveTx can.
-		priorTagDigest, tagExisted, rerr := h.tags.ResolveTx(ctx, tx, repoID, image, reference)
+		// Peek the tag's current binding (tx-scoped) BEFORE writing it so we
+		// can tell a re-point (tag moved off another manifest) from a fresh tag.
+		var rerr error
+		priorTagDigest, tagExisted, rerr = h.tags.ResolveTx(ctx, tx, repoID, image, reference)
 		if rerr != nil {
 			return false, rerr
 		}
 		if _, err := h.tags.Upsert(ctx, tx, repoID, image, reference, mfDigest); err != nil {
 			return false, err
 		}
+	}
 
-		// Refcount delta. incRefs previously ran on EVERY PUT, so
-		// re-pushing an unchanged manifest to the same tag (docker push
-		// retries / unchanged CI re-pushes) bumped blob/child ref_count with
-		// no matching decRef, leaking refs so the blobs could never be GC'd.
-		// Adjust refs only when the tag binding actually changes:
-		if !tagExisted || priorTagDigest != mfDigest {
-			// New or changed tag binding → this manifest gains a tag reference.
-			if err := h.incRefs(ctx, tx, repoID, refs, isIndex); err != nil {
-				return false, err
-			}
-			if tagExisted && priorTagDigest != mfDigest {
-				// Tag moved off priorTagDigest → release that manifest's refs
-				// (identical condition to the previous Upsert-return path).
-				priorManifest, err := h.manifests.GetByDigestTx(ctx, tx, repoID, priorTagDigest)
-				if err != nil {
-					return false, err
-				}
-				if priorManifest != nil {
-					priorRefs, priorIsIndex, perr := manifestRefs(priorManifest.Body)
-					if perr != nil {
-						priorRefs = nil
-					}
-					if err := h.decRefs(ctx, tx, repoID, priorRefs, priorIsIndex); err != nil {
-						return false, err
-					}
-				}
-			}
-		}
-		// else: tag already pointed at mfDigest → no-op re-push, no ref change.
-	} else if inserted {
-		// Digest-only push: gain a ref only when the manifest is newly created;
-		// a digest re-push of an existing manifest is a pure no-op.
+	// Invariant: a blob/child's ref_count is the number of MANIFEST ROWS that
+	// reference it — not the number of tags. So IncRef exactly when this PUT
+	// created the manifest row. A re-push (same digest) or a second tag onto an
+	// already-stored manifest must not inflate refs (the historical per-tag
+	// accounting leaked them so blobs could never be GC'd).
+	if inserted {
 		if err := h.incRefs(ctx, tx, repoID, refs, isIndex); err != nil {
+			return false, err
+		}
+	}
+
+	// Tag re-point: the tag used to point at a different manifest, which may now
+	// be unreferenced. Reap it (release its refs + delete the row) only when no
+	// tag still points at it and it is not an index child — the same last-tag
+	// cascade as manifestDelete. The previous code decremented the prior
+	// manifest's blobs unconditionally, which leaked on multi-tag manifests and,
+	// worse, freed blobs of a manifest that still had other tags (data loss:
+	// GC could delete bytes still served by the surviving tag).
+	if tagged && tagExisted && priorTagDigest != "" && priorTagDigest != mfDigest {
+		if err := h.reapManifestIfOrphaned(ctx, tx, repoID, priorTagDigest); err != nil {
 			return false, err
 		}
 	}

@@ -92,6 +92,33 @@ func (r *DEBPackagesRepo) Delete(ctx context.Context, tx *sql.Tx, id int64) erro
 	return nil
 }
 
+// DeleteByStoragePoolPath removes every deb_packages row in repoID that points
+// at the shared on-disk pool file storagePoolPath — one row per suite the
+// package was published to. Returns the number of rows removed.
+//
+// A pool file is shared across suites (Debian pool layout is suite-agnostic),
+// so deleting a single suite's row by id and then trashing the file orphaned
+// the other suites' rows: they kept pointing at a file that had been moved to
+// trash, 404-ing on download. Keying the delete on the storage path removes
+// every reference before the file is trashed.
+func (r *DEBPackagesRepo) DeleteByStoragePoolPath(ctx context.Context, tx *sql.Tx, repoID int64, storagePoolPath string) (int64, error) {
+	if storagePoolPath == "" {
+		// Guard against a blanket DELETE: an empty path would match every row
+		// whose storage_pool_path was never populated. The pool DELETE route
+		// always has a concrete, validated path, so empty here is a bug.
+		return 0, fmt.Errorf("deb_packages: delete by pool path: empty path")
+	}
+	res, err := tx.ExecContext(ctx,
+		`DELETE FROM deb_packages WHERE repo_id=? AND storage_pool_path=?`,
+		repoID, storagePoolPath,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("deb_packages: delete by pool path %q: %w", storagePoolPath, err)
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
+}
+
 // FindByTuple returns the row matching (suite_id, package, version,
 // architecture) scoped to repoID. Returns ErrNotFound on miss.
 func (r *DEBPackagesRepo) FindByTuple(ctx context.Context, repoID, suiteID int64, pkg, version, arch string) (*DEBPackage, error) {

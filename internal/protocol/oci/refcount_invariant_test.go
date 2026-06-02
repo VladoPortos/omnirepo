@@ -3,6 +3,7 @@ package oci_test
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"net/http"
 	"regexp"
 	"testing"
@@ -206,4 +207,82 @@ func TestTagMove_DoesNotFreeStillTaggedManifestBlobs(t *testing.T) {
 		t.Fatalf("M not pullable via v2 after tag-move: %d", g.StatusCode)
 	}
 	assertBlobRefcountsConsistent(t, f)
+}
+
+// TestDigestDelete_IndexChild_Refused pins the guard: a manifest still
+// referenced by an image index (ref_count > 0) cannot be removed by a
+// digest-form DELETE — doing so would dangle the parent index. The request is
+// refused with 405 and the child stays pullable. After the index is deleted
+// (releasing the reference), the child becomes deletable.
+func TestDigestDelete_IndexChild_Refused(t *testing.T) {
+	f := newManifestFixture(t, false)
+	cfg := f.seedBlob([]byte("cfg-idx-child"))
+	l1 := f.seedBlob([]byte("layer-idx-child"))
+	childBody := buildManifest(cfg, l1)
+
+	// Push the child image manifest (must exist before the index references it).
+	cr := f.putManifest("child", childBody)
+	cr.Body.Close()
+	if cr.StatusCode != http.StatusCreated {
+		t.Fatalf("push child: %d", cr.StatusCode)
+	}
+	childDigest := cr.Header.Get("Docker-Content-Digest")
+	if childDigest == "" {
+		t.Fatal("no child digest")
+	}
+
+	// Push an index referencing the child.
+	indexBody := []byte(fmt.Sprintf(
+		`{"schemaVersion":2,"mediaType":"application/vnd.oci.image.index.v1+json","manifests":[{"mediaType":"application/vnd.oci.image.manifest.v1+json","digest":%q,"size":%d}]}`,
+		childDigest, len(childBody)))
+	ir := f.putManifest("latest", indexBody)
+	ir.Body.Close()
+	if ir.StatusCode != http.StatusCreated {
+		t.Fatalf("push index: %d", ir.StatusCode)
+	}
+
+	// Digest-delete of the index child must be refused with 405.
+	del := f.deleteManifest(childDigest)
+	del.Body.Close()
+	if del.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("delete index child: status=%d, want 405", del.StatusCode)
+	}
+	// Child still pullable; index intact.
+	g := f.getManifest(childDigest)
+	g.Body.Close()
+	if g.StatusCode != http.StatusOK {
+		t.Fatalf("child not pullable after refused delete: %d", g.StatusCode)
+	}
+	gi := f.getManifest("latest")
+	gi.Body.Close()
+	if gi.StatusCode != http.StatusOK {
+		t.Fatalf("index not pullable after refused child delete: %d", gi.StatusCode)
+	}
+	assertBlobRefcountsConsistent(t, f)
+
+	// Delete the index → releases the child reference → child now deletable.
+	di := f.deleteManifest(f.indexDigest(t, "latest"))
+	di.Body.Close()
+	if di.StatusCode != http.StatusAccepted {
+		t.Fatalf("delete index: %d", di.StatusCode)
+	}
+	dc := f.deleteManifest(childDigest)
+	dc.Body.Close()
+	if dc.StatusCode != http.StatusAccepted {
+		t.Fatalf("delete child after index gone: status=%d, want 202", dc.StatusCode)
+	}
+	assertBlobRefcountsConsistent(t, f)
+}
+
+// indexDigest resolves the manifest digest a tag points at (helper for
+// deleting the index by digest).
+func (f *manifestFixture) indexDigest(t *testing.T, tag string) string {
+	t.Helper()
+	var d string
+	err := f.db.Reader.QueryRowContext(context.Background(),
+		`SELECT digest FROM docker_tags WHERE repo_id=? AND tag=?`, f.repoID, tag).Scan(&d)
+	if err != nil {
+		t.Fatalf("resolve tag %s: %v", tag, err)
+	}
+	return d
 }

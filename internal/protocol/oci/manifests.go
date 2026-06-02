@@ -492,6 +492,12 @@ func (h *Handler) manifestGetOrHead(w http.ResponseWriter, r *http.Request, writ
 	}
 }
 
+// errManifestStillReferenced is returned from the manifestDelete tx when a
+// digest-form delete targets a manifest that an image index still references
+// (its docker_manifests ref_count > 0). Deleting it would dangle the parent
+// index, so the request is refused with 405 (mirroring blobDelete).
+var errManifestStillReferenced = errors.New("manifest is referenced by an image index; delete the index first")
+
 // manifestDelete handles DELETE /v2/<name>/manifests/<ref>.
 //
 // Semantics per must_haves + Pitfall 7:
@@ -579,7 +585,23 @@ func (h *Handler) manifestDelete(w http.ResponseWriter, r *http.Request) {
 			}
 			// Last reference — cascade into full delete.
 		} else {
-			// Digest-form delete: also unlink every tag pointing at digest.
+			// Digest-form delete removes the manifest entirely. Refuse if it is
+			// still referenced by an image index (ref_count > 0) — deleting it
+			// would dangle that parent index. The client must delete the index
+			// first. Re-read in-tx (writer-serialized → authoritative) so a
+			// concurrent index push can't slip a reference in after the pre-tx
+			// read.
+			cur, gerr := h.manifests.GetByDigestTx(ctx, tx, rr.repo.ID, targetDigest)
+			if gerr != nil {
+				return gerr
+			}
+			if cur == nil {
+				return nil // deleted concurrently — idempotent success
+			}
+			if cur.RefCount > 0 {
+				return errManifestStillReferenced
+			}
+			// Unlink every tag pointing at digest, then reap below.
 			if _, err := tx.ExecContext(ctx,
 				`DELETE FROM docker_tags WHERE repo_id=? AND digest=?`,
 				rr.repo.ID, targetDigest,
@@ -599,6 +621,11 @@ func (h *Handler) manifestDelete(w http.ResponseWriter, r *http.Request) {
 		return metadata.IndexArtifactDelete(ctx, tx, rr.repo.ID, targetDigest)
 	})
 	if err != nil {
+		if errors.Is(err, errManifestStillReferenced) {
+			// Mirror blobDelete's "still referenced" convention: 405.
+			writeOCIErr(w, http.StatusMethodNotAllowed, ErrCodeUnsupported, err)
+			return
+		}
 		writeOCIErr(w, http.StatusInternalServerError, ErrCodeUnknown, err)
 		return
 	}

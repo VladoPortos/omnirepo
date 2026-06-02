@@ -279,8 +279,14 @@ func TestPool_ShutdownDeadlineAbandonsLongHandler(t *testing.T) {
 	}
 
 	// Row should still be 'running' — boot recovery is responsible.
+	// Check the read error rather than ignoring it: a silently-dropped read
+	// previously left status == "" and masked the real cause — the in-memory
+	// test DB being reclaimed under load, now fixed by sqlitetest's pinned
+	// sentinel connection.
 	var status string
-	_ = db.Reader.QueryRow(`SELECT status FROM sync_jobs`).Scan(&status)
+	if err := db.Reader.QueryRow(`SELECT status FROM sync_jobs`).Scan(&status); err != nil {
+		t.Fatalf("read status after abandoned shutdown: %v", err)
+	}
 	if status != "running" {
 		t.Fatalf("status=%q want running after abandoned shutdown", status)
 	}

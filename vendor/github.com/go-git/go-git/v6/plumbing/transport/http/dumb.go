@@ -17,6 +17,7 @@ import (
 	"github.com/go-git/go-billy/v6"
 
 	"github.com/go-git/go-git/v6/plumbing"
+	formatcfg "github.com/go-git/go-git/v6/plumbing/format/config"
 	"github.com/go-git/go-git/v6/plumbing/format/idxfile"
 	"github.com/go-git/go-git/v6/plumbing/format/objfile"
 	"github.com/go-git/go-git/v6/plumbing/format/packfile"
@@ -176,7 +177,7 @@ func (r *fetchWalker) getHead() (ref *plumbing.Reference, err error) {
 
 func (r *fetchWalker) process() error {
 	var head plumbing.Hash
-	if r.refs.Head == nil {
+	if headRef, err := r.refs.Head(); err != nil {
 		h, err := r.getHead()
 		if err != nil {
 			return err
@@ -185,17 +186,17 @@ func (r *fetchWalker) process() error {
 		switch h.Type() {
 		case plumbing.HashReference:
 			head = h.Hash()
-			r.refs.Head = &head
+			r.refs.References = append([]*plumbing.Reference{h}, r.refs.References...)
 		case plumbing.SymbolicReference:
-			for name, refHash := range r.refs.References {
-				if name == h.Target().String() {
-					head = refHash
+			for _, ref := range r.refs.References {
+				if ref.Name().String() == h.Target().String() {
+					head = ref.Hash()
 					break
 				}
 			}
 		}
 	} else {
-		head = *r.refs.Head
+		head = headRef.Hash()
 	}
 
 	if head.IsZero() {
@@ -225,13 +226,9 @@ func (r *fetchWalker) process() error {
 	}
 
 	r.queue = append(r.queue, head)
-	for name, refHash := range r.refs.References {
-		peeled, hasPeeled := r.refs.Peeled[name]
-		if r.st.HasEncodedObject(refHash) != nil {
-			r.queue = append(r.queue, refHash)
-		}
-		if hasPeeled && r.st.HasEncodedObject(peeled) != nil {
-			r.queue = append(r.queue, peeled)
+	for _, ref := range r.refs.References {
+		if r.st.HasEncodedObject(ref.Hash()) != nil {
+			r.queue = append(r.queue, ref.Hash())
 		}
 	}
 
@@ -262,7 +259,7 @@ func (r *fetchWalker) fetchObject(objHash plumbing.Hash, obj plumbing.EncodedObj
 		return fmt.Errorf("unexpected status code: %d", res.StatusCode)
 	}
 
-	rd, err := objfile.NewReader(res.Body)
+	rd, err := objfile.NewReader(res.Body, objectFormatFromHash(objHash))
 	if err != nil {
 		return err
 	}
@@ -287,6 +284,13 @@ func (r *fetchWalker) fetchObject(objHash plumbing.Hash, obj plumbing.EncodedObj
 	}
 
 	return nil
+}
+
+func objectFormatFromHash(h plumbing.Hash) formatcfg.ObjectFormat {
+	if h.HexSize() == formatcfg.SHA256HexSize {
+		return formatcfg.SHA256
+	}
+	return formatcfg.SHA1
 }
 
 func (r *fetchWalker) fetch() error {

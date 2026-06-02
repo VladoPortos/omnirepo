@@ -397,7 +397,7 @@ func (s *ObjectStorage) encodedObjectSizeFromUnpacked(h plumbing.Hash) (size int
 		return 0, err
 	}
 
-	r, err := objfile.NewReader(f)
+	r, err := objfile.NewReader(f, s.options.ObjectFormat)
 	if err != nil {
 		return 0, err
 	}
@@ -605,7 +605,7 @@ func (s *ObjectStorage) getFromUnpacked(h plumbing.Hash) (obj plumbing.EncodedOb
 		return cacheObj, nil
 	}
 
-	r, err := objfile.NewReader(f)
+	r, err := objfile.NewReader(f, s.options.ObjectFormat)
 	if err != nil {
 		return nil, err
 	}
@@ -763,16 +763,37 @@ func (s *ObjectStorage) HashesWithPrefix(prefix []byte) ([]plumbing.Hash, error)
 			if err == io.EOF {
 				break
 			} else if err != nil {
+				_ = ei.Close()
 				return nil, err
 			}
 			if e.Hash.HasPrefix(prefix) {
 				if _, ok := seen[e.Hash]; ok {
 					continue
 				}
+				seen[e.Hash] = struct{}{}
 				hashes = append(hashes, e.Hash)
 			}
 		}
 		_ = ei.Close()
+	}
+
+	if err := s.initAlternates(); err != nil {
+		return nil, err
+	}
+	s.muA.RLock()
+	defer s.muA.RUnlock()
+	for _, alt := range s.alternates {
+		altHashes, err := alt.HashesWithPrefix(prefix)
+		if err != nil {
+			return nil, err
+		}
+		for _, h := range altHashes {
+			if _, ok := seen[h]; ok {
+				continue
+			}
+			seen[h] = struct{}{}
+			hashes = append(hashes, h)
+		}
 	}
 
 	return hashes, nil
@@ -823,7 +844,7 @@ func (s *ObjectStorage) buildPackfileIters(
 			}
 			return newPackfileIter(
 				s.dir.Fs(), pack, t, seen, s.index[h],
-				s.objectCache, s.options.KeepDescriptors, crypto.SHA1.Size(),
+				s.objectCache, s.options.KeepDescriptors, h.Size(),
 			)
 		},
 	}, nil

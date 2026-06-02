@@ -27,6 +27,29 @@ var (
 	ErrDeltaNotCached = errors.New("delta could not be found in cache")
 )
 
+// maxObjectPreallocBytes caps the up-front size hint passed to
+// bytes.Buffer.Grow when staging an object's contents, so a malformed length
+// cannot trigger a huge or out-of-range allocation. The buffer still grows
+// dynamically as data is written; this is purely a hint cap.
+const maxObjectPreallocBytes = 1 << 30 // 1 GiB
+
+// Match upstream Git's pack depth ceiling: pack-objects.h OE_DEPTH_BITS,
+// enforced in builtin/pack-objects.c as (1 << OE_DEPTH_BITS) - 1.
+const maxDeltaChainDepth = 4095
+
+// growHint returns a non-negative int64 size, clamped to a sane upper bound,
+// suitable for passing to bytes.Buffer.Grow.
+func growHint(n int64) int {
+	switch {
+	case n <= 0:
+		return 0
+	case n > maxObjectPreallocBytes:
+		return maxObjectPreallocBytes
+	default:
+		return int(n)
+	}
+}
+
 // Parser decodes a packfile and calls any observer associated to it. Is used
 // to generate indexes.
 type Parser struct {
@@ -233,7 +256,7 @@ func (p *Parser) ensureContent(oh *ObjectHeader) error {
 		deltaData := sync.GetBytesBuffer()
 		defer sync.PutBytesBuffer(deltaData)
 
-		err = p.scanner.inflateContent(oh.ContentOffset, deltaData)
+		err = p.scanner.inflateContent(oh.ContentOffset, deltaData, oh.Size)
 		if err != nil {
 			return fmt.Errorf("inflating content at offset %v: %w", oh.ContentOffset, err)
 		}
@@ -278,11 +301,31 @@ func (p *Parser) processDelta(oh *ObjectHeader) error {
 		return fmt.Errorf("unsupported delta type: %v", oh.Type)
 	}
 
+	if err := checkDeltaChainDepth(oh); err != nil {
+		return err
+	}
+
 	if err := p.ensureContent(oh); err != nil {
 		return err
 	}
 
 	return p.storeOrCache(oh)
+}
+
+func checkDeltaChainDepth(oh *ObjectHeader) error {
+	var depth int
+	for current := oh; current != nil && current.isDeltaOnDisk(); current = current.parent {
+		depth++
+		if depth > maxDeltaChainDepth {
+			return fmt.Errorf("%w: delta chain depth exceeds %d", ErrMalformedPackfile, maxDeltaChainDepth)
+		}
+	}
+
+	return nil
+}
+
+func (oh *ObjectHeader) isDeltaOnDisk() bool {
+	return oh.Type.IsDelta() || oh.diskType.IsDelta()
 }
 
 // parentReader returns a [io.ReaderAt] for the decompressed contents
@@ -309,7 +352,7 @@ func (p *Parser) parentReader(parent *ObjectHeader) (io.ReaderAt, error) {
 				if parent.content == nil {
 					parent.content = sync.GetBytesBuffer()
 				}
-				parent.content.Grow(int(parent.Size))
+				parent.content.Grow(growHint(parent.Size))
 
 				_, err = ioutil.CopyBufferPool(parent.content, r)
 				if err == nil {
@@ -334,9 +377,9 @@ func (p *Parser) parentReader(parent *ObjectHeader) (io.ReaderAt, error) {
 	if parent.content == nil {
 		parent.content = sync.GetBytesBuffer()
 	}
-	parent.content.Grow(int(parent.Size))
+	parent.content.Grow(growHint(parent.Size))
 
-	err := p.scanner.inflateContent(parent.ContentOffset, parent.content)
+	err := p.scanner.inflateContent(parent.ContentOffset, parent.content, parent.Size)
 	if err != nil {
 		return nil, ErrReferenceDeltaNotFound
 	}

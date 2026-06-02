@@ -13,8 +13,8 @@ import (
 	"github.com/go-git/go-git/v6/plumbing/format/pktline"
 	"github.com/go-git/go-git/v6/plumbing/object"
 	"github.com/go-git/go-git/v6/plumbing/protocol"
+	"github.com/go-git/go-git/v6/plumbing/protocol/capability"
 	"github.com/go-git/go-git/v6/plumbing/protocol/packp"
-	"github.com/go-git/go-git/v6/plumbing/protocol/packp/capability"
 	"github.com/go-git/go-git/v6/plumbing/protocol/packp/sideband"
 	"github.com/go-git/go-git/v6/plumbing/revlist"
 	"github.com/go-git/go-git/v6/storage"
@@ -99,13 +99,14 @@ func UploadPack(
 	var upreq *packp.UploadRequest
 	var havesWithRef map[plumbing.Hash][]plumbing.Hash
 	var multiAck, multiAckDetailed bool
-	var caps *capability.List
+	var caps capability.List
 	var wants []plumbing.Hash
+	var ack packp.ACK
 	firstRound := true
 	for !done {
 		writec := make(chan error)
 		if firstRound || opts.StatelessRPC {
-			upreq = packp.NewUploadRequest()
+			upreq = &packp.UploadRequest{}
 			if err := upreq.Decode(rd); err != nil {
 				return fmt.Errorf("decoding upload-request: %w", err)
 			}
@@ -131,14 +132,13 @@ func UploadPack(
 				// TODO: support deepen-since, and deepen-not
 				var shupd packp.ShallowUpdate
 				if !upreq.Depth.IsZero() {
-					switch depth := upreq.Depth.(type) {
-					case packp.DepthCommits:
-						if err := getShallowCommits(st, wants, int(depth), &shupd); err != nil {
+					if upreq.Depth.Deepen > 0 {
+						if err := getShallowCommits(st, wants, upreq.Depth.Deepen, &shupd); err != nil {
 							writec <- fmt.Errorf("getting shallow commits: %w", err)
 							return
 						}
-					default:
-						writec <- fmt.Errorf("unsupported depth type %T", upreq.Depth)
+					} else {
+						writec <- fmt.Errorf("unsupported depth: %+v", upreq.Depth)
 						return
 					}
 
@@ -150,10 +150,10 @@ func UploadPack(
 
 				writec <- nil
 			}()
-		}
 
-		if err := <-writec; err != nil {
-			return err
+			if err := <-writec; err != nil {
+				return err
+			}
 		}
 
 		var uphav packp.UploadHaves
@@ -168,16 +168,9 @@ func UploadPack(
 		haves = append(haves, uphav.Haves...)
 		done = uphav.Done
 
-		common := map[plumbing.Hash]struct{}{}
-		var ack packp.ACK
 		var acks []packp.ACK
 		for _, hu := range uphav.Haves {
-			refs, ok := havesWithRef[hu]
-			if ok {
-				for _, ref := range refs {
-					common[ref] = struct{}{}
-				}
-			}
+			_, ok := havesWithRef[hu]
 
 			var status packp.ACKStatus
 			if multiAckDetailed {

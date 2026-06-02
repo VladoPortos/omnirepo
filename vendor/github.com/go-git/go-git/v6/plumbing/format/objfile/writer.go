@@ -1,7 +1,6 @@
 package objfile
 
 import (
-	"compress/zlib"
 	"errors"
 	"io"
 	"strconv"
@@ -18,10 +17,11 @@ var ErrOverflow = errors.New("objfile: declared data length exceeded (overflow)"
 // io.Writer. Close should be called when finished with the Writer. Close will
 // not close the underlying io.Writer.
 type Writer struct {
-	raw    io.Writer
-	hasher plumbing.Hasher
-	multi  io.Writer
-	zlib   *zlib.Writer
+	raw          io.Writer
+	hasher       plumbing.Hasher
+	multi        io.Writer
+	zlib         sync.ZlibWriter
+	objectFormat format.ObjectFormat
 
 	closed  bool
 	pending int64 // number of unwritten bytes
@@ -29,15 +29,17 @@ type Writer struct {
 	closeErr error
 }
 
-// NewWriter returns a new Writer writing to w.
+// NewWriter returns a new Writer writing to w and hashing objects with the
+// given object format.
 //
 // The returned Writer implements io.WriteCloser. Close should be called when
 // finished with the Writer. Close will not close the underlying io.Writer.
-func NewWriter(w io.Writer) *Writer {
+func NewWriter(w io.Writer, objectFormat format.ObjectFormat) *Writer {
 	zlib := sync.GetZlibWriter(w)
 	return &Writer{
-		raw:  w,
-		zlib: zlib,
+		raw:          w,
+		zlib:         zlib,
+		objectFormat: objectFormat,
 	}
 }
 
@@ -66,7 +68,7 @@ func (w *Writer) WriteHeader(t plumbing.ObjectType, size int64) error {
 func (w *Writer) prepareForWrite(t plumbing.ObjectType, size int64) {
 	w.pending = size
 
-	w.hasher = plumbing.NewHasher(format.SHA1, t, size)
+	w.hasher = plumbing.NewHasher(w.objectFormat, t, size)
 	w.multi = io.MultiWriter(w.zlib, w.hasher)
 }
 

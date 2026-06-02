@@ -26,10 +26,31 @@ func New(t testing.TB) *metadata.DB {
 	if err != nil {
 		t.Fatalf("sqlitetest.New: open: %v", err)
 	}
+
+	// Pin a sentinel connection for the whole test. A mode=memory&cache=shared
+	// SQLite database is destroyed the instant its LAST open connection closes
+	// — every table vanishes. Under load the reader/writer pools can
+	// momentarily drop to zero live connections (e.g. a context-canceled write
+	// during shutdown makes database/sql discard the writer's sole conn while
+	// no reader conn happens to be open), silently wiping the DB; a later query
+	// then opens a fresh, empty database and fails with "no such table". A
+	// single pinned connection guarantees the DB is never reclaimed mid-test.
+	// Held on the reader pool (size 8) so the size-1 writer pool stays free for
+	// migrations and test writes.
+	sentinel, err := db.Reader.Conn(context.Background())
+	if err != nil {
+		_ = db.Close()
+		t.Fatalf("sqlitetest.New: sentinel conn: %v", err)
+	}
+
 	if _, err := migrations.Apply(context.Background(), db.Writer); err != nil {
+		_ = sentinel.Close()
 		_ = db.Close()
 		t.Fatalf("sqlitetest.New: migrate: %v", err)
 	}
-	t.Cleanup(func() { _ = db.Close() })
+	t.Cleanup(func() {
+		_ = sentinel.Close()
+		_ = db.Close()
+	})
 	return db
 }

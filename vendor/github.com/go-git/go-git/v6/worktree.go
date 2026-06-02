@@ -10,8 +10,6 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"runtime"
-	"slices"
 	"strings"
 	"time"
 
@@ -56,12 +54,16 @@ var (
 
 // Worktree represents a git worktree.
 type Worktree struct {
-	// Filesystem underlying filesystem.
-	Filesystem billy.Filesystem
 	// External excludes not found in the repository .gitignore
 	Excludes []gitignore.Pattern
 
-	r *Repository
+	r          *Repository
+	filesystem *worktreeFilesystem
+}
+
+// Filesystem returns the underlying filesystem for the worktree.
+func (w *Worktree) Filesystem() billy.Filesystem {
+	return w.filesystem.Filesystem
 }
 
 // Pull incorporates changes from a remote repository into the current branch.
@@ -677,10 +679,7 @@ func (w *Worktree) resetWorktreeToTree(fromTree, toTree *object.Tree, files []st
 		if len(files) > 0 && !inFiles(filesMap, name) {
 			continue
 		}
-		if err := w.validChange(ch); err != nil {
-			return err
-		}
-		if err := rmFileAndDirsIfEmpty(w.Filesystem, name); err != nil {
+		if err := rmFileAndDirsIfEmpty(w.filesystem, name); err != nil {
 			return err
 		}
 	}
@@ -691,7 +690,14 @@ func (w *Worktree) resetWorktreeToTree(fromTree, toTree *object.Tree, files []st
 	// Delete means "on disk, not in index" = untracked → always skip.
 	// Note: SkipWorktree entries are invisible to the merkletrie diff;
 	// they are cleaned up in step 3 below.
-	worktreeChanges, err := w.diffStagingWithWorktree(true, false)
+	//
+	// excludeIgnoredChanges=true engages the filesystem walker's
+	// IgnoreMatcher so untracked entries inside gitignored directories are
+	// pruned at enumeration time rather than walked and then dropped as
+	// Delete actions. The observable result is unchanged because Delete
+	// actions are skipped by the loop below; the matcher only avoids the
+	// pointless lstat of every file under directories like node_modules.
+	worktreeChanges, err := w.diffStagingWithWorktree(true, true)
 	if err != nil {
 		return err
 	}
@@ -723,9 +729,6 @@ func (w *Worktree) resetWorktreeToTree(fromTree, toTree *object.Tree, files []st
 			}
 		}
 
-		if err := w.validChange(ch); err != nil {
-			return err
-		}
 		if err := w.checkoutChange(ch, toTree, b); err != nil {
 			return err
 		}
@@ -742,10 +745,10 @@ func (w *Worktree) resetWorktreeToTree(fromTree, toTree *object.Tree, files []st
 		if len(files) > 0 && !inFiles(filesMap, e.Name) {
 			continue
 		}
-		if _, statErr := w.Filesystem.Lstat(e.Name); os.IsNotExist(statErr) {
+		if _, statErr := w.filesystem.Lstat(e.Name); os.IsNotExist(statErr) {
 			continue
 		}
-		if err := rmFileAndDirsIfEmpty(w.Filesystem, e.Name); err != nil {
+		if err := rmFileAndDirsIfEmpty(w.filesystem, e.Name); err != nil {
 			return err
 		}
 	}
@@ -756,6 +759,13 @@ func (w *Worktree) resetWorktreeToTree(fromTree, toTree *object.Tree, files []st
 
 // resetWorktree updates the worktree to match the staging area.
 // files restricts the operation to the named paths; nil means all files.
+//
+// excludeIgnoredChanges is intentionally false here. The caller is
+// MergeReset, and files contains paths that were just removed from the
+// index by resetIndex. A tracked-but-gitignored path that was removed
+// from the index in this same Reset is no longer in idxMap, so the
+// noder's IgnoreMatcher would prune it from the walk and the Delete
+// action needed to remove it from disk would never be emitted.
 func (w *Worktree) resetWorktree(t *object.Tree, files []string) error {
 	changes, err := w.diffStagingWithWorktree(true, false)
 	if err != nil {
@@ -770,10 +780,6 @@ func (w *Worktree) resetWorktree(t *object.Tree, files []string) error {
 
 	filesMap := buildFilePathMap(files)
 	for _, ch := range changes {
-		if err := w.validChange(ch); err != nil {
-			return err
-		}
-
 		if len(files) > 0 {
 			file := ""
 			if ch.From != nil {
@@ -801,106 +807,6 @@ func (w *Worktree) resetWorktree(t *object.Tree, files []string) error {
 	return w.r.Storer.SetIndex(idx)
 }
 
-// worktreeDeny is a list of paths that are not allowed
-// to be used when resetting the worktree.
-var worktreeDeny = map[string]struct{}{
-	// .git
-	GitDirName: {},
-
-	// For other historical reasons, file names that do not conform to the 8.3
-	// format (up to eight characters for the basename, three for the file
-	// extension, certain characters not allowed such as `+`, etc) are associated
-	// with a so-called "short name", at least on the `C:` drive by default.
-	// Which means that `git~1/` is a valid way to refer to `.git/`.
-	"git~1": {},
-}
-
-// validPath checks whether paths are valid.
-// The rules around invalid paths could differ from upstream based on how
-// filesystems are managed within go-git, but they are largely the same.
-//
-// For upstream rules:
-// https://github.com/git/git/blob/564d0252ca632e0264ed670534a51d18a689ef5d/read-cache.c#L946
-// https://github.com/git/git/blob/564d0252ca632e0264ed670534a51d18a689ef5d/path.c#L1383
-func validPath(paths ...string) error {
-	for _, p := range paths {
-		parts := strings.FieldsFunc(p, func(r rune) bool { return (r == '\\' || r == '/') })
-		if len(parts) == 0 {
-			return fmt.Errorf("invalid path: %q", p)
-		}
-
-		if _, denied := worktreeDeny[strings.ToLower(parts[0])]; denied {
-			return fmt.Errorf("invalid path prefix: %q", p)
-		}
-
-		if runtime.GOOS == "windows" {
-			// Volume names are not supported, in both formats: \\ and <DRIVE_LETTER>:.
-			if vol := filepath.VolumeName(p); vol != "" {
-				return fmt.Errorf("invalid path: %q", p)
-			}
-
-			if !windowsValidPath(parts[0]) {
-				return fmt.Errorf("invalid path: %q", p)
-			}
-		}
-
-		if slices.Contains(parts, "..") {
-			return fmt.Errorf("invalid path %q: cannot use '..'", p)
-		}
-	}
-	return nil
-}
-
-// windowsPathReplacer defines the chars that need to be replaced
-// as part of windowsValidPath.
-var windowsPathReplacer *strings.Replacer
-
-func init() {
-	windowsPathReplacer = strings.NewReplacer(" ", "", ".", "")
-}
-
-func windowsValidPath(part string) bool {
-	if len(part) > 3 && strings.EqualFold(part[:4], GitDirName) {
-		// For historical reasons, file names that end in spaces or periods are
-		// automatically trimmed. Therefore, `.git . . ./` is a valid way to refer
-		// to `.git/`.
-		if windowsPathReplacer.Replace(part[4:]) == "" {
-			return false
-		}
-
-		// For yet other historical reasons, NTFS supports so-called "Alternate Data
-		// Streams", i.e. metadata associated with a given file, referred to via
-		// `<filename>:<stream-name>:<stream-type>`. There exists a default stream
-		// type for directories, allowing `.git/` to be accessed via
-		// `.git::$INDEX_ALLOCATION/`.
-		//
-		// For performance reasons, _all_ Alternate Data Streams of `.git/` are
-		// forbidden, not just `::$INDEX_ALLOCATION`.
-		if len(part) > 4 && part[4:5] == ":" {
-			return false
-		}
-	}
-	return true
-}
-
-func (w *Worktree) validChange(ch merkletrie.Change) error {
-	action, err := ch.Action()
-	if err != nil {
-		return nil
-	}
-
-	switch action {
-	case merkletrie.Delete:
-		return validPath(ch.From.String())
-	case merkletrie.Insert:
-		return validPath(ch.To.String())
-	case merkletrie.Modify:
-		return validPath(ch.From.String(), ch.To.String())
-	}
-
-	return nil
-}
-
 func (w *Worktree) checkoutChange(ch merkletrie.Change, t *object.Tree, idx *indexBuilder) error {
 	a, err := ch.Action()
 	if err != nil {
@@ -914,6 +820,9 @@ func (w *Worktree) checkoutChange(ch merkletrie.Change, t *object.Tree, idx *ind
 	switch a {
 	case merkletrie.Modify, merkletrie.Insert:
 		name = ch.To.String()
+		// FindEntry validates name via pathutil.ValidTreePath, so a
+		// dangerous tree-derived path is refused at the lookup
+		// boundary before we materialise anything.
 		e, err = t.FindEntry(name)
 		if err != nil {
 			return err
@@ -921,7 +830,15 @@ func (w *Worktree) checkoutChange(ch merkletrie.Change, t *object.Tree, idx *ind
 
 		isSubmodule = e.Mode == filemode.Submodule
 	case merkletrie.Delete:
-		return rmFileAndDirsIfEmpty(w.Filesystem, ch.From.String())
+		// checkoutChange.Delete is only reached from resetWorktree's
+		// filesystem-vs-index merkletrie diff (resetWorktreeToTree's
+		// tree-derived deletes call rmFileAndDirsIfEmpty directly).
+		// The path source is therefore the local worktree filesystem,
+		// where the tolerant worktreeFilesystem wrapper is the right
+		// fit: we want to be able to clean up legitimately-tracked
+		// shapes like "submodule/.git" rather than abort the whole
+		// reset on a single weird untracked file.
+		return rmFileAndDirsIfEmpty(w.filesystem, ch.From.String())
 	}
 
 	if isSubmodule {
@@ -1000,7 +917,7 @@ func (w *Worktree) checkoutChangeSubmodule(name string,
 			return err
 		}
 
-		if err := w.Filesystem.MkdirAll(name, mode); err != nil {
+		if err := w.filesystem.MkdirAll(name, mode); err != nil {
 			return err
 		}
 
@@ -1022,7 +939,7 @@ func (w *Worktree) checkoutChangeRegularFile(name string,
 
 		// to apply perm changes the file is deleted, billy doesn't implement
 		// chmod
-		if err := w.Filesystem.Remove(name); err != nil {
+		if err := w.filesystem.Remove(name); err != nil {
 			return err
 		}
 
@@ -1053,7 +970,7 @@ func (w *Worktree) checkoutFile(f *object.File) (err error) {
 		return w.checkoutFileSymlink(f)
 	}
 
-	dstFile, err := w.Filesystem.OpenFile(f.Name, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, mode.Perm())
+	dstFile, err := w.filesystem.OpenFile(f.Name, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, mode.Perm())
 	if err != nil {
 		return err
 	}
@@ -1102,10 +1019,10 @@ func (w *Worktree) copyObjectToWorktree(object *object.File, file billy.File) (e
 }
 
 func (w *Worktree) checkoutFileSymlink(f *object.File) (err error) {
-	// https://github.com/git/git/commit/10ecfa76491e4923988337b2e2243b05376b40de
-	if strings.EqualFold(f.Name, gitmodulesFile) {
-		return ErrGitModulesSymlink
-	}
+	// .gitmodules symlink rejection (and its NTFS / HFS variants) is
+	// enforced by the worktreeFilesystem wrapper's Symlink method via
+	// validSymlinkName. See https://github.com/git/git/commit/10ecfa7
+	// for the upstream rationale.
 
 	from, err := f.Reader()
 	if err != nil {
@@ -1119,14 +1036,14 @@ func (w *Worktree) checkoutFileSymlink(f *object.File) (err error) {
 		return err
 	}
 
-	err = w.Filesystem.Symlink(string(bytes), f.Name)
+	err = w.filesystem.Symlink(string(bytes), f.Name)
 
 	// On windows, this might fail.
 	// Follow Git on Windows behavior by writing the link as it is.
 	if err != nil && isSymlinkWindowsNonAdmin(err) {
 		mode, _ := f.Mode.ToOSFileMode()
 
-		to, err := w.Filesystem.OpenFile(f.Name, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, mode.Perm())
+		to, err := w.filesystem.OpenFile(f.Name, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, mode.Perm())
 		if err != nil {
 			return err
 		}
@@ -1151,7 +1068,7 @@ func (w *Worktree) addIndexFromTreeEntry(name string, f *object.TreeEntry, idx *
 
 func (w *Worktree) addIndexFromFile(name string, h plumbing.Hash, idx *indexBuilder) error {
 	idx.Remove(name)
-	fi, err := w.Filesystem.Lstat(name)
+	fi, err := w.filesystem.Lstat(name)
 	if err != nil {
 		return err
 	}
@@ -1281,7 +1198,7 @@ func (w *Worktree) newSubmodule(fromModules, fromConfig *config.Submodule) *Subm
 }
 
 func (w *Worktree) isSymlink(path string) bool {
-	if s, err := w.Filesystem.Lstat(path); err == nil {
+	if s, err := w.filesystem.Lstat(path); err == nil {
 		return s.Mode()&os.ModeSymlink != 0
 	}
 	return false
@@ -1292,7 +1209,7 @@ func (w *Worktree) readGitmodulesFile() (*config.Modules, error) {
 		return nil, ErrGitModulesSymlink
 	}
 
-	f, err := w.Filesystem.Open(gitmodulesFile)
+	f, err := w.filesystem.Open(gitmodulesFile)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
@@ -1324,7 +1241,7 @@ func (w *Worktree) Clean(opts *CleanOptions) error {
 	}
 
 	root := ""
-	files, err := w.Filesystem.ReadDir(root)
+	files, err := w.filesystem.ReadDir(root)
 	if err != nil {
 		return err
 	}
@@ -1344,7 +1261,7 @@ func (w *Worktree) doClean(status Status, opts *CleanOptions, dir string, files 
 				continue
 			}
 
-			subfiles, err := w.Filesystem.ReadDir(path)
+			subfiles, err := w.filesystem.ReadDir(path)
 			if err != nil {
 				return err
 			}
@@ -1353,14 +1270,14 @@ func (w *Worktree) doClean(status Status, opts *CleanOptions, dir string, files 
 				return err
 			}
 		} else if status.IsUntracked(path) {
-			if err := w.Filesystem.Remove(path); err != nil {
+			if err := w.filesystem.Remove(path); err != nil {
 				return err
 			}
 		}
 	}
 
 	if opts.Dir && dir != "" {
-		_, err := removeDirIfEmpty(w.Filesystem, dir)
+		_, err := removeDirIfEmpty(w.filesystem, dir)
 		return err
 	}
 
@@ -1517,7 +1434,7 @@ func rmFileAndDirsIfEmpty(fs billy.Filesystem, name string) error {
 	}
 
 	dir := filepath.Dir(name)
-	for {
+	for dir != "." && dir != "" {
 		removed, err := removeDirIfEmpty(fs, dir)
 		if err != nil && !os.IsNotExist(err) {
 			return err

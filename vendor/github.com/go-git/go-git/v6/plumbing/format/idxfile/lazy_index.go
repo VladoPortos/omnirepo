@@ -45,6 +45,7 @@ type openFileFunc func() (ReadAtCloser, error)
 type LazyIndex struct {
 	hashSize int
 	count    int
+	count64  int
 
 	// Section byte offsets within the idx file.
 	fanoutStart int
@@ -157,6 +158,7 @@ func (s *LazyIndex) init(packHash plumbing.Hash) error {
 	if err != nil {
 		return err
 	}
+	s.count64 = n64
 
 	// The pack checksum sits right after the 64-bit offset table.
 	packBuf := make([]byte, s.hashSize)
@@ -349,6 +351,10 @@ func (s *LazyIndex) offset(idx io.ReaderAt, pos int) (uint64, error) {
 	off32 := binary.BigEndian.Uint32(buf[:])
 	if uint64(off32)&is64bitsMask != 0 {
 		loIndex := int(uint64(off32) & ^is64bitsMask)
+		if loIndex >= s.count64 {
+			return 0, fmt.Errorf("%w: offset64 index %d out of range (have %d entries)",
+				ErrMalformedIdxFile, loIndex, s.count64)
+		}
 		var buf64 [off64Size]byte
 		off64Pos := int64(s.off64Start + loIndex*off64Size)
 		if _, err := idx.ReadAt(buf64[:], off64Pos); err != nil {

@@ -1,14 +1,15 @@
 # Go parameters
 GOCMD = go
-GOTEST = $(GOCMD) test 
+GOTEST = $(GOCMD) test
 WASIRUN_WRAPPER := $(CURDIR)/scripts/wasirun-wrapper
+JSWASM_WRAPPER := $(CURDIR)/scripts/jswasm-wrapper
 
 # Coverage
 COVERAGE_REPORT := coverage.out
 COVERAGE_MODE := count
 
 # renovate: datasource=github-tags depName=golangci/golangci-lint
-GOLANGCI_VERSION ?= v2.10.1
+GOLANGCI_VERSION ?= v2.11.4
 TOOLS_BIN := $(shell mkdir -p build/tools && realpath build/tools)
 
 GOLANGCI = $(TOOLS_BIN)/golangci-lint-$(GOLANGCI_VERSION)
@@ -30,6 +31,12 @@ wasitest: export GOARCH=wasm
 wasitest: export GOOS=wasip1
 wasitest:
 	$(GOTEST) -exec $(WASIRUN_WRAPPER) ./...
+
+.PHONY: jstest
+jstest: export GOARCH=wasm
+jstest: export GOOS=js
+jstest:
+	$(GOTEST) -exec $(JSWASM_WRAPPER) ./...
 
 validate: validate-lint validate-dirty ## Run validation checks.
 

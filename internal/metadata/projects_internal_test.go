@@ -26,11 +26,24 @@ func newAtomicityTestDB(t *testing.T) *DB {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
+	// Pin a sentinel reader connection for the test's lifetime — a
+	// mode=memory&cache=shared DB is destroyed when its last connection
+	// closes, which under load silently wipes every table. Mirrors the
+	// guard in sqlitetest.New.
+	sentinel, err := db.Reader.Conn(context.Background())
+	if err != nil {
+		_ = db.Close()
+		t.Fatalf("sentinel conn: %v", err)
+	}
 	if _, err := migrations.Apply(context.Background(), db.Writer); err != nil {
+		_ = sentinel.Close()
 		_ = db.Close()
 		t.Fatalf("migrate: %v", err)
 	}
-	t.Cleanup(func() { _ = db.Close() })
+	t.Cleanup(func() {
+		_ = sentinel.Close()
+		_ = db.Close()
+	})
 	return db
 }
 

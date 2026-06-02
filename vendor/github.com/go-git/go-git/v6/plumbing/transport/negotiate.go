@@ -10,18 +10,71 @@ import (
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/go-git/go-git/v6/plumbing/format/config"
 	"github.com/go-git/go-git/v6/plumbing/format/pktline"
+	"github.com/go-git/go-git/v6/plumbing/protocol/capability"
 	"github.com/go-git/go-git/v6/plumbing/protocol/packp"
-	"github.com/go-git/go-git/v6/plumbing/protocol/packp/capability"
 	"github.com/go-git/go-git/v6/storage"
 	"github.com/go-git/go-git/v6/utils/ioutil"
 	xstorage "github.com/go-git/go-git/v6/x/storage"
 )
 
+const (
+	initialFlush  = 16
+	pipeSafeFlush = 32
+	largeFlush    = 16384
+	maxInVein     = 256
+)
+
+func nextFlush(statelessRPC bool, count int) int {
+	if statelessRPC {
+		if count < largeFlush {
+			return count << 1
+		}
+		return count * 11 / 10
+	}
+
+	if count < pipeSafeFlush {
+		return count << 1
+	}
+
+	return count + pipeSafeFlush
+}
+
+func applyServerACKs(
+	statelessRPC bool,
+	acks []packp.ACK,
+	common map[plumbing.Hash]struct{},
+	statelessCommon *[]plumbing.Hash,
+	gotContinue *bool,
+	gotReady *bool,
+	inVein *int,
+) {
+	for _, ack := range acks {
+		if !*gotContinue && ack.Status > 0 {
+			*gotContinue = true
+		}
+
+		switch ack.Status {
+		case packp.ACKContinue:
+			*inVein = 0
+		case packp.ACKReady:
+			*gotReady = true
+			*inVein = 0
+		case packp.ACKCommon:
+			_, alreadyCommon := common[ack.Hash]
+			common[ack.Hash] = struct{}{}
+			if statelessRPC && !alreadyCommon {
+				*statelessCommon = append(*statelessCommon, ack.Hash)
+				*inVein = 0
+			}
+		}
+	}
+}
+
 // NegotiatePack performs the pack negotiation phase of the fetch operation.
 func NegotiatePack(
 	ctx context.Context,
 	st storage.Storer,
-	caps *capability.List,
+	caps capability.List,
 	statelessRPC bool,
 	reader io.Reader,
 	writer io.WriteCloser,
@@ -30,23 +83,23 @@ func NegotiatePack(
 	reader = ioutil.NewContextReader(ctx, reader)
 	writer = ioutil.NewContextWriteCloser(ctx, writer)
 
-	upreq := packp.NewUploadRequest()
+	upreq := &packp.UploadRequest{}
 	multiAck := caps.Supports(capability.MultiACK)
 	multiAckDetailed := caps.Supports(capability.MultiACKDetailed)
 	if multiAckDetailed {
-		_ = upreq.Capabilities.Set(capability.MultiACKDetailed)
+		upreq.Capabilities.Set(capability.MultiACKDetailed)
 	} else if multiAck {
-		_ = upreq.Capabilities.Set(capability.MultiACK)
+		upreq.Capabilities.Set(capability.MultiACK)
 	}
 
 	if req.Progress != nil {
 		if caps.Supports(capability.Sideband64k) {
-			_ = upreq.Capabilities.Set(capability.Sideband64k)
+			upreq.Capabilities.Set(capability.Sideband64k)
 		} else if caps.Supports(capability.Sideband) {
-			_ = upreq.Capabilities.Set(capability.Sideband)
+			upreq.Capabilities.Set(capability.Sideband)
 		}
 	} else if caps.Supports(capability.NoProgress) {
-		_ = upreq.Capabilities.Set(capability.NoProgress)
+		upreq.Capabilities.Set(capability.NoProgress)
 	}
 
 	if caps.Supports(capability.ObjectFormat) {
@@ -85,27 +138,25 @@ func NegotiatePack(
 			return nil, fmt.Errorf("mismatched algorithms: client %s; server %s", clientFormat, serverFormat)
 		}
 
-		_ = upreq.Capabilities.Set(capability.ObjectFormat, clientFormat.String())
+		upreq.Capabilities.Set(capability.ObjectFormat, clientFormat.String())
 	}
 
 	if caps.Supports(capability.OFSDelta) {
-		_ = upreq.Capabilities.Set(capability.OFSDelta)
+		upreq.Capabilities.Set(capability.OFSDelta)
 	}
 
 	if caps.Supports(capability.Agent) {
-		_ = upreq.Capabilities.Set(capability.Agent, capability.DefaultAgent())
+		upreq.Capabilities.Set(capability.Agent, capability.DefaultAgent())
 	}
 
 	if req.IncludeTags && caps.Supports(capability.IncludeTag) {
-		_ = upreq.Capabilities.Set(capability.IncludeTag)
+		upreq.Capabilities.Set(capability.IncludeTag)
 	}
 
 	if req.Filter != "" {
 		if caps.Supports(capability.Filter) {
 			upreq.Filter = req.Filter
-			if err := upreq.Capabilities.Set(capability.Filter); err != nil {
-				return nil, err
-			}
+			upreq.Capabilities.Set(capability.Filter)
 		} else {
 			return nil, ErrFilterNotSupported
 		}
@@ -117,7 +168,7 @@ func NegotiatePack(
 		if !caps.Supports(capability.Shallow) {
 			return nil, ErrShallowNotSupported
 		}
-		upreq.Depth = packp.DepthCommits(req.Depth)
+		upreq.Depth = packp.DepthRequest{Deepen: req.Depth}
 		upreq.Shallows, err = st.Shallow()
 		if err != nil {
 			return nil, err
@@ -135,21 +186,41 @@ func NegotiatePack(
 	}
 
 	common := map[plumbing.Hash]struct{}{}
+	var statelessCommon []plumbing.Hash
 	var inVein int
 	var done bool
 	var gotContinue bool
+	var gotReady bool
+	var sendDoneAfterReady bool
 	firstRound := true
+	flushAt := initialFlush
 
 	for !done {
 		var uphav packp.UploadHaves
-		for i := 0; i < 32 && len(req.Haves) > 0; i++ {
+		if statelessRPC && !sendDoneAfterReady {
+			uphav.Haves = append(uphav.Haves, statelessCommon...)
+		}
+
+		batchSize := 0
+		if !sendDoneAfterReady {
+			batchSize = flushAt
+			if gotContinue {
+				remaining := maxInVein - inVein
+				if remaining <= 0 {
+					batchSize = 0
+				} else if batchSize > remaining {
+					batchSize = remaining
+				}
+			}
+		}
+
+		for i := 0; i < batchSize && len(req.Haves) > 0; i++ {
 			uphav.Haves = append(uphav.Haves, req.Haves[len(req.Haves)-1])
 			req.Haves = req.Haves[:len(req.Haves)-1]
 			inVein++
 		}
 
-		const maxInVein = 256
-		done = len(req.Haves) == 0 || (gotContinue && inVein >= maxInVein)
+		done = sendDoneAfterReady || len(req.Haves) == 0 || (gotContinue && inVein >= maxInVein)
 		uphav.Done = done
 
 		if isSubset(req.Wants, uphav.Haves) && len(upreq.Shallows) == 0 {
@@ -198,14 +269,7 @@ func NegotiatePack(
 					readc <- fmt.Errorf("decoding server-response: %w", err)
 					return
 				}
-				for _, ack := range srvrs.ACKs {
-					if !gotContinue && ack.Status > 0 {
-						gotContinue = true
-					}
-					if ack.Status == packp.ACKCommon {
-						common[ack.Hash] = struct{}{}
-					}
-				}
+				applyServerACKs(statelessRPC, srvrs.ACKs, common, &statelessCommon, &gotContinue, &gotReady, &inVein)
 			}
 			readc <- nil
 		}()
@@ -213,8 +277,15 @@ func NegotiatePack(
 		if err := <-readc; err != nil {
 			return nil, err
 		}
+		if sendDoneAfterReady {
+			break
+		}
+		if gotReady {
+			sendDoneAfterReady = true
+		}
 
 		firstRound = false
+		flushAt = nextFlush(statelessRPC, flushAt)
 	}
 
 	if !statelessRPC {

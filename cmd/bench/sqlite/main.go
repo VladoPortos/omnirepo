@@ -98,13 +98,17 @@ func main() {
 				})
 				atomic.AddUint64(&txCount, 1)
 				if err != nil {
-					// Context cancelled at shutdown is not a real error.
-					if runCtx.Err() != nil && strings.Contains(err.Error(), "context") {
+					countErr, busy := classifyTxErr(err, runCtx.Err() != nil)
+					if !countErr {
+						// Non-busy error observed after the run deadline
+						// fired: a shutdown-race artifact (context-cancel
+						// OR a bare "interrupted (9)" on an in-flight
+						// statement). Not writer contention — stop this
+						// worker cleanly without failing the gate.
 						return
 					}
 					atomic.AddInt64(&errs, 1)
-					m := err.Error()
-					if strings.Contains(m, "SQLITE_BUSY") || strings.Contains(m, "database is locked") {
+					if busy {
 						atomic.AddInt64(&busyCount, 1)
 					}
 				}
@@ -121,6 +125,48 @@ func main() {
 	if busyCount != 0 || errs != 0 {
 		os.Exit(1)
 	}
+}
+
+// classifyTxErr decides how a WriteTx error counts toward the bench's
+// pass/fail gate.
+//
+// The bench exists to prove that SQLITE_BUSY / "database is locked" never
+// occurs under writer contention (SetMaxOpenConns(1) + BEGIN IMMEDIATE), so
+// those are ALWAYS hard failures — even when observed as the run deadline
+// fires. That is the invariant the gate protects.
+//
+// Any other (non-busy) error seen AFTER the deadline has passed
+// (deadlinePassed == true) is a shutdown-race artifact: an in-flight
+// BeginTx/ExecContext/Commit interrupted when the run context expires.
+//
+// We deliberately ignore ALL non-busy errors at shutdown rather than
+// allow-listing specific shapes. Empirically these are dominated by
+// "context deadline exceeded" (from BeginTx blocking on the size-1 writer
+// pool), but rarer shapes also occur — a bare "interrupted (9)" SQLite
+// interrupt, or a post-cancellation commit-state error — none of which
+// contain a stable substring. The previous guard allow-listed only the
+// substring "context" and so let "interrupted (9)" through, which is the
+// false positive that turned CI red. An allow-list re-introduces that
+// fragility: the next unenumerated shutdown shape re-flakes the gate.
+// Ignoring every non-busy post-deadline error is safe here because the
+// workload is uniform — any genuine non-busy error (constraint/logic/
+// corruption) would also fire during the active run, where it IS counted
+// (deadlinePassed == false). SQLITE_BUSY is the one thing that must never
+// occur and is always counted, even at shutdown.
+func classifyTxErr(err error, deadlinePassed bool) (countErr, busy bool) {
+	if err == nil {
+		return false, false
+	}
+	m := err.Error()
+	busy = strings.Contains(m, "SQLITE_BUSY") || strings.Contains(m, "database is locked")
+	if busy {
+		return true, true
+	}
+	if deadlinePassed {
+		// Shutdown-race interrupt / cancellation — expected, ignore.
+		return false, false
+	}
+	return true, false
 }
 
 func fatal(format string, args ...any) {

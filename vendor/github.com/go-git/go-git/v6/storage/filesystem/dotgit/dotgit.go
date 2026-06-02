@@ -13,14 +13,13 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"reflect"
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-git/go-billy/v6"
-	"github.com/go-git/go-billy/v6/helper/chroot"
 
 	"github.com/go-git/go-git/v6/plumbing"
 	formatcfg "github.com/go-git/go-git/v6/plumbing/format/config"
@@ -80,6 +79,10 @@ var (
 	// ErrEmptyRefFile is returned when a reference file is attempted to be read,
 	// but the file is empty
 	ErrEmptyRefFile = errors.New("ref file is empty")
+	// ErrModuleNameEscape is returned when a submodule name would
+	// resolve outside the modules/ subtree, mirroring canonical Git's
+	// "ignoring suspicious submodule name" defence.
+	ErrModuleNameEscape = errors.New("submodule name escapes modules/ directory")
 )
 
 // Options holds configuration for the storage.
@@ -112,8 +115,10 @@ type DotGit struct {
 	options Options
 	fs      billy.Filesystem
 
-	// incoming object directory information
-	incomingChecked bool
+	// incoming object directory information. incomingDirName is written
+	// exactly once inside incomingOnce.Do; sync.Once provides the
+	// happens-before guarantee that lets readers observe it lock-free.
+	incomingOnce    sync.Once
 	incomingDirName string
 
 	objectList []plumbing.Hash // sorted
@@ -483,7 +488,7 @@ func (d *DotGit) DeleteOldObjectPackAndIndex(hash plumbing.Hash, t time.Time) er
 func (d *DotGit) NewObject() (*ObjectWriter, error) {
 	d.cleanObjectList()
 
-	return newObjectWriter(d.fs)
+	return newObjectWriter(d.fs, d.options.ObjectFormat)
 }
 
 // ObjectsWithPrefix returns the hashes of objects that have the given prefix.
@@ -724,9 +729,11 @@ func (d *DotGit) incomingObjectPath(h plumbing.Hash) string {
 }
 
 // hasIncomingObjects searches for an incoming directory and keeps its name
-// so it doesn't have to be found each time an object is accessed.
+// so it doesn't have to be found each time an object is accessed. The
+// lazy initialisation runs under sync.Once so concurrent callers cannot
+// race on the cached fields.
 func (d *DotGit) hasIncomingObjects() bool {
-	if !d.incomingChecked {
+	d.incomingOnce.Do(func() {
 		directoryContents, err := d.fs.ReadDir(objectsPath)
 		if err == nil {
 			for _, file := range directoryContents {
@@ -737,9 +744,7 @@ func (d *DotGit) hasIncomingObjects() bool {
 				}
 			}
 		}
-
-		d.incomingChecked = true
-	}
+	})
 
 	return d.incomingDirName != ""
 }
@@ -1275,8 +1280,19 @@ func (d *DotGit) PackRefs() (err error) {
 }
 
 // Module return a billy.Filesystem pointing to the module folder
+//
+// As a defence in depth against submodule name path traversal,
+// refuse names whose joined path leaves the modules/ subtree once
+// cleaned. The config-layer parser also validates submodule names,
+// but Module may be reached from any caller that constructs a
+// Submodule struct programmatically and so bypasses the parser.
 func (d *DotGit) Module(name string) (billy.Filesystem, error) {
-	return d.fs.Chroot(d.fs.Join(modulePath, name))
+	p := d.fs.Join(modulePath, name)
+	cleaned := path.Clean(filepath.ToSlash(p))
+	if cleaned != modulePath && !strings.HasPrefix(cleaned, modulePath+"/") {
+		return nil, ErrModuleNameEscape
+	}
+	return d.fs.Chroot(p)
 }
 
 // AddAlternate appends an alternate object directory path to the alternates file.
@@ -1332,24 +1348,8 @@ func (d *DotGit) Alternates() ([]*DotGit, error) {
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
 		path := scanner.Text()
-
-		// Avoid creating multiple dotgits for the same alternative path.
-		if _, ok := seen[path]; ok {
-			continue
-		}
-
-		seen[path] = struct{}{}
-
-		if filepath.IsAbs(path) {
-			// Handling absolute paths should be straight-forward. However, the default osfs (Chroot)
-			// tries to concatenate an abs path with the root path in some operations (e.g. Stat),
-			// which leads to unexpected errors. Therefore, make the path relative to the current FS instead.
-			if reflect.TypeOf(fs) == reflect.TypeFor[*chroot.ChrootHelper]() {
-				path, err = filepath.Rel(fs.Root(), path)
-				if err != nil {
-					return nil, fmt.Errorf("cannot make path %q relative: %w", path, err)
-				}
-			}
+		if filepath.IsAbs(path) || filepath.VolumeName(path) != "" {
+			path = filepath.Clean(path)
 		} else {
 			// By Git conventions, relative paths should be based on the object database (.git/objects/info)
 			// location as per: https://www.kernel.org/pub/software/scm/git/docs/gitrepository-layout.html
@@ -1359,6 +1359,15 @@ func (d *DotGit) Alternates() ([]*DotGit, error) {
 			abs := filepath.Join(string(filepath.Separator), filepath.ToSlash(path))
 			path = filepath.FromSlash(abs)
 		}
+
+		path = alternatePathForFS(path, fs.Root())
+
+		// Avoid creating multiple dotgits for the same alternative path.
+		if _, ok := seen[path]; ok {
+			continue
+		}
+
+		seen[path] = struct{}{}
 
 		// Aligns with upstream behavior: exit if target path is not a valid directory.
 		if fi, err := fs.Stat(path); err != nil || !fi.IsDir() {
@@ -1376,6 +1385,29 @@ func (d *DotGit) Alternates() ([]*DotGit, error) {
 	}
 
 	return alternates, nil
+}
+
+func alternatePathForFS(path, root string) string {
+	if root == "" {
+		return path
+	}
+
+	root = filepath.Clean(root)
+	if root == "." || root == string(filepath.Separator) {
+		return path
+	}
+
+	rel, err := filepath.Rel(root, path)
+	if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return rel
+	}
+
+	vol := filepath.VolumeName(path)
+	if vol != "" {
+		return strings.TrimLeft(path[len(vol):], `\/`)
+	}
+
+	return strings.TrimPrefix(path, root+string(filepath.Separator))
 }
 
 // Fs returns the underlying filesystem of the DotGit folder.

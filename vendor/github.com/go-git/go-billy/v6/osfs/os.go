@@ -4,7 +4,6 @@
 package osfs
 
 import (
-	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -19,98 +18,71 @@ const (
 )
 
 // Default Filesystem representing the root of the os filesystem.
-var Default = &ChrootOS{}
+var Default = newBoundOS(string(os.PathSeparator))
 
-// New returns a new OS filesystem.
-// By default paths are deduplicated, but still enforced
-// under baseDir. For more info refer to WithDeduplicatePath.
+// New returns a new OS filesystem rooted at baseDir.
+//
+// The returned filesystem is always a [BoundOS]: containment is enforced
+// via [os.Root], opened and closed per operation. For better performance
+// with caller-managed lifecycle, use [FromRoot] instead.
+//
+// All [Option] values are accepted for API compatibility but have no
+// effect on the returned implementation.
 func New(baseDir string, opts ...Option) billy.Filesystem {
-	o := &options{
-		deduplicatePath: true,
-	}
+	o := &options{}
 	for _, opt := range opts {
 		opt(o)
 	}
 
-	if o.Type == BoundOSFS {
-		return newBoundOS(baseDir, o.deduplicatePath)
-	}
-
-	return newChrootOS(baseDir)
+	return newBoundOS(baseDir)
 }
 
-// WithBoundOS returns the option of using a Bound filesystem OS.
+// WithBoundOS selects the [BoundOS] implementation.
+//
+// [BoundOS] is the only OS-backed implementation returned by [New], so this
+// option is the default and is kept for API compatibility.
 func WithBoundOS() Option {
 	return func(o *options) {
 		o.Type = BoundOSFS
 	}
 }
 
-// WithChrootOS returns the option of using a Chroot filesystem OS.
-func WithChrootOS() Option {
-	return func(o *options) {
-		o.Type = ChrootOSFS
-	}
-}
-
-// WithDeduplicatePath toggles the deduplication of the base dir in the path.
-// This occurs when absolute links are being used.
-// Assuming base dir /base/dir and an absolute symlink /base/dir/target:
-//
-// With DeduplicatePath (default): /base/dir/target
-// Without DeduplicatePath: /base/dir/base/dir/target
-//
-// This option is only used by the BoundOS OS type.
-func WithDeduplicatePath(enabled bool) Option {
-	return func(o *options) {
-		o.deduplicatePath = enabled
-	}
-}
-
 type options struct {
 	Type
-	deduplicatePath bool
 }
 
+// Type identifies an osfs implementation.
 type Type int
 
 const (
-	ChrootOSFS Type = iota
-	BoundOSFS
+	// BoundOSFS selects the [BoundOS] implementation.
+	BoundOSFS Type = iota
 )
-
-func tempFile(dir, prefix string) (billy.File, error) {
-	f, err := os.CreateTemp(dir, prefix)
-	if err != nil {
-		return nil, err
-	}
-	return &file{File: f}, nil
-}
-
-func openFile(fn string, flag int, perm fs.FileMode, createDir func(string) error) (billy.File, error) {
-	if flag&os.O_CREATE != 0 {
-		if createDir == nil {
-			return nil, fmt.Errorf("createDir func cannot be nil if file needs to be opened in create mode")
-		}
-		if err := createDir(fn); err != nil {
-			return nil, err
-		}
-	}
-
-	f, err := os.OpenFile(fn, flag, perm)
-	if err != nil {
-		return nil, err
-	}
-	return &file{File: f}, err
-}
 
 // file is a wrapper for an os.File which adds support for file locking.
 type file struct {
 	*os.File
-	m sync.Mutex
+	name string
+	m    sync.Mutex
+}
+
+func (f *file) Name() string {
+	if f.name != "" {
+		return f.name
+	}
+	return f.File.Name()
 }
 
 func (f *file) WriteTo(w io.Writer) error {
 	_, err := f.File.WriteTo(w)
 	return err
+}
+
+type fileInfo struct {
+	fs.FileInfo
+	name string
+}
+
+func (fi fileInfo) Name() string {
+	return fi.name
 }

@@ -8,7 +8,6 @@ import (
 
 	"github.com/vladoportos/omnirepo/internal/audit"
 	"github.com/vladoportos/omnirepo/internal/auth"
-	"github.com/vladoportos/omnirepo/internal/metadata"
 )
 
 // DeleteTagREST is the session-authed REST shim — the UI
@@ -90,11 +89,11 @@ func (d *DeleteTagREST) Handle(w http.ResponseWriter, r *http.Request) {
 		writeActionErr(w, http.StatusNotFound, "not_found", "manifest gone")
 		return
 	}
-	refs, isIndex, refsErr := manifestRefs(m.Body)
-	if refsErr != nil {
-		// Match /v2 manifestDelete — a parse failure here is never silently
-		// swallowed; the stored body is broken and blob-refcount
-		// bookkeeping can't be done safely without it.
+	// Validate the stored body parses before mutating anything (reapManifest
+	// re-parses it to release refs). Match /v2 manifestDelete — a parse failure
+	// is never silently swallowed; the body is broken and blob-refcount
+	// bookkeeping can't be done safely without it.
+	if _, _, refsErr := manifestRefs(m.Body); refsErr != nil {
 		writeActionErr(w, http.StatusBadRequest, "manifest_invalid", refsErr.Error())
 		return
 	}
@@ -113,17 +112,11 @@ func (d *DeleteTagREST) Handle(w http.ResponseWriter, r *http.Request) {
 		if count > 0 || m.RefCount > 0 {
 			return nil
 		}
-		// Last reference. Cascade to full manifest delete: ref-decrements,
-		// row removal, FTS cleanup. Mirrors manifestDelete's tag-form
-		// cascade exactly.
-		if derr := d.h.decRefs(ctx, tx, rr.ID, refs, isIndex); derr != nil {
-			return derr
-		}
-		if derr := d.h.manifests.Delete(ctx, tx, rr.ID, targetDigest); derr != nil {
-			return derr
-		}
+		// Last reference. Cascade to full manifest delete (ref-decrements, row
+		// removal, FTS cleanup, recursive reap of orphaned index children).
+		// Mirrors manifestDelete's tag-form cascade exactly.
 		cascaded = true
-		return metadata.IndexArtifactDelete(ctx, tx, rr.ID, targetDigest)
+		return d.h.reapManifest(ctx, tx, rr.ID, targetDigest, m.Body)
 	})
 	if err != nil {
 		writeActionErr(w, http.StatusInternalServerError, "delete_failed", "")

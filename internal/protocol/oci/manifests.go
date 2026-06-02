@@ -327,32 +327,6 @@ func (h *Handler) incRefs(ctx context.Context, tx *sql.Tx, repoID int64, refs []
 	return nil
 }
 
-// decRefs mirrors incRefs for DELETE / tag-overwrite paths.
-//
-// A previous iteration silently swallowed ErrRefCountUnderflow and
-// kept going. That masks real bugs — if DecRef returns underflow, the
-// caller's bookkeeping is inconsistent (manifest references more refs than
-// the refcount table records), which is exactly the class of silent data
-// corruption that orphans or double-deletes blobs. Fail the tx instead so
-// the operation is retried with fresh state or the problem surfaces to
-// operators.
-func (h *Handler) decRefs(ctx context.Context, tx *sql.Tx, repoID int64, refs []string, isIndex bool) error {
-	if isIndex {
-		for _, d := range refs {
-			if err := h.manifests.DecRef(ctx, tx, repoID, d); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-	for _, d := range refs {
-		if err := h.blobs.DecRef(ctx, tx, d); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 // reapManifestIfOrphaned deletes manifest `digest` in `repoID` — releasing its
 // referenced blob/child refs and removing the manifest row + FTS entry — but
 // ONLY when nothing references it anymore: no tag points at it AND its own
@@ -375,14 +349,39 @@ func (h *Handler) reapManifestIfOrphaned(ctx context.Context, tx *sql.Tx, repoID
 	if tagCount > 0 || m.RefCount > 0 {
 		return nil // still tagged, or referenced as an index child
 	}
-	refs, isIndex, rerr := manifestRefs(m.Body)
+	return h.reapManifest(ctx, tx, repoID, digest, m.Body)
+}
+
+// reapManifest unconditionally removes manifest `digest` — the caller has
+// already determined it is unreferenced (no tags, manifest ref_count 0). It
+// releases the refs the body carries and deletes the row + FTS entry. For an
+// image manifest that means DecRef'ing its blobs; for an index it DecRef's
+// each child manifest's ref_count and then RECURSIVELY reaps any child left
+// orphaned (no tags, ref_count 0), so an untagged child that only existed to
+// back the index does not leak its row and blobs once the index is gone.
+// Content addressing rules out reference cycles, so the recursion terminates.
+func (h *Handler) reapManifest(ctx context.Context, tx *sql.Tx, repoID int64, digest string, body []byte) error {
+	refs, isIndex, rerr := manifestRefs(body)
 	if rerr != nil {
 		// A stored body that no longer parses can't have its refs released
 		// safely — fail loudly rather than silently orphan blobs.
 		return fmt.Errorf("reap manifest %s: %w", digest, rerr)
 	}
-	if err := h.decRefs(ctx, tx, repoID, refs, isIndex); err != nil {
-		return err
+	if isIndex {
+		for _, child := range refs {
+			if err := h.manifests.DecRef(ctx, tx, repoID, child); err != nil {
+				return err
+			}
+			if err := h.reapManifestIfOrphaned(ctx, tx, repoID, child); err != nil {
+				return err
+			}
+		}
+	} else {
+		for _, blob := range refs {
+			if err := h.blobs.DecRef(ctx, tx, blob); err != nil {
+				return err
+			}
+		}
 	}
 	if err := h.manifests.Delete(ctx, tx, repoID, digest); err != nil {
 		return err
@@ -562,8 +561,9 @@ func (h *Handler) manifestDelete(w http.ResponseWriter, r *http.Request) {
 	// could never reclaim them. Fail the DELETE with MANIFEST_INVALID so
 	// the caller knows the stored body is broken and must be manually
 	// remediated rather than silently leaking bytes.
-	refs, isIndex, refsErr := manifestRefs(m.Body)
-	if refsErr != nil {
+	// Validate the stored body parses before mutating anything (reapManifest
+	// re-parses it to release refs). A broken body must fail loudly, not orphan.
+	if _, _, refsErr := manifestRefs(m.Body); refsErr != nil {
 		writeOCIErr(w, http.StatusBadRequest, ErrCodeManifestInvalid, refsErr)
 		return
 	}
@@ -610,15 +610,9 @@ func (h *Handler) manifestDelete(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		// Decrement refs on blobs/child manifests, then delete the row
-		// and the FTS entry.
-		if err := h.decRefs(ctx, tx, rr.repo.ID, refs, isIndex); err != nil {
-			return err
-		}
-		if err := h.manifests.Delete(ctx, tx, rr.repo.ID, targetDigest); err != nil {
-			return err
-		}
-		return metadata.IndexArtifactDelete(ctx, tx, rr.repo.ID, targetDigest)
+		// Release refs and delete the row + FTS entry, recursively reaping any
+		// index children left orphaned by this delete.
+		return h.reapManifest(ctx, tx, rr.repo.ID, targetDigest, m.Body)
 	})
 	if err != nil {
 		if errors.Is(err, errManifestStillReferenced) {

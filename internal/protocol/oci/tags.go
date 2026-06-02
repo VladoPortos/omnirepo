@@ -14,7 +14,6 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/vladoportos/omnirepo/internal/audit"
-	"github.com/vladoportos/omnirepo/internal/metadata"
 )
 
 // tagsListResponse is the {"name","tags":[...]} envelope per spec.
@@ -121,15 +120,12 @@ func (h *Handler) tagDelete(w http.ResponseWriter, r *http.Request) {
 		writeOCIErr(w, http.StatusInternalServerError, ErrCodeUnknown, err)
 		return
 	}
-	// Same class as manifestDelete. A malformed stored body must
-	// fail the DELETE with MANIFEST_INVALID so ref-counts stay consistent
-	// rather than silently skipping the decrement step.
-	var refs []string
-	var isIndex bool
+	// Same class as manifestDelete. A malformed stored body must fail the
+	// DELETE with MANIFEST_INVALID so ref-counts stay consistent rather than
+	// silently skipping the decrement step (reapManifest re-parses to release
+	// refs; validate here first).
 	if m != nil {
-		var refsErr error
-		refs, isIndex, refsErr = manifestRefs(m.Body)
-		if refsErr != nil {
+		if _, _, refsErr := manifestRefs(m.Body); refsErr != nil {
 			writeOCIErr(w, http.StatusBadRequest, ErrCodeManifestInvalid, refsErr)
 			return
 		}
@@ -150,14 +146,9 @@ func (h *Handler) tagDelete(w http.ResponseWriter, r *http.Request) {
 		if count > 0 || m.RefCount > 0 {
 			return nil
 		}
-		// Last reference → cascade to manifest delete.
-		if err := h.decRefs(ctx, tx, rr.repo.ID, refs, isIndex); err != nil {
-			return err
-		}
-		if err := h.manifests.Delete(ctx, tx, rr.repo.ID, digest); err != nil {
-			return err
-		}
-		return metadata.IndexArtifactDelete(ctx, tx, rr.repo.ID, digest)
+		// Last reference → cascade to manifest delete (recursively reaping any
+		// orphaned index children).
+		return h.reapManifest(ctx, tx, rr.repo.ID, digest, m.Body)
 	})
 	if err != nil {
 		writeOCIErr(w, http.StatusInternalServerError, ErrCodeUnknown, err)

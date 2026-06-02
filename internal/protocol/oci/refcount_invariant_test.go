@@ -286,3 +286,53 @@ func (f *manifestFixture) indexDigest(t *testing.T, tag string) string {
 	}
 	return d
 }
+
+// TestIndexDelete_RecursivelyReapsOrphanedChild pins the recursive reap:
+// deleting an index whose only-untagged child exists solely to back it must
+// reap that child too (row + blobs), not just decrement it. The non-recursive
+// cascade left the child manifest row and its blobs pinned forever.
+func TestIndexDelete_RecursivelyReapsOrphanedChild(t *testing.T) {
+	f := newManifestFixture(t, false)
+	cfg := f.seedBlob([]byte("cfg-reap"))
+	l1 := f.seedBlob([]byte("layer-reap"))
+	childBody := buildManifest(cfg, l1)
+
+	cr := f.putManifest("childtmp", childBody)
+	cr.Body.Close()
+	childDigest := cr.Header.Get("Docker-Content-Digest")
+	indexBody := []byte(fmt.Sprintf(
+		`{"schemaVersion":2,"mediaType":"application/vnd.oci.image.index.v1+json","manifests":[{"mediaType":"application/vnd.oci.image.manifest.v1+json","digest":%q,"size":%d}]}`,
+		childDigest, len(childBody)))
+	ir := f.putManifest("latest", indexBody)
+	ir.Body.Close()
+	if ir.StatusCode != http.StatusCreated {
+		t.Fatalf("push index: %d", ir.StatusCode)
+	}
+	// Drop the child's own tag → child now exists ONLY as an index child.
+	dt := f.deleteManifest("childtmp")
+	dt.Body.Close()
+	if dt.StatusCode != http.StatusAccepted {
+		t.Fatalf("delete child tag: %d", dt.StatusCode)
+	}
+	// Child still present (referenced by the index).
+	if m, _ := f.manifests.GetByDigest(context.Background(), f.repoID, childDigest); m == nil {
+		t.Fatal("child manifest reaped too early (still referenced by index)")
+	}
+
+	// Delete the index (last tag) → must recursively reap the orphaned child.
+	di := f.deleteManifest("latest")
+	di.Body.Close()
+	if di.StatusCode != http.StatusAccepted {
+		t.Fatalf("delete index: %d", di.StatusCode)
+	}
+	// Child manifest row gone, and its blobs released to 0.
+	if m, _ := f.manifests.GetByDigest(context.Background(), f.repoID, childDigest); m != nil {
+		t.Fatalf("orphaned child manifest not reaped after index delete: %+v", m)
+	}
+	for _, d := range []string{cfg, l1} {
+		if got := blobRefcount(t, f, d); got != 0 {
+			t.Errorf("child blob %s ref_count=%d, want 0 (child recursively reaped)", d, got)
+		}
+	}
+	assertBlobRefcountsConsistent(t, f)
+}

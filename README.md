@@ -84,17 +84,26 @@ See the **[Dependencies, versions, and licenses](#dependencies-versions-and-lice
 
 ### Docker (recommended)
 
+Pre-built images are published to this repository's GitHub Container Registry:
+
 ```bash
 docker run -d \
   --name omnirepo \
   -p 8080:8080 -p 8443:8443 \
   -v /srv/omnirepo:/var/lib/omnirepo \
-  omnirepo:v1.2
+  ghcr.io/vladoportos/omnirepo:latest
 ```
 
-(The `make docker` target tags with `git describe --tags` — built images land as
-`omnirepo:v1.2`, `omnirepo:v1.2-<N>-g<sha>` between tags, or `omnirepo:dev`
-when no tags are reachable.)
+Available tags: `latest`, the pinned patch release (e.g. `1.0.0`), and the `1.0`
+minor series (`linux/amd64`). Pin to a release tag for reproducible deploys:
+
+```bash
+docker pull ghcr.io/vladoportos/omnirepo:1.0.0
+```
+
+To build the image yourself instead, the `make docker` target tags it from
+`git describe --tags` — `omnirepo:v1.0.0`, `omnirepo:v1.0.0-<N>-g<sha>` between
+tags, or `omnirepo:dev` when no tags are reachable.
 
 Browse to `https://<host>:8443/` (accepting the self-signed cert) or `http://<host>:8080/` in dev.
 

@@ -1,0 +1,87 @@
+name: release
+
+# Build the release container image, publish it to this repo's GitHub
+# Container Registry package (ghcr.io/<owner>/omnirepo), and create the
+# GitHub Release. Triggered by pushing a semver tag, e.g.:
+#
+#   git tag v1.0.0 && git push origin v1.0.0
+#
+# Image is linux/amd64. The build bakes in the Trivy DB (downloaded at build
+# time — the runtime air-gap invariant is unaffected).
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write   # create the GitHub Release
+  packages: write   # push the image to ghcr.io
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Image metadata (tags + labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          # Semver tag v1.0.0 -> image tags 1.0.0, 1.0, latest
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build and push (linux/amd64)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          build-args: |
+            VERSION=${{ github.ref_name }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Single-arch image: skip provenance/SBOM attestations so the GHCR
+          # package shows one clean manifest instead of an unknown/unknown entry.
+          provenance: false
+          sbom: false
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE_VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          cat > /tmp/notes.md <<NOTES
+          OmniRepo ${{ github.ref_name }} — a self-hosted, air-gap-friendly artifact server in a single container. Serves OCI/Docker, RPM/YUM, APT/Debian, PyPI, Helm, RAW, S3-compatible buckets, and Git on one port, with Trivy-powered vulnerability scanning, a project-scoped user model, web UI, and REST API.
+
+          ### Container image
+          \`\`\`
+          docker pull ghcr.io/vladoportos/omnirepo:${IMAGE_VERSION}
+          \`\`\`
+          Also published as \`:latest\` and the \`:${IMAGE_VERSION%.*}\` series (linux/amd64).
+
+          ### Run
+          \`\`\`
+          docker run -d --name omnirepo \\
+            -p 8080:8080 -p 8443:8443 \\
+            -v omnirepo-data:/var/lib/omnirepo \\
+            ghcr.io/vladoportos/omnirepo:${IMAGE_VERSION}
+          \`\`\`
+          HTTP on 8080, HTTPS (self-signed by default) on 8443; all mutable state lives under the mounted \`/var/lib/omnirepo\` volume.
+          NOTES
+          gh release create "${{ github.ref_name }}" \
+            --title "OmniRepo ${{ github.ref_name }}" \
+            --notes-file /tmp/notes.md

@@ -230,47 +230,7 @@ jobs:
       - name: Run Git conformance suite
         run: make conformance-git
 
-  # Phase 4 TEST-07 gate: git clone memory benchmark. Generates a
-  # deterministic ~1.3 GB bare repo, launches omnirepo as a child process,
-  # clones against it while sampling /proc/<pid>/status VmRSS at 50 ms.
-  # Hard gate: peak_rss < 3 * repo_bytes for the gogit backend.
-  # Also runs gitkit for comparison (not gated). JSON artifact archived.
-  #
-  # continue-on-error: kept on for runtime cost — the fixture build is
-  # ~15 min on a cold runner and each backend clone is several minutes.
-  # The test itself is reliable (bootstrap-collision rewrite shipped:
-  # the empty bare from the Phase 3 repo-create hook is swapped for the
-  # fixture symlink AFTER /healthz, so InitBare no longer fights the
-  # fixture). Drop continue-on-error if the bench should gate CI.
-  bench-git:
-    runs-on: ubuntu-24.04
-    needs: build-test
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: actions/setup-go@v6
-        with:
-          go-version: '1.25'
-          cache: true
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-          cache: 'npm'
-          cache-dependency-path: web/package-lock.json
-
-      - name: Build frontend
-        run: make frontend
-
-      - name: Install git
-        run: sudo apt-get update && sudo apt-get install -y git
-
-      - name: Run git memory bench (TEST-07)
-        run: make bench-git
-
-      - uses: actions/upload-artifact@v7
-        if: always()
-        with:
-          name: git-bench-results
-          path: .bench/git-results.json
+  # Phase 4 TEST-07: git clone memory benchmark moved to its own manual-only
+  # workflow (.github/workflows/bench-git.yml, workflow_dispatch). It is
+  # non-gating and slow (~15-40 min for the ~1.3 GB fixture + per-backend
+  # clones), so it no longer runs on every push — dispatch it on demand.

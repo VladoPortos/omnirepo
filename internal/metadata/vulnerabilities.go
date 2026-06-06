@@ -56,25 +56,3 @@ func (r *VulnerabilitiesRepo) InsertBatch(ctx context.Context, tx *sql.Tx, scanI
 	}
 	return nil
 }
-
-// DeleteByScan removes every vulnerability row for scanID. Used by
-// rescan flows before re-inserting the fresh batch.
-func (r *VulnerabilitiesRepo) DeleteByScan(ctx context.Context, tx *sql.Tx, scanID int64) error {
-	_, err := tx.ExecContext(ctx, `DELETE FROM vulnerabilities WHERE scan_id=?`, scanID)
-	if err != nil {
-		return fmt.Errorf("vulnerabilities: delete_by_scan %d: %w", scanID, err)
-	}
-	return nil
-}
-
-// CountByScan returns how many rows exist for scanID. Useful in tests
-// and the REST envelope.
-func (r *VulnerabilitiesRepo) CountByScan(ctx context.Context, scanID int64) (int, error) {
-	var n int
-	if err := r.db.Reader.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM vulnerabilities WHERE scan_id=?`, scanID,
-	).Scan(&n); err != nil {
-		return 0, fmt.Errorf("vulnerabilities: count: %w", err)
-	}
-	return n, nil
-}

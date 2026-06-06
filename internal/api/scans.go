@@ -528,15 +528,17 @@ func (d Deps) handleScanPrune(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Count rows before/after so we can return a meaningful summary.
-	// DELETE ... WHERE id NOT IN (SELECT MAX(id) FROM scans
-	//   WHERE repo_id=? AND status IN ('done','failed')
-	//   GROUP BY artifact_kind, artifact_id) AND repo_id=? AND status IN (...)
-	// Pending/running rows are explicitly preserved.
+	// Prune every finished (done/failed) scan except the newest per
+	// artifact; pending/running rows are explicitly preserved. The prune
+	// set is collected first so each scan's vulnerabilities rows AND the
+	// cves_fts rows they orphan can be removed via
+	// metadata.DeleteVulnerabilitiesByScan — the scans→vulnerabilities FK
+	// cascade would drop the rows, but cves_fts is an FTS5 table with no
+	// FK, so without the explicit sweep its rows leak on every prune.
 	var deleted int64
 	if err := d.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
-		res, err := tx.ExecContext(r.Context(), `
-			DELETE FROM scans
+		rows, err := tx.QueryContext(r.Context(), `
+			SELECT id FROM scans
 			WHERE repo_id = ?
 			  AND status IN ('done','failed')
 			  AND id NOT IN (
@@ -548,11 +550,31 @@ func (d Deps) handleScanPrune(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return err
 		}
-		n, err := res.RowsAffected()
-		if err != nil {
+		var ids []int64
+		for rows.Next() {
+			var id int64
+			if err := rows.Scan(&id); err != nil {
+				_ = rows.Close()
+				return err
+			}
+			ids = append(ids, id)
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
 			return err
 		}
-		deleted = n
+		_ = rows.Close()
+
+		for _, id := range ids {
+			if err := metadata.DeleteVulnerabilitiesByScan(r.Context(), tx, id); err != nil {
+				return err
+			}
+			if _, err := tx.ExecContext(r.Context(),
+				`DELETE FROM scans WHERE id = ?`, id); err != nil {
+				return err
+			}
+		}
+		deleted = int64(len(ids))
 		return nil
 	}); err != nil {
 		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")

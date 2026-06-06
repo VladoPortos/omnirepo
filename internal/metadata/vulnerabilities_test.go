@@ -10,6 +10,20 @@ import (
 	"github.com/vladoportos/omnirepo/internal/metadata/sqlitetest"
 )
 
+
+// countVulnRows counts vulnerabilities rows for scanID via raw SQL — the
+// repo layer deliberately has no production read path for this.
+func countVulnRows(t *testing.T, db *metadata.DB, scanID int64) int {
+	t.Helper()
+	var n int
+	if err := db.Reader.QueryRowContext(context.Background(),
+		`SELECT COUNT(*) FROM vulnerabilities WHERE scan_id=?`, scanID,
+	).Scan(&n); err != nil {
+		t.Fatalf("count vulnerabilities: %v", err)
+	}
+	return n
+}
+
 func TestVulnerabilities_InsertBatchAndCount(t *testing.T) {
 	t.Parallel()
 	db := sqlitetest.New(t)
@@ -35,9 +49,8 @@ func TestVulnerabilities_InsertBatchAndCount(t *testing.T) {
 		t.Fatalf("insert batch: %v", err)
 	}
 
-	n, err := vrepo.CountByScan(ctx, scanID)
-	if err != nil || n != 2 {
-		t.Fatalf("count=%d err=%v", n, err)
+	if n := countVulnRows(t, db, scanID); n != 2 {
+		t.Fatalf("count=%d want 2", n)
 	}
 }
 
@@ -66,36 +79,8 @@ func TestVulnerabilities_InsertBatchCapEnforced(t *testing.T) {
 		t.Fatalf("want ErrVulnBatchTooLarge, got %v", err)
 	}
 	// Because tx rolls back, no rows were inserted.
-	n, _ := vrepo.CountByScan(ctx, scanID)
-	if n != 0 {
+	if n := countVulnRows(t, db, scanID); n != 0 {
 		t.Fatalf("want 0 rows after rejected batch, got %d", n)
 	}
 }
 
-func TestVulnerabilities_DeleteByScan(t *testing.T) {
-	t.Parallel()
-	db := sqlitetest.New(t)
-	seedProjectRepo(t, db)
-	scans := metadata.NewScansRepo(db)
-	vrepo := metadata.NewVulnerabilitiesRepo(db)
-	ctx := context.Background()
-	var scanID int64
-	_ = db.WriteTx(ctx, func(tx *sql.Tx) error {
-		var err error
-		scanID, err = scans.Enqueue(ctx, tx, 1, "docker", "sha256:q")
-		return err
-	})
-	_ = db.WriteTx(ctx, func(tx *sql.Tx) error {
-		return vrepo.InsertBatch(ctx, tx, scanID, []metadata.Vuln{
-			{CVEID: "CVE-1", Severity: "LOW", PackageName: "a"},
-			{CVEID: "CVE-2", Severity: "LOW", PackageName: "b"},
-		}, 0)
-	})
-	_ = db.WriteTx(ctx, func(tx *sql.Tx) error {
-		return vrepo.DeleteByScan(ctx, tx, scanID)
-	})
-	n, _ := vrepo.CountByScan(ctx, scanID)
-	if n != 0 {
-		t.Fatalf("want 0 after delete, got %d", n)
-	}
-}

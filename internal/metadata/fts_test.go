@@ -180,8 +180,7 @@ func TestFTS_DeleteVulnerabilitiesByScan_CascadesFTSOnOrphansOnly(t *testing.T) 
 		t.Fatalf("CVE-SHARED should remain, count=%d", shared)
 	}
 	// And the vulnerabilities rows for scan1 are gone.
-	n, _ := vrepo.CountByScan(ctx, scan1)
-	if n != 0 {
+	if n := countVulnRows(t, db, scan1); n != 0 {
 		t.Fatalf("vulnerabilities rows for scan1 remain: %d", n)
 	}
 }

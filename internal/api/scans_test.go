@@ -238,11 +238,36 @@ func TestScansREST_PruneScans_KeepsLatest(t *testing.T) {
 		}
 		return id
 	}
-	insertDoneScan("docker", "sha256:a")
+	old1 := insertDoneScan("docker", "sha256:a")
 	insertDoneScan("docker", "sha256:a")
 	keepA := insertDoneScan("docker", "sha256:a")
 	insertDoneScan("docker", "sha256:b")
 	keepB := insertDoneScan("docker", "sha256:b")
+
+	// Seed vulnerabilities + cves_fts so the prune's orphan sweep is
+	// observable end-to-end: CVE-ORPHAN is referenced only by a pruned
+	// scan and must vanish from cves_fts; CVE-SHARED is also referenced
+	// by a surviving scan and must stay.
+	vrepo := metadata.NewVulnerabilitiesRepo(s.db)
+	if err := s.db.WriteTx(ctx, func(tx *sql.Tx) error {
+		if err := vrepo.InsertBatch(ctx, tx, old1, []metadata.Vuln{
+			{CVEID: "CVE-ORPHAN", Severity: "HIGH", PackageName: "p"},
+			{CVEID: "CVE-SHARED", Severity: "LOW", PackageName: "p"},
+		}, 0); err != nil {
+			return err
+		}
+		if err := vrepo.InsertBatch(ctx, tx, keepA, []metadata.Vuln{
+			{CVEID: "CVE-SHARED", Severity: "LOW", PackageName: "p"},
+		}, 0); err != nil {
+			return err
+		}
+		if err := metadata.IndexVulnerability(ctx, tx, "CVE-ORPHAN", "p", "orphan"); err != nil {
+			return err
+		}
+		return metadata.IndexVulnerability(ctx, tx, "CVE-SHARED", "p", "shared")
+	}); err != nil {
+		t.Fatal(err)
+	}
 	// Running row for a third artifact — must survive the prune.
 	var running int64
 	if err := s.db.WriteTx(ctx, func(tx *sql.Tx) error {
@@ -265,6 +290,23 @@ func TestScansREST_PruneScans_KeepsLatest(t *testing.T) {
 	}
 	if got, _ := body["deleted"].(float64); got != 3 {
 		t.Fatalf("deleted=%v want 3 (body=%v)", got, body)
+	}
+
+	// Orphan sweep: CVE-ORPHAN's only referencing scan (old1) was pruned,
+	// so its cves_fts row must be gone; CVE-SHARED survives via keepA.
+	// The pruned scans' vulnerabilities rows are gone too.
+	var orphan, shared, oldVulns int
+	_ = s.db.Reader.QueryRowContext(ctx, `SELECT COUNT(*) FROM cves_fts WHERE cve_id = ?`, "CVE-ORPHAN").Scan(&orphan)
+	_ = s.db.Reader.QueryRowContext(ctx, `SELECT COUNT(*) FROM cves_fts WHERE cve_id = ?`, "CVE-SHARED").Scan(&shared)
+	_ = s.db.Reader.QueryRowContext(ctx, `SELECT COUNT(*) FROM vulnerabilities WHERE scan_id = ?`, old1).Scan(&oldVulns)
+	if orphan != 0 {
+		t.Fatalf("CVE-ORPHAN cves_fts row should be swept on prune, count=%d", orphan)
+	}
+	if shared != 1 {
+		t.Fatalf("CVE-SHARED cves_fts row should survive, count=%d", shared)
+	}
+	if oldVulns != 0 {
+		t.Fatalf("pruned scan %d still has %d vulnerabilities rows", old1, oldVulns)
 	}
 
 	// What remains: keepA, keepB, running — three rows total.

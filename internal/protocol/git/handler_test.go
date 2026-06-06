@@ -11,6 +11,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/go-chi/chi/v5"
+
+	"github.com/vladoportos/omnirepo/internal/audit"
 	"github.com/vladoportos/omnirepo/internal/config"
 	"github.com/vladoportos/omnirepo/internal/metadata"
 	"github.com/vladoportos/omnirepo/internal/metadata/sqlitetest"
@@ -480,4 +483,75 @@ func readAll(t *testing.T, resp *http.Response) []byte {
 		t.Fatalf("read body: %v", err)
 	}
 	return buf.Bytes()
+}
+
+// TestDeniedFetch_EmitsAuditEvent pins the AuditMiddleware placement: it
+// wraps the auth chain (step 2, right after ResolveRepoFromURL), so an
+// unauthenticated upload-pack POST against a private repo is rejected AND
+// still lands in the audit log as git.fetch with outcome=error. Failed
+// access attempts are precisely what the audit trail must capture.
+func TestDeniedFetch_EmitsAuditEvent(t *testing.T) {
+	t.Parallel()
+	db := sqlitetest.New(t)
+	ctx := context.Background()
+	if _, err := db.Writer.ExecContext(ctx, `INSERT INTO projects(name) VALUES ('privproj')`); err != nil {
+		t.Fatal(err)
+	}
+	var projID int64
+	if err := db.Reader.QueryRowContext(ctx, `SELECT id FROM projects WHERE name='privproj'`).Scan(&projID); err != nil {
+		t.Fatal(err)
+	}
+	// Private repo: public_read stays 0 so anonymous fetch is denied.
+	if _, err := db.Writer.ExecContext(ctx,
+		`INSERT INTO repos(project_id, type, name) VALUES (?, 'git', 'secret')`, projID); err != nil {
+		t.Fatal(err)
+	}
+
+	logger := &fakeAuditLogger{}
+	handler := gitpkg.New(gitpkg.Deps{
+		Backend:  &recordingBackend{},
+		Config:   defaultCfg(),
+		Locks:    storage.NewLocks(),
+		Repos:    metadata.NewReposRepo(db),
+		Projects: metadata.NewProjectsRepo(db),
+		Members:  metadata.NewMembersRepo(db),
+		Audit:    logger,
+		DataRoot: t.TempDir(),
+		Users:    metadata.NewUsersRepo(db),
+		Sessions: metadata.NewSessionsRepo(db),
+		APIKeys:  metadata.NewAPIKeysRepo(db),
+		DB:       db,
+		Refs:     metadata.NewGitRefsRepo(db),
+	})
+	r := chi.NewRouter()
+	handler.Mount(r)
+	ts := httptest.NewServer(r)
+	t.Cleanup(ts.Close)
+
+	resp, err := http.Post(ts.URL+"/privproj/git/secret.git/git-upload-pack",
+		"application/x-git-upload-pack-request", strings.NewReader(""))
+	if err != nil {
+		t.Fatalf("POST upload-pack: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized && resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("status = %d, want 401/403 for anonymous fetch of private repo", resp.StatusCode)
+	}
+
+	var fetchEvents []audit.Event
+	for _, e := range logger.events {
+		if e.Kind == audit.EvtGitFetch {
+			fetchEvents = append(fetchEvents, e)
+		}
+	}
+	if len(fetchEvents) != 1 {
+		t.Fatalf("want exactly 1 git.fetch audit event for the denied POST, got %d (all: %+v)", len(fetchEvents), logger.events)
+	}
+	ev := fetchEvents[0]
+	if ev.Outcome != "error" || ev.TargetID != "secret" {
+		t.Fatalf("event = %+v, want outcome=error target=secret", ev)
+	}
+	if st, _ := ev.Details["status"].(int); st < 400 {
+		t.Fatalf("details.status = %v, want >= 400", ev.Details["status"])
+	}
 }

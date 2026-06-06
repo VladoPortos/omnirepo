@@ -84,18 +84,19 @@ func New(d Deps) *Handler {
 // order allows anonymous clones of public_read=true repos:
 //
 //  1. ResolveRepoFromURL — parse URL, look up project + repo
-//  2. AnonymousGitRead   — when no Authorization header is present and the
+//  2. AuditMiddleware — emits a git.fetch audit event per completed
+//     upload-pack POST, success or denial (it wraps the rest of the
+//     chain so 401/403 fetch attempts are audited with outcome=error;
+//     pushes are audited via EvtGitRefsSynced in dispatchToBackend).
+//  3. AnonymousGitRead   — when no Authorization header is present and the
 //     repo is public_read + the action is a read, attach an anonymous actor
 //     so downstream checks pass; otherwise fall through.
-//  3. skipIfActor(BasicOrAPIKey) — auth path for credentialed clients;
-//     skipped when step 2 already attached anonymous.
-//  4. resolveMembership — fills project-membership cache for auth.Can.
-//  5. RequireGitPermission — derive action from path, check auth.Can.
-//  6. PerRepoMutex — no-op on reads; serialize writes per repo.
-//  7. PushSizeLimit — MaxBytesReader cap on wire bytes.
-//  8. AuditMiddleware — emits a git.fetch audit event per completed
-//     upload-pack POST (pushes are audited via EvtGitRefsSynced in
-//     dispatchToBackend).
+//  4. skipIfActor(BasicOrAPIKey) — auth path for credentialed clients;
+//     skipped when step 3 already attached anonymous.
+//  5. resolveMembership — fills project-membership cache for auth.Can.
+//  6. RequireGitPermission — derive action from path, check auth.Can.
+//  7. PerRepoMutex — no-op on reads; serialize writes per repo.
+//  8. PushSizeLimit — MaxBytesReader cap on wire bytes.
 //
 // Two URL shapes are mounted with the same handler chain:
 //   - "/git/{project}/{repo}"   — legacy form (kept for compatibility)
@@ -118,13 +119,13 @@ func (h *Handler) Mount(parent chi.Router) {
 func (h *Handler) mountAt(parent chi.Router, route string, authDeps authmw.Deps) {
 	parent.Route(route, func(r chi.Router) {
 		r.Use(ResolveRepoFromURL(h.projects, h.repos))
+		r.Use(AuditMiddleware(h))
 		r.Use(AnonymousGitRead())
 		r.Use(skipIfActor(authmw.BasicOrAPIKey(authDeps)))
 		r.Use(resolveMembership(h.members))
 		r.Use(RequireGitPermission())
 		r.Use(PerRepoMutex(h.locks))
 		r.Use(PushSizeLimit(ResolveMaxPushBytes(h.cfg.Repos.Git.MaxPushBytes)))
-		r.Use(AuditMiddleware(h))
 		// LFS batch endpoint returns 501 lfs.not_supported. Registered
 		// BEFORE the /* catch-all so chi's specific-pattern-beats-wildcard
 		// precedence wins — applies to every method (see lfs.go for rationale).

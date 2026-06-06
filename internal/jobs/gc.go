@@ -58,6 +58,7 @@ type GCReport struct {
 	BytesFreed          int64 `json:"bytes_freed"`
 	TrashEntriesDeleted int64 `json:"trash_entries_deleted"`
 	SessionsPruned      int64 `json:"sessions_pruned"`
+	UploadMarkersPruned int64 `json:"upload_markers_pruned"`
 }
 
 // GCHandler executes one GC run. Construct via NewGCHandler and register
@@ -212,6 +213,16 @@ func (g *GCHandler) Handle(ctx context.Context, jobID int64) error {
 			}
 			report.SessionsPruned++
 		}
+	}
+
+	// Step 5b: prune expired blob_uploads markers (the digest-keyed GC
+	// exclusion set). Expired rows no longer protect anything — both the
+	// pre-loop snapshot and the in-tx re-check filter on expires_at — but
+	// without this sweep the table grows forever.
+	if n, perr := g.BlobUploads.PruneExpired(ctx, time.Now()); perr != nil {
+		slog.WarnContext(ctx, "gc.blob_uploads.prune.failed", "err", perr)
+	} else {
+		report.UploadMarkersPruned = int64(n)
 	}
 
 	// Step 6: persist report into sync_jobs.log. We do this in its own

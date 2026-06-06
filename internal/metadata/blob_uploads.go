@@ -7,10 +7,11 @@ import (
 	"time"
 )
 
-// BlobUploadsRepo owns the blob_uploads table.
-// Start inserts (digest, expires_at=now+ttl); Complete deletes the row;
-// PruneExpired deletes rows with expires_at < now. GC consumes this
-// to exclude in-flight digests from sweep.
+// BlobUploadsRepo owns the blob_uploads table — the digest-keyed GC
+// exclusion set. Start inserts (digest, expires_at=now+ttl) BEFORE the CAS
+// write so GC cannot sweep a blob whose referencing manifest PUT is still
+// in flight; rows are never deleted on upload completion — the TTL is the
+// protection window, and the GC run prunes expired rows via PruneExpired.
 //
 // Start is idempotent: a second Start for the same digest updates expires_at
 // to the newer value instead of returning a PK conflict. This keeps resumable
@@ -31,17 +32,6 @@ func (r *BlobUploadsRepo) Start(ctx context.Context, digest string, ttl time.Dur
 		`, digest, expires)
 		if err != nil {
 			return fmt.Errorf("blob_uploads: start %s: %w", digest, err)
-		}
-		return nil
-	})
-}
-
-// Complete removes the in-flight marker for digest. No-ops if missing.
-func (r *BlobUploadsRepo) Complete(ctx context.Context, digest string) error {
-	return r.db.WriteTx(ctx, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `DELETE FROM blob_uploads WHERE digest=?`, digest)
-		if err != nil {
-			return fmt.Errorf("blob_uploads: complete %s: %w", digest, err)
 		}
 		return nil
 	})

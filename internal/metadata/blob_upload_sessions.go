@@ -59,17 +59,6 @@ func (r *BlobUploadSessionsRepo) AppendBytes(ctx context.Context, tx *sql.Tx, uu
 	return nil
 }
 
-// Touch bumps last_patch_at only.
-func (r *BlobUploadSessionsRepo) Touch(ctx context.Context, tx *sql.Tx, uuid string) error {
-	_, err := tx.ExecContext(ctx,
-		`UPDATE blob_upload_sessions SET last_patch_at = CURRENT_TIMESTAMP WHERE uuid = ?`, uuid,
-	)
-	if err != nil {
-		return fmt.Errorf("blob_upload_sessions: touch %s: %w", uuid, err)
-	}
-	return nil
-}
-
 // Lookup returns the session row, or (nil, nil) if absent.
 func (r *BlobUploadSessionsRepo) Lookup(ctx context.Context, uuid string) (*BlobUploadSession, error) {
 	var s BlobUploadSession
@@ -118,15 +107,3 @@ func (r *BlobUploadSessionsRepo) PruneExpiredReturning(ctx context.Context, tx *
 	return out, rows.Err()
 }
 
-// PruneExpired deletes every row with expires_at < now, returning the
-// count removed.
-func (r *BlobUploadSessionsRepo) PruneExpired(ctx context.Context, tx *sql.Tx, now time.Time) (int, error) {
-	res, err := tx.ExecContext(ctx,
-		`DELETE FROM blob_upload_sessions WHERE expires_at < ?`, now.UTC(),
-	)
-	if err != nil {
-		return 0, fmt.Errorf("blob_upload_sessions: prune: %w", err)
-	}
-	n, _ := res.RowsAffected()
-	return int(n), nil
-}

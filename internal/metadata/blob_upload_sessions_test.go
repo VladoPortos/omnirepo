@@ -46,8 +46,7 @@ func TestBlobUploadSessions_Lifecycle(t *testing.T) {
 		t.Fatal("expected error for missing session")
 	}
 
-	// Touch + delete.
-	_ = db.WriteTx(ctx, func(tx *sql.Tx) error { return sessions.Touch(ctx, tx, "u1") })
+	// Delete.
 	_ = db.WriteTx(ctx, func(tx *sql.Tx) error { return sessions.Delete(ctx, tx, "u1") })
 	gone, _ := sessions.Lookup(ctx, "u1")
 	if gone != nil {
@@ -69,14 +68,14 @@ func TestBlobUploadSessions_PruneExpired(t *testing.T) {
 		return sessions.Create(ctx, tx, "stale", 1, -time.Hour)
 	})
 
-	var removed int
+	var removed []string
 	_ = db.WriteTx(ctx, func(tx *sql.Tx) error {
 		var err error
-		removed, err = sessions.PruneExpired(ctx, tx, time.Now())
+		removed, err = sessions.PruneExpiredReturning(ctx, tx, time.Now())
 		return err
 	})
-	if removed != 1 {
-		t.Fatalf("pruned=%d want 1", removed)
+	if len(removed) != 1 || removed[0] != "stale" {
+		t.Fatalf("pruned=%v want [stale]", removed)
 	}
 	s, _ := sessions.Lookup(ctx, "fresh")
 	if s == nil {

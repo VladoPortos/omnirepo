@@ -39,17 +39,12 @@ func TestBlobUploadsStartCompletePrune(t *testing.T) {
 		t.Fatalf("pruned %d, want 1", n)
 	}
 
-	// Complete d1
-	if err := r.Complete(ctx, d1); err != nil {
-		t.Fatalf("Complete: %v", err)
-	}
-
-	// Row count
+	// d1 is still active (1h TTL) — the prune must have left it alone.
 	var count int
 	if err := db.Reader.QueryRowContext(ctx, "SELECT count(*) FROM blob_uploads").Scan(&count); err != nil {
 		t.Fatal(err)
 	}
-	if count != 0 {
-		t.Fatalf("remaining rows = %d, want 0", count)
+	if count != 1 {
+		t.Fatalf("remaining rows = %d, want 1 (active %s)", count, d1)
 	}
 }

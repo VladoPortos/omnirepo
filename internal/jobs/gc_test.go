@@ -416,6 +416,16 @@ func TestGC_PrunesExpiredUploadSessionsAndTmpFiles(t *testing.T) {
 		}
 	}
 
+	// blob_uploads exclusion markers: 2 expired + 1 active. Step 5b must
+	// sweep exactly the expired pair and leave the active one protecting
+	// its in-flight digest.
+	blobUploads := metadata.NewBlobUploadsRepo(f.db)
+	for i, ttl := range []time.Duration{-time.Hour, -time.Minute, time.Hour} {
+		if err := blobUploads.Start(ctx, fmt.Sprintf("sha256:marker-%d", i), ttl); err != nil {
+			t.Fatal(err)
+		}
+	}
+
 	jobID := f.enqueueGCJob()
 	if err := f.handler.Handle(ctx, jobID); err != nil {
 		t.Fatalf("Handle: %v", err)
@@ -448,6 +458,16 @@ func TestGC_PrunesExpiredUploadSessionsAndTmpFiles(t *testing.T) {
 	}
 	if rep.SessionsPruned != 3 {
 		t.Fatalf("SessionsPruned=%d want 3", rep.SessionsPruned)
+	}
+	if rep.UploadMarkersPruned != 2 {
+		t.Fatalf("UploadMarkersPruned=%d want 2", rep.UploadMarkersPruned)
+	}
+	var markers int
+	if err := f.db.Reader.QueryRowContext(ctx, `SELECT COUNT(*) FROM blob_uploads`).Scan(&markers); err != nil {
+		t.Fatal(err)
+	}
+	if markers != 1 {
+		t.Fatalf("blob_uploads remaining = %d want 1 (active marker)", markers)
 	}
 }
 

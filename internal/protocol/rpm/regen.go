@@ -92,7 +92,7 @@ func RegenFor(d RegenDeps) regen.RegenFn {
 				License: p.License, URL: p.URL, SourceRPM: p.SourceRPM,
 				Size:      uint64(p.SizeBytes),
 				BuildTime: p.UploadedAt, // best-effort: build time not stored in v1
-				Digest:    stripSha256Prefix(p.Digest),
+				Digest:    storage.TrimSHA256Prefix(p.Digest),
 				// Restore the persisted file index so filelists.xml carries
 				// real <file> entries (dnf file-based dependency resolution).
 				Files: UnmarshalFiles(p.FilesJSON),
@@ -268,14 +268,4 @@ func (d RegenDeps) recordFailure(ctx context.Context, cause error) error {
 		})
 	}
 	return cause
-}
-
-// stripSha256Prefix removes a leading "sha256:" so the value can land in the
-// pkgid/checksum XML attributes (which carry just the hex digest).
-func stripSha256Prefix(d string) string {
-	const p = "sha256:"
-	if len(d) > len(p) && d[:len(p)] == p {
-		return d[len(p):]
-	}
-	return d
 }

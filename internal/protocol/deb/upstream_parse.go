@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/vladoportos/omnirepo/internal/protocol/upstreamfetch"
 	"github.com/vladoportos/omnirepo/internal/streamio"
 )
 
@@ -39,10 +40,9 @@ type UpstreamEntry struct {
 	Control   *Control
 }
 
-// AuthCreds carries optional Basic / Bearer credentials.
-type AuthCreds struct {
-	User, Password, Token string
-}
+// AuthCreds carries optional Basic / Bearer credentials. Alias of the
+// shared upstreamfetch.Creds so the fetch helpers need no conversion.
+type AuthCreds = upstreamfetch.Creds
 
 // SyncFilter narrows the per-entry yield. Names match the package name
 // (case-insensitive); Globs match the candidate filename via filepath.Match.
@@ -84,10 +84,10 @@ func ParseUpstream(
 	}
 	// Try InRelease first, fall back to Release.
 	releaseURL := base.ResolveReference(&url.URL{Path: "dists/" + suite + "/InRelease"}).String()
-	body, err := fetchAll(ctx, client, releaseURL, creds, 8*1024*1024)
+	body, err := upstreamfetch.FetchAll(ctx, client, releaseURL, creds, 8*1024*1024, "deb upstream")
 	if err != nil {
 		releaseURL = base.ResolveReference(&url.URL{Path: "dists/" + suite + "/Release"}).String()
-		body, err = fetchAll(ctx, client, releaseURL, creds, 8*1024*1024)
+		body, err = upstreamfetch.FetchAll(ctx, client, releaseURL, creds, 8*1024*1024, "deb upstream")
 		if err != nil {
 			return 0, err
 		}
@@ -114,12 +114,12 @@ func ParseUpstream(
 			}
 			rel := "dists/" + suite + "/" + comp + "/binary-" + arch + "/Packages.gz"
 			pkgsURL := base.ResolveReference(&url.URL{Path: rel}).String()
-			pkgsBody, err := fetchAll(ctx, client, pkgsURL, creds, 256*1024*1024)
+			pkgsBody, err := upstreamfetch.FetchAll(ctx, client, pkgsURL, creds, 256*1024*1024, "deb upstream")
 			if err != nil {
 				// Try uncompressed Packages as a fallback.
 				rel = "dists/" + suite + "/" + comp + "/binary-" + arch + "/Packages"
 				pkgsURL = base.ResolveReference(&url.URL{Path: rel}).String()
-				pkgsBody, err = fetchAll(ctx, client, pkgsURL, creds, 1024*1024*1024)
+				pkgsBody, err = upstreamfetch.FetchAll(ctx, client, pkgsURL, creds, 1024*1024*1024, "deb upstream")
 				if err != nil {
 					continue
 				}
@@ -344,37 +344,4 @@ func (sf SyncFilter) acceptArch(a string) bool {
 		}
 	}
 	return false
-}
-
-func applyCreds(req *http.Request, creds AuthCreds) {
-	switch {
-	case creds.Token != "":
-		req.Header.Set("Authorization", "Bearer "+creds.Token)
-	case creds.User != "" || creds.Password != "":
-		req.SetBasicAuth(creds.User, creds.Password)
-	}
-}
-
-func fetchAll(ctx context.Context, client *http.Client, urlStr string, creds AuthCreds, maxBytes int64) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, urlStr, nil)
-	if err != nil {
-		return nil, fmt.Errorf("deb upstream: build req: %w", err)
-	}
-	applyCreds(req, creds)
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("deb upstream: get %s: %w", urlStr, err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("deb upstream: %s -> %d", urlStr, resp.StatusCode)
-	}
-	// Fail-explicit on cap+1 metadata bodies
-	// (Release / InRelease / Packages / Packages.gz) instead of the prior
-	// silent-truncation idiom.
-	body, err := streamio.ReadAllLimited(resp.Body, maxBytes, streamio.ErrMetadataTooLarge)
-	if err != nil {
-		return nil, fmt.Errorf("deb upstream: read body: %w", err)
-	}
-	return body, nil
 }

@@ -17,12 +17,12 @@ package rpm
 import (
 	"bytes"
 	"compress/gzip"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/xml"
 	"fmt"
 	"sort"
 	"time"
+
+	omrcrypto "github.com/vladoportos/omnirepo/internal/crypto"
 )
 
 const (
@@ -228,12 +228,6 @@ func gzipDeterministic(src []byte) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// hexSum returns the hex-encoded sha256 of b.
-func hexSum(b []byte) string {
-	s := sha256.Sum256(b)
-	return hex.EncodeToString(s[:])
-}
-
 // WritePrimary builds primary.xml from pkgs and returns the gzipped bytes,
 // the gzipped sha256 (as hex), the uncompressed sha256, the uncompressed
 // size, and the gzipped size.
@@ -276,7 +270,7 @@ func WritePrimary(pkgs []*Parsed) (gz []byte, gzSum, openSum string, openSize, g
 	if err != nil {
 		return nil, "", "", 0, 0, err
 	}
-	return gz, hexSum(gz), hexSum(open), int64(len(open)), int64(len(gz)), nil
+	return gz, omrcrypto.SHA256Hex(gz), omrcrypto.SHA256Hex(open), int64(len(open)), int64(len(gz)), nil
 }
 
 // WriteFilelists builds filelists.xml from pkgs.
@@ -311,7 +305,7 @@ func WriteFilelists(pkgs []*Parsed) (gz []byte, gzSum, openSum string, openSize,
 	if err != nil {
 		return nil, "", "", 0, 0, err
 	}
-	return gz, hexSum(gz), hexSum(open), int64(len(open)), int64(len(gz)), nil
+	return gz, omrcrypto.SHA256Hex(gz), omrcrypto.SHA256Hex(open), int64(len(open)), int64(len(gz)), nil
 }
 
 // WriteOther builds other.xml from pkgs (changelog only in v1).
@@ -341,7 +335,7 @@ func WriteOther(pkgs []*Parsed) (gz []byte, gzSum, openSum string, openSize, gzS
 	if err != nil {
 		return nil, "", "", 0, 0, err
 	}
-	return gz, hexSum(gz), hexSum(open), int64(len(open)), int64(len(gz)), nil
+	return gz, omrcrypto.SHA256Hex(gz), omrcrypto.SHA256Hex(open), int64(len(open)), int64(len(gz)), nil
 }
 
 // WriteRepomd builds repomd.xml referencing the three data blocks. Each

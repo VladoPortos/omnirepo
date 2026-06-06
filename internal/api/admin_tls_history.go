@@ -5,9 +5,7 @@
 package api
 
 import (
-	"crypto/sha256"
 	"crypto/x509"
-	"encoding/hex"
 	"encoding/pem"
 	"fmt"
 	"net/http"
@@ -19,6 +17,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/vladoportos/omnirepo/internal/auth"
+	omrcrypto "github.com/vladoportos/omnirepo/internal/crypto"
 	authmw "github.com/vladoportos/omnirepo/internal/auth/middleware"
 )
 
@@ -79,7 +78,7 @@ func (d Deps) handleTLSHistory(w http.ResponseWriter, r *http.Request) {
 			UploadedAt:        info.ModTime().UTC().Format(time.RFC3339),
 			UploadedBy:        uploadedBy,
 			Subject:           leaf.Subject.CommonName,
-			FingerprintSHA256: sha256Hex(leaf.Raw),
+			FingerprintSHA256: omrcrypto.SHA256Hex(leaf.Raw),
 		})
 	}
 
@@ -134,7 +133,7 @@ func (d Deps) handleTLSCurrent(w http.ResponseWriter, r *http.Request) {
 		"not_after":          cert.Leaf.NotAfter.UTC().Format(time.RFC3339),
 		"dns_names":          cert.Leaf.DNSNames,
 		"serial":             fmt.Sprintf("%x", cert.Leaf.SerialNumber),
-		"fingerprint_sha256": sha256Hex(cert.Leaf.Raw),
+		"fingerprint_sha256": omrcrypto.SHA256Hex(cert.Leaf.Raw),
 		"source":             source,
 	})
 }
@@ -150,10 +149,4 @@ func parseLeaf(pemData []byte) *x509.Certificate {
 		return nil
 	}
 	return cert
-}
-
-// sha256Hex returns the lowercase-hex SHA-256 digest of raw.
-func sha256Hex(raw []byte) string {
-	sum := sha256.Sum256(raw)
-	return hex.EncodeToString(sum[:])
 }

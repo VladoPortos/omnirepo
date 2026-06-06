@@ -21,6 +21,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/vladoportos/omnirepo/internal/protocol/upstreamfetch"
 	"github.com/vladoportos/omnirepo/internal/streamio"
 )
 
@@ -45,11 +46,9 @@ type UpstreamFile struct {
 	Size           int64
 }
 
-// AuthCreds carries optional Basic auth credentials threaded into the
-// outbound request. Empty fields disable auth.
-type AuthCreds struct {
-	User, Password, Token string
-}
+// AuthCreds carries optional Basic / Bearer credentials threaded into the
+// outbound request. Alias of the shared upstreamfetch.Creds.
+type AuthCreds = upstreamfetch.Creds
 
 // SyncFilter narrows the per-project file enumeration. Names are matched
 // case-insensitively against the PEP 503 normalized project name; Globs
@@ -133,7 +132,7 @@ func ParseUpstreamSimpleIndex(ctx context.Context, client *http.Client, upstream
 		return nil, fmt.Errorf("pypi upstream: build req: %w", err)
 	}
 	req.Header.Set("Accept", "application/vnd.pypi.simple.v1+json, text/html;q=0.5")
-	applyCreds(req, creds)
+	upstreamfetch.ApplyCreds(req, creds)
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("pypi upstream: get %s: %w", indexURL, err)
@@ -190,7 +189,7 @@ func ParseUpstreamProject(ctx context.Context, client *http.Client, upstream, no
 		return nil, fmt.Errorf("pypi upstream: build req: %w", err)
 	}
 	req.Header.Set("Accept", "application/vnd.pypi.simple.v1+json, text/html;q=0.5")
-	applyCreds(req, creds)
+	upstreamfetch.ApplyCreds(req, creds)
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("pypi upstream: get %s: %w", projectURL, err)
@@ -253,16 +252,6 @@ func ParseUpstreamProject(ctx context.Context, client *http.Client, upstream, no
 		})
 	}
 	return out, nil
-}
-
-// applyCreds sets Basic auth or Bearer token headers when creds are set.
-func applyCreds(req *http.Request, creds AuthCreds) {
-	switch {
-	case creds.Token != "":
-		req.Header.Set("Authorization", "Bearer "+creds.Token)
-	case creds.User != "" || creds.Password != "":
-		req.SetBasicAuth(creds.User, creds.Password)
-	}
 }
 
 func isJSON(ct string) bool {

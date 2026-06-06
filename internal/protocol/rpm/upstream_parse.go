@@ -20,6 +20,7 @@ import (
 
 	"github.com/klauspost/compress/zstd"
 	"github.com/ulikunitz/xz"
+	"github.com/vladoportos/omnirepo/internal/protocol/upstreamfetch"
 	"github.com/vladoportos/omnirepo/internal/streamio"
 )
 
@@ -82,10 +83,9 @@ type UpstreamEntry struct {
 	Metadata *PrimaryPkg
 }
 
-// AuthCreds carries optional Basic / Bearer credentials.
-type AuthCreds struct {
-	User, Password, Token string
-}
+// AuthCreds carries optional Basic / Bearer credentials. Alias of the
+// shared upstreamfetch.Creds so the fetch helpers need no conversion.
+type AuthCreds = upstreamfetch.Creds
 
 // SyncFilter narrows the per-entry yield. Names match the package name
 // (case-insensitive); Globs match the candidate filename via filepath.Match.
@@ -112,7 +112,7 @@ func ParseUpstream(
 		return 0, fmt.Errorf("rpm upstream: parse url: %w", err)
 	}
 	repomdURL := base.ResolveReference(&url.URL{Path: "repodata/repomd.xml"}).String()
-	repomdBody, err := fetchAll(ctx, client, repomdURL, creds, 8*1024*1024)
+	repomdBody, err := upstreamfetch.FetchAll(ctx, client, repomdURL, creds, 8*1024*1024, "rpm upstream")
 	if err != nil {
 		return 0, err
 	}
@@ -131,7 +131,7 @@ func ParseUpstream(
 		return 0, fmt.Errorf("rpm upstream: no primary block in repomd")
 	}
 	primaryURL := base.ResolveReference(&url.URL{Path: primaryHref}).String()
-	primaryRaw, err := fetchAll(ctx, client, primaryURL, creds, 256*1024*1024)
+	primaryRaw, err := upstreamfetch.FetchAll(ctx, client, primaryURL, creds, 256*1024*1024, "rpm upstream")
 	if err != nil {
 		return 0, err
 	}
@@ -213,39 +213,4 @@ func (sf SyncFilter) acceptFilename(filename string) bool {
 		}
 	}
 	return false
-}
-
-func applyCreds(req *http.Request, creds AuthCreds) {
-	switch {
-	case creds.Token != "":
-		req.Header.Set("Authorization", "Bearer "+creds.Token)
-	case creds.User != "" || creds.Password != "":
-		req.SetBasicAuth(creds.User, creds.Password)
-	}
-}
-
-// fetchAll GETs urlStr with auth + ctx, reading at most maxBytes from the
-// response body. Non-2xx responses return an error referencing the URL but
-// without body bytes.
-func fetchAll(ctx context.Context, client *http.Client, urlStr string, creds AuthCreds, maxBytes int64) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, urlStr, nil)
-	if err != nil {
-		return nil, fmt.Errorf("rpm upstream: build req: %w", err)
-	}
-	applyCreds(req, creds)
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("rpm upstream: get %s: %w", urlStr, err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("rpm upstream: %s -> %d", urlStr, resp.StatusCode)
-	}
-	// Fail-explicit on cap+1 metadata bodies (repomd.xml, primary.xml.gz)
-	// instead of silently truncating.
-	body, err := streamio.ReadAllLimited(resp.Body, maxBytes, streamio.ErrMetadataTooLarge)
-	if err != nil {
-		return nil, fmt.Errorf("rpm upstream: read body: %w", err)
-	}
-	return body, nil
 }

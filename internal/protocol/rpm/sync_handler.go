@@ -9,9 +9,7 @@ package rpm
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -33,8 +31,8 @@ import (
 	"github.com/vladoportos/omnirepo/internal/jobs"
 	"github.com/vladoportos/omnirepo/internal/metadata"
 	"github.com/vladoportos/omnirepo/internal/protocol/regen"
+	"github.com/vladoportos/omnirepo/internal/protocol/upstreamfetch"
 	"github.com/vladoportos/omnirepo/internal/storage"
-	"github.com/vladoportos/omnirepo/internal/streamio"
 )
 
 // SyncJobKind is the sync_jobs.kind value routed to SyncHandler.Handle.
@@ -413,7 +411,7 @@ func (h *SyncHandler) fetchAndCommit(ctx context.Context, projectName string, re
 			return 0, nil
 		}
 	}
-	body, size, dgst, err := downloadAndHashWithProgress(ctx, h.deps.HTTPClient, ent.Path, creds, progress, step, accumulatedDone, totalBytes)
+	body, size, dgst, err := upstreamfetch.DownloadAndHash(ctx, h.deps.HTTPClient, ent.Path, creds, progress, step, accumulatedDone, totalBytes, maxArtifactBytes)
 	if err != nil {
 		return 0, fmt.Errorf("rpm_sync: download %s: %w", ent.Filename, err)
 	}
@@ -507,47 +505,6 @@ func (h *SyncHandler) fetchAndCommit(ctx context.Context, projectName string, re
 	return size, nil
 }
 
-// downloadAndHashWithProgress GETs urlStr with creds, hashes the body
-// inline, and returns the bytes + size + hex digest. When progress is
-// non-nil, the body is wrapped with jobs.CountingReader so every non-zero
-// read advances *accumulatedDone (atomic under parallel downloads) and
-// triggers a throttled progress.Set.
-func downloadAndHashWithProgress(ctx context.Context, client *http.Client, urlStr string, creds AuthCreds, progress *jobs.ProgressWriter, step string, accumulatedDone *int64, total int64) ([]byte, int64, string, error) {
-	if client == nil {
-		client = http.DefaultClient
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, urlStr, nil)
-	if err != nil {
-		return nil, 0, "", fmt.Errorf("build req: %w", err)
-	}
-	applyCreds(req, creds)
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, 0, "", fmt.Errorf("get %s: %w", urlStr, err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		return nil, 0, "", fmt.Errorf("%s -> %d", urlStr, resp.StatusCode)
-	}
-	hasher := sha256.New()
-	var reader = io.TeeReader(resp.Body, hasher)
-	if progress != nil && accumulatedDone != nil {
-		reader = &jobs.CountingReader{R: reader, OnRead: func(n int) {
-			done := atomic.AddInt64(accumulatedDone, int64(n))
-			_ = progress.Set(ctx, step, done, total)
-		}}
-	}
-	// Fail-explicit on cap+1 instead of the previous silent-truncation
-	// idiom (full-body read through a
-	// LimitReader). The cap is a package-level var (not a const) only
-	// so tests can shrink it; no production caller mutates it.
-	body, err := streamio.ReadAllLimited(reader, maxArtifactBytes, streamio.ErrArtifactTooLarge)
-	if err != nil {
-		return nil, 0, "", fmt.Errorf("read %s: %w", urlStr, err)
-	}
-	return body, int64(len(body)), hex.EncodeToString(hasher.Sum(nil)), nil
-}
-
 // maxArtifactBytes caps the per-artifact upstream body for mirror sync
 // downloads. Test-overridable (var, not const) so cap+1 oversized-upstream
 // regression guards can run without serving multi-GiB bodies.
@@ -579,4 +536,3 @@ func truncateErr(s string) string {
 	}
 	return s[:max] + "...[truncated]"
 }
-

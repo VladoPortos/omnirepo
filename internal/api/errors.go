@@ -197,7 +197,6 @@ func normalizeLegacyCode(code string) string {
 	return "legacy." + sanitizeCode(code)
 }
 
-
 // sanitizeCode lowercases and replaces dashes/spaces with underscores
 // to satisfy the ApiErrorEnvelope code regex. Characters that are
 // neither alphanumeric, underscore, nor the transformable set are

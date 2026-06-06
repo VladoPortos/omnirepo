@@ -14,6 +14,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vladoportos/omnirepo/internal/protocol/upstreamfetch"
 	"github.com/vladoportos/omnirepo/internal/streamio"
 )
 
@@ -29,7 +30,7 @@ func TestFetchAll_OversizedHTTPBody_ReturnsMetadataTooLarge(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	got, err := fetchAll(context.Background(), srv.Client(), srv.URL, AuthCreds{}, cap)
+	got, err := upstreamfetch.FetchAll(context.Background(), srv.Client(), srv.URL, AuthCreds{}, cap, "deb upstream")
 	if err == nil {
 		t.Fatalf("expected error from cap+1 upstream, got nil (len=%d)", len(got))
 	}

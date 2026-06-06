@@ -217,3 +217,18 @@ func TestCASPutFromPath_MissingSource(t *testing.T) {
 		t.Fatalf("err not fs.ErrNotExist: %v", err)
 	}
 }
+
+func TestTrimSHA256Prefix(t *testing.T) {
+	cases := map[string]string{
+		"sha256:abc123": "abc123",
+		"abc123":        "abc123",
+		"sha256:":       "sha256:", // bare prefix is not a digest — unchanged
+		"":              "",
+		"sha512:abc":    "sha512:abc",
+	}
+	for in, want := range cases {
+		if got := storage.TrimSHA256Prefix(in); got != want {
+			t.Errorf("TrimSHA256Prefix(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/vladoportos/omnirepo/internal/auth"
-	"github.com/vladoportos/omnirepo/internal/protocol/s3/keys"
+	s3keys "github.com/vladoportos/omnirepo/internal/protocol/s3/keys"
 	"github.com/vladoportos/omnirepo/internal/protocol/s3/sigv4"
 )
 

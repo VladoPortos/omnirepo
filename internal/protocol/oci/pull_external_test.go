@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -21,31 +20,6 @@ import (
 	"github.com/vladoportos/omnirepo/internal/metadata"
 	"github.com/vladoportos/omnirepo/internal/protocol/oci"
 )
-
-// -----------------------------------------------------------------------------
-// sanitizeUpstreamErr unit tests — we test the exported behaviour indirectly
-// by observing the error that comes back from Handle on a malformed cred.
-// -----------------------------------------------------------------------------
-
-// TestSanitizeUpstreamErr_ScrubsAuthHeader: exercise the exported Sanitize
-// helper (we expose it as a package-level function for this test; if not
-// exported, this test documents the required behaviour and runs against the
-// observable surface).
-func TestSanitizeUpstreamErr_ScrubsAuthHeader(t *testing.T) {
-	// The function is unexported; assert behaviour via a constructed error
-	// that would contain the header string and flowing through the regex.
-	orig := errors.New(`request failed: header "Authorization: Basic YWxpY2U6c2VjcmV0" rejected`)
-	scrubbed := oci.SanitizeUpstreamErrExported(orig)
-	if scrubbed == nil {
-		t.Fatal("scrubbed nil")
-	}
-	if strings.Contains(scrubbed.Error(), "YWxpY2U6c2VjcmV0") {
-		t.Fatalf("credential not scrubbed: %q", scrubbed.Error())
-	}
-	if !strings.Contains(scrubbed.Error(), "REDACTED") {
-		t.Fatalf("no REDACTED marker: %q", scrubbed.Error())
-	}
-}
 
 // -----------------------------------------------------------------------------
 // Mock upstream registry — implements the minimum /v2 surface needed by

@@ -81,7 +81,7 @@ func NewSeverityGate(
 			if !entry.Blocked {
 				return false, "", 0
 			}
-			emitGateAudit(ctx, auditLogger, repoID, artifactKind, artifactID, entry, "cache")
+			scan.EmitGateAudit(ctx, auditLogger, repoID, artifactKind, artifactID, entry, "cache")
 			return true, entry.Severity, entry.ScanID
 		}
 
@@ -107,33 +107,7 @@ func NewSeverityGate(
 			Blocked: true, Severity: sev, CVECount: count, ScanID: latest.ScanID,
 		}
 		cache.Set(repoID, artifactKind, artifactID, entry)
-		emitGateAudit(ctx, auditLogger, repoID, artifactKind, artifactID, entry, "db")
+		scan.EmitGateAudit(ctx, auditLogger, repoID, artifactKind, artifactID, entry, "db")
 		return true, sev, latest.ScanID
 	}
-}
-
-func emitGateAudit(
-	ctx context.Context,
-	logger audit.Logger,
-	repoID int64,
-	kind, artifactID string,
-	entry scan.CacheEntry,
-	source string,
-) {
-	if logger == nil {
-		return
-	}
-	_ = logger.Record(ctx, audit.Event{
-		Kind:       audit.EvtScanGateBlocked,
-		TargetKind: kind,
-		TargetID:   artifactID,
-		Outcome:    "blocked",
-		Details: map[string]any{
-			"repo_id":   repoID,
-			"severity":  entry.Severity,
-			"cve_count": entry.CVECount,
-			"scan_id":   entry.ScanID,
-			"source":    source,
-		},
-	})
 }

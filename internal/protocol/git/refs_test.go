@@ -116,7 +116,6 @@ func (f *fakeAuditLogger) Record(_ context.Context, e audit.Event) error {
 
 // --- Test 1: WalkAndReplace basic ---
 
-
 // findRef returns the ref named name from List output, failing the test
 // when absent.
 func findRef(t *testing.T, refs *metadata.GitRefsRepo, repoID int64, name string) metadata.GitRef {
@@ -489,7 +488,6 @@ func TestCreateRepoHook(t *testing.T) {
 		t.Errorf("HEAD type = %q, want symbolic", headRef.Type)
 	}
 }
-
 
 // --- Test 9: Walker errors are non-fatal ---
 

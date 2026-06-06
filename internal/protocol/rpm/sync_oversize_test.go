@@ -15,6 +15,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/vladoportos/omnirepo/internal/protocol/upstreamfetch"
 	"github.com/vladoportos/omnirepo/internal/streamio"
 )
 
@@ -39,7 +40,7 @@ func TestDownloadAndHashWithProgress_OversizedUpstream_ReturnsArtifactTooLarge(t
 	}))
 	t.Cleanup(srv.Close)
 
-	got, size, dgst, err := downloadAndHashWithProgress(context.Background(), srv.Client(), srv.URL, AuthCreds{}, nil, "", nil, 0)
+	got, size, dgst, err := upstreamfetch.DownloadAndHash(context.Background(), srv.Client(), srv.URL, AuthCreds{}, nil, "", nil, 0, maxArtifactBytes)
 	if err == nil {
 		t.Fatalf("expected error from cap+1 upstream, got nil (size=%d dgst=%q len(body)=%d)", size, dgst, len(got))
 	}

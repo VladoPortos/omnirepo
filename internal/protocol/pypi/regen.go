@@ -140,7 +140,7 @@ func RegenFor(d RegenDeps) regen.RegenFn {
 				files = append(files, FileLink{
 					Filename:       r.Filename,
 					URL:            urlPrefix + r.Filename,
-					SHA256:         stripSha256Prefix(r.Digest),
+					SHA256:         storage.TrimSHA256Prefix(r.Digest),
 					RequiresPython: r.RequiresPython,
 				})
 			}
@@ -262,14 +262,4 @@ func sweepStaleHashed(dir, stem, ext, keepHashName string) {
 		}
 		_ = os.Remove(m)
 	}
-}
-
-// stripSha256Prefix returns the hex part of a "sha256:<hex>" digest, or
-// the input unchanged if the prefix isn't present.
-func stripSha256Prefix(d string) string {
-	const prefix = "sha256:"
-	if len(d) > len(prefix) && d[:len(prefix)] == prefix {
-		return d[len(prefix):]
-	}
-	return d
 }

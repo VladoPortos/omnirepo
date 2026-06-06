@@ -17,6 +17,7 @@ import (
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/vladoportos/omnirepo/internal/protocol/helm/ociclient"
+	"github.com/vladoportos/omnirepo/internal/protocol/upstreamfetch"
 	"github.com/vladoportos/omnirepo/internal/streamio"
 	helmrepo "helm.sh/helm/v3/pkg/repo"
 )
@@ -63,10 +64,9 @@ type UpstreamEntry struct {
 	Source   EntrySourceKind // http vs oci vs unknown
 }
 
-// AuthCreds carries optional Basic / Bearer credentials.
-type AuthCreds struct {
-	User, Password, Token string
-}
+// AuthCreds carries optional Basic / Bearer credentials. Alias of the
+// shared upstreamfetch.Creds so the fetch helpers need no conversion.
+type AuthCreds = upstreamfetch.Creds
 
 // SyncFilter narrows the per-entry yield. Names match the chart name
 // (case-insensitive); Globs match the candidate filename via filepath.Match.
@@ -94,7 +94,7 @@ func ParseUpstream(
 	if err != nil {
 		return 0, fmt.Errorf("helm upstream: build req: %w", err)
 	}
-	applyCreds(req, creds)
+	upstreamfetch.ApplyCreds(req, creds)
 	resp, err := client.Do(req)
 	if err != nil {
 		return 0, fmt.Errorf("helm upstream: get %s: %w", indexURL, err)
@@ -192,15 +192,6 @@ func (sf SyncFilter) acceptFilename(filename string) bool {
 		}
 	}
 	return false
-}
-
-func applyCreds(req *http.Request, creds AuthCreds) {
-	switch {
-	case creds.Token != "":
-		req.Header.Set("Authorization", "Bearer "+creds.Token)
-	case creds.User != "" || creds.Password != "":
-		req.SetBasicAuth(creds.User, creds.Password)
-	}
 }
 
 func resolveURL(base *url.URL, href string) string {

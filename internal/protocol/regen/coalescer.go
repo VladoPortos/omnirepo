@@ -8,7 +8,6 @@ package regen
 
 import (
 	"context"
-	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -181,6 +180,3 @@ func (c *Coalescer) loop() {
 // Inflight reports whether a regen is currently running. Exposed for tests.
 func (c *Coalescer) Inflight() bool { return c.inflight.Load() }
 
-
-// _ guards against a misuse: a sync import that lint might otherwise drop.
-var _ sync.Mutex

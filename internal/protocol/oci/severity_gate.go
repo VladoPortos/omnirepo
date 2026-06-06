@@ -112,7 +112,7 @@ func NewSeverityGate(
 			if !entry.Blocked {
 				return nil
 			}
-			emitGateAudit(ctx, auditLogger, repoID, "docker", digest, entry, "cache")
+			scan.EmitGateAudit(ctx, auditLogger, repoID, "docker", digest, entry, "cache")
 			return &ErrBlockedByScan{
 				Severity: entry.Severity, CVECount: entry.CVECount, ScanID: entry.ScanID,
 			}
@@ -146,39 +146,11 @@ func NewSeverityGate(
 			Blocked: true, Severity: sev, CVECount: count, ScanID: latest.ScanID,
 		}
 		cache.Set(repoID, "docker", digest, entry)
-		emitGateAudit(ctx, auditLogger, repoID, "docker", digest, entry, "db")
+		scan.EmitGateAudit(ctx, auditLogger, repoID, "docker", digest, entry, "db")
 		return &ErrBlockedByScan{
 			Severity: sev, CVECount: count, ScanID: latest.ScanID,
 		}
 	}
-}
-
-// emitGateAudit records scan.gate.blocked best-effort. Source is "cache"
-// or "db" — useful when investigating spurious blocks.
-func emitGateAudit(
-	ctx context.Context,
-	logger audit.Logger,
-	repoID int64,
-	kind, artifactID string,
-	entry scan.CacheEntry,
-	source string,
-) {
-	if logger == nil {
-		return
-	}
-	_ = logger.Record(ctx, audit.Event{
-		Kind:       audit.EvtScanGateBlocked,
-		TargetKind: kind,
-		TargetID:   artifactID,
-		Outcome:    "blocked",
-		Details: map[string]any{
-			"repo_id":   repoID,
-			"severity":  entry.Severity,
-			"cve_count": entry.CVECount,
-			"scan_id":   entry.ScanID,
-			"source":    source,
-		},
-	})
 }
 
 // WriteBlockedResponse writes the documented 403 envelope to w. Exported

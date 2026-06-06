@@ -31,7 +31,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"regexp"
 	"strconv"
 	"time"
 
@@ -43,6 +42,7 @@ import (
 
 	"github.com/vladoportos/omnirepo/internal/audit"
 	"github.com/vladoportos/omnirepo/internal/auth"
+	"github.com/vladoportos/omnirepo/internal/httpx"
 	"github.com/vladoportos/omnirepo/internal/jobs"
 	"github.com/vladoportos/omnirepo/internal/metadata"
 	"github.com/vladoportos/omnirepo/internal/storage"
@@ -119,26 +119,6 @@ type PullExternalHandler struct {
 // NewPullExternalHandler returns a handler bound to deps.
 func NewPullExternalHandler(deps PullExternalDeps) *PullExternalHandler {
 	return &PullExternalHandler{deps: deps}
-}
-
-// SanitizeUpstreamErrExported exposes sanitizeUpstreamErr for external tests
-// that cannot reach into the unexported surface.
-func SanitizeUpstreamErrExported(err error) error { return sanitizeUpstreamErr(err) }
-
-// authRegex scrubs Authorization header bytes out of error strings.
-// Matches "Authorization: <anything-to-EOL-or-newline>".
-var authRegex = regexp.MustCompile(`(?i)Authorization:\s*[^\r\n"']*`)
-
-// sanitizeUpstreamErr strips Authorization: headers from err.Error(). Returns
-// a plain errors.New with the scrubbed text so the original error's wrap
-// chain is deliberately dropped — upstream libraries sometimes retain the
-// credential bytes inside nested %w chains.
-func sanitizeUpstreamErr(err error) error {
-	if err == nil {
-		return nil
-	}
-	scrubbed := authRegex.ReplaceAllString(err.Error(), "Authorization: REDACTED")
-	return errors.New(scrubbed)
 }
 
 // Handle implements jobs.Handler for kind="pull_external".
@@ -245,7 +225,7 @@ func (p *PullExternalHandler) Handle(ctx context.Context, payload string, projec
 	// Try image first; if it's actually an index, fall back to remote.Index.
 	desc, err := remote.Get(srcRef, opts...)
 	if err != nil {
-		return sanitizeUpstreamErr(fmt.Errorf("pull_external: remote.Get: %w", err))
+		return httpx.SanitizeUpstreamErr(fmt.Errorf("pull_external: remote.Get: %w", err))
 	}
 
 	if desc.MediaType.IsIndex() {
@@ -267,7 +247,7 @@ func (p *PullExternalHandler) handleImage(
 ) error {
 	img, err := desc.Image()
 	if err != nil {
-		return sanitizeUpstreamErr(fmt.Errorf("pull_external: image: %w", err))
+		return httpx.SanitizeUpstreamErr(fmt.Errorf("pull_external: image: %w", err))
 	}
 	// Single-image pull: compute totalBytes from manifest layers + config,
 	// then stream with byte-level progress ("layer N of M · accum/total").
@@ -275,7 +255,7 @@ func (p *PullExternalHandler) handleImage(
 	// sizes from the manifest response) to get a stable denominator.
 	layers, lerr := img.Layers()
 	if lerr != nil {
-		return sanitizeUpstreamErr(fmt.Errorf("pull_external: layers: %w", lerr))
+		return httpx.SanitizeUpstreamErr(fmt.Errorf("pull_external: layers: %w", lerr))
 	}
 	var totalBytes int64
 	for _, l := range layers {
@@ -292,11 +272,11 @@ func (p *PullExternalHandler) handleImage(
 	}
 	raw, err := img.RawManifest()
 	if err != nil {
-		return sanitizeUpstreamErr(fmt.Errorf("pull_external: raw manifest: %w", err))
+		return httpx.SanitizeUpstreamErr(fmt.Errorf("pull_external: raw manifest: %w", err))
 	}
 	mt, err := img.MediaType()
 	if err != nil {
-		return sanitizeUpstreamErr(fmt.Errorf("pull_external: media type: %w", err))
+		return httpx.SanitizeUpstreamErr(fmt.Errorf("pull_external: media type: %w", err))
 	}
 	// End-of-pull progress ping so UI renders "done · total/total".
 	_ = progress.Set(ctx, "done", accumulatedDone, totalBytes)
@@ -317,11 +297,11 @@ func (p *PullExternalHandler) handleIndex(
 ) error {
 	idx, err := desc.ImageIndex()
 	if err != nil {
-		return sanitizeUpstreamErr(fmt.Errorf("pull_external: index: %w", err))
+		return httpx.SanitizeUpstreamErr(fmt.Errorf("pull_external: index: %w", err))
 	}
 	mf, err := idx.IndexManifest()
 	if err != nil {
-		return sanitizeUpstreamErr(fmt.Errorf("pull_external: index manifest: %w", err))
+		return httpx.SanitizeUpstreamErr(fmt.Errorf("pull_external: index manifest: %w", err))
 	}
 	// Compute total bytes across ALL child images up-front so the progress
 	// bar has a stable denominator for the whole multi-arch pull. Each
@@ -354,7 +334,7 @@ func (p *PullExternalHandler) handleIndex(
 	for i, childDesc := range mf.Manifests {
 		childImg, err := idx.Image(childDesc.Digest)
 		if err != nil {
-			return sanitizeUpstreamErr(fmt.Errorf("pull_external: child image %s: %w",
+			return httpx.SanitizeUpstreamErr(fmt.Errorf("pull_external: child image %s: %w",
 				childDesc.Digest, err))
 		}
 		imageStep := fmt.Sprintf("image %d of %d", i+1, len(mf.Manifests))
@@ -364,11 +344,11 @@ func (p *PullExternalHandler) handleIndex(
 		}
 		childRaw, err := childImg.RawManifest()
 		if err != nil {
-			return sanitizeUpstreamErr(fmt.Errorf("pull_external: child raw: %w", err))
+			return httpx.SanitizeUpstreamErr(fmt.Errorf("pull_external: child raw: %w", err))
 		}
 		childMT, err := childImg.MediaType()
 		if err != nil {
-			return sanitizeUpstreamErr(fmt.Errorf("pull_external: child mt: %w", err))
+			return httpx.SanitizeUpstreamErr(fmt.Errorf("pull_external: child mt: %w", err))
 		}
 		// Child manifests go in WITHOUT a tag reference — only the index
 		// carries the user-visible tag. Pass reference="" so the helper
@@ -380,11 +360,11 @@ func (p *PullExternalHandler) handleIndex(
 	// Now the index body itself.
 	raw, err := idx.RawManifest()
 	if err != nil {
-		return sanitizeUpstreamErr(fmt.Errorf("pull_external: index raw: %w", err))
+		return httpx.SanitizeUpstreamErr(fmt.Errorf("pull_external: index raw: %w", err))
 	}
 	mt, err := idx.MediaType()
 	if err != nil {
-		return sanitizeUpstreamErr(fmt.Errorf("pull_external: index mt: %w", err))
+		return httpx.SanitizeUpstreamErr(fmt.Errorf("pull_external: index mt: %w", err))
 	}
 	return p.commitManifest(ctx, dstRepo, repoPath, dstTag, raw, string(mt), srcRef, false)
 }
@@ -410,7 +390,7 @@ func (p *PullExternalHandler) streamImageBlobs(
 ) error {
 	layers, err := img.Layers()
 	if err != nil {
-		return sanitizeUpstreamErr(fmt.Errorf("pull_external: layers: %w", err))
+		return httpx.SanitizeUpstreamErr(fmt.Errorf("pull_external: layers: %w", err))
 	}
 	for i, l := range layers {
 		layerStep := fmt.Sprintf("layer %d of %d", i+1, len(layers))
@@ -423,7 +403,7 @@ func (p *PullExternalHandler) streamImageBlobs(
 	}
 	cfg, err := img.RawConfigFile()
 	if err != nil {
-		return sanitizeUpstreamErr(fmt.Errorf("pull_external: raw config: %w", err))
+		return httpx.SanitizeUpstreamErr(fmt.Errorf("pull_external: raw config: %w", err))
 	}
 	// Config blob: wrap bytes.Reader with CountingReader too so the tiny
 	// config download is reflected in progress. For single-goroutine
@@ -454,7 +434,7 @@ func (p *PullExternalHandler) streamLayer(
 ) error {
 	rc, err := l.Compressed()
 	if err != nil {
-		return sanitizeUpstreamErr(fmt.Errorf("pull_external: layer compressed: %w", err))
+		return httpx.SanitizeUpstreamErr(fmt.Errorf("pull_external: layer compressed: %w", err))
 	}
 	defer func() { _ = rc.Close() }()
 	cr := &jobs.CountingReader{R: rc, OnRead: func(n int) {

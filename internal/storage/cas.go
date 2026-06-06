@@ -243,3 +243,14 @@ func (c *cas) Delete(ctx context.Context, digest string) error {
 	}
 	return nil
 }
+
+// TrimSHA256Prefix returns the hex part of a "sha256:<hex>" digest, or the
+// input unchanged when the prefix is absent. Shared by the rpm/pypi regen
+// writers (XML/JSON metadata carries the bare hex form).
+func TrimSHA256Prefix(d string) string {
+	const prefix = "sha256:"
+	if len(d) > len(prefix) && d[:len(prefix)] == prefix {
+		return d[len(prefix):]
+	}
+	return d
+}

@@ -106,4 +106,3 @@ func (r *BlobUploadSessionsRepo) PruneExpiredReturning(ctx context.Context, tx *
 	}
 	return out, rows.Err()
 }
-

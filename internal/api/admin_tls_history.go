@@ -17,8 +17,8 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/vladoportos/omnirepo/internal/auth"
-	omrcrypto "github.com/vladoportos/omnirepo/internal/crypto"
 	authmw "github.com/vladoportos/omnirepo/internal/auth/middleware"
+	omrcrypto "github.com/vladoportos/omnirepo/internal/crypto"
 )
 
 // mountAdminTLSHistory installs TLS history endpoints on r.

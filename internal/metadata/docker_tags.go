@@ -88,7 +88,6 @@ func (r *DockerTagsRepo) ResolveTx(ctx context.Context, tx *sql.Tx, repoID int64
 	return digest, true, nil
 }
 
-
 // ListPaginated returns tag names in (repoID, image) strictly greater than
 // `after` (lexicographic), sorted ascending, capped at `limit`. An empty
 // `after` returns the first page. Limit is clamped to [1, 1000].

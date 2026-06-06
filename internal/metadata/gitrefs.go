@@ -142,4 +142,3 @@ func (r *GitRefsRepo) List(ctx context.Context, repoID int64) ([]GitRef, error) 
 	}
 	return out, rows.Err()
 }
-

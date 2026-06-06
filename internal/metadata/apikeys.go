@@ -201,40 +201,7 @@ func (r *APIKeysRepo) ListByUser(ctx context.Context, userID int64) ([]APIKey, e
 	if err != nil {
 		return nil, fmt.Errorf("api_keys: list by user %d: %w", userID, err)
 	}
-	defer func() { _ = rows.Close() }()
-	var out []APIKey
-	for rows.Next() {
-		var k APIKey
-		var userID2, projectID sql.NullInt64
-		var role sql.NullString
-		var lastUsed, revoked sql.NullTime
-		if err := rows.Scan(&k.ID, &k.OwnerKind, &userID2, &projectID, &k.Name, &k.TokenPrefix, &k.TokenSHA256,
-			&role, &lastUsed, &k.CreatedAt, &revoked); err != nil {
-			return nil, fmt.Errorf("api_keys: list scan: %w", err)
-		}
-		if userID2.Valid {
-			v := userID2.Int64
-			k.OwnerUserID = &v
-		}
-		if projectID.Valid {
-			v := projectID.Int64
-			k.OwnerProjectID = &v
-		}
-		if role.Valid {
-			v := role.String
-			k.Role = &v
-		}
-		if lastUsed.Valid {
-			t := lastUsed.Time
-			k.LastUsedAt = &t
-		}
-		if revoked.Valid {
-			t := revoked.Time
-			k.RevokedAt = &t
-		}
-		out = append(out, k)
-	}
-	return out, rows.Err()
+	return scanAPIKeyRows(rows)
 }
 
 // ListByProject returns all live (non-revoked) API keys owned by
@@ -251,23 +218,30 @@ func (r *APIKeysRepo) ListByProject(ctx context.Context, projectID int64) ([]API
 	if err != nil {
 		return nil, fmt.Errorf("api_keys: list by project %d: %w", projectID, err)
 	}
+	return scanAPIKeyRows(rows)
+}
+
+// scanAPIKeyRows drains rows produced by the shared api_keys SELECT column
+// list into []APIKey, mapping NULLable columns onto pointer fields. Caller
+// keeps responsibility for the query; rows are closed here.
+func scanAPIKeyRows(rows *sql.Rows) ([]APIKey, error) {
 	defer func() { _ = rows.Close() }()
 	var out []APIKey
 	for rows.Next() {
 		var k APIKey
-		var userID, projectID2 sql.NullInt64
+		var ownerUserID, ownerProjectID sql.NullInt64
 		var role sql.NullString
 		var lastUsed, revoked sql.NullTime
-		if err := rows.Scan(&k.ID, &k.OwnerKind, &userID, &projectID2, &k.Name, &k.TokenPrefix, &k.TokenSHA256,
+		if err := rows.Scan(&k.ID, &k.OwnerKind, &ownerUserID, &ownerProjectID, &k.Name, &k.TokenPrefix, &k.TokenSHA256,
 			&role, &lastUsed, &k.CreatedAt, &revoked); err != nil {
 			return nil, fmt.Errorf("api_keys: list scan: %w", err)
 		}
-		if userID.Valid {
-			v := userID.Int64
+		if ownerUserID.Valid {
+			v := ownerUserID.Int64
 			k.OwnerUserID = &v
 		}
-		if projectID2.Valid {
-			v := projectID2.Int64
+		if ownerProjectID.Valid {
+			v := ownerProjectID.Int64
 			k.OwnerProjectID = &v
 		}
 		if role.Valid {

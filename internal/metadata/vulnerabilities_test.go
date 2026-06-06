@@ -10,7 +10,6 @@ import (
 	"github.com/vladoportos/omnirepo/internal/metadata/sqlitetest"
 )
 
-
 // countVulnRows counts vulnerabilities rows for scanID via raw SQL — the
 // repo layer deliberately has no production read path for this.
 func countVulnRows(t *testing.T, db *metadata.DB, scanID int64) int {
@@ -83,4 +82,3 @@ func TestVulnerabilities_InsertBatchCapEnforced(t *testing.T) {
 		t.Fatalf("want 0 rows after rejected batch, got %d", n)
 	}
 }
-

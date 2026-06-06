@@ -109,28 +109,6 @@ func (d Deps) mountUpstreamCreds(r chi.Router) {
 	})
 }
 
-// resolveProjectAndCheckMembership handles 401/403/404 for every upstream-cred
-// handler and returns the project id on success.
-func (d Deps) resolveProjectAndCheckMembership(w http.ResponseWriter, r *http.Request) (int64, string, auth.Actor, bool) {
-	actor, ok := auth.ActorFromContext(r.Context())
-	if !ok {
-		writeJSONError(w, r, http.StatusUnauthorized, ErrUnauthenticated, "")
-		return 0, "", auth.Actor{}, false
-	}
-	projectName := chi.URLParam(r, "name")
-	p, err := d.Projects.FindByName(r.Context(), projectName)
-	if err != nil {
-		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "project not found")
-		return 0, "", auth.Actor{}, false
-	}
-	if allowed, reason := auth.Can(r.Context(), actor, auth.ActionManageUpstreamCreds,
-		auth.Target{Kind: "project", ProjectID: p.ID}); !allowed {
-		writeJSONError(w, r, http.StatusForbidden, ErrForbidden, reason)
-		return 0, "", auth.Actor{}, false
-	}
-	return p.ID, p.Name, actor, true
-}
-
 func parseCredID(w http.ResponseWriter, r *http.Request) (int64, bool) {
 	idStr := chi.URLParam(r, "id")
 	id, err := strconv.ParseInt(idStr, 10, 64)
@@ -142,7 +120,7 @@ func parseCredID(w http.ResponseWriter, r *http.Request) (int64, bool) {
 }
 
 func (d Deps) handleListUpstreamCreds(w http.ResponseWriter, r *http.Request) {
-	projectID, _, _, ok := d.resolveProjectAndCheckMembership(w, r)
+	projectID, _, _, ok := d.resolveProjectForAction(w, r, auth.ActionManageUpstreamCreds)
 	if !ok {
 		return
 	}
@@ -159,7 +137,7 @@ func (d Deps) handleListUpstreamCreds(w http.ResponseWriter, r *http.Request) {
 }
 
 func (d Deps) handleGetUpstreamCred(w http.ResponseWriter, r *http.Request) {
-	projectID, _, _, ok := d.resolveProjectAndCheckMembership(w, r)
+	projectID, _, _, ok := d.resolveProjectForAction(w, r, auth.ActionManageUpstreamCreds)
 	if !ok {
 		return
 	}
@@ -180,7 +158,7 @@ func (d Deps) handleGetUpstreamCred(w http.ResponseWriter, r *http.Request) {
 }
 
 func (d Deps) handleCreateUpstreamCred(w http.ResponseWriter, r *http.Request) {
-	projectID, projectName, actor, ok := d.resolveProjectAndCheckMembership(w, r)
+	projectID, projectName, actor, ok := d.resolveProjectForAction(w, r, auth.ActionManageUpstreamCreds)
 	if !ok {
 		return
 	}
@@ -244,7 +222,7 @@ func (d Deps) handleCreateUpstreamCred(w http.ResponseWriter, r *http.Request) {
 }
 
 func (d Deps) handleUpdateUpstreamCred(w http.ResponseWriter, r *http.Request) {
-	projectID, projectName, actor, ok := d.resolveProjectAndCheckMembership(w, r)
+	projectID, projectName, actor, ok := d.resolveProjectForAction(w, r, auth.ActionManageUpstreamCreds)
 	if !ok {
 		return
 	}
@@ -297,7 +275,7 @@ func (d Deps) handleUpdateUpstreamCred(w http.ResponseWriter, r *http.Request) {
 }
 
 func (d Deps) handleDeleteUpstreamCred(w http.ResponseWriter, r *http.Request) {
-	projectID, projectName, actor, ok := d.resolveProjectAndCheckMembership(w, r)
+	projectID, projectName, actor, ok := d.resolveProjectForAction(w, r, auth.ActionManageUpstreamCreds)
 	if !ok {
 		return
 	}

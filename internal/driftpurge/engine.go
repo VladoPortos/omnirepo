@@ -16,8 +16,13 @@ package driftpurge
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"os"
 	"sort"
+
+	"github.com/vladoportos/omnirepo/internal/storage"
 )
 
 // Key is the comparable identity tuple for a drift diff. Fields are
@@ -239,4 +244,30 @@ func Run(
 	}
 
 	return report, nil
+}
+
+// purgeRow is the shared tail of every adapter's Purge: marshal the
+// snapshot sidecar, DELETE the metadata row inside the caller's tx, then
+// soft-move the on-disk blob to trash with the snapshot attached.
+//
+// DELETE-before-move ordering: the reverse leaves a window where the file
+// is moved, the caller's WriteTx rolls back the DELETE, and the row then
+// points at a missing file (404 on download). With this order a
+// trash-move failure rolls back the DELETE cleanly — row + file both stay
+// where they were. A missing source file (os.ErrNotExist) is tolerated:
+// the sidecar still landed and the DELETE is the truth-of-record.
+func purgeRow(ctx context.Context, tx *sql.Tx, trash storage.Trash, label, deleteSQL, trashKind string, id int64, snap map[string]any, path, actor string) error {
+	snapBytes, err := json.Marshal(snap)
+	if err != nil {
+		return fmt.Errorf("%s: marshal snapshot id=%d: %w", label, id, err)
+	}
+	if _, err := tx.ExecContext(ctx, deleteSQL, id); err != nil {
+		return fmt.Errorf("%s: delete id=%d: %w", label, id, err)
+	}
+	if _, err := trash.MoveWithSnapshot(ctx, path, trashKind, id, actor, snapBytes); err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("%s: trash move id=%d path=%q: %w", label, id, path, err)
+		}
+	}
+	return nil
 }

@@ -56,9 +56,12 @@ func (d Deps) mountProjectAPIKeys(r chi.Router) {
 	})
 }
 
-// resolveProjectAndCheckAPIKeysMembership handles 401/403/404 and
-// returns the project id + name + actor on success.
-func (d Deps) resolveProjectAndCheckAPIKeysMembership(w http.ResponseWriter, r *http.Request) (int64, string, auth.Actor, bool) {
+// resolveProjectForAction handles the 401/403/404 preamble shared by every
+// project-scoped credential endpoint (project API keys, S3 access keys,
+// upstream creds): authenticate the actor, resolve {name} to a project,
+// and authorize action against it. Returns project id + name + actor on
+// success; on failure the error envelope has already been written.
+func (d Deps) resolveProjectForAction(w http.ResponseWriter, r *http.Request, action auth.Action) (int64, string, auth.Actor, bool) {
 	actor, ok := auth.ActorFromContext(r.Context())
 	if !ok {
 		writeJSONError(w, r, http.StatusUnauthorized, ErrUnauthenticated, "")
@@ -70,7 +73,7 @@ func (d Deps) resolveProjectAndCheckAPIKeysMembership(w http.ResponseWriter, r *
 		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "project not found")
 		return 0, "", auth.Actor{}, false
 	}
-	if allowed, reason := auth.Can(r.Context(), actor, auth.ActionManageProjectAPIKeys,
+	if allowed, reason := auth.Can(r.Context(), actor, action,
 		auth.Target{Kind: "project", ProjectID: p.ID}); !allowed {
 		writeJSONError(w, r, http.StatusForbidden, ErrForbidden, reason)
 		return 0, "", auth.Actor{}, false
@@ -79,7 +82,7 @@ func (d Deps) resolveProjectAndCheckAPIKeysMembership(w http.ResponseWriter, r *
 }
 
 func (d Deps) handleListProjectAPIKeys(w http.ResponseWriter, r *http.Request) {
-	projectID, _, _, ok := d.resolveProjectAndCheckAPIKeysMembership(w, r)
+	projectID, _, _, ok := d.resolveProjectForAction(w, r, auth.ActionManageProjectAPIKeys)
 	if !ok {
 		return
 	}
@@ -102,7 +105,7 @@ func (d Deps) handleListProjectAPIKeys(w http.ResponseWriter, r *http.Request) {
 }
 
 func (d Deps) handleCreateProjectAPIKey(w http.ResponseWriter, r *http.Request) {
-	projectID, projectName, actor, ok := d.resolveProjectAndCheckAPIKeysMembership(w, r)
+	projectID, projectName, actor, ok := d.resolveProjectForAction(w, r, auth.ActionManageProjectAPIKeys)
 	if !ok {
 		return
 	}
@@ -185,7 +188,7 @@ func (d Deps) handleCreateProjectAPIKey(w http.ResponseWriter, r *http.Request) 
 }
 
 func (d Deps) handleRevokeProjectAPIKey(w http.ResponseWriter, r *http.Request) {
-	projectID, projectName, actor, ok := d.resolveProjectAndCheckAPIKeysMembership(w, r)
+	projectID, projectName, actor, ok := d.resolveProjectForAction(w, r, auth.ActionManageProjectAPIKeys)
 	if !ok {
 		return
 	}

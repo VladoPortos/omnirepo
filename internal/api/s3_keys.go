@@ -69,30 +69,8 @@ func (d Deps) mountS3Keys(r chi.Router) {
 	})
 }
 
-// resolveProjectAndCheckS3KeysMembership handles 401/403/404 for every
-// s3-access-key handler and returns the project id on success.
-func (d Deps) resolveProjectAndCheckS3KeysMembership(w http.ResponseWriter, r *http.Request) (int64, string, auth.Actor, bool) {
-	actor, ok := auth.ActorFromContext(r.Context())
-	if !ok {
-		writeJSONError(w, r, http.StatusUnauthorized, ErrUnauthenticated, "")
-		return 0, "", auth.Actor{}, false
-	}
-	projectName := chi.URLParam(r, "name")
-	p, err := d.Projects.FindByName(r.Context(), projectName)
-	if err != nil {
-		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "project not found")
-		return 0, "", auth.Actor{}, false
-	}
-	if allowed, reason := auth.Can(r.Context(), actor, auth.ActionManageS3Keys,
-		auth.Target{Kind: "project", ProjectID: p.ID}); !allowed {
-		writeJSONError(w, r, http.StatusForbidden, ErrForbidden, reason)
-		return 0, "", auth.Actor{}, false
-	}
-	return p.ID, p.Name, actor, true
-}
-
 func (d Deps) handleCreateS3Key(w http.ResponseWriter, r *http.Request) {
-	projectID, projectName, actor, ok := d.resolveProjectAndCheckS3KeysMembership(w, r)
+	projectID, projectName, actor, ok := d.resolveProjectForAction(w, r, auth.ActionManageS3Keys)
 	if !ok {
 		return
 	}
@@ -181,7 +159,7 @@ func (d Deps) handleCreateS3Key(w http.ResponseWriter, r *http.Request) {
 }
 
 func (d Deps) handleListS3Keys(w http.ResponseWriter, r *http.Request) {
-	projectID, _, _, ok := d.resolveProjectAndCheckS3KeysMembership(w, r)
+	projectID, _, _, ok := d.resolveProjectForAction(w, r, auth.ActionManageS3Keys)
 	if !ok {
 		return
 	}
@@ -206,7 +184,7 @@ func (d Deps) handleListS3Keys(w http.ResponseWriter, r *http.Request) {
 }
 
 func (d Deps) handleRevokeS3Key(w http.ResponseWriter, r *http.Request) {
-	projectID, projectName, actor, ok := d.resolveProjectAndCheckS3KeysMembership(w, r)
+	projectID, projectName, actor, ok := d.resolveProjectForAction(w, r, auth.ActionManageS3Keys)
 	if !ok {
 		return
 	}

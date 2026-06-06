@@ -23,6 +23,14 @@ import (
 //
 // Returns an empty map for an empty input slice, never nil.
 func (d Deps) liveRepoSizes(ctx context.Context, ids []int64) map[int64]int64 {
+	return d.liveRepoAggregate(ctx, ids, repoSizeExpr)
+}
+
+// liveRepoAggregate runs `SELECT r.id, <expr> FROM repos r WHERE r.id IN
+// (ids...)` and returns id → value. Shared core of liveRepoSizes /
+// liveRepoItemCounts. Returns an empty map (never nil) on empty input or
+// DB error — callers treat missing entries as "unknown".
+func (d Deps) liveRepoAggregate(ctx context.Context, ids []int64, expr string) map[int64]int64 {
 	out := make(map[int64]int64, len(ids))
 	if len(ids) == 0 {
 		return out
@@ -33,16 +41,16 @@ func (d Deps) liveRepoSizes(ctx context.Context, ids []int64) map[int64]int64 {
 		ph[i] = "?"
 		args[i] = id
 	}
-	query := `SELECT r.id, ` + repoSizeExpr + ` FROM repos r WHERE r.id IN (` + strings.Join(ph, ",") + `)`
+	query := `SELECT r.id, ` + expr + ` FROM repos r WHERE r.id IN (` + strings.Join(ph, ",") + `)`
 	rows, err := d.DB.Reader.QueryContext(ctx, query, args...)
 	if err != nil {
 		return out
 	}
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
-		var id, sz int64
-		if err := rows.Scan(&id, &sz); err == nil {
-			out[id] = sz
+		var id, v int64
+		if err := rows.Scan(&id, &v); err == nil {
+			out[id] = v
 		}
 	}
 	return out
@@ -81,29 +89,7 @@ const repoItemCountExpr = `(
 // map (never nil) on an empty input or a DB error — callers treat missing
 // entries as "unknown" and suppress the badge.
 func (d Deps) liveRepoItemCounts(ctx context.Context, ids []int64) map[int64]int64 {
-	out := make(map[int64]int64, len(ids))
-	if len(ids) == 0 {
-		return out
-	}
-	ph := make([]string, len(ids))
-	args := make([]any, len(ids))
-	for i, id := range ids {
-		ph[i] = "?"
-		args[i] = id
-	}
-	query := `SELECT r.id, ` + repoItemCountExpr + ` FROM repos r WHERE r.id IN (` + strings.Join(ph, ",") + `)`
-	rows, err := d.DB.Reader.QueryContext(ctx, query, args...)
-	if err != nil {
-		return out
-	}
-	defer func() { _ = rows.Close() }()
-	for rows.Next() {
-		var id, n int64
-		if err := rows.Scan(&id, &n); err == nil {
-			out[id] = n
-		}
-	}
-	return out
+	return d.liveRepoAggregate(ctx, ids, repoItemCountExpr)
 }
 
 // mountProjectsFull installs the full projects endpoints.

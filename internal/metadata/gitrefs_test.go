@@ -144,7 +144,6 @@ func TestGitRefsCheckConstraintRejectsBogusType(t *testing.T) {
 	}
 }
 
-
 // --- ReplaceAllTx explicit tx-scoped variant ---
 
 // TestGitRefs_ReplaceAllTx_AtomicReplace seeds prior ref rows then calls

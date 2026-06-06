@@ -3,10 +3,7 @@ package driftpurge
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
-	"errors"
 	"fmt"
-	"os"
 
 	"github.com/vladoportos/omnirepo/internal/metadata"
 	"github.com/vladoportos/omnirepo/internal/storage"
@@ -86,26 +83,9 @@ func (a *rpmAdapter) Purge(ctx context.Context, tx *sql.Tx, row Row, actor strin
 		"digest":      inner.Digest,
 		"filename":    inner.Filename,
 	}
-	snapBytes, err := json.Marshal(snap)
-	if err != nil {
-		return fmt.Errorf("rpm adapter: marshal snapshot id=%d: %w", inner.ID, err)
-	}
-
-	// DELETE row first (in tx), then move file
-	// to trash. See pypi_adapter.go for the rationale — reverse order
-	// can leak rows pointing at moved files when the caller's WriteTx
-	// rolls back the DELETE after a partial trash move.
-	if _, err := tx.ExecContext(ctx, `DELETE FROM rpm_packages WHERE id = ?`, inner.ID); err != nil {
-		return fmt.Errorf("rpm adapter: delete id=%d: %w", inner.ID, err)
-	}
-
-	path := a.pathFn(inner)
-	if _, err := a.trash.MoveWithSnapshot(ctx, path, "rpm_package_drift", inner.ID, actor, snapBytes); err != nil {
-		if !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("rpm adapter: trash move id=%d path=%q: %w", inner.ID, path, err)
-		}
-	}
-	return nil
+	return purgeRow(ctx, tx, a.trash, "rpm adapter",
+		`DELETE FROM rpm_packages WHERE id = ?`, "rpm_package_drift",
+		inner.ID, snap, a.pathFn(inner), actor)
 }
 
 // rpmRow wraps *metadata.RPMPackage. Key is {name, version, arch}.

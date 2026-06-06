@@ -177,5 +177,3 @@ export function ErrorClassStoryPage() {
     </div>
   );
 }
-
-export default ErrorClassStoryPage;

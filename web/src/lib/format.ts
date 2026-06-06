@@ -73,13 +73,6 @@ export function formatDate(iso: string): string {
   });
 }
 
-/**
- * Capitalize severity string for display.
- */
-export function formatSeverity(s: string): string {
-  if (!s) return '';
-  return s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
-}
 
 /**
  * Format a duration in milliseconds into a human-readable string.

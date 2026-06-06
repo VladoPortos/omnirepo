@@ -333,7 +333,7 @@ export function useDeleteHelmChart(projectName: string, repoName: string) {
 
 // useRepoContent returns the entries array for the page. Existing consumers
 // treat the data as a plain array — preserved via `select`. For pagination
-// metadata (total, next_offset) use useRepoContentPage below.
+// metadata (total, next_offset) use useRepoContentLoadMore below.
 export function useRepoContent(
   projectName: string,
   repoType: string,
@@ -356,25 +356,6 @@ export function useRepoContent(
   });
 }
 
-// useRepoContentPage returns the full paginated envelope so load-more
-// tables can read total / next_offset.
-export function useRepoContentPage(
-  projectName: string,
-  repoType: string,
-  repoName: string,
-  opts?: { limit?: number; offset?: number },
-) {
-  return useQuery({
-    queryKey: ['repo-content', projectName, repoType, repoName, opts?.limit ?? 100, opts?.offset ?? 0],
-    queryFn: () => fetchRepoContentPage(projectName, repoType, repoName, opts),
-    staleTime: 15_000,
-    refetchInterval: (query) => {
-      const page = query.state.data as RepoContentPage | undefined;
-      if (!page) return false;
-      return page.items.some((r) => r.scan_severity === 'scanning') ? 3_000 : false;
-    },
-  });
-}
 
 function fetchRepoContentPage(
   projectName: string,
@@ -391,8 +372,8 @@ function fetchRepoContentPage(
   );
 }
 
-// useRepoContentLoadMore wraps useRepoContentPage with append-forward
-// offset state — fits the existing /loop-more pattern used by the
+// useRepoContentLoadMore maintains append-forward offset state over the
+// paginated repo-content endpoint — fits the existing /loop-more pattern used by the
 // per-row-scan feature (commit 8ffe66c). Call .loadMore() to fetch and
 // concatenate the next window; .hasMore tracks whether the backend is
 // still returning a next_offset.
@@ -923,15 +904,6 @@ export function useUpdateProjectMemberRole(projectName: string) {
 
 // -- Repos --
 
-export function useRepos(projectName: string) {
-  return useQuery({
-    queryKey: ['projects', projectName, 'repos'],
-    queryFn: () =>
-      api.get<PaginatedResponse<Repo>>(`/projects/${enc(projectName)}/repos`),
-    enabled: !!projectName,
-    staleTime: 30_000,
-  });
-}
 
 export function useRepo(projectName: string, repoType: string, repoName: string) {
   return useQuery({

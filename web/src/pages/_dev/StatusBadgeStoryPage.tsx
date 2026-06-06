@@ -92,5 +92,3 @@ export function StatusBadgeStoryPage() {
     </div>
   );
 }
-
-export default StatusBadgeStoryPage;

@@ -9,11 +9,6 @@ export interface PaginatedResponse<T> {
   next_cursor: string | null;
 }
 
-export interface ErrorResponse {
-  error: string;
-  detail: string;
-}
-
 // -- Auth --
 
 export interface LoginRequest {
@@ -64,11 +59,6 @@ export interface LoginResponse {
   login: string;
   is_super_admin: boolean;
   must_change_password: boolean;
-}
-
-export interface ChangePasswordRequest {
-  current: string;
-  new_password: string;
 }
 
 // -- User --
@@ -373,32 +363,9 @@ export interface SyncEnqueueResponse {
   kind: string;
 }
 
-export interface WipeResponse {
-  artifact_count: number;
-  bytes_freed: number;
-  trash_id: string;
-}
-
 // -- Sync --
 
-export interface SyncRequest {
-  source_url: string;
-  cred_id?: number;
-}
-
 export type SyncJobStatus = 'pending' | 'running' | 'done' | 'failed';
-
-export interface SyncJob {
-  id: number;
-  kind: string;
-  repo_id: number;
-  status: SyncJobStatus;
-  log: string;
-  error: string;
-  created_at: string;
-  started_at: string;
-  finished_at: string;
-}
 
 // JobStatus alias for the subset used by live progress polling.
 // Same wire tokens as SyncJobStatus.
@@ -573,12 +540,6 @@ export interface Vulnerability {
   description: string;
 }
 
-export interface SBOMRef {
-  scan_id: number;
-  format: string;
-  download_url: string;
-}
-
 // -- Search --
 
 export type SearchKind = 'repo' | 'artifact' | 'cve' | 'rpm' | 'deb' | 'pypi' | 'helm';
@@ -704,10 +665,6 @@ export interface TrashListResponse {
 }
 
 // -- Settings --
-
-export type SettingsMap = Record<string, string>;
-
-export type SettingsPatch = Record<string, string>;
 
 // -- Dashboard --
 

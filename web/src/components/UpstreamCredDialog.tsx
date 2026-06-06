@@ -52,8 +52,6 @@ import type {
   UpstreamCredPatch,
 } from '@/api/types';
 
-export type UpstreamCredDialogMode = 'create' | 'edit';
-
 export interface UpstreamCredDialogProps {
   open: boolean;
   onClose: () => void;

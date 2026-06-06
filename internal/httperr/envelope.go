@@ -199,4 +199,3 @@ func build(code, msg string, cls Class, status int, opts ...Option) *Error {
 	}
 	return e
 }
-

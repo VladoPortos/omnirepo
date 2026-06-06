@@ -85,7 +85,6 @@ func (c *SeverityCache) Invalidate(repoID int64, kind, artifactID string) {
 	delete(c.m, cacheKey(repoID, kind, artifactID))
 }
 
-
 // cacheKey builds the map key. Uses a delimiter that cannot appear in a
 // numeric repo id to avoid collisions ("\x1f" is the ASCII unit separator).
 func cacheKey(repoID int64, kind, artifactID string) string {

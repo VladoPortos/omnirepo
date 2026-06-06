@@ -64,4 +64,3 @@ func (h *CertHolder) Swap(certPEM, keyPEM []byte) error {
 func (h *CertHolder) Current() *tls.Certificate {
 	return h.p.Load()
 }
-

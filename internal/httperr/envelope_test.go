@@ -107,7 +107,6 @@ func TestValidation_ReturnsCorrectClassAndStatus(t *testing.T) {
 	}
 }
 
-
 func TestValidationFields_SetsFieldsMap(t *testing.T) {
 	in := map[string]string{"user.name": "required", "user.email": "invalid"}
 	e := httperr.ValidationFields("user.form_invalid", "Please fix the errors below.", in)
@@ -244,7 +243,6 @@ func TestInternal_EnvelopeMessageNeverLeaksCause(t *testing.T) {
 		t.Errorf("hint should be empty, got %q", e.Envelope.Hint)
 	}
 }
-
 
 // ----------------------------------------------------------------------------
 // IsInternalString

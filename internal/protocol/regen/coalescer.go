@@ -179,4 +179,3 @@ func (c *Coalescer) loop() {
 
 // Inflight reports whether a regen is currently running. Exposed for tests.
 func (c *Coalescer) Inflight() bool { return c.inflight.Load() }
-

@@ -59,4 +59,3 @@ func TestSeverityCache_KeyDistinguishesArtifacts(t *testing.T) {
 		t.Fatalf("key 1/raw/a wrong: %+v ok=%v", e, ok)
 	}
 }
-

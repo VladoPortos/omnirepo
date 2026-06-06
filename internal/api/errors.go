@@ -179,7 +179,7 @@ var codeShapeRegex = regexp.MustCompile(`^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$`)
 // stability during the migration window. The output is ALWAYS a valid
 // envelope code and MUST NOT contain internal-leakage substrings
 // (file paths, source locations, stack markers, driver strings) —
-// see httperr.IsInternalString.
+// the regression gate lives in errors_envelope_test.go.
 func normalizeLegacyCode(code string) string {
 	if code == "" {
 		return "api.unknown"
@@ -197,14 +197,6 @@ func normalizeLegacyCode(code string) string {
 	return "legacy." + sanitizeCode(code)
 }
 
-func containsDot(s string) bool {
-	for _, c := range s {
-		if c == '.' {
-			return true
-		}
-	}
-	return false
-}
 
 // sanitizeCode lowercases and replaces dashes/spaces with underscores
 // to satisfy the ApiErrorEnvelope code regex. Characters that are

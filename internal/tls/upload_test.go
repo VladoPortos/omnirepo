@@ -18,6 +18,16 @@ func fingerprint(t *testing.T, pemBytes []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// legacyLayout mirrors the historical <root>/certs/{server.crt,server.key,
+// uploaded} layout the deleted ApplyUpload wrapper used to derive.
+func legacyLayout(root string) UploadLayout {
+	return UploadLayout{
+		CertPath:   filepath.Join(root, "certs", "server.crt"),
+		KeyPath:    filepath.Join(root, "certs", "server.key"),
+		HistoryDir: filepath.Join(root, "certs", "uploaded"),
+	}
+}
+
 func TestApplyUploadWritesHistoryAndSwapsHolder(t *testing.T) {
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, "certs"), 0o750); err != nil {
@@ -39,7 +49,7 @@ func TestApplyUploadWritesHistoryAndSwapsHolder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("gen admin: %v", err)
 	}
-	if err := ApplyUpload(context.Background(), adminCert, adminKey, root, h); err != nil {
+	if err := ApplyUploadAt(context.Background(), adminCert, adminKey, legacyLayout(root), h); err != nil {
 		t.Fatalf("ApplyUpload: %v", err)
 	}
 
@@ -133,7 +143,7 @@ func TestApplyUploadLivePairNeverMismatched(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = ApplyUpload(context.Background(), newCert, newKey, root, h)
+	err = ApplyUploadAt(context.Background(), newCert, newKey, legacyLayout(root), h)
 	if err == nil {
 		t.Fatalf("expected upload failure due to blocked key stage")
 	}
@@ -165,7 +175,7 @@ func TestApplyUploadRejectsMalformedPEM(t *testing.T) {
 	if err := h.Swap(certPEM, keyPEM); err != nil {
 		t.Fatalf("seed swap: %v", err)
 	}
-	err := ApplyUpload(context.Background(), []byte("not-a-pem"), []byte("also-not"), root, h)
+	err := ApplyUploadAt(context.Background(), []byte("not-a-pem"), []byte("also-not"), legacyLayout(root), h)
 	if err == nil {
 		t.Fatalf("expected error on malformed PEM")
 	}

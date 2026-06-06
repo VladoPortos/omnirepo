@@ -388,7 +388,7 @@ func TestInfoRefs_ReceivePack_MirrorRejected(t *testing.T) {
 
 // --- mirror-not-yet-synced 503 envelope ---
 
-// TestMirrorRepo_BeforeFirstSync_Returns503 — after OnRepoCreate skips
+// TestMirrorRepo_BeforeFirstSync_Returns503 — after CreateRepoHook skips
 // InitBare for mirrors, the bare-repo dir does not exist on disk until the
 // first /sync completes. A clone attempt
 // (GET /info/refs?service=git-upload-pack) BEFORE the first sync used to
@@ -446,7 +446,7 @@ func TestMirrorRepo_AfterFirstSync_PassesThrough(t *testing.T) {
 
 // TestNonMirror_MissingDir_NotGated — non-mirror repos must NOT be subject
 // to the mirror.not_yet_synced guard even when their on-disk dir is absent.
-// Non-mirror repos always have InitBare run by OnRepoCreate, so a missing
+// Non-mirror repos always have InitBare run by CreateRepoHook, so a missing
 // dir is genuinely an internal/operator issue — let the backend's native
 // error propagate rather than masquerading as a transient mirror state.
 func TestNonMirror_MissingDir_NotGated(t *testing.T) {

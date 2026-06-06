@@ -88,26 +88,6 @@ func (r *DockerTagsRepo) ResolveTx(ctx context.Context, tx *sql.Tx, repoID int64
 	return digest, true, nil
 }
 
-// List returns all tag names in (repoID, image), sorted ascending.
-func (r *DockerTagsRepo) List(ctx context.Context, repoID int64, image string) ([]string, error) {
-	rows, err := r.db.Reader.QueryContext(ctx,
-		`SELECT tag FROM docker_tags WHERE repo_id=? AND image=? ORDER BY tag ASC`,
-		repoID, image,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("docker_tags: list: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-	var out []string
-	for rows.Next() {
-		var t string
-		if err := rows.Scan(&t); err != nil {
-			return nil, fmt.Errorf("docker_tags: scan: %w", err)
-		}
-		out = append(out, t)
-	}
-	return out, rows.Err()
-}
 
 // ListPaginated returns tag names in (repoID, image) strictly greater than
 // `after` (lexicographic), sorted ascending, capped at `limit`. An empty

@@ -25,8 +25,8 @@ func TestCertHolderEmptyGet(t *testing.T) {
 	if !strings.Contains(err.Error(), "no certificate loaded") {
 		t.Fatalf("unexpected err: %v", err)
 	}
-	if h.Loaded() {
-		t.Fatalf("Loaded() should be false before Swap")
+	if h.Current() != nil {
+		t.Fatalf("Current() should be nil before Swap")
 	}
 }
 

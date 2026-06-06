@@ -116,6 +116,24 @@ func (f *fakeAuditLogger) Record(_ context.Context, e audit.Event) error {
 
 // --- Test 1: WalkAndReplace basic ---
 
+
+// findRef returns the ref named name from List output, failing the test
+// when absent.
+func findRef(t *testing.T, refs *metadata.GitRefsRepo, repoID int64, name string) metadata.GitRef {
+	t.Helper()
+	all, err := refs.List(context.Background(), repoID)
+	if err != nil {
+		t.Fatalf("list refs: %v", err)
+	}
+	for _, g := range all {
+		if g.Name == name {
+			return g
+		}
+	}
+	t.Fatalf("ref %q not found in %d refs", name, len(all))
+	return metadata.GitRef{}
+}
+
 func TestWalkAndReplace_BasicRefs(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not in PATH")
@@ -337,10 +355,7 @@ func TestWalkAndReplace_DetachedHEAD(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	headRef, err := refsRepo.FindByName(context.Background(), repoID, "HEAD")
-	if err != nil {
-		t.Fatalf("find HEAD: %v", err)
-	}
+	headRef := findRef(t, refsRepo, repoID, "HEAD")
 	if headRef.Type != metadata.GitRefSymbolic {
 		t.Errorf("HEAD type = %q, want symbolic", headRef.Type)
 	}
@@ -437,29 +452,13 @@ func TestPostReceivePackHook(t *testing.T) {
 	}
 }
 
-// --- Test 7: OnRepoCreate ---
+// --- Test 7: CreateRepoHook ---
 
-func TestOnRepoCreate(t *testing.T) {
+func TestCreateRepoHook(t *testing.T) {
 	db := sqlitetest.New(t)
 	projID := seedProject(t, db)
 	refsRepo := metadata.NewGitRefsRepo(db)
 	dataRoot := t.TempDir()
-
-	h := gitpkg.New(gitpkg.Deps{
-		Backend:  gitpkg.SelectBackend(defaultCfg()),
-		Config:   defaultCfg(),
-		Locks:    storage.NewLocks(),
-		Repos:    metadata.NewReposRepo(db),
-		Projects: metadata.NewProjectsRepo(db),
-		Members:  metadata.NewMembersRepo(db),
-		Audit:    &fakeAuditLogger{},
-		DataRoot: dataRoot,
-		Users:    metadata.NewUsersRepo(db),
-		Sessions: metadata.NewSessionsRepo(db),
-		APIKeys:  metadata.NewAPIKeysRepo(db),
-		DB:       db,
-		Refs:     refsRepo,
-	})
 
 	ctx := context.Background()
 	var repoID int64
@@ -469,16 +468,10 @@ func TestOnRepoCreate(t *testing.T) {
 		if insErr != nil {
 			return insErr
 		}
-		repo := &metadata.Repo{ID: repoID, Type: "git", Name: "myrepo"}
-		_, err := h.OnRepoCreate(ctx, tx, repoID, "git", "testproj", "myrepo")
-		if err != nil {
-			return err
-		}
-		_ = repo // keep compiler happy
-		return nil
+		return gitpkg.CreateRepoHook(ctx, tx, repoID, "git", "testproj", "myrepo", dataRoot, refsRepo)
 	})
 	if err != nil {
-		t.Fatalf("OnRepoCreate: %v", err)
+		t.Fatalf("CreateRepoHook: %v", err)
 	}
 
 	// Check bare repo exists on disk.
@@ -488,10 +481,7 @@ func TestOnRepoCreate(t *testing.T) {
 	}
 
 	// Check HEAD row was seeded.
-	headRef, err := refsRepo.FindByName(ctx, repoID, "HEAD")
-	if err != nil {
-		t.Fatalf("find HEAD: %v", err)
-	}
+	headRef := findRef(t, refsRepo, repoID, "HEAD")
 	if headRef.Target != "refs/heads/main" {
 		t.Errorf("HEAD target = %q, want refs/heads/main", headRef.Target)
 	}
@@ -500,56 +490,6 @@ func TestOnRepoCreate(t *testing.T) {
 	}
 }
 
-// --- Test 8: OnRepoDelete ---
-
-func TestOnRepoDelete(t *testing.T) {
-	db := sqlitetest.New(t)
-	_ = seedProject(t, db)
-	refsRepo := metadata.NewGitRefsRepo(db)
-	dataRoot := t.TempDir()
-
-	h := gitpkg.New(gitpkg.Deps{
-		Backend:  gitpkg.SelectBackend(defaultCfg()),
-		Config:   defaultCfg(),
-		Locks:    storage.NewLocks(),
-		Repos:    metadata.NewReposRepo(db),
-		Projects: metadata.NewProjectsRepo(db),
-		Members:  metadata.NewMembersRepo(db),
-		Audit:    &fakeAuditLogger{},
-		DataRoot: dataRoot,
-		Users:    metadata.NewUsersRepo(db),
-		Sessions: metadata.NewSessionsRepo(db),
-		APIKeys:  metadata.NewAPIKeysRepo(db),
-		DB:       db,
-		Refs:     refsRepo,
-	})
-
-	ctx := context.Background()
-	bareDir := filepath.Join(dataRoot, "repos", "testproj", "git", "delrepo.git")
-	if err := gitpkg.InitBare(bareDir, "main"); err != nil {
-		t.Fatal(err)
-	}
-
-	repo := &metadata.Repo{ID: 42, Type: "git", Name: "delrepo"}
-	trashRoot := filepath.Join(dataRoot, "trash")
-	trash := storage.NewTrash(trashRoot)
-
-	err := h.OnRepoDelete(ctx, repo, "testproj", trash)
-	if err != nil {
-		t.Fatalf("OnRepoDelete: %v", err)
-	}
-
-	// Bare repo should be gone from original location.
-	if _, err := os.Stat(bareDir); !os.IsNotExist(err) {
-		t.Error("bare repo dir should be removed from original location")
-	}
-
-	// Trash directory should have the entry.
-	entries, _ := trash.List(ctx)
-	if len(entries) == 0 {
-		t.Fatal("trash should contain the moved repo")
-	}
-}
 
 // --- Test 9: Walker errors are non-fatal ---
 
@@ -632,35 +572,19 @@ func TestDispatch_WalkerErrorNonFatal(t *testing.T) {
 	runGit(t, workDir, "push", "origin", "main")
 }
 
-// --- Test: OnRepoCreate skips non-git types ---
+// --- Test: CreateRepoHook skips non-git types ---
 
-func TestOnRepoCreate_SkipsNonGit(t *testing.T) {
-	db := sqlitetest.New(t)
+func TestCreateRepoHook_SkipsNonGit(t *testing.T) {
 	dataRoot := t.TempDir()
 
-	h := gitpkg.New(gitpkg.Deps{
-		Backend:  gitpkg.SelectBackend(defaultCfg()),
-		Config:   defaultCfg(),
-		Locks:    storage.NewLocks(),
-		Repos:    metadata.NewReposRepo(db),
-		Projects: metadata.NewProjectsRepo(db),
-		Members:  metadata.NewMembersRepo(db),
-		Audit:    &fakeAuditLogger{},
-		DataRoot: dataRoot,
-		Users:    metadata.NewUsersRepo(db),
-		Sessions: metadata.NewSessionsRepo(db),
-		APIKeys:  metadata.NewAPIKeysRepo(db),
-		DB:       db,
-		Refs:     metadata.NewGitRefsRepo(db),
-	})
-
+	// nil tx + nil refs are safe: the hook returns before touching either
+	// for non-git types.
 	ctx := context.Background()
-	extras, err := h.OnRepoCreate(ctx, nil, 0, "rpm", "proj", "repo")
-	if err != nil {
-		t.Fatalf("OnRepoCreate for rpm should not error: %v", err)
+	if err := gitpkg.CreateRepoHook(ctx, nil, 0, "rpm", "proj", "repo", dataRoot, nil); err != nil {
+		t.Fatalf("CreateRepoHook for rpm should not error: %v", err)
 	}
-	if extras != nil {
-		t.Fatal("extras should be nil for non-git type")
+	if _, err := os.Stat(filepath.Join(dataRoot, "repos")); !os.IsNotExist(err) {
+		t.Fatal("no on-disk state should be created for non-git type")
 	}
 }
 

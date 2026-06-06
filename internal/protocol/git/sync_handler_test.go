@@ -371,28 +371,13 @@ func TestGitSync_ErrorPath(t *testing.T) {
 }
 
 // TestGitSync_OnRepoCreate_SkipsInitBare_Smoke is the integration of
-// Task 1 + Task 2b: OnRepoCreate skips InitBare for the mirror repo, then
+// Task 1 + Task 2b: CreateRepoHook skips InitBare for the mirror repo, then
 // the sync handler's PlainCloneContext branch happily lands the clone
 // at the empty target path. Pitfall D guard end-to-end.
 func TestGitSync_OnRepoCreate_SkipsInitBare_Smoke(t *testing.T) {
 	upstream := makeUpstreamBareRepo(t, "")
 	db := sqlitetest.New(t)
 	dataRoot := t.TempDir()
-
-	gitH := gitpkg.New(gitpkg.Deps{
-		Backend:  gitpkg.SelectBackend(defaultCfg()),
-		Config:   defaultCfg(),
-		Repos:    metadata.NewReposRepo(db),
-		Projects: metadata.NewProjectsRepo(db),
-		Members:  metadata.NewMembersRepo(db),
-		Audit:    &fakeAuditLogger{},
-		DataRoot: dataRoot,
-		Users:    metadata.NewUsersRepo(db),
-		Sessions: metadata.NewSessionsRepo(db),
-		APIKeys:  metadata.NewAPIKeysRepo(db),
-		DB:       db,
-		Refs:     metadata.NewGitRefsRepo(db),
-	})
 
 	ctx := context.Background()
 	res, err := db.Writer.ExecContext(ctx, `INSERT INTO projects(name) VALUES ('smokep')`)
@@ -413,8 +398,7 @@ func TestGitSync_OnRepoCreate_SkipsInitBare_Smoke(t *testing.T) {
 		}); err != nil {
 			return err
 		}
-		_, hookErr := gitH.OnRepoCreate(ctx, tx, repoID, "git", "smokep", "smoker")
-		return hookErr
+		return gitpkg.CreateRepoHook(ctx, tx, repoID, "git", "smokep", "smoker", dataRoot, metadata.NewGitRefsRepo(db))
 	})
 	if err != nil {
 		t.Fatalf("create+hook: %v", err)
@@ -422,7 +406,7 @@ func TestGitSync_OnRepoCreate_SkipsInitBare_Smoke(t *testing.T) {
 
 	bareDir := filepath.Join(dataRoot, "repos", "smokep", "git", "smoker.git")
 	if _, err := os.Stat(bareDir); !os.IsNotExist(err) {
-		t.Fatalf("bare repo should NOT exist post-OnRepoCreate for mirror: stat err=%v", err)
+		t.Fatalf("bare repo should NOT exist post-CreateRepoHook for mirror: stat err=%v", err)
 	}
 
 	rec := &recordingAuditLogger{}

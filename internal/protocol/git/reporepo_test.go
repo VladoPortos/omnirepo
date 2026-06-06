@@ -10,44 +10,19 @@ import (
 	"github.com/vladoportos/omnirepo/internal/metadata"
 	"github.com/vladoportos/omnirepo/internal/metadata/sqlitetest"
 	gitpkg "github.com/vladoportos/omnirepo/internal/protocol/git"
-	"github.com/vladoportos/omnirepo/internal/storage"
 )
 
-// newOnRepoCreateHandler builds a gitpkg.Handler wired to a fresh sqlitetest
-// DB under dataRoot. The returned handler mirrors the shape used in
-// refs_test.go so future tests against OnRepoCreate can reuse this helper.
-func newOnRepoCreateHandler(t *testing.T, db *metadata.DB, dataRoot string) *gitpkg.Handler {
-	t.Helper()
-	return gitpkg.New(gitpkg.Deps{
-		Backend:  gitpkg.SelectBackend(defaultCfg()),
-		Config:   defaultCfg(),
-		Locks:    storage.NewLocks(),
-		Repos:    metadata.NewReposRepo(db),
-		Projects: metadata.NewProjectsRepo(db),
-		Members:  metadata.NewMembersRepo(db),
-		Audit:    &fakeAuditLogger{},
-		DataRoot: dataRoot,
-		Users:    metadata.NewUsersRepo(db),
-		Sessions: metadata.NewSessionsRepo(db),
-		APIKeys:  metadata.NewAPIKeysRepo(db),
-		DB:       db,
-		Refs:     metadata.NewGitRefsRepo(db),
-	})
-}
-
-// TestOnRepoCreate_MirrorSkipsInitBare is the load-bearing Pitfall D guard:
-// when the repos row carries is_mirror=1, OnRepoCreate must NOT create the
+// TestCreateRepoHook_MirrorSkipsInitBare is the load-bearing Pitfall D guard:
+// when the repos row carries is_mirror=1, CreateRepoHook must NOT create the
 // bare-repo directory on disk — gogit.PlainCloneContext refuses a non-empty
 // target. The hook also skips the HEAD ref seed (the upstream clone brings
 // the full ref set).
-func TestOnRepoCreate_MirrorSkipsInitBare(t *testing.T) {
+func TestCreateRepoHook_MirrorSkipsInitBare(t *testing.T) {
 	db := sqlitetest.New(t)
 	projID := seedProject(t, db)
 	refsRepo := metadata.NewGitRefsRepo(db)
 	dataRoot := t.TempDir()
 	reposRepo := metadata.NewReposRepo(db)
-
-	h := newOnRepoCreateHandler(t, db, dataRoot)
 
 	ctx := context.Background()
 	var repoID int64
@@ -63,11 +38,10 @@ func TestOnRepoCreate_MirrorSkipsInitBare(t *testing.T) {
 		}); err != nil {
 			return err
 		}
-		_, err := h.OnRepoCreate(ctx, tx, repoID, "git", "testproj", "mirror-repo")
-		return err
+		return gitpkg.CreateRepoHook(ctx, tx, repoID, "git", "testproj", "mirror-repo", dataRoot, refsRepo)
 	})
 	if err != nil {
-		t.Fatalf("OnRepoCreate (mirror): %v", err)
+		t.Fatalf("CreateRepoHook (mirror): %v", err)
 	}
 
 	// Pitfall D assertion: bare-repo directory must NOT exist yet.
@@ -78,22 +52,24 @@ func TestOnRepoCreate_MirrorSkipsInitBare(t *testing.T) {
 
 	// HEAD ref row must NOT exist either — the sync handler populates refs
 	// from the upstream clone on first sync.
-	if _, err := refsRepo.FindByName(ctx, repoID, "HEAD"); err == nil {
-		t.Fatalf("HEAD ref should NOT be seeded for mirror repo; found one")
+	refs, err := refsRepo.List(ctx, repoID)
+	if err != nil {
+		t.Fatalf("list refs: %v", err)
+	}
+	if len(refs) != 0 {
+		t.Fatalf("no refs should be seeded for mirror repo; got %d", len(refs))
 	}
 }
 
-// TestOnRepoCreate_NonMirrorInitsBare pins the non-mirror path: a plain
+// TestCreateRepoHook_NonMirrorInitsBare pins the non-mirror path: a plain
 // type=git repo (is_mirror=0) still triggers InitBare + HEAD seed exactly
 // as before. Regression guard on the refactor.
-func TestOnRepoCreate_NonMirrorInitsBare(t *testing.T) {
+func TestCreateRepoHook_NonMirrorInitsBare(t *testing.T) {
 	db := sqlitetest.New(t)
 	projID := seedProject(t, db)
 	refsRepo := metadata.NewGitRefsRepo(db)
 	dataRoot := t.TempDir()
 	reposRepo := metadata.NewReposRepo(db)
-
-	h := newOnRepoCreateHandler(t, db, dataRoot)
 
 	ctx := context.Background()
 	var repoID int64
@@ -104,11 +80,10 @@ func TestOnRepoCreate_NonMirrorInitsBare(t *testing.T) {
 			return insErr
 		}
 		// No SetMirrorConfigInTx → is_mirror stays 0 (default).
-		_, err := h.OnRepoCreate(ctx, tx, repoID, "git", "testproj", "plain-repo")
-		return err
+		return gitpkg.CreateRepoHook(ctx, tx, repoID, "git", "testproj", "plain-repo", dataRoot, refsRepo)
 	})
 	if err != nil {
-		t.Fatalf("OnRepoCreate (non-mirror): %v", err)
+		t.Fatalf("CreateRepoHook (non-mirror): %v", err)
 	}
 
 	// Bare-repo dir SHOULD exist.
@@ -122,10 +97,7 @@ func TestOnRepoCreate_NonMirrorInitsBare(t *testing.T) {
 	}
 
 	// HEAD ref SHOULD be seeded to refs/heads/main.
-	headRef, err := refsRepo.FindByName(ctx, repoID, "HEAD")
-	if err != nil {
-		t.Fatalf("find HEAD: %v", err)
-	}
+	headRef := findRef(t, refsRepo, repoID, "HEAD")
 	if headRef.Target != "refs/heads/main" {
 		t.Fatalf("HEAD target = %q, want refs/heads/main", headRef.Target)
 	}

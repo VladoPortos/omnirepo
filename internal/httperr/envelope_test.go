@@ -64,7 +64,6 @@ func TestCodeRegex_EveryConstructorPanicsOnBadCode(t *testing.T) {
 		run  func()
 	}{
 		{"Validation", func() { httperr.Validation("BAD CODE", "msg") }},
-		{"ValidationField", func() { httperr.ValidationField("BAD CODE", "user.name", "msg") }},
 		{"ValidationFields", func() { httperr.ValidationFields("BAD CODE", "msg", map[string]string{"a": "b"}) }},
 		{"Permission", func() { httperr.Permission("BAD CODE", "msg") }},
 		{"Transient", func() { httperr.Transient("BAD CODE", "msg", 0) }},
@@ -108,22 +107,6 @@ func TestValidation_ReturnsCorrectClassAndStatus(t *testing.T) {
 	}
 }
 
-func TestValidationField_SetsFieldDetail(t *testing.T) {
-	e := httperr.ValidationField("user.name_required", "user.name", "Name is required")
-	if e.Envelope.Details == nil {
-		t.Fatal("Details nil")
-	}
-	got, ok := e.Envelope.Details["field"].(string)
-	if !ok {
-		t.Fatalf("details[field] not string, got %T", e.Envelope.Details["field"])
-	}
-	if got != "user.name" {
-		t.Errorf("details[field] = %q, want %q", got, "user.name")
-	}
-	if e.Envelope.Class != httperr.ClassValidation {
-		t.Errorf("class = %q", e.Envelope.Class)
-	}
-}
 
 func TestValidationFields_SetsFieldsMap(t *testing.T) {
 	in := map[string]string{"user.name": "required", "user.email": "invalid"}
@@ -262,6 +245,7 @@ func TestInternal_EnvelopeMessageNeverLeaksCause(t *testing.T) {
 	}
 }
 
+
 // ----------------------------------------------------------------------------
 // IsInternalString
 // ----------------------------------------------------------------------------
@@ -362,19 +346,19 @@ func TestEnvelope_JSONMarshal(t *testing.T) {
 }
 
 // ----------------------------------------------------------------------------
-// As helper / errors.As chain
+// errors.As chain
 // ----------------------------------------------------------------------------
 
 func TestAs_UnwrapsErrorChain(t *testing.T) {
 	base := httperr.Validation("user.name_required", "Name is required")
 	wrapped := fmt.Errorf("handle user create: %w", base)
 
-	got, ok := httperr.As(wrapped)
-	if !ok {
-		t.Fatal("As returned ok=false on wrapped *Error")
+	var got *httperr.Error
+	if !errors.As(wrapped, &got) {
+		t.Fatal("errors.As returned false on wrapped *Error")
 	}
 	if got != base {
-		t.Errorf("As did not return the original *Error pointer")
+		t.Errorf("errors.As did not return the original *Error pointer")
 	}
 
 	// Error() returns Envelope.Message

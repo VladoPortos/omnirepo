@@ -295,22 +295,25 @@ func PerRepoMutex(locks storage.Locks) func(http.Handler) http.Handler {
 	}
 }
 
-// ---- Step 6: Audit ----
+// ---- Step 8: Audit ----
 
-// GitAuditLogger is the interface the audit middleware needs. Decoupled from
-// the full audit.Logger to keep tests simple.
-type GitAuditLogger interface {
-	Record(method, path string, status int, bytes int64)
+// GitAuditRecorder receives one callback per completed Git HTTP request
+// with the response status and bytes written. *Handler implements it by
+// emitting git.fetch audit events for completed upload-pack POSTs.
+// Decoupled from the full audit.Logger to keep tests simple.
+type GitAuditRecorder interface {
+	RecordGitRequest(r *http.Request, status int, written int64)
 }
 
-// AuditMiddleware returns a chi middleware that captures the HTTP method,
-// path, response status code, and written bytes for every Git request.
-func AuditMiddleware(logger GitAuditLogger) func(http.Handler) http.Handler {
+// AuditMiddleware returns a chi middleware that captures the response
+// status code and written bytes for every Git request and forwards them —
+// together with the request — to rec after the inner handler completes.
+func AuditMiddleware(rec GitAuditRecorder) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
 			next.ServeHTTP(sw, r)
-			logger.Record(r.Method, r.URL.Path, sw.status, sw.written)
+			rec.RecordGitRequest(r, sw.status, sw.written)
 		})
 	}
 }

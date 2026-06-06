@@ -107,7 +107,7 @@ func makeSdist(t *testing.T, dir string, name, version, requiresPython, summary 
 func TestParseWheel(t *testing.T) {
 	dir := t.TempDir()
 	p := makeWheel(t, dir, "Flask", "2.3.0", ">=3.8", "A microframework")
-	f, err := pypi.ParseWheel(p)
+	f, err := pypi.ParseWheelAs(p, filepath.Base(p))
 	if err != nil {
 		t.Fatalf("ParseWheel: %v", err)
 	}
@@ -148,7 +148,7 @@ func TestParseWheel_MissingMetadata(t *testing.T) {
 	if err := os.WriteFile(p, buf.Bytes(), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := pypi.ParseWheel(p); err == nil {
+	if _, err := pypi.ParseWheelAs(p, filepath.Base(p)); err == nil {
 		t.Fatal("ParseWheel should reject wheel missing METADATA")
 	}
 }
@@ -156,7 +156,7 @@ func TestParseWheel_MissingMetadata(t *testing.T) {
 func TestParseSdist(t *testing.T) {
 	dir := t.TempDir()
 	p := makeSdist(t, dir, "zope.interface", "5.5.2", ">=2.7", "Zope-style interfaces")
-	f, err := pypi.ParseSdist(p)
+	f, err := pypi.ParseSdistAs(p, filepath.Base(p))
 	if err != nil {
 		t.Fatalf("ParseSdist: %v", err)
 	}
@@ -186,7 +186,7 @@ func TestParseSdist_MissingPKGINFO(t *testing.T) {
 	_ = gz.Close()
 	p := filepath.Join(dir, "foo-1.0.tar.gz")
 	_ = os.WriteFile(p, buf.Bytes(), 0o644)
-	if _, err := pypi.ParseSdist(p); err == nil {
+	if _, err := pypi.ParseSdistAs(p, filepath.Base(p)); err == nil {
 		t.Fatal("ParseSdist should reject sdist missing PKG-INFO")
 	}
 }

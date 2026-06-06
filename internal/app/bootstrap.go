@@ -122,13 +122,10 @@ var validSeverities = map[string]struct{}{
 //     inside the same tx so the audit trail is immediate and atomic.
 //
 // RepoCreateHookFn is the signature for the composed repo-create hook.
-// When non-nil, ApplyBootstrap calls it inside the same tx for each repo so
-// that git bare repos get initialized, signing keys get generated, etc.
+// When non-nil, ApplyBootstrapWithHook calls it inside the same tx for each
+// repo so that git bare repos get initialized, signing keys get generated,
+// etc.
 type RepoCreateHookFn func(ctx context.Context, tx *sql.Tx, repoID int64, repoType, projectName, repoName string) (map[string]any, error)
-
-func ApplyBootstrap(ctx context.Context, db *metadata.DB, cfg config.Config, path string) (*BootstrapReport, error) {
-	return ApplyBootstrapWithHook(ctx, db, cfg, path, nil)
-}
 
 func ApplyBootstrapWithHook(ctx context.Context, db *metadata.DB, cfg config.Config, path string, repoHook RepoCreateHookFn) (*BootstrapReport, error) {
 	// 1. Idempotent fast-path.

@@ -78,7 +78,7 @@ func TestApplyBootstrap_HappyPath(t *testing.T) {
 	db := sqlitetest.New(t)
 	p := writeBootstrap(t, goodBootstrap())
 
-	rep, err := app.ApplyBootstrap(context.Background(), db, config.Defaults(), p)
+	rep, err := app.ApplyBootstrapWithHook(context.Background(), db, config.Defaults(), p, nil)
 	if err != nil {
 		t.Fatalf("apply: %v", err)
 	}
@@ -116,7 +116,7 @@ func TestApplyBootstrap_HappyPath(t *testing.T) {
 func TestApplyBootstrap_PasswordsHashed(t *testing.T) {
 	db := sqlitetest.New(t)
 	p := writeBootstrap(t, goodBootstrap())
-	if _, err := app.ApplyBootstrap(context.Background(), db, config.Defaults(), p); err != nil {
+	if _, err := app.ApplyBootstrapWithHook(context.Background(), db, config.Defaults(), p, nil); err != nil {
 		t.Fatalf("apply: %v", err)
 	}
 	rows, err := db.Reader.QueryContext(context.Background(), `SELECT login, password_hash FROM users`)
@@ -144,7 +144,7 @@ func TestApplyBootstrap_APIKeyHashed(t *testing.T) {
 	db := sqlitetest.New(t)
 	b := goodBootstrap()
 	p := writeBootstrap(t, b)
-	if _, err := app.ApplyBootstrap(context.Background(), db, config.Defaults(), p); err != nil {
+	if _, err := app.ApplyBootstrapWithHook(context.Background(), db, config.Defaults(), p, nil); err != nil {
 		t.Fatalf("apply: %v", err)
 	}
 	var plaintext, shaGot string
@@ -166,7 +166,7 @@ func TestApplyBootstrap_APIKeyHashed(t *testing.T) {
 func TestApplyBootstrap_MCPDefault(t *testing.T) {
 	db := sqlitetest.New(t)
 	p := writeBootstrap(t, goodBootstrap())
-	if _, err := app.ApplyBootstrap(context.Background(), db, config.Defaults(), p); err != nil {
+	if _, err := app.ApplyBootstrapWithHook(context.Background(), db, config.Defaults(), p, nil); err != nil {
 		t.Fatalf("apply: %v", err)
 	}
 	// alice has MCP=false (default), bob has MCP=true (explicit).
@@ -195,14 +195,14 @@ func TestApplyBootstrap_MCPDefault(t *testing.T) {
 func TestBootstrapIdempotentAfterFirstRun(t *testing.T) {
 	db := sqlitetest.New(t)
 	p := writeBootstrap(t, goodBootstrap())
-	if _, err := app.ApplyBootstrap(context.Background(), db, config.Defaults(), p); err != nil {
+	if _, err := app.ApplyBootstrapWithHook(context.Background(), db, config.Defaults(), p, nil); err != nil {
 		t.Fatalf("first apply: %v", err)
 	}
 	// Rewrite bootstrap with a third user; re-apply must skip.
 	b := goodBootstrap()
 	b.Users = append(b.Users, app.BootstrapUser{Login: "carol", Email: "c@x", Password: "cpw"})
 	p2 := writeBootstrap(t, b)
-	rep, err := app.ApplyBootstrap(context.Background(), db, config.Defaults(), p2)
+	rep, err := app.ApplyBootstrapWithHook(context.Background(), db, config.Defaults(), p2, nil)
 	if err != nil {
 		t.Fatalf("second apply: %v", err)
 	}
@@ -217,7 +217,7 @@ func TestBootstrapIdempotentAfterFirstRun(t *testing.T) {
 func TestBootstrapRefuses0644(t *testing.T) {
 	db := sqlitetest.New(t)
 	p := writeBootstrapMode(t, goodBootstrap(), 0o644)
-	_, err := app.ApplyBootstrap(context.Background(), db, config.Defaults(), p)
+	_, err := app.ApplyBootstrapWithHook(context.Background(), db, config.Defaults(), p, nil)
 	if err == nil {
 		t.Fatalf("expected error")
 	}
@@ -233,7 +233,7 @@ func TestAtomicRollbackOnFailure(t *testing.T) {
 	b.APIKeys[1].Owner = "missing_project"
 	p := writeBootstrap(t, b)
 
-	_, err := app.ApplyBootstrap(context.Background(), db, config.Defaults(), p)
+	_, err := app.ApplyBootstrapWithHook(context.Background(), db, config.Defaults(), p, nil)
 	if err == nil {
 		t.Fatalf("expected error")
 	}
@@ -251,7 +251,7 @@ func TestAtomicRollbackOnBadRepoType(t *testing.T) {
 	b.Repos = append(b.Repos, app.BootstrapRepo{Project: "acme", Type: "bogus", Name: "x"})
 	p := writeBootstrap(t, b)
 
-	_, err := app.ApplyBootstrap(context.Background(), db, config.Defaults(), p)
+	_, err := app.ApplyBootstrapWithHook(context.Background(), db, config.Defaults(), p, nil)
 	if err == nil {
 		t.Fatalf("expected error")
 	}
@@ -305,7 +305,7 @@ func TestBootstrapValidationMatrix(t *testing.T) {
 			b := goodBootstrap()
 			c.mutate(&b)
 			p := writeBootstrap(t, b)
-			_, err := app.ApplyBootstrap(context.Background(), db, config.Defaults(), p)
+			_, err := app.ApplyBootstrapWithHook(context.Background(), db, config.Defaults(), p, nil)
 			if err == nil {
 				t.Fatalf("expected error")
 			}

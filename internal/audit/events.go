@@ -182,6 +182,12 @@ const (
 	// Details: {repo_id, ref_count, project}.
 	EvtGitRefsSynced EventKind = "git.refs.synced"
 
+	// Git fetch/clone. Emitted by the git audit middleware for every
+	// completed upload-pack POST (the actual pack transfer; info/refs
+	// advertisements are skipped so one clone logs one event).
+	// Details: {repo_id, project, status, bytes}.
+	EvtGitFetch EventKind = "git.fetch"
+
 	// DB integrity_check. Emitted by internal/metadata/pragmas.go
 	// (source=boot) and internal/api/admin_db_health.go (source=manual).
 	EvtIntegrityCheckTriggered EventKind = "admin.integrity_check.triggered"

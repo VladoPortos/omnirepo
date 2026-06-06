@@ -11,7 +11,6 @@ package metadata
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -144,25 +143,3 @@ func (r *GitRefsRepo) List(ctx context.Context, repoID int64) ([]GitRef, error) 
 	return out, rows.Err()
 }
 
-// FindByName returns a single ref by (repo_id, name). Returns ErrNotFound
-// when missing. Primarily used by tests; the list path is ReplaceAll/List.
-func (r *GitRefsRepo) FindByName(ctx context.Context, repoID int64, name string) (*GitRef, error) {
-	if name == "" {
-		return nil, errors.New("git_refs: name required")
-	}
-	var g GitRef
-	var typ, updated string
-	err := r.db.Reader.QueryRowContext(ctx, `
-		SELECT id, repo_id, name, target, type, updated_at
-		FROM git_refs WHERE repo_id = ? AND name = ?
-	`, repoID, name).Scan(&g.ID, &g.RepoID, &g.Name, &g.Target, &typ, &updated)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, ErrNotFound
-		}
-		return nil, fmt.Errorf("git_refs: find by name: %w", err)
-	}
-	g.Type = GitRefType(typ)
-	g.UpdatedAt, _ = time.Parse("2006-01-02T15:04:05.000Z", updated)
-	return &g, nil
-}

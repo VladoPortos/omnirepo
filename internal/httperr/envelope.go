@@ -23,7 +23,6 @@
 package httperr
 
 import (
-	"errors"
 	"regexp"
 )
 
@@ -94,6 +93,36 @@ func WithDetail(k string, v any) Option {
 	}
 }
 
+// internalMarkers flags strings that look like internal-only leakage
+// (filesystem paths, Go driver messages, stack markers). Used by tests
+// (e.g. the api handlers envelope integration test) to assert
+// Envelope.Message / Envelope.Hint never carry these substrings.
+var internalMarkers = []*regexp.Regexp{
+	// Filesystem absolute paths (matches both leading and mid-string).
+	regexp.MustCompile(`(^|\s)/[a-zA-Z0-9_/.-]+`),
+	// Go source locations (e.g. "file.go:123").
+	regexp.MustCompile(`\.go:\d+`),
+	// Stack markers — the word "goroutine" or a runtime.* frame.
+	regexp.MustCompile(`\b(goroutine|runtime\.)`),
+	// Go driver / syscall leaks. Note: "sqlite" is matched as a bare
+	// substring because the driver appears in messages like "sqlite3 ...".
+	regexp.MustCompile(`sqlite`),
+	regexp.MustCompile(`\b(sql:|read:|open:|stat:)`),
+}
+
+// IsInternalString reports whether s contains substrings that look like
+// internal-only information (paths, source locations, stack markers,
+// driver leaks). Used by leak-screening tests (api envelope integration
+// gate) to prevent internal-string leaks reaching wire envelopes.
+func IsInternalString(s string) bool {
+	for _, re := range internalMarkers {
+		if re.MatchString(s) {
+			return true
+		}
+	}
+	return false
+}
+
 // codeRegex enforces the OpenAPI pattern ^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$
 var codeRegex = regexp.MustCompile(`^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$`)
 
@@ -105,12 +134,6 @@ func CodeIsValid(code string) bool { return codeRegex.MatchString(code) }
 // Validation returns a validation-class Error with HTTP 400.
 func Validation(code, msg string, opts ...Option) *Error {
 	return build(code, msg, ClassValidation, 400, opts...)
-}
-
-// ValidationField returns a validation-class Error with details.field set
-// to the offending dot-path (e.g. "user.name").
-func ValidationField(code, field, msg string) *Error {
-	return Validation(code, msg, WithDetail("field", field))
 }
 
 // ValidationFields returns a validation-class Error with details.fields
@@ -177,42 +200,3 @@ func build(code, msg string, cls Class, status int, opts ...Option) *Error {
 	return e
 }
 
-// internalMarkers flags strings that look like internal-only leakage
-// (filesystem paths, Go driver messages, stack markers). Used by tests
-// and call sites to assert Envelope.Message / Envelope.Hint never carry
-// these substrings.
-var internalMarkers = []*regexp.Regexp{
-	// Filesystem absolute paths (matches both leading and mid-string).
-	regexp.MustCompile(`(^|\s)/[a-zA-Z0-9_/.-]+`),
-	// Go source locations (e.g. "file.go:123").
-	regexp.MustCompile(`\.go:\d+`),
-	// Stack markers — the word "goroutine" or a runtime.* frame.
-	regexp.MustCompile(`\b(goroutine|runtime\.)`),
-	// Go driver / syscall leaks. Note: "sqlite" is matched as a bare
-	// substring because the driver appears in messages like "sqlite3 ...".
-	regexp.MustCompile(`sqlite`),
-	regexp.MustCompile(`\b(sql:|read:|open:|stat:)`),
-}
-
-// IsInternalString reports whether s contains substrings that look like
-// internal-only information (paths, source locations, stack markers,
-// driver leaks). Used in envelope construction sites and tests to
-// prevent internal-string leaks.
-func IsInternalString(s string) bool {
-	for _, re := range internalMarkers {
-		if re.MatchString(s) {
-			return true
-		}
-	}
-	return false
-}
-
-// As is a convenience wrapper over errors.As for the canonical Error type.
-// Returns (err, true) if err (or anything in its chain) is a *httperr.Error.
-func As(err error) (*Error, bool) {
-	var target *Error
-	if errors.As(err, &target) {
-		return target, true
-	}
-	return nil, false
-}

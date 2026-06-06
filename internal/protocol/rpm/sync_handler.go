@@ -13,7 +13,6 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -581,12 +580,3 @@ func truncateErr(s string) string {
 	return s[:max] + "...[truncated]"
 }
 
-// PayloadFromBytes is a small parse helper used by the REST endpoint to
-// validate a sync request body before enqueue.
-func PayloadFromBytes(body []byte) (SyncPayload, error) {
-	var pl SyncPayload
-	if err := json.Unmarshal(body, &pl); err != nil {
-		return pl, errors.New("invalid JSON")
-	}
-	return pl, nil
-}

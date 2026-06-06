@@ -191,23 +191,3 @@ func TestNormalizeLegacyCode_NeverLeaksShapeInternals(t *testing.T) {
 		})
 	}
 }
-
-// TestContainsDot is a trivial gate for the pass-through detection used
-// by normalizeLegacyCode. A code with a "." is considered already-dotted
-// and passes through unchanged.
-func TestContainsDot(t *testing.T) {
-	for _, tc := range []struct {
-		in   string
-		want bool
-	}{
-		{"", false},
-		{"foo", false},
-		{"foo.bar", true},
-		{".", true},
-		{"foo.bar.baz", true},
-	} {
-		if got := containsDot(tc.in); got != tc.want {
-			t.Errorf("containsDot(%q) = %v, want %v", tc.in, got, tc.want)
-		}
-	}
-}

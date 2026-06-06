@@ -208,17 +208,10 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 				if err := CreateDEBRepoHook(ctx, tx, repoID, repoType, bootAptSuites); err != nil {
 					return nil, err
 				}
-				if repoType == "git" {
-					repoPath := filepath.Join(cfg.DataRoot, "repos", projectName, "git", repoName+".git")
-					if err := gitpkg.InitBare(repoPath, "main"); err != nil {
-						return nil, err
-					}
-					seed := []metadata.GitRef{
-						{Name: "HEAD", Target: "refs/heads/main", Type: metadata.GitRefSymbolic},
-					}
-					if err := gitRefsRepoBoot.ReplaceAll(ctx, tx, repoID, seed); err != nil {
-						return nil, err
-					}
+				// Shared git arm — see gitpkg.CreateRepoHook for the mirror
+				// skip + orphan-dir cleanup rationale.
+				if err := gitpkg.CreateRepoHook(ctx, tx, repoID, repoType, projectName, repoName, cfg.DataRoot, gitRefsRepoBoot); err != nil {
+					return nil, err
 				}
 				return nil, nil
 			}
@@ -610,41 +603,11 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 		if err := CreateDEBRepoHook(ctx, tx, repoID, repoType, aptSuitesRepo); err != nil {
 			return nil, err
 		}
-		// Git bare-repo lifecycle.
-		//
-		// Audit finding #7: InitBare creates the `.git` dir on disk inside
-		// the hook, but the outer tx can still roll back if a later step
-		// (ReplaceAll here, or any future addition) fails. Clean the
-		// freshly-initialised dir up on any error return so the filesystem
-		// doesn't hold an orphan that has no repos row.
-		//
-		// For mirror repos skip both
-		// InitBare and the HEAD-ref seed — the sync handler's first
-		// PlainCloneContext refuses a non-empty target dir, and empty-bare
-		// state lets the sync populate both on first success. The commit
-		// 7920876 implementation lived on *git.Handler.OnRepoCreate but
-		// was never wired into the composed hook, leaving this inline
-		// block as the live path.
-		if repoType == "git" {
-			var isMirror sql.NullInt64
-			if err := tx.QueryRowContext(ctx,
-				`SELECT is_mirror FROM repos WHERE id = ?`, repoID,
-			).Scan(&isMirror); err != nil && err != sql.ErrNoRows {
-				return nil, fmt.Errorf("repo-create hook: read is_mirror for repo %d: %w", repoID, err)
-			}
-			if !isMirror.Valid || isMirror.Int64 == 0 {
-				repoPath := filepath.Join(cfg.DataRoot, "repos", projectName, "git", repoName+".git")
-				if err := gitpkg.InitBare(repoPath, "main"); err != nil {
-					return nil, err
-				}
-				seed := []metadata.GitRef{
-					{Name: "HEAD", Target: "refs/heads/main", Type: metadata.GitRefSymbolic},
-				}
-				if err := gitRefsRepo.ReplaceAll(ctx, tx, repoID, seed); err != nil {
-					_ = os.RemoveAll(repoPath)
-					return nil, err
-				}
-			}
+		// Git bare-repo lifecycle — shared arm, see gitpkg.CreateRepoHook
+		// for the mirror skip + orphan-dir cleanup (audit finding #7)
+		// rationale. Same implementation serves the bootstrap hook above.
+		if err := gitpkg.CreateRepoHook(ctx, tx, repoID, repoType, projectName, repoName, cfg.DataRoot, gitRefsRepo); err != nil {
+			return nil, err
 		}
 		if fp == "" {
 			return nil, nil

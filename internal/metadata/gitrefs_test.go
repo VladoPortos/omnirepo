@@ -144,29 +144,6 @@ func TestGitRefsCheckConstraintRejectsBogusType(t *testing.T) {
 	}
 }
 
-func TestGitRefsFindByName(t *testing.T) {
-	t.Parallel()
-	db := sqlitetest.New(t)
-	ctx := context.Background()
-	repoID := seedGitRepo(t, db)
-	r := metadata.NewGitRefsRepo(db)
-
-	_ = db.WriteTx(ctx, func(tx *sql.Tx) error {
-		return r.ReplaceAll(ctx, tx, repoID, []metadata.GitRef{
-			{Name: "refs/heads/main", Target: "abc", Type: metadata.GitRefBranch},
-		})
-	})
-	g, err := r.FindByName(ctx, repoID, "refs/heads/main")
-	if err != nil {
-		t.Fatalf("find: %v", err)
-	}
-	if g.Target != "abc" || g.Type != metadata.GitRefBranch {
-		t.Fatalf("mismatch: %+v", g)
-	}
-	if _, err := r.FindByName(ctx, repoID, "refs/heads/nope"); !errors.Is(err, metadata.ErrNotFound) {
-		t.Fatalf("want ErrNotFound, got %v", err)
-	}
-}
 
 // --- ReplaceAllTx explicit tx-scoped variant ---
 
@@ -329,7 +306,7 @@ func TestGitRefs_ReplaceAllTx_EmptySetPrunes(t *testing.T) {
 }
 
 // TestGitRefs_ReplaceAllTx_ColumnOrderMatchesSchema inserts a ref with
-// explicit Name/Target/Type values and then SELECTs it back via FindByName,
+// explicit Name/Target/Type values and then SELECTs it back via List,
 // asserting each field survives the round-trip. Guards against column-order
 // drift in the INSERT statement (e.g. future refactor that accidentally
 // swaps target and name).
@@ -347,9 +324,18 @@ func TestGitRefs_ReplaceAllTx_ColumnOrderMatchesSchema(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("replace_all_tx: %v", err)
 	}
-	got, err := r.FindByName(ctx, repoID, "refs/tags/v9.9.9")
+	all, err := r.List(ctx, repoID)
 	if err != nil {
-		t.Fatalf("find: %v", err)
+		t.Fatalf("list: %v", err)
+	}
+	var got metadata.GitRef
+	for _, g := range all {
+		if g.Name == "refs/tags/v9.9.9" {
+			got = g
+		}
+	}
+	if got.Name == "" {
+		t.Fatalf("ref refs/tags/v9.9.9 not found in %d refs", len(all))
 	}
 	if got.Name != "refs/tags/v9.9.9" {
 		t.Fatalf("Name = %q, want refs/tags/v9.9.9", got.Name)

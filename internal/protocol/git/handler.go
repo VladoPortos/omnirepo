@@ -93,7 +93,9 @@ func New(d Deps) *Handler {
 //  5. RequireGitPermission — derive action from path, check auth.Can.
 //  6. PerRepoMutex — no-op on reads; serialize writes per repo.
 //  7. PushSizeLimit — MaxBytesReader cap on wire bytes.
-//  8. AuditMiddleware — defer-style capture.
+//  8. AuditMiddleware — emits a git.fetch audit event per completed
+//     upload-pack POST (pushes are audited via EvtGitRefsSynced in
+//     dispatchToBackend).
 //
 // Two URL shapes are mounted with the same handler chain:
 //   - "/git/{project}/{repo}"   — legacy form (kept for compatibility)
@@ -122,6 +124,7 @@ func (h *Handler) mountAt(parent chi.Router, route string, authDeps authmw.Deps)
 		r.Use(RequireGitPermission())
 		r.Use(PerRepoMutex(h.locks))
 		r.Use(PushSizeLimit(ResolveMaxPushBytes(h.cfg.Repos.Git.MaxPushBytes)))
+		r.Use(AuditMiddleware(h))
 		// LFS batch endpoint returns 501 lfs.not_supported. Registered
 		// BEFORE the /* catch-all so chi's specific-pattern-beats-wildcard
 		// precedence wins — applies to every method (see lfs.go for rationale).
@@ -218,6 +221,37 @@ func (h *Handler) dispatchToBackend(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+}
+
+// RecordGitRequest implements GitAuditRecorder. It emits one git.fetch
+// audit event per completed upload-pack POST (the actual clone/fetch pack
+// transfer). info/refs advertisements are skipped so a single clone does
+// not double-log; pushes are audited separately via EvtGitRefsSynced in
+// dispatchToBackend.
+func (h *Handler) RecordGitRequest(r *http.Request, status int, written int64) {
+	if h.audit == nil || r.Method != http.MethodPost || !strings.HasSuffix(r.URL.Path, "/git-upload-pack") {
+		return
+	}
+	repo := RepoFromContext(r.Context())
+	if repo == nil {
+		return
+	}
+	outcome := "ok"
+	if status >= 400 {
+		outcome = "error"
+	}
+	_ = h.audit.Record(r.Context(), audit.Event{
+		Kind:       audit.EvtGitFetch,
+		TargetKind: "repo",
+		TargetID:   repo.Name,
+		Outcome:    outcome,
+		Details: map[string]any{
+			"repo_id": repo.ID,
+			"project": projectFromContext(r.Context()),
+			"status":  status,
+			"bytes":   written,
+		},
+	})
 }
 
 // SelectBackend returns the GitServer implementation selected by config.

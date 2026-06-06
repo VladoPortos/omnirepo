@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path"
 	"strings"
 )
 
@@ -46,20 +45,13 @@ func (f *File) MarshalCoreMetadata() string {
 	return string(b)
 }
 
-// ParseWheel opens the .whl archive at wheelPath, reads the
+// ParseWheelAs opens the .whl archive at wheelPath, reads the
 // *.dist-info/METADATA entry via archive/zip (no extraction on disk),
-// parses its RFC 822 headers, and returns a populated *File.
-//
-// Filename is parsed per PEP 427: NAME-VERSION-PYTHON_TAG-ABI_TAG-PLATFORM_TAG.whl.
-// The NAME segment is Normalize()'d.
-func ParseWheel(wheelPath string) (*File, error) {
-	return ParseWheelAs(wheelPath, path.Base(wheelPath))
-}
-
-// ParseWheelAs is like ParseWheel but uses the supplied canonical
-// filename (instead of path.Base) for PEP 427 parsing. Callers staging
-// uploads under a tmp path use this so the parser sees the original
-// client-supplied filename.
+// parses its RFC 822 headers, and returns a populated *File. The supplied
+// canonical filename (not wheelPath's base) is used for PEP 427 parsing:
+// NAME-VERSION-PYTHON_TAG-ABI_TAG-PLATFORM_TAG.whl, with the NAME segment
+// Normalize()'d. Callers staging uploads under a tmp path pass the
+// original client-supplied filename so the parser sees it.
 func ParseWheelAs(wheelPath, canonicalFilename string) (*File, error) {
 	if wheelPath == "" {
 		return nil, errors.New("pypi: empty wheel path")
@@ -121,15 +113,10 @@ func ParseWheelAs(wheelPath, canonicalFilename string) (*File, error) {
 	return f, nil
 }
 
-// ParseSdist opens the sdist at sdistPath (supports .tar.gz / .tgz / .zip),
-// reads the top-level PKG-INFO, parses its RFC 822 headers, and returns a
-// populated *File with Kind="sdist".
-func ParseSdist(sdistPath string) (*File, error) {
-	return ParseSdistAs(sdistPath, path.Base(sdistPath))
-}
-
-// ParseSdistAs is like ParseSdist but uses the supplied canonical
-// filename for sdist filename parsing.
+// ParseSdistAs opens the sdist at sdistPath (supports .tar.gz / .tgz /
+// .zip), reads the top-level PKG-INFO, parses its RFC 822 headers, and
+// returns a populated *File with Kind="sdist". The supplied canonical
+// filename is used for sdist filename parsing.
 func ParseSdistAs(sdistPath, canonicalFilename string) (*File, error) {
 	if sdistPath == "" {
 		return nil, errors.New("pypi: empty sdist path")

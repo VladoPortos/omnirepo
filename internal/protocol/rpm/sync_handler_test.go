@@ -2,6 +2,7 @@ package rpm_test
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -9,12 +10,13 @@ import (
 	"github.com/vladoportos/omnirepo/internal/protocol/rpm"
 )
 
-// TestRPMSyncPayloadShape ensures the JSON shape is parseable.
+// TestRPMSyncPayloadShape pins the SyncPayload JSON tags — the sync
+// handler unmarshals the enqueued payload string into this exact shape.
 func TestRPMSyncPayloadShape(t *testing.T) {
 	body := []byte(`{"upstream_url":"https://repo.example/centos","cred_id":42,"filter":{"names":["foo"]}}`)
-	pl, err := rpm.PayloadFromBytes(body)
-	if err != nil {
-		t.Fatalf("PayloadFromBytes: %v", err)
+	var pl rpm.SyncPayload
+	if err := json.Unmarshal(body, &pl); err != nil {
+		t.Fatalf("unmarshal SyncPayload: %v", err)
 	}
 	if pl.UpstreamURL != "https://repo.example/centos" {
 		t.Fatalf("upstream_url wrong: %+v", pl)

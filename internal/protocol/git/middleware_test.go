@@ -334,12 +334,16 @@ func TestPerRepoMutex_UploadPackNoLock(t *testing.T) {
 type recordingAudit struct {
 	mu      sync.Mutex
 	entries []string
+	status  []int
+	bytes   []int64
 }
 
-func (a *recordingAudit) Record(method, path string, status int, bytes int64) {
+func (a *recordingAudit) RecordGitRequest(r *http.Request, status int, written int64) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.entries = append(a.entries, method+" "+path)
+	a.entries = append(a.entries, r.Method+" "+r.URL.Path)
+	a.status = append(a.status, status)
+	a.bytes = append(a.bytes, written)
 }
 
 func TestAuditMiddleware_CapturesRequest(t *testing.T) {
@@ -362,5 +366,72 @@ func TestAuditMiddleware_CapturesRequest(t *testing.T) {
 	}
 	if !strings.Contains(rec.entries[0], "GET") {
 		t.Fatalf("audit entry: %q", rec.entries[0])
+	}
+	if rec.status[0] != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.status[0])
+	}
+	if rec.bytes[0] != int64(len("hello")) {
+		t.Fatalf("bytes = %d, want %d", rec.bytes[0], len("hello"))
+	}
+}
+
+// TestRecordGitRequest_EmitsFetchAudit pins the production GitAuditRecorder:
+// a completed POST …/git-upload-pack with a context-stashed repo emits one
+// git.fetch audit event with status/bytes details; info/refs GETs and
+// receive-pack POSTs emit nothing through this path.
+func TestRecordGitRequest_EmitsFetchAudit(t *testing.T) {
+	db := sqlitetest.New(t)
+	logger := &fakeAuditLogger{}
+	h := gitpkg.New(gitpkg.Deps{
+		Backend:  gitpkg.SelectBackend(defaultCfg()),
+		Config:   defaultCfg(),
+		Locks:    storage.NewLocks(),
+		Repos:    metadata.NewReposRepo(db),
+		Projects: metadata.NewProjectsRepo(db),
+		Members:  metadata.NewMembersRepo(db),
+		Audit:    logger,
+		DataRoot: t.TempDir(),
+		Users:    metadata.NewUsersRepo(db),
+		Sessions: metadata.NewSessionsRepo(db),
+		APIKeys:  metadata.NewAPIKeysRepo(db),
+		DB:       db,
+		Refs:     metadata.NewGitRefsRepo(db),
+	})
+
+	repo := &metadata.Repo{ID: 7, Type: "git", Name: "myrepo"}
+	mkReq := func(method, path string) *http.Request {
+		req := httptest.NewRequest(method, path, nil)
+		ctx := gitpkg.WithRepo(req.Context(), repo)
+		ctx = gitpkg.WithProject(ctx, "acme")
+		return req.WithContext(ctx)
+	}
+
+	// upload-pack POST → one git.fetch event.
+	h.RecordGitRequest(mkReq("POST", "/acme/git/myrepo/git-upload-pack"), 200, 1234)
+	if len(logger.events) != 1 {
+		t.Fatalf("want 1 audit event, got %d", len(logger.events))
+	}
+	ev := logger.events[0]
+	if string(ev.Kind) != "git.fetch" {
+		t.Fatalf("kind = %q, want git.fetch", ev.Kind)
+	}
+	if ev.TargetID != "myrepo" || ev.Outcome != "ok" {
+		t.Fatalf("event = %+v", ev)
+	}
+	if ev.Details["project"] != "acme" || ev.Details["status"] != 200 || ev.Details["bytes"] != int64(1234) {
+		t.Fatalf("details = %+v", ev.Details)
+	}
+
+	// Failed upload-pack → outcome=error.
+	h.RecordGitRequest(mkReq("POST", "/acme/git/myrepo/git-upload-pack"), 403, 0)
+	if len(logger.events) != 2 || logger.events[1].Outcome != "error" {
+		t.Fatalf("want error outcome, got %+v", logger.events)
+	}
+
+	// info/refs GET and receive-pack POST are not audited here.
+	h.RecordGitRequest(mkReq("GET", "/acme/git/myrepo/info/refs"), 200, 10)
+	h.RecordGitRequest(mkReq("POST", "/acme/git/myrepo/git-receive-pack"), 200, 10)
+	if len(logger.events) != 2 {
+		t.Fatalf("non-upload-pack requests must not emit git.fetch; got %d events", len(logger.events))
 	}
 }

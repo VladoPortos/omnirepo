@@ -65,7 +65,3 @@ func (h *CertHolder) Current() *tls.Certificate {
 	return h.p.Load()
 }
 
-// Loaded reports whether a certificate is currently live. Used by /readyz.
-func (h *CertHolder) Loaded() bool {
-	return h.p.Load() != nil
-}

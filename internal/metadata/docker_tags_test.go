@@ -68,7 +68,7 @@ func TestDockerTags_UpsertResolveListDelete(t *testing.T) {
 		t.Fatalf("expected empty for missing tag")
 	}
 
-	list, _ := tags.List(ctx, 1, "")
+	list, _ := tags.ListPaginated(ctx, 1, "", 100, "")
 	if len(list) != 2 || list[0] != "latest" || list[1] != "v1" {
 		t.Fatalf("unexpected list: %v", list)
 	}

@@ -22,18 +22,6 @@ type UploadLayout struct {
 	UploadedBy string
 }
 
-// ApplyUpload is a thin compatibility wrapper that derives the historical
-// <dataRoot>/certs/{server.crt,server.key,uploaded} layout and delegates to
-// ApplyUploadAt. New code should call ApplyUploadAt directly with explicit
-// paths so cfg.TLS.{cert_path,key_path} are honored.
-func ApplyUpload(ctx context.Context, certPEM, keyPEM []byte, dataRoot string, holder *CertHolder) error {
-	return ApplyUploadAt(ctx, certPEM, keyPEM, UploadLayout{
-		CertPath:   filepath.Join(dataRoot, "certs", "server.crt"),
-		KeyPath:    filepath.Join(dataRoot, "certs", "server.key"),
-		HistoryDir: filepath.Join(dataRoot, "certs", "uploaded"),
-	}, holder)
-}
-
 // ApplyUploadAt accepts an admin-supplied cert+key pair, validates them,
 // archives a timestamped copy under layout.HistoryDir/<ts>/, atomically
 // replaces the live files at layout.CertPath / layout.KeyPath, and finally

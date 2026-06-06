@@ -50,9 +50,6 @@ func NewSeverityCache(ttl time.Duration) *SeverityCache {
 	}
 }
 
-// TTL returns the cache's configured TTL (test introspection).
-func (c *SeverityCache) TTL() time.Duration { return c.ttl }
-
 // Get returns the cached entry and (true) if present and unexpired.
 // Expired entries are NOT eagerly evicted on read — Set will overwrite
 // them, and Invalidate is the explicit eviction path.
@@ -88,12 +85,6 @@ func (c *SeverityCache) Invalidate(repoID int64, kind, artifactID string) {
 	delete(c.m, cacheKey(repoID, kind, artifactID))
 }
 
-// Size returns the number of cached entries (test introspection).
-func (c *SeverityCache) Size() int {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return len(c.m)
-}
 
 // cacheKey builds the map key. Uses a delimiter that cannot appear in a
 // numeric repo id to avoid collisions ("\x1f" is the ASCII unit separator).

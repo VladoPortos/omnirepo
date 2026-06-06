@@ -58,14 +58,5 @@ func TestSeverityCache_KeyDistinguishesArtifacts(t *testing.T) {
 	if e, ok := c.Get(1, "raw", "sha256:a"); !ok || e.Severity != "low" {
 		t.Fatalf("key 1/raw/a wrong: %+v ok=%v", e, ok)
 	}
-	if c.Size() != 4 {
-		t.Fatalf("Size = %d, want 4", c.Size())
-	}
 }
 
-func TestSeverityCache_DefaultTTL(t *testing.T) {
-	c := scan.NewSeverityCache(0)
-	if c.TTL() != 30*time.Second {
-		t.Fatalf("default TTL = %v, want 30s", c.TTL())
-	}
-}

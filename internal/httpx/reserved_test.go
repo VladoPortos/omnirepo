@@ -1,7 +1,6 @@
 package httpx_test
 
 import (
-	"net/http"
 	"testing"
 
 	"github.com/vladoportos/omnirepo/internal/httpx"
@@ -59,24 +58,3 @@ func TestPhase04ReservedIncludesS3AndGit(t *testing.T) {
 		}
 	}
 }
-
-func TestMountReservedPanicsOnReservedPrefix(t *testing.T) {
-	defer func() {
-		r := recover()
-		if r == nil {
-			t.Fatal("MountReserved did not panic on reserved prefix")
-		}
-	}()
-	// We use a nil handler because the panic fires before any handler invocation.
-	httpx.MountReserved(nil, "v2", nil)
-}
-
-func TestMountReservedAcceptsNonReserved(t *testing.T) {
-	// Use a real chi router; we do not need to panic here.
-	r := httpx.NewBareRouter()
-	httpx.MountReserved(r, "acme-project", emptyHandler{})
-}
-
-type emptyHandler struct{}
-
-func (emptyHandler) ServeHTTP(_ http.ResponseWriter, _ *http.Request) {}

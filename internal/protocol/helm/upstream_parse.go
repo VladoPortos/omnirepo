@@ -53,18 +53,6 @@ const (
 	EntrySourceOCI
 )
 
-// String returns the short kind name used in audit/log output.
-func (k EntrySourceKind) String() string {
-	switch k {
-	case EntrySourceHTTP:
-		return "http"
-	case EntrySourceOCI:
-		return "oci"
-	default:
-		return "unknown"
-	}
-}
-
 // UpstreamEntry is one chart version yielded by ParseUpstream.
 type UpstreamEntry struct {
 	Path     string // absolute URL to fetch the .tgz

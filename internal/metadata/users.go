@@ -254,17 +254,6 @@ func (r *UsersRepo) UpdateEmail(ctx context.Context, id int64, email string) err
 	})
 }
 
-// UpdateAvatarSeed sets the user's avatar seed string.
-func (r *UsersRepo) UpdateAvatarSeed(ctx context.Context, id int64, seed string) error {
-	return r.db.WriteTx(ctx, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `UPDATE users SET avatar_seed=? WHERE id=?`, seed, id)
-		if err != nil {
-			return fmt.Errorf("users: update avatar_seed %d: %w", id, err)
-		}
-		return nil
-	})
-}
-
 // UpdateProfile atomically sets email and/or avatar_seed in one tx.
 // Either pointer may be nil to leave that column untouched. Returns nil if
 // both are nil.

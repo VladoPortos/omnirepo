@@ -44,20 +44,6 @@ func (r *SettingsRepo) Set(ctx context.Context, key, value string) error {
 	})
 }
 
-// SetTx is a transactional variant of Set. Used by bootstrap to land settings
-// in the same writer tx that seeds users/projects/etc so atomicity holds
-// across the whole seed.
-func (r *SettingsRepo) SetTx(ctx context.Context, tx *sql.Tx, key, value string) error {
-	_, err := tx.ExecContext(ctx, `
-		INSERT INTO settings(key, value) VALUES (?, ?)
-		ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=CURRENT_TIMESTAMP
-	`, key, value)
-	if err != nil {
-		return fmt.Errorf("settings: set %q: %w", key, err)
-	}
-	return nil
-}
-
 // GetAll returns every (key, value) pair. Intended for admin tooling; not
 // sorted.
 func (r *SettingsRepo) GetAll(ctx context.Context) (map[string]string, error) {

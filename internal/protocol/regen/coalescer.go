@@ -8,7 +8,6 @@ package regen
 
 import (
 	"context"
-	"errors"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -182,14 +181,6 @@ func (c *Coalescer) loop() {
 // Inflight reports whether a regen is currently running. Exposed for tests.
 func (c *Coalescer) Inflight() bool { return c.inflight.Load() }
 
-// ErrShutdown is returned by RegenFn supplied callbacks that wish to
-// treat a cancelled ctx as a no-op rather than a real error. Exported
-// so downstream plans share one sentinel.
-var ErrShutdown = errors.New("regen: coalescer shutting down")
-
-// noopWait keeps the unused time import alive if future refactors drop
-// goroutine-internal timer usage.
-var _ = time.Millisecond
 
 // _ guards against a misuse: a sync import that lint might otherwise drop.
 var _ sync.Mutex

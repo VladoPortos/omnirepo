@@ -21,15 +21,12 @@ package helm
 // contract at the helper layer is covered by sync_oversize_test.go.
 
 import (
-	"archive/tar"
 	"bytes"
-	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -129,43 +126,6 @@ func newHelmOversizedFixture(t *testing.T, upstreamClient *http.Client) *helmOve
 	return &helmOversizedFixture{t: t, h: h, db: db, repoID: rid}
 }
 
-// helmMakeChartTGZ builds a minimal valid Helm chart tgz with the supplied
-// Chart.yaml fields. Local copy of the testutil helper (which lives in
-// package helm_test, inaccessible from this internal test).
-func helmMakeChartTGZ(t *testing.T, name, version string) []byte {
-	t.Helper()
-	chartYAML := fmt.Sprintf("apiVersion: v2\nname: %s\nversion: %s\ntype: application\n", name, version)
-	notes := "Test chart NOTES\n"
-
-	var buf bytes.Buffer
-	gz := gzip.NewWriter(&buf)
-	tw := tar.NewWriter(gz)
-
-	writeTarFile := func(path, body string) {
-		h := &tar.Header{
-			Name:     path,
-			Mode:     0o644,
-			Size:     int64(len(body)),
-			Typeflag: tar.TypeReg,
-		}
-		if err := tw.WriteHeader(h); err != nil {
-			t.Fatalf("tar header %s: %v", path, err)
-		}
-		if _, err := tw.Write([]byte(body)); err != nil {
-			t.Fatalf("tar body %s: %v", path, err)
-		}
-	}
-	writeTarFile(name+"/Chart.yaml", chartYAML)
-	writeTarFile(name+"/templates/NOTES.txt", notes)
-	if err := tw.Close(); err != nil {
-		t.Fatalf("tar close: %v", err)
-	}
-	if err := gz.Close(); err != nil {
-		t.Fatalf("gz close: %v", err)
-	}
-	return buf.Bytes()
-}
-
 // TestHelmSync_OversizedArtifactRejected proves that for Helm, when upstream
 // returns cap+1 bytes for a chart .tgz body, sync fails with an error whose
 // text contains streamio.ErrArtifactTooLarge AND zero new helm_charts rows
@@ -224,7 +184,6 @@ generated: "2026-04-25T00:00:00Z"
 			rowsAfter-rowsBefore, rowsBefore, rowsAfter)
 	}
 	_ = errors.Is
-	_ = helmMakeChartTGZ // keep helper referenced for future overflow-of-real-chart variant
 }
 
 // TestHelmSync_OversizedMetadataRejected proves for Helm: when upstream

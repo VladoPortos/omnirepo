@@ -156,24 +156,13 @@ func (r *DockerTagsRepo) ExistsTag(ctx context.Context, repoID int64, image, tag
 	return true, nil
 }
 
-// CountForDigest returns the number of tag rows in repoID pointing at digest.
-// Used by manifest DELETE to decide whether deleting a single tag reference
-// should cascade into ref_count decrements on the manifest's referenced blobs.
-// This count is intentionally image-blind: ref_count on a manifest is the
-// total tag-reference count across every image in the repo.
-func (r *DockerTagsRepo) CountForDigest(ctx context.Context, repoID int64, digest string) (int64, error) {
-	var n int64
-	err := r.db.Reader.QueryRowContext(ctx, `
-		SELECT COUNT(*) FROM docker_tags WHERE repo_id = ? AND digest = ?
-	`, repoID, digest).Scan(&n)
-	if err != nil {
-		return 0, fmt.Errorf("docker_tags: count: %w", err)
-	}
-	return n, nil
-}
-
-// CountForDigestTx is CountForDigest called through a caller-supplied tx.
-// Required inside WriteTx callbacks where Reader-pool reads race the
+// CountForDigestTx returns the number of tag rows in repoID pointing at
+// digest, read through a caller-supplied tx. Used by manifest DELETE to
+// decide whether deleting a single tag reference should cascade into
+// ref_count decrements on the manifest's referenced blobs. The count is
+// intentionally image-blind: ref_count on a manifest is the total
+// tag-reference count across every image in the repo. The tx read is
+// required inside WriteTx callbacks where Reader-pool reads race the
 // in-flight writer tx and can deadlock (see GetByDigestTx rationale).
 func (r *DockerTagsRepo) CountForDigestTx(ctx context.Context, tx *sql.Tx, repoID int64, digest string) (int64, error) {
 	var n int64

@@ -133,13 +133,13 @@ func writeEnvelope(w http.ResponseWriter, r *http.Request, e *httperr.Error) {
 // conventions so wire compatibility is preserved. Field is the
 // form input id or dotted DTO path (e.g. "name", "user.email") —
 // whichever the UI uses to index its fieldErrors map.
-func writeFieldValidationError(w http.ResponseWriter, r *http.Request, code, field, detail string) {
+func writeFieldValidationError(w http.ResponseWriter, r *http.Request, field, detail string) {
 	if detail == "" {
 		detail = defaultMessageForStatus(http.StatusUnprocessableEntity)
 	}
 	e := &httperr.Error{
 		Envelope: httperr.Envelope{
-			Code:    normalizeLegacyCode(code),
+			Code:    normalizeLegacyCode(ErrValidationFailed),
 			Message: detail,
 			Class:   httperr.ClassValidation,
 			Details: map[string]any{"field": field},
@@ -254,8 +254,8 @@ const maxAdminJSONBodyBytes int64 = 64 << 10 // 64 KiB
 // don't forget MaxBytesReader and existing unbounded JSON decodes
 // (handleCreateUser, handleCreateProject, handleCreateRepo) cannot
 // force unbounded buffering.
-func decodeJSONBody(w http.ResponseWriter, r *http.Request, limit int64, out any) bool {
-	r.Body = http.MaxBytesReader(w, r.Body, limit)
+func decodeJSONBody(w http.ResponseWriter, r *http.Request, out any) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, maxAdminJSONBodyBytes)
 	if err := json.NewDecoder(r.Body).Decode(out); err != nil {
 		var maxErr *http.MaxBytesError
 		if errors.As(err, &maxErr) {

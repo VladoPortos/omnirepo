@@ -126,7 +126,7 @@ func (d *DeleteTagREST) Handle(w http.ResponseWriter, r *http.Request) {
 	// Reuse the OCI manifestDelete audit shape so /v2 and the REST shim
 	// produce indistinguishable audit-log rows for the same logical event.
 	fullPath := projectName + "/docker/" + repoName
-	d.h.emitManifestAudit(r, audit.EvtOCITagDeleted, targetDigest, "ok", map[string]any{
+	d.h.emitManifestAudit(r, audit.EvtOCITagDeleted, targetDigest, map[string]any{
 		"repo":     fullPath,
 		"tag":      tag,
 		"cascaded": cascaded,

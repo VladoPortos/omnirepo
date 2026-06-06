@@ -32,7 +32,7 @@ import (
 //     chunked upload session, per OCI spec. The response becomes a 202
 //     from blobUploadPost.
 func (h *Handler) blobMount(w http.ResponseWriter, r *http.Request) {
-	dest := h.resolveRepo(w, r, true)
+	dest := h.resolveRepo(w, r)
 	if dest == nil {
 		return
 	}
@@ -135,7 +135,7 @@ func (h *Handler) blobMount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.emitAudit(r, audit.EvtOCIBlobMounted, digest, "ok", map[string]any{
+	h.emitAudit(r, audit.EvtOCIBlobMounted, digest, map[string]any{
 		"from": fromRaw,
 		"to":   dest.fullPath,
 	})

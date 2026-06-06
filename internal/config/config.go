@@ -321,10 +321,7 @@ func Load(flagPath string) (Config, error) {
 	}
 
 	// 2. Resolve file path.
-	path, mustExist, err := resolvePath(flagPath)
-	if err != nil {
-		return Config{}, err
-	}
+	path, mustExist := resolvePath(flagPath)
 	if path != "" {
 		if _, statErr := os.Stat(path); statErr != nil {
 			if mustExist {
@@ -421,14 +418,14 @@ func (cfg *Config) Validate() error {
 
 // resolvePath returns the chosen config file path and whether its absence is a
 // fatal error (only the flagPath case is fatal when missing).
-func resolvePath(flagPath string) (path string, mustExist bool, err error) {
+func resolvePath(flagPath string) (path string, mustExist bool) {
 	if flagPath != "" {
-		return flagPath, true, nil
+		return flagPath, true
 	}
 	if env := os.Getenv("OMNIREPO_CONFIG"); env != "" {
-		return env, false, nil
+		return env, false
 	}
-	return defaultConfigPath, false, nil
+	return defaultConfigPath, false
 }
 
 // ErrInvalidConfig is returned when configuration fails structural validation.

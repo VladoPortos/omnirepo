@@ -84,12 +84,12 @@ type resolvedRepo struct {
 // repo. Docker clients can also use the 4-segment form to host multiple
 // images under a single OmniRepo docker repo.
 //
-// requireDocker — when true, accepts only OCI-native repo types: "docker"
+// Accepts only OCI-native repo types: "docker"
 // (standard image registry) and "helm" (charts pushed via `helm push
 // oci://…`; a post-commit mirror wires OCI-pushed charts into the
 // traditional /<project>/helm/<repo>/ tree so `helm repo add` can see
 // them). Other repo types are rejected with NAME_INVALID.
-func (h *Handler) resolveRepo(w http.ResponseWriter, r *http.Request, requireDocker bool) *resolvedRepo {
+func (h *Handler) resolveRepo(w http.ResponseWriter, r *http.Request) *resolvedRepo {
 	projectName := chi.URLParam(r, "project")
 	repoType := chi.URLParam(r, "type")
 	repoName := chi.URLParam(r, "repo")
@@ -112,7 +112,7 @@ func (h *Handler) resolveRepo(w http.ResponseWriter, r *http.Request, requireDoc
 	// OCI v2 multiplexes Docker registry traffic and Helm OCI traffic on the
 	// same /v2 surface. Both speak the distribution protocol; the difference
 	// lives in the manifest config mediaType and the post-commit hooks.
-	if requireDocker && repoType != "docker" && repoType != "helm" {
+	if repoType != "docker" && repoType != "helm" {
 		writeOCIErr(w, http.StatusBadRequest, ErrCodeNameInvalid,
 			fmt.Errorf("expected type=docker or helm, got %s", repoType))
 		return nil
@@ -212,7 +212,7 @@ func (h *Handler) blobPostDispatch(w http.ResponseWriter, r *http.Request) {
 // blobUploadPost starts a new chunked upload session.
 // Response: 202 Accepted, Location: /v2/<name>/blobs/uploads/<uuid>, Range: 0-0.
 func (h *Handler) blobUploadPost(w http.ResponseWriter, r *http.Request) {
-	rr := h.resolveRepo(w, r, true)
+	rr := h.resolveRepo(w, r)
 	if rr == nil {
 		return
 	}
@@ -250,7 +250,7 @@ func (h *Handler) blobUploadPost(w http.ResponseWriter, r *http.Request) {
 // blobUploadPatch appends a chunk to the tmp upload file.
 // Response: 202 Accepted, Location, Range: 0-<bytes-1>.
 func (h *Handler) blobUploadPatch(w http.ResponseWriter, r *http.Request) {
-	rr := h.resolveRepo(w, r, true)
+	rr := h.resolveRepo(w, r)
 	if rr == nil {
 		return
 	}
@@ -322,7 +322,7 @@ func (h *Handler) blobUploadPatch(w http.ResponseWriter, r *http.Request) {
 // Handler.Mount, so mirror-flagged repos reject upload attempts with 403
 // repo.repo_is_mirror before this handler runs.
 func (h *Handler) blobUploadPut(w http.ResponseWriter, r *http.Request) {
-	rr := h.resolveRepo(w, r, true)
+	rr := h.resolveRepo(w, r)
 	if rr == nil {
 		return
 	}
@@ -421,7 +421,7 @@ func (h *Handler) blobUploadPut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.emitAudit(r, audit.EvtOCIBlobUploaded, actual, "ok", map[string]any{
+	h.emitAudit(r, audit.EvtOCIBlobUploaded, actual, map[string]any{
 		"repo": rr.fullPath,
 		"size": size,
 	})
@@ -436,7 +436,7 @@ func (h *Handler) blobUploadPut(w http.ResponseWriter, r *http.Request) {
 // per OCI §4.2.1 — a single-request upload. Equivalent to POST+PUT rolled
 // into one.
 func (h *Handler) blobMonolithicPost(w http.ResponseWriter, r *http.Request) {
-	rr := h.resolveRepo(w, r, true)
+	rr := h.resolveRepo(w, r)
 	if rr == nil {
 		return
 	}
@@ -519,7 +519,7 @@ func (h *Handler) blobMonolithicPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.emitAudit(r, audit.EvtOCIBlobUploaded, actual, "ok", map[string]any{
+	h.emitAudit(r, audit.EvtOCIBlobUploaded, actual, map[string]any{
 		"repo":       rr.fullPath,
 		"size":       size,
 		"monolithic": true,
@@ -534,7 +534,7 @@ func (h *Handler) blobMonolithicPost(w http.ResponseWriter, r *http.Request) {
 // blobUploadStatus returns the Range header of an in-progress session.
 // Response: 204 No Content, Range: 0-<bytes-1>.
 func (h *Handler) blobUploadStatus(w http.ResponseWriter, r *http.Request) {
-	rr := h.resolveRepo(w, r, true)
+	rr := h.resolveRepo(w, r)
 	if rr == nil {
 		return
 	}
@@ -569,7 +569,7 @@ func (h *Handler) blobUploadStatus(w http.ResponseWriter, r *http.Request) {
 // blobGet serves the blob contents via http.ServeContent (range support).
 // Sets Docker-Content-Digest.
 func (h *Handler) blobGet(w http.ResponseWriter, r *http.Request) {
-	rr := h.resolveRepo(w, r, true)
+	rr := h.resolveRepo(w, r)
 	if rr == nil {
 		return
 	}
@@ -618,7 +618,7 @@ func (h *Handler) blobGet(w http.ResponseWriter, r *http.Request) {
 // blobHead returns 200 with Content-Length + Docker-Content-Digest if blob
 // exists, 404 otherwise.
 func (h *Handler) blobHead(w http.ResponseWriter, r *http.Request) {
-	rr := h.resolveRepo(w, r, true)
+	rr := h.resolveRepo(w, r)
 	if rr == nil {
 		return
 	}
@@ -651,7 +651,7 @@ func (h *Handler) blobHead(w http.ResponseWriter, r *http.Request) {
 // only GC deletes CAS bytes — see Pitfall 8 in repos.WipeDocker). Deleting
 // the docker_blobs row at ref_count==0 hands it off to the next GC sweep.
 func (h *Handler) blobDelete(w http.ResponseWriter, r *http.Request) {
-	rr := h.resolveRepo(w, r, true)
+	rr := h.resolveRepo(w, r)
 	if rr == nil {
 		return
 	}
@@ -697,7 +697,7 @@ func (h *Handler) blobDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.emitAudit(r, audit.EvtOCIBlobDeleted, digest, "ok", map[string]any{
+	h.emitAudit(r, audit.EvtOCIBlobDeleted, digest, map[string]any{
 		"repo": rr.fullPath,
 	})
 
@@ -707,7 +707,7 @@ func (h *Handler) blobDelete(w http.ResponseWriter, r *http.Request) {
 // emitAudit records a best-effort audit event with the request's actor.
 // Called AFTER the writer tx commits so a transient audit failure never
 // masks a successful state change.
-func (h *Handler) emitAudit(r *http.Request, kind audit.EventKind, targetID, outcome string, details map[string]any) {
+func (h *Handler) emitAudit(r *http.Request, kind audit.EventKind, targetID string, details map[string]any) {
 	if h.auditLogger == nil {
 		return
 	}
@@ -717,7 +717,7 @@ func (h *Handler) emitAudit(r *http.Request, kind audit.EventKind, targetID, out
 		UserAgent:  r.Header.Get("User-Agent"),
 		TargetKind: "blob",
 		TargetID:   targetID,
-		Outcome:    outcome,
+		Outcome:    "ok",
 		Details:    details,
 		OccurredAt: time.Now().UTC(),
 	}

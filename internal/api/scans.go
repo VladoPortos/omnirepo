@@ -206,12 +206,12 @@ func (d Deps) handleListRepoScans(w http.ResponseWriter, r *http.Request) {
 }
 
 // resolveArtifactRepo resolves project + repo from the URL params and
-// enforces project membership. Returns (project, repo, artifactID, ok).
-func (d Deps) resolveArtifactRepo(w http.ResponseWriter, r *http.Request) (*metadata.Project, *metadata.Repo, string, bool) {
+// enforces project membership. Returns (repo, artifactID, ok).
+func (d Deps) resolveArtifactRepo(w http.ResponseWriter, r *http.Request) (*metadata.Repo, string, bool) {
 	actor, ok := auth.ActorFromContext(r.Context())
 	if !ok {
 		writeJSONError(w, r, http.StatusUnauthorized, ErrUnauthenticated, "")
-		return nil, nil, "", false
+		return nil, "", false
 	}
 	projectName := chi.URLParam(r, "name")
 	repoType := chi.URLParam(r, "type")
@@ -227,23 +227,23 @@ func (d Deps) resolveArtifactRepo(w http.ResponseWriter, r *http.Request) (*meta
 	}
 	if _, ok := validRepoTypes[repoType]; !ok {
 		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "repo not found")
-		return nil, nil, "", false
+		return nil, "", false
 	}
 	p, err := d.Projects.FindByName(r.Context(), projectName)
 	if err != nil || p == nil {
 		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "project not found")
-		return nil, nil, "", false
+		return nil, "", false
 	}
 	rr, err := d.Repos.FindByTriple(r.Context(), p.ID, repoType, repoName)
 	if err != nil || rr == nil {
 		writeJSONError(w, r, http.StatusNotFound, ErrNotFound, "repo not found")
-		return nil, nil, "", false
+		return nil, "", false
 	}
 	if !d.actorIsProjectMember(r.Context(), actor, p.ID) {
 		writeJSONError(w, r, http.StatusForbidden, ErrForbidden, "not a project member")
-		return nil, nil, "", false
+		return nil, "", false
 	}
-	return p, rr, artifactID, true
+	return rr, artifactID, true
 }
 
 // actorIsProjectMember verifies actor is a project member. Super-admin
@@ -276,7 +276,7 @@ func (d Deps) actorIsProjectMember(ctx context.Context, actor auth.Actor, projec
 
 // handleRescan enqueues a fresh scan row for the artifact and kicks the pool.
 func (d Deps) handleRescan(w http.ResponseWriter, r *http.Request) {
-	_, repo, artifactID, ok := d.resolveArtifactRepo(w, r)
+	repo, artifactID, ok := d.resolveArtifactRepo(w, r)
 	if !ok {
 		return
 	}
@@ -679,7 +679,7 @@ func artifactKindForRepoType(t string) string {
 
 // handleListArtifactScans returns scans rows for one artifact, newest first.
 func (d Deps) handleListArtifactScans(w http.ResponseWriter, r *http.Request) {
-	_, repo, artifactID, ok := d.resolveArtifactRepo(w, r)
+	repo, artifactID, ok := d.resolveArtifactRepo(w, r)
 	if !ok {
 		return
 	}

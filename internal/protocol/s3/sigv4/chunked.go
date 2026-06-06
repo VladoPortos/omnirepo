@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"io"
 	"strconv"
@@ -132,7 +131,7 @@ func (c *chunkedReader) readNextChunk() error {
 		// Terminal chunk verified — consume any trailing CRLF tolerantly
 		// (RFC says only one \r\n after the zero chunk, but some clients
 		// emit an extra).
-		_ = swallowOptionalCRLF(c.src)
+		swallowOptionalCRLF(c.src)
 		c.finished = true
 		return nil
 	}
@@ -187,19 +186,15 @@ func expectCRLF(r *bufio.Reader) error {
 	return nil
 }
 
-// swallowOptionalCRLF best-effort: reads CRLF if present, else returns nil.
-func swallowOptionalCRLF(r *bufio.Reader) error {
+// swallowOptionalCRLF best-effort: discards a CRLF pair if present.
+func swallowOptionalCRLF(r *bufio.Reader) {
 	peek, err := r.Peek(2)
 	if err != nil {
-		if errors.Is(err, io.EOF) {
-			return nil
-		}
-		return nil
+		return
 	}
 	if len(peek) == 2 && peek[0] == '\r' && peek[1] == '\n' {
 		_, _ = r.Discard(2)
 	}
-	return nil
 }
 
 // constEq is a constant-time string equality check. Uses ConstantTimeEq for

@@ -30,7 +30,7 @@ type tagsListResponse struct {
 //   - If a next page exists, the `Link` header advertises ?n&last=<lasttag>
 //     per RFC 5988 with rel="next".
 func (h *Handler) tagsList(w http.ResponseWriter, r *http.Request) {
-	rr := h.resolveRepo(w, r, true)
+	rr := h.resolveRepo(w, r)
 	if rr == nil {
 		return
 	}
@@ -84,7 +84,7 @@ func (h *Handler) tagsList(w http.ResponseWriter, r *http.Request) {
 // Delegates to manifestDelete's tag-form logic: unlink tag, cascade to
 // manifest delete when it was the last reference AND ref_count==0.
 func (h *Handler) tagDelete(w http.ResponseWriter, r *http.Request) {
-	rr := h.resolveRepo(w, r, true)
+	rr := h.resolveRepo(w, r)
 	if rr == nil {
 		return
 	}
@@ -155,7 +155,7 @@ func (h *Handler) tagDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.emitManifestAudit(r, audit.EvtOCITagDeleted, digest, "ok", map[string]any{
+	h.emitManifestAudit(r, audit.EvtOCITagDeleted, digest, map[string]any{
 		"repo": rr.fullPath,
 		"tag":  tag,
 	})

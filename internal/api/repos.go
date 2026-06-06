@@ -269,7 +269,7 @@ func (d Deps) handlePatchRepo(w http.ResponseWriter, r *http.Request) {
 			}
 			// Cross-project ownership check. before.ProjectID is populated
 			// by resolveRepoFromURL above.
-			if ok, _ := mirrorCredOwnership(r.Context(), d.UpstreamCreds, before.ProjectID, v); !ok {
+			if !mirrorCredOwnership(r.Context(), d.UpstreamCreds, before.ProjectID, v) {
 				writeJSONError(w, r, http.StatusBadRequest, codeRepoMirrorCredWrongProject,
 					"mirror_cred_id must belong to the same project as the repo")
 				return

@@ -122,7 +122,7 @@ func manifestMediaType(r *http.Request) string {
 // Handler.Mount, so mirror-flagged repos reject upload attempts with 403
 // repo.repo_is_mirror before this handler runs.
 func (h *Handler) manifestPut(w http.ResponseWriter, r *http.Request) {
-	rr := h.resolveRepo(w, r, true)
+	rr := h.resolveRepo(w, r)
 	if rr == nil {
 		return
 	}
@@ -292,7 +292,7 @@ func (h *Handler) manifestPut(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	h.emitManifestAudit(r, audit.EvtOCIManifestUploaded, mfDigest, "ok", map[string]any{
+	h.emitManifestAudit(r, audit.EvtOCIManifestUploaded, mfDigest, map[string]any{
 		"repo":      repoPath,
 		"reference": reference,
 		"media":     mediaType,
@@ -427,7 +427,7 @@ func (h *Handler) manifestHead(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) manifestGetOrHead(w http.ResponseWriter, r *http.Request, writeBody bool) {
-	rr := h.resolveRepo(w, r, true)
+	rr := h.resolveRepo(w, r)
 	if rr == nil {
 		return
 	}
@@ -507,7 +507,7 @@ var errManifestStillReferenced = errors.New("manifest is referenced by an image 
 //     at the digest AND the digest's own manifest ref_count is 0, cascade
 //     into a full manifest delete (ref decrements + row removal).
 func (h *Handler) manifestDelete(w http.ResponseWriter, r *http.Request) {
-	rr := h.resolveRepo(w, r, true)
+	rr := h.resolveRepo(w, r)
 	if rr == nil {
 		return
 	}
@@ -625,12 +625,12 @@ func (h *Handler) manifestDelete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if tagForm {
-		h.emitManifestAudit(r, audit.EvtOCITagDeleted, targetDigest, "ok", map[string]any{
+		h.emitManifestAudit(r, audit.EvtOCITagDeleted, targetDigest, map[string]any{
 			"repo": rr.fullPath,
 			"tag":  reference,
 		})
 	} else {
-		h.emitManifestAudit(r, audit.EvtOCIManifestDeleted, targetDigest, "ok", map[string]any{
+		h.emitManifestAudit(r, audit.EvtOCIManifestDeleted, targetDigest, map[string]any{
 			"repo":      rr.fullPath,
 			"reference": reference,
 		})
@@ -760,7 +760,7 @@ func (h *Handler) writeManifestWithRefcounts(
 // emitManifestAudit mirrors emitAudit (blobs.go) but uses "manifest" as the
 // target kind so activity feeds can separate blob-push noise from the
 // logical manifest upload event.
-func (h *Handler) emitManifestAudit(r *http.Request, kind audit.EventKind, targetID, outcome string, details map[string]any) {
+func (h *Handler) emitManifestAudit(r *http.Request, kind audit.EventKind, targetID string, details map[string]any) {
 	if h.auditLogger == nil {
 		return
 	}
@@ -770,7 +770,7 @@ func (h *Handler) emitManifestAudit(r *http.Request, kind audit.EventKind, targe
 		UserAgent:  r.Header.Get("User-Agent"),
 		TargetKind: "manifest",
 		TargetID:   targetID,
-		Outcome:    outcome,
+		Outcome:    "ok",
 		Details:    details,
 		OccurredAt: time.Now().UTC(),
 	}

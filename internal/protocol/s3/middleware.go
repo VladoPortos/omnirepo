@@ -177,7 +177,7 @@ func RequireBucketAccess(lookup BucketProjectLookup) func(http.Handler) http.Han
 				// Root-level request (ListBuckets). S3 keys are
 				// project-scoped so listing all buckets across projects
 				// is a cross-project information disclosure. Block it.
-				writeAccessDenied(w, r)
+				writeAccessDenied(w)
 				return
 			}
 
@@ -206,7 +206,7 @@ func RequireBucketAccess(lookup BucketProjectLookup) func(http.Handler) http.Han
 
 			allowed, _ := auth.Can(r.Context(), actor, action, target)
 			if !allowed {
-				writeAccessDenied(w, r)
+				writeAccessDenied(w)
 				return
 			}
 			next.ServeHTTP(w, r)
@@ -240,7 +240,7 @@ func bucketFromPath(path string) string {
 }
 
 // writeAccessDenied writes a 403 AccessDenied XML error body.
-func writeAccessDenied(w http.ResponseWriter, r *http.Request) {
+func writeAccessDenied(w http.ResponseWriter) {
 	// Use a custom AccessDenied error — not one of the sigv4 sentinels.
 	w.Header().Set("Content-Type", "application/xml")
 	w.WriteHeader(http.StatusForbidden)

@@ -229,9 +229,9 @@ func (p *PullExternalHandler) Handle(ctx context.Context, payload string, projec
 	}
 
 	if desc.MediaType.IsIndex() {
-		return p.handleIndex(ctx, desc, srcRef, opts, dstRepo, repoPath, dstTag, progress)
+		return p.handleIndex(ctx, desc, srcRef, dstRepo, repoPath, dstTag, progress)
 	}
-	return p.handleImage(ctx, desc, srcRef, opts, dstRepo, repoPath, dstTag, progress)
+	return p.handleImage(ctx, desc, srcRef, dstRepo, repoPath, dstTag, progress)
 }
 
 // handleImage imports a single-image manifest.
@@ -239,7 +239,6 @@ func (p *PullExternalHandler) handleImage(
 	ctx context.Context,
 	desc *remote.Descriptor,
 	srcRef name.Reference,
-	opts []remote.Option,
 	dstRepo *metadata.Repo,
 	repoPath string,
 	dstTag string,
@@ -289,7 +288,6 @@ func (p *PullExternalHandler) handleIndex(
 	ctx context.Context,
 	desc *remote.Descriptor,
 	srcRef name.Reference,
-	opts []remote.Option,
 	dstRepo *metadata.Repo,
 	repoPath string,
 	dstTag string,

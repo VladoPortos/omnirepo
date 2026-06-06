@@ -93,7 +93,7 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.auditEvent(r, audit.EvtRawDelete, res.repo, res.relPath, "ok", map[string]any{
+	h.auditEvent(r, audit.EvtRawDelete, res.relPath, "ok", map[string]any{
 		"project": res.project.Name,
 		"repo":    res.repo.Name,
 		"path":    res.relPath,

@@ -107,20 +107,20 @@ func RegenFor(d RegenDeps) regen.RegenFn {
 		if err := RenderSimpleJSON(&topJSON, projects); err != nil {
 			return d.recordFailure(ctx, fmt.Errorf("pypi regen: render top json: %w", err))
 		}
-		topHashHTML := writeHashAndPointer(ctx, d.RepoRoot, simpleDir, "index", "html", topHTML.Bytes())
+		topHashHTML := writeHashAndPointer(ctx, d.RepoRoot, simpleDir, "html", topHTML.Bytes())
 		if topHashHTML == "" {
 			return d.recordFailure(ctx, fmt.Errorf("pypi regen: write top html"))
 		}
 		filesWritten += 2
-		topHashJSON := writeHashAndPointer(ctx, d.RepoRoot, simpleDir, "index", "json", topJSON.Bytes())
+		topHashJSON := writeHashAndPointer(ctx, d.RepoRoot, simpleDir, "json", topJSON.Bytes())
 		if topHashJSON == "" {
 			return d.recordFailure(ctx, fmt.Errorf("pypi regen: write top json"))
 		}
 		filesWritten += 2
 
 		// Sweep stale top-level content-hash files.
-		sweepStaleHashed(simpleDir, "index", "html", topHashHTML)
-		sweepStaleHashed(simpleDir, "index", "json", topHashJSON)
+		sweepStaleHashed(simpleDir, "html", topHashHTML)
+		sweepStaleHashed(simpleDir, "json", topHashJSON)
 
 		urlPrefix := d.PackagesURLPrefix
 		if urlPrefix == "" {
@@ -158,18 +158,18 @@ func RegenFor(d RegenDeps) regen.RegenFn {
 			if err := RenderProjectJSON(&pJSON, projNorm, files); err != nil {
 				return d.recordFailure(ctx, fmt.Errorf("pypi regen: render %s json: %w", projNorm, err))
 			}
-			h1 := writeHashAndPointer(ctx, d.RepoRoot, projDir, "index", "html", pHTML.Bytes())
+			h1 := writeHashAndPointer(ctx, d.RepoRoot, projDir, "html", pHTML.Bytes())
 			if h1 == "" {
 				return d.recordFailure(ctx, fmt.Errorf("pypi regen: write %s html", projNorm))
 			}
 			filesWritten += 2
-			h2 := writeHashAndPointer(ctx, d.RepoRoot, projDir, "index", "json", pJSON.Bytes())
+			h2 := writeHashAndPointer(ctx, d.RepoRoot, projDir, "json", pJSON.Bytes())
 			if h2 == "" {
 				return d.recordFailure(ctx, fmt.Errorf("pypi regen: write %s json", projNorm))
 			}
 			filesWritten += 2
-			sweepStaleHashed(projDir, "index", "html", h1)
-			sweepStaleHashed(projDir, "index", "json", h2)
+			sweepStaleHashed(projDir, "html", h1)
+			sweepStaleHashed(projDir, "json", h2)
 		}
 
 		// 5. Mark clean + clear last_regen_error.
@@ -230,28 +230,28 @@ func (d RegenDeps) recordFailure(ctx context.Context, cause error) error {
 	return cause
 }
 
-// writeHashAndPointer writes body to dir/{stem}-<sha256>.{ext} via
-// WriteAndRename, then atomically updates dir/{stem}.{ext} to the same
+// writeHashAndPointer writes body to dir/index-<sha256>.{ext} via
+// WriteAndRename, then atomically updates dir/index.{ext} to the same
 // bytes. Returns the hashed filename ("index-<sha>.html") on success or
 // "" on error.
-func writeHashAndPointer(ctx context.Context, repoRoot, dir, stem, ext string, body []byte) string {
+func writeHashAndPointer(ctx context.Context, repoRoot, dir, ext string, body []byte) string {
 	sum := sha256.Sum256(body)
-	hashName := fmt.Sprintf("%s-%x.%s", stem, sum, ext)
+	hashName := fmt.Sprintf("index-%x.%s", sum, ext)
 	tmpDir := filepath.Join(repoRoot, ".tmp-pypi-regen")
 	if _, err := storage.WriteAndRename(ctx, tmpDir, filepath.Join(dir, hashName), bytes.NewReader(body)); err != nil {
 		return ""
 	}
-	if _, err := storage.WriteAndRename(ctx, tmpDir, filepath.Join(dir, stem+"."+ext), bytes.NewReader(body)); err != nil {
+	if _, err := storage.WriteAndRename(ctx, tmpDir, filepath.Join(dir, "index."+ext), bytes.NewReader(body)); err != nil {
 		return ""
 	}
 	return hashName
 }
 
-// sweepStaleHashed removes prior {stem}-*.{ext} files in dir except the
+// sweepStaleHashed removes prior index-*.{ext} files in dir except the
 // current keepHashName. Errors are swallowed (a stale file cannot corrupt
 // correctness because readers always serve the pointer file).
-func sweepStaleHashed(dir, stem, ext, keepHashName string) {
-	matches, err := filepath.Glob(filepath.Join(dir, stem+"-*."+ext))
+func sweepStaleHashed(dir, ext, keepHashName string) {
+	matches, err := filepath.Glob(filepath.Join(dir, "index-*."+ext))
 	if err != nil {
 		return
 	}

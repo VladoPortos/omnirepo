@@ -110,7 +110,7 @@ func (h *Handler) put(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Audit. Best-effort.
-	h.auditEvent(r, audit.EvtRawPut, res.repo, res.relPath, "ok", map[string]any{
+	h.auditEvent(r, audit.EvtRawPut, res.relPath, "ok", map[string]any{
 		"project": res.project.Name,
 		"repo":    res.repo.Name,
 		"path":    res.relPath,

@@ -69,7 +69,7 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 	if h.severityGate != nil {
 		blocked, severity, scanID := h.severityGate(r.Context(), res.repo.ID, "raw", res.relPath)
 		if blocked {
-			h.auditEvent(r, audit.EvtRawGetBlocked, res.repo, res.relPath, "blocked", map[string]any{
+			h.auditEvent(r, audit.EvtRawGetBlocked, res.relPath, "blocked", map[string]any{
 				"severity": severity,
 				"scan_id":  scanID,
 			})

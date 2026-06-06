@@ -433,28 +433,21 @@ func reencodeFilter(v any) (bool, json.RawMessage) {
 	return true, out
 }
 
-// mirrorCredOwnership asserts credID belongs to ownerProjectID.
-// Returns (ok, exists):
-//   - ok=true, exists=true:   cred exists and is owned by projectID
-//   - ok=false, exists=true:  cross-project
-//   - ok=false, exists=false: cred id is missing or repo unavailable
-//
-// Handlers render the 400 mirror_cred_wrong_project envelope from
-// !ok, regardless of which sub-case triggered — leaking
+// mirrorCredOwnership reports whether credID exists and is owned by
+// projectID. Missing cred, repo unavailable, and cross-project ownership
+// all collapse to false ON PURPOSE: handlers render the same 400
+// mirror_cred_wrong_project envelope regardless of sub-case — leaking
 // existence/not-existence across projects would be an info-disclosure
 // vector.
-func mirrorCredOwnership(ctx context.Context, upstreamCreds *metadata.UpstreamCredsRepo, projectID, credID int64) (ok bool, exists bool) {
+func mirrorCredOwnership(ctx context.Context, upstreamCreds *metadata.UpstreamCredsRepo, projectID, credID int64) bool {
 	if upstreamCreds == nil {
-		return false, false
+		return false
 	}
 	ownerID, err := upstreamCreds.GetProjectID(ctx, credID)
 	if err != nil {
-		return false, false
+		return false
 	}
-	if ownerID != projectID {
-		return false, true
-	}
-	return true, true
+	return ownerID == projectID
 }
 
 // dockerHubOCIHost is the single OCI-flavoured Docker Hub host name. The

@@ -626,7 +626,7 @@ func (d Deps) handleDeleteMe(w http.ResponseWriter, r *http.Request) {
 
 func (d Deps) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 	var req CreateUserRequest
-	if !decodeJSONBody(w, r, maxAdminJSONBodyBytes, &req) {
+	if !decodeJSONBody(w, r, &req) {
 		return
 	}
 	if err := auth.LoginValid(req.Login); err != nil {
@@ -699,11 +699,11 @@ func (d Deps) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 
 func (d Deps) handleCreateProject(w http.ResponseWriter, r *http.Request) {
 	var req CreateProjectRequest
-	if !decodeJSONBody(w, r, maxAdminJSONBodyBytes, &req) {
+	if !decodeJSONBody(w, r, &req) {
 		return
 	}
 	if err := auth.ProjectNameValid(req.Name); err != nil {
-		writeFieldValidationError(w, r, ErrValidationFailed, "name", err.Error())
+		writeFieldValidationError(w, r, "name", err.Error())
 		return
 	}
 
@@ -787,7 +787,7 @@ func (d Deps) handleAddMember(w http.ResponseWriter, r *http.Request) {
 		role = "viewer" // new inserts default to viewer
 	}
 	if role != "maintainer" && role != "viewer" {
-		writeFieldValidationError(w, r, ErrValidationFailed, "role", "must be 'maintainer' or 'viewer'")
+		writeFieldValidationError(w, r, "role", "must be 'maintainer' or 'viewer'")
 		return
 	}
 
@@ -873,11 +873,11 @@ func (d Deps) handlePatchMember(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Role string `json:"role"`
 	}
-	if !decodeJSONBody(w, r, maxAdminJSONBodyBytes, &req) {
+	if !decodeJSONBody(w, r, &req) {
 		return
 	}
 	if req.Role != "maintainer" && req.Role != "viewer" {
-		writeFieldValidationError(w, r, ErrValidationFailed, "role", "must be 'maintainer' or 'viewer'")
+		writeFieldValidationError(w, r, "role", "must be 'maintainer' or 'viewer'")
 		return
 	}
 
@@ -972,15 +972,15 @@ func (d Deps) handleCreateRepo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req CreateRepoRequest
-	if !decodeJSONBody(w, r, maxAdminJSONBodyBytes, &req) {
+	if !decodeJSONBody(w, r, &req) {
 		return
 	}
 	if err := auth.RepoNameValid(req.Name); err != nil {
-		writeFieldValidationError(w, r, ErrValidationFailed, "name", err.Error())
+		writeFieldValidationError(w, r, "name", err.Error())
 		return
 	}
 	if _, ok := validRepoTypes[req.Type]; !ok {
-		writeFieldValidationError(w, r, ErrValidationFailed, "type", "invalid type")
+		writeFieldValidationError(w, r, "type", "invalid type")
 		return
 	}
 
@@ -1005,7 +1005,7 @@ func (d Deps) handleCreateRepo(w http.ResponseWriter, r *http.Request) {
 		}
 		req.MirrorFilter = canonical
 		if req.MirrorCredID != nil {
-			ok, _ := mirrorCredOwnership(r.Context(), d.UpstreamCreds, p.ID, *req.MirrorCredID)
+			ok := mirrorCredOwnership(r.Context(), d.UpstreamCreds, p.ID, *req.MirrorCredID)
 			if !ok {
 				writeJSONError(w, r, http.StatusBadRequest, codeRepoMirrorCredWrongProject,
 					"mirror_cred_id must belong to the same project as the repo")

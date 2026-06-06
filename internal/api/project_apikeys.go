@@ -132,7 +132,7 @@ func (d Deps) handleCreateProjectAPIKey(w http.ResponseWriter, r *http.Request) 
 		role = "maintainer"
 	}
 	if role != "maintainer" && role != "viewer" {
-		writeFieldValidationError(w, r, ErrValidationFailed, "role", "must be 'maintainer' or 'viewer'")
+		writeFieldValidationError(w, r, "role", "must be 'maintainer' or 'viewer'")
 		return
 	}
 	// Same duplicate-name guard as the user-scoped twin: names are the

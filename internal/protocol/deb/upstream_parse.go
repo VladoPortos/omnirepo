@@ -143,10 +143,7 @@ func ParseUpstream(
 
 			paragraphs := splitParagraphs(pkgsBody)
 			for _, para := range paragraphs {
-				ent, ok, err := parsePackagesParagraph(para, base, suite, comp, arch)
-				if err != nil {
-					return count, err
-				}
+				ent, ok := parsePackagesParagraph(para, base, suite, comp, arch)
 				if !ok {
 					continue
 				}
@@ -229,10 +226,10 @@ func splitParagraphs(body []byte) [][]byte {
 	return out
 }
 
-func parsePackagesParagraph(body []byte, base *url.URL, suite, comp, arch string) (UpstreamEntry, bool, error) {
+func parsePackagesParagraph(body []byte, base *url.URL, suite, comp, arch string) (UpstreamEntry, bool) {
 	ctrl, err := ParseControlParagraph(body)
 	if err != nil {
-		return UpstreamEntry{}, false, nil
+		return UpstreamEntry{}, false
 	}
 	// Extract Filename + Size + SHA256 directly from the paragraph; control
 	// struct doesn't carry those Packages-only fields.
@@ -265,7 +262,7 @@ func parsePackagesParagraph(body []byte, base *url.URL, suite, comp, arch string
 		}
 	}
 	if filename == "" {
-		return UpstreamEntry{}, false, nil
+		return UpstreamEntry{}, false
 	}
 	size, _ := strconv.ParseInt(sizeStr, 10, 64)
 	digest := ""
@@ -282,7 +279,7 @@ func parsePackagesParagraph(body []byte, base *url.URL, suite, comp, arch string
 		Component: comp,
 		Arch:      arch,
 		Control:   ctrl,
-	}, true, nil
+	}, true
 }
 
 func (sf SyncFilter) acceptName(name string) bool {

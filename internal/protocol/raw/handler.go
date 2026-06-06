@@ -375,7 +375,7 @@ func validateRawPath(raw string, strict bool) (string, error) {
 
 // auditEvent is a tiny helper around d.Audit.Record that fills in actor +
 // request fields uniformly. Best-effort: errors are swallowed.
-func (h *Handler) auditEvent(r *http.Request, kind audit.EventKind, target *metadata.Repo, targetID, outcome string, details map[string]any) {
+func (h *Handler) auditEvent(r *http.Request, kind audit.EventKind, targetID, outcome string, details map[string]any) {
 	if h.auditLogger == nil {
 		return
 	}

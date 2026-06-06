@@ -435,3 +435,34 @@ func TestRecordGitRequest_EmitsFetchAudit(t *testing.T) {
 		t.Fatalf("non-upload-pack requests must not emit git.fetch; got %d events", len(logger.events))
 	}
 }
+
+// flushRecorder wraps httptest.ResponseRecorder counting Flush calls.
+type flushRecorder struct {
+	*httptest.ResponseRecorder
+	flushes int
+}
+
+func (f *flushRecorder) Flush() { f.flushes++ }
+
+// TestAuditMiddleware_ForwardsFlush pins the streaming contract: the
+// statusWriter wrapper must forward Flush to the underlying writer —
+// git clone pack streaming relies on incremental flushes.
+func TestAuditMiddleware_ForwardsFlush(t *testing.T) {
+	rec := &recordingAudit{}
+	mw := gitpkg.AuditMiddleware(rec)
+
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("chunk"))
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+	})
+
+	fr := &flushRecorder{ResponseRecorder: httptest.NewRecorder()}
+	req := httptest.NewRequest("POST", "/acme/git/r/git-upload-pack", nil)
+	mw(inner).ServeHTTP(fr, req)
+
+	if fr.flushes == 0 {
+		t.Fatal("Flush was not forwarded through the audit statusWriter")
+	}
+}

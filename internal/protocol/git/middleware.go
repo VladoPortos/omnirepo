@@ -335,3 +335,15 @@ func (w *statusWriter) Write(b []byte) (int, error) {
 	w.written += int64(n)
 	return n, err
 }
+
+// Flush forwards to the underlying writer when it supports it — the git
+// smart-HTTP backend flushes pack data incrementally during clones, and
+// swallowing Flush here would buffer large transfers.
+func (w *statusWriter) Flush() {
+	if f, ok := w.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// Unwrap exposes the underlying writer for http.ResponseController.
+func (w *statusWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }

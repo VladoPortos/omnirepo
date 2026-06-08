@@ -33,7 +33,7 @@ jobs:
 
       - name: Image metadata (tags + labels)
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ghcr.io/${{ github.repository }}
           # Semver tag v1.0.0 -> image tags 1.0.0, 1.0, latest

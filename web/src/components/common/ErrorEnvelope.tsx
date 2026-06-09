@@ -192,14 +192,19 @@ function TransientRetryButton({
   onRetry?: () => void;
 }) {
   const retryAfterMs = envelope.details?.retry_after_ms ?? 0;
-  const [remaining, setRemaining] = useState<number>(retryAfterMs);
+  const [remaining, setRemaining] = useState<number>(Math.max(retryAfterMs, 0));
+
+  // Restart the countdown when a new envelope carries a different
+  // retry_after_ms. Render-phase previous-value guard instead of a
+  // synchronous setState inside the interval effect.
+  const [prevRetryAfterMs, setPrevRetryAfterMs] = useState(retryAfterMs);
+  if (retryAfterMs !== prevRetryAfterMs) {
+    setPrevRetryAfterMs(retryAfterMs);
+    setRemaining(Math.max(retryAfterMs, 0));
+  }
 
   useEffect(() => {
-    if (retryAfterMs <= 0) {
-      setRemaining(0);
-      return;
-    }
-    setRemaining(retryAfterMs);
+    if (retryAfterMs <= 0) return;
     const timer = setInterval(() => {
       setRemaining((prev) => {
         if (prev <= 1000) {

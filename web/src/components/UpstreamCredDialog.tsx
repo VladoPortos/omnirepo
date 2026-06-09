@@ -27,7 +27,7 @@
  */
 
 'use client';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import {
   Dialog,
   DialogContent,
@@ -97,30 +97,35 @@ export function UpstreamCredDialog({
   // is never invoked, so passing 0 is safe.
   const patchM = usePatchUpstreamCred(projectName, cred?.id ?? 0);
 
-  // Reset form whenever the dialog opens. In edit mode, prefill from
-  // `cred` EXCEPT password + token which stay blank by contract.
-  useEffect(() => {
-    if (!open) return;
-    setMutationError(null);
-    createM.reset();
-    patchM.reset();
-    if (mode === 'edit' && cred) {
-      setHost(cred.host);
-      // cred.kind is a free-form string on the wire; cast is safe
-      // because the backend only accepts values in UpstreamCredKind.
-      setKind((cred.kind as UpstreamCredKind) || 'docker');
-      setUsername(cred.username ?? '');
-      setPassword('');
-      setToken('');
-    } else {
-      setHost('');
-      setKind('docker');
-      setUsername('');
-      setPassword('');
-      setToken('');
+  // Reset form whenever the dialog opens (or the target cred/mode swaps
+  // while open). In edit mode, prefill from `cred` EXCEPT password +
+  // token which stay blank by contract. Render-phase previous-value
+  // guard per the React docs, instead of a reset effect. The former
+  // createM.reset()/patchM.reset() calls were dropped: no render reads
+  // mutation error/success state (only isPending, which clears itself).
+  const resetKey = open ? `${mode}:${cred?.id ?? 'new'}` : null;
+  const [prevResetKey, setPrevResetKey] = useState<string | null>(null);
+  if (resetKey !== prevResetKey) {
+    setPrevResetKey(resetKey);
+    if (resetKey !== null) {
+      setMutationError(null);
+      if (mode === 'edit' && cred) {
+        setHost(cred.host);
+        // cred.kind is a free-form string on the wire; cast is safe
+        // because the backend only accepts values in UpstreamCredKind.
+        setKind((cred.kind as UpstreamCredKind) || 'docker');
+        setUsername(cred.username ?? '');
+        setPassword('');
+        setToken('');
+      } else {
+        setHost('');
+        setKind('docker');
+        setUsername('');
+        setPassword('');
+        setToken('');
+      }
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, mode, cred?.id]);
+  }
 
   const mutation = mode === 'edit' ? patchM : createM;
   const isPending = mutation.isPending;

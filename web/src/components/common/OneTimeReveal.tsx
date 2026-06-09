@@ -3,7 +3,7 @@
  * Secret cleared from React state on dialog close.
  */
 
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback } from 'react';
 import {
   Dialog,
   DialogContent,
@@ -33,12 +33,15 @@ export function OneTimeReveal({
 }: OneTimeRevealProps) {
   const [internalSecret, setInternalSecret] = useState(secret);
 
-  // Sync secret when it changes (new reveal)
-  useEffect(() => {
+  // Sync secret when it changes (new reveal). Render-phase previous-
+  // value guard per the React docs, instead of a sync effect.
+  const [prevSecret, setPrevSecret] = useState(secret);
+  if (secret !== prevSecret) {
+    setPrevSecret(secret);
     if (secret) {
       setInternalSecret(secret);
     }
-  }, [secret]);
+  }
 
   const handleClose = useCallback(
     (nextOpen: boolean) => {

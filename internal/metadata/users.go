@@ -289,8 +289,9 @@ func (r *UsersRepo) Count(ctx context.Context) (int64, error) {
 }
 
 // CountLiveSuperAdmins returns the number of live (non-soft-deleted)
-// super-admins. Used by the delete-user handler to refuse deletes that
-// would leave the instance without an admin.
+// super-admins. The production guard against deleting the last admin is
+// enforced atomically inside DeleteEnforceLastSuperAdmin; this standalone
+// count exists for tests to independently assert that invariant.
 func (r *UsersRepo) CountLiveSuperAdmins(ctx context.Context) (int64, error) {
 	var n int64
 	err := r.db.Reader.QueryRowContext(ctx,

@@ -85,17 +85,6 @@ func (r *SessionsRepo) FindByPrefixSha(ctx context.Context, prefix, sha256hex st
 	return &s, nil
 }
 
-// TouchLastSeen updates sessions.last_seen_at for session id.
-func (r *SessionsRepo) TouchLastSeen(ctx context.Context, id int64, t time.Time) error {
-	return r.db.WriteTx(ctx, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `UPDATE sessions SET last_seen_at=? WHERE id=?`, fmtTS(t), id)
-		if err != nil {
-			return fmt.Errorf("sessions: touch last seen %d: %w", id, err)
-		}
-		return nil
-	})
-}
-
 // SlideExpiry extends sessions.expires_at (and bumps last_seen_at) to
 // newExpires for session id. Callers compute newExpires as
 // min(now + session_ttl, issued_at + hard_cap) — 12h sliding, 7d hard cap.

@@ -251,7 +251,7 @@ func (r *ReposRepo) ListByProject(ctx context.Context, projectID int64) ([]Repo,
 	defer func() { _ = rows.Close() }()
 	var out []Repo
 	for rows.Next() {
-		rr, err := scanRepo(rows)
+		rr, err := scanRepoRow(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -393,10 +393,6 @@ func (r *ReposRepo) scanOne(ctx context.Context, where string, args ...any) (*Re
 
 type scanner interface {
 	Scan(dest ...any) error
-}
-
-func scanRepo(rs scanner) (*Repo, error) {
-	return scanRepoRow(rs)
 }
 
 // UpdateFields carries optional edits for ReposRepo.Update.

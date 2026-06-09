@@ -96,14 +96,6 @@ func (r *RPMPackagesRepo) Delete(ctx context.Context, tx *sql.Tx, id int64) erro
 	return nil
 }
 
-// FindByNEVRA returns the row matching the NEVRA inside repoID. Returns
-// ErrNotFound on miss.
-func (r *RPMPackagesRepo) FindByNEVRA(ctx context.Context, repoID int64, name string, epoch int, version, release, arch string) (*RPMPackage, error) {
-	return r.scanOne(ctx, `
-		repo_id=? AND name=? AND epoch=? AND version=? AND release=? AND arch=?
-	`, repoID, name, epoch, version, release, arch)
-}
-
 // FindByDigest returns the row matching digest inside repoID. Returns
 // ErrNotFound on miss. Useful for deletion-by-digest in the RPM handler.
 func (r *RPMPackagesRepo) FindByDigest(ctx context.Context, repoID int64, digest string) (*RPMPackage, error) {

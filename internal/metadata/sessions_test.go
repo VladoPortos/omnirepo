@@ -69,29 +69,6 @@ func TestSessionsRepo_FindExpiredReturnsNotFound(t *testing.T) {
 	}
 }
 
-func TestSessionsRepo_TouchLastSeen(t *testing.T) {
-	db := sqlitetest.New(t)
-	uid := seedUser(t, db, "alice")
-	repo := metadata.NewSessionsRepo(db)
-	ctx := context.Background()
-	now := time.Now().UTC().Truncate(time.Second)
-	id, err := repo.Create(ctx, uid, "abcdefgh", "sha", now, now.Add(24*time.Hour))
-	if err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-	later := now.Add(5 * time.Minute)
-	if err := repo.TouchLastSeen(ctx, id, later); err != nil {
-		t.Fatalf("TouchLastSeen: %v", err)
-	}
-	s, err := repo.FindByPrefixSha(ctx, "abcdefgh", "sha")
-	if err != nil {
-		t.Fatalf("Find: %v", err)
-	}
-	if !s.LastSeenAt.Equal(later) {
-		t.Fatalf("LastSeenAt: %v, want %v", s.LastSeenAt, later)
-	}
-}
-
 func TestSessionsRepo_Delete(t *testing.T) {
 	db := sqlitetest.New(t)
 	uid := seedUser(t, db, "alice")

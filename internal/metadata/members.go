@@ -97,8 +97,10 @@ func (r *MembersRepo) GetRole(ctx context.Context, projectID, userID int64) (str
 }
 
 // CountMaintainers returns the number of non-deleted human maintainers for
-// projectID. Used by the last-maintainer guard in handlePatchMember and
-// handleRemoveMember.
+// projectID. The production last-maintainer guard is enforced atomically
+// inside RemoveGuarded / UpdateRoleGuarded (count-and-mutate in one tx to
+// close the TOCTOU window); this standalone count exists for tests to
+// independently assert the guard's effect on the maintainer population.
 //
 // The SQL joins users to exclude soft-deleted accounts; it does NOT
 // count project-scoped API keys (they're not users) or super-admins (they

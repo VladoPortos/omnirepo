@@ -35,7 +35,7 @@ func TestRPMPackagesRoundTrip(t *testing.T) {
 		t.Fatalf("insert: %v", err)
 	}
 
-	got, err := r.FindByNEVRA(ctx, repoID, "nginx", 0, "1.25.0", "1.el9", "x86_64")
+	got, err := r.FindByDigest(ctx, repoID, "sha256:abc")
 	if err != nil {
 		t.Fatalf("find: %v", err)
 	}
@@ -57,16 +57,6 @@ func TestRPMPackagesRoundTrip(t *testing.T) {
 	got2, _ := r.FindByDigest(ctx, repoID, "sha256:def")
 	if got2 == nil || got2.ID != id {
 		t.Fatalf("FindByDigest after upsert: %+v", got2)
-	}
-}
-
-func TestRPMPackagesNEVRAMiss(t *testing.T) {
-	t.Parallel()
-	db := sqlitetest.New(t)
-	r := metadata.NewRPMPackagesRepo(db)
-	_, err := r.FindByNEVRA(context.Background(), 99, "x", 0, "1", "1", "noarch")
-	if !errors.Is(err, metadata.ErrNotFound) {
-		t.Fatalf("want ErrNotFound, got %v", err)
 	}
 }
 

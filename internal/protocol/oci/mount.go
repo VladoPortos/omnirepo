@@ -2,7 +2,6 @@ package oci
 
 import (
 	"database/sql"
-	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -10,7 +9,6 @@ import (
 
 	"github.com/vladoportos/omnirepo/internal/audit"
 	"github.com/vladoportos/omnirepo/internal/auth"
-	"github.com/vladoportos/omnirepo/internal/metadata"
 )
 
 // blobMount implements POST /v2/<name>/blobs/uploads/?mount=<digest>&from=<repo>
@@ -185,9 +183,3 @@ func parseFromRepo(raw string) (project, repoType, repoName string, ok bool) {
 		return "", "", "", false
 	}
 }
-
-// Compile-time reminder: blob mount reuses Handler.resolveRepo + canOnRepo
-// + emitAudit from blobs.go. Any change to those helpers' signatures must
-// update both files in lockstep.
-var _ = errors.New
-var _ = metadata.ErrNotFound

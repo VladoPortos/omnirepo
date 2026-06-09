@@ -26,7 +26,6 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -828,8 +827,3 @@ func validDigest(d string) bool {
 	}
 	return true
 }
-
-// Compile-time guard: handler.go wires blobPostDispatch / blobUploadPatch /
-// blobUploadPut / blobUploadStatus / blobGet / blobHead / blobDelete into
-// Mount. Those are the handler methods defined above.
-var _ = json.Marshal // keep encoding/json import for future use if needed

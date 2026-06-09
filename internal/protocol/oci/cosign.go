@@ -9,7 +9,6 @@ package oci
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -131,5 +130,4 @@ func writeJSONErr(w http.ResponseWriter, status int, msg string) {
 	_ = json.NewEncoder(w).Encode(struct {
 		Error string `json:"error"`
 	}{Error: msg})
-	_ = errors.New // keep errors import if future extensions need it
 }

@@ -80,6 +80,7 @@ const REPO_TYPES: { value: RepoType; label: string }[] = [
   { value: 'deb', label: 'APT' },
   { value: 'pypi', label: 'PyPI' },
   { value: 'helm', label: 'Helm' },
+  { value: 'go', label: 'Go modules' },
   { value: 'git', label: 'Git' },
   { value: 'raw', label: 'RAW' },
 ];
@@ -284,6 +285,15 @@ export function CreateRepoDialog({
                 value={mirrorCfg}
                 onChange={setMirrorCfg}
               />
+            )}
+            {repoType === 'go' && (
+              <p className="rounded-md border border-muted bg-muted/40 p-3 text-xs text-muted-foreground">
+                Go module repos serve the GOPROXY protocol. Publish module
+                zips with <span className="font-semibold">curl</span> and
+                consume with <span className="font-semibold">GOPROXY</span>{' '}
+                — see the snippets on the repo page. Go repos have no
+                mirroring and are not vulnerability-scanned.
+              </p>
             )}
             {repoType === 'docker' && (
               <p className="rounded-md border border-muted bg-muted/40 p-3 text-xs text-muted-foreground">

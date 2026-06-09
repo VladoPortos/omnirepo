@@ -66,6 +66,7 @@ const REPO_TYPES: { value: RepoType; label: string }[] = [
   { value: 'deb', label: 'APT' },
   { value: 'pypi', label: 'PyPI' },
   { value: 'helm', label: 'Helm' },
+  { value: 'go', label: 'Go' },
   { value: 'git', label: 'Git' },
   { value: 'raw', label: 'RAW' },
   { value: 's3', label: 'S3' },

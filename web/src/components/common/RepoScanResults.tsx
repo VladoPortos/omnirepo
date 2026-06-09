@@ -193,10 +193,11 @@ export function RepoScanResults({ projectName, repoType, repoName }: RepoScanRes
 
   const rows = useMemo(() => scans ?? [], [scans]);
   const hasMore = rows.length >= limit;
-  // Git repos don't have scannable artifacts. Rendering the button there
-  // would 400 on click — hide it instead. Everyone else gets the button
-  // (server enforces the real permission check).
-  const canRescan = repoType !== 'git' && !!me;
+  // Git and Go repos don't have scannable artifacts (git serves refs;
+  // go modules are never scanned). Rendering the button there would 400
+  // on click — hide it instead. Everyone else gets the button (server
+  // enforces the real permission check).
+  const canRescan = repoType !== 'git' && repoType !== 'go' && !!me;
 
   // Group scans by day key; preserves per-group ordering (newest first
   // because the API already sorts by id DESC, which correlates with

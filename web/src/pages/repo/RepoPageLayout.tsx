@@ -43,6 +43,7 @@ const TYPE_LABELS: Record<RepoType, string> = {
   deb: 'APT',
   pypi: 'PyPI',
   helm: 'Helm',
+  go: 'Go',
   git: 'Git',
   raw: 'RAW',
   s3: 'S3',
@@ -63,6 +64,8 @@ function itemUnit(type: RepoType, n: number): string {
       return `release${plural}`;
     case 'helm':
       return `chart${plural}`;
+    case 'go':
+      return `module version${plural}`;
     case 'raw':
       return `file${plural}`;
     case 'git':

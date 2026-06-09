@@ -33,6 +33,7 @@ const LABEL_MAP: Record<string, string> = {
   pypi: 'PyPI',
   docker: 'Docker',
   helm: 'Helm',
+  go: 'Go',
   git: 'Git',
   raw: 'RAW',
   s3: 'S3',

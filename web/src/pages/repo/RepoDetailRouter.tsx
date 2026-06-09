@@ -15,6 +15,8 @@ import { HelmRepoPage } from './HelmRepoPage';
 import { RawRepoPage } from './RawRepoPage';
 import { GitRepoPage } from './GitRepoPage';
 import { GoRepoPage } from './GoRepoPage';
+import { NpmRepoPage } from './NpmRepoPage';
+import { MavenRepoPage } from './MavenRepoPage';
 
 export function RepoDetailRouter() {
   const { name, type, repo } = useParams<{ name: string; type: string; repo: string }>();
@@ -43,6 +45,10 @@ export function RepoDetailRouter() {
       return <HelmRepoPage repo={data} />;
     case 'go':
       return <GoRepoPage repo={data} />;
+    case 'npm':
+      return <NpmRepoPage repo={data} />;
+    case 'maven':
+      return <MavenRepoPage repo={data} />;
     case 'raw':
       return <RawRepoPage repo={data} />;
     case 'git':

@@ -361,6 +361,54 @@ export function useDeleteGoModuleVersion(projectName: string, repoName: string) 
   });
 }
 
+/**
+ * useDeleteNpmPackageVersion — session-authed row-delete for npm
+ * registry repos:
+ *   DELETE /projects/{name}/repos/npm/{repo}/{package}/-/{version}
+ * The package name is percent-encoded as ONE path segment — for scoped
+ * packages the scope slash in @scope/name must arrive as %2F (the npm
+ * registry's own URL convention), so enc() over the whole name is the
+ * safe form. The server re-points the "latest" dist-tag after the
+ * delete, so the content listing is the only invalidation needed. No
+ * repo-scans invalidation — npm artifacts are never scanned.
+ */
+export function useDeleteNpmPackageVersion(projectName: string, repoName: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ pkg, version }: { pkg: string; version: string }) =>
+      api.del<void>(
+        `/projects/${enc(projectName)}/repos/npm/${enc(repoName)}/${enc(pkg)}/-/${enc(version)}`,
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['repo-content', projectName, 'npm', repoName] });
+    },
+  });
+}
+
+/**
+ * useDeleteMavenArtifact — session-authed row-delete for Maven repos:
+ *   DELETE /projects/{name}/repos/maven/{repo}/{path}
+ * `path` is the slash-separated storage path from the content row's
+ * extra.path (group dirs/artifact/version/filename), percent-encoded
+ * per segment so the slashes survive as route separators. No
+ * repo-scans invalidation — maven artifacts are never scanned.
+ */
+export function useDeleteMavenArtifact(projectName: string, repoName: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ path }: { path: string }) =>
+      api.del<void>(
+        `/projects/${enc(projectName)}/repos/maven/${enc(repoName)}/${path
+          .split('/')
+          .map(enc)
+          .join('/')}`,
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['repo-content', projectName, 'maven', repoName] });
+    },
+  });
+}
+
 // -- Repo content (listing artifacts uploaded to a repo) --
 
 // useRepoContent returns the entries array for the page. Existing consumers

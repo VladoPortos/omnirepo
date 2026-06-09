@@ -11,26 +11,12 @@
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import type { HelmFilter } from '@/api/types';
+import { arrToCsv, csvToArr, setOrUndef } from '@/lib/filter-helpers';
 
 export interface FilterWidgetHelmProps {
   value: HelmFilter;
   onChange: (next: HelmFilter) => void;
   disabled?: boolean;
-}
-
-function csvToArr(raw: string): string[] {
-  return raw
-    .split(',')
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0);
-}
-
-function arrToCsv(arr: string[] | undefined): string {
-  return (arr ?? []).join(', ');
-}
-
-function setOrUndef<T>(arr: T[]): T[] | undefined {
-  return arr.length === 0 ? undefined : arr;
 }
 
 export function FilterWidgetHelm({

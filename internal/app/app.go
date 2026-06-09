@@ -483,7 +483,7 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 		cfg: cfg, db: db, auditLogger: auditLogger, locks: sharedLocks,
 		severity: helmGate,
 	}.wireHelm(router)
-	defer shutdownHelmRegistry(context.Background(), helmRegistry)
+	defer shutdownRegistry(context.Background(), helmRegistry)
 	ociHelmMirrorHook := wireHelmMirror(ociCAS, helmMirror)
 
 	// blobRoot + ociCAS already constructed in step 5e (scan handler wiring).
@@ -623,21 +623,21 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 		cfg: cfg, db: db, auditLogger: auditLogger, locks: sharedLocks,
 		severity: pypiGate,
 	}.wirePyPI(router)
-	defer shutdownPyPIRegistry(context.Background(), pypiRegistry)
+	defer shutdownRegistry(context.Background(), pypiRegistry)
 
 	rpmRegistry, rpmHandler := rpmDeps{
 		cfg: cfg, db: db, auditLogger: auditLogger,
 		signingKeys: signingKeysRepo, locks: sharedLocks,
 		severity: rpmGate,
 	}.wireRPM(router)
-	defer shutdownRPMRegistry(context.Background(), rpmRegistry)
+	defer shutdownRegistry(context.Background(), rpmRegistry)
 
 	debRegistry, debHandler := debDeps{
 		cfg: cfg, db: db, auditLogger: auditLogger,
 		signingKeys: signingKeysRepo, locks: sharedLocks,
 		severity: debGate,
 	}.wireDEB(router)
-	defer shutdownDEBRegistry(context.Background(), debRegistry)
+	defer shutdownRegistry(context.Background(), debRegistry)
 
 	syncAdapter := syncDeps{
 		cfg:          cfg,

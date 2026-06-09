@@ -85,8 +85,9 @@ func (d debDeps) wireDEB(router chi.Router) (*regen.Registry, *deb.Handler) {
 	return registry, h
 }
 
-// shutdownDEBRegistry drains the registry returned by wireDEB.
-func shutdownDEBRegistry(ctx context.Context, reg *regen.Registry) {
+// shutdownRegistry drains a per-protocol coalescer registry (returned by the
+// wireXxx helpers) during graceful shutdown. nil-safe.
+func shutdownRegistry(ctx context.Context, reg *regen.Registry) {
 	if reg == nil {
 		return
 	}

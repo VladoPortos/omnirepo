@@ -1,7 +1,6 @@
 package app
 
 import (
-	"context"
 	"path/filepath"
 	"time"
 
@@ -75,12 +74,4 @@ func (d pypiDeps) wirePyPI(router chi.Router) (*regen.Registry, *pypi.Handler) {
 	})
 	h.Mount(router)
 	return registry, h
-}
-
-// shutdownPyPIRegistry drains the coalescer registry returned by wirePyPI.
-func shutdownPyPIRegistry(ctx context.Context, reg *regen.Registry) {
-	if reg == nil {
-		return
-	}
-	_ = reg.ShutdownAll(ctx)
 }

@@ -4,7 +4,6 @@
 package app
 
 import (
-	"context"
 	"path/filepath"
 	"time"
 
@@ -79,12 +78,4 @@ func (d rpmDeps) wireRPM(router chi.Router) (*regen.Registry, *rpm.Handler) {
 	})
 	h.Mount(router)
 	return registry, h
-}
-
-// shutdownRPMRegistry drains the registry returned by wireRPM.
-func shutdownRPMRegistry(ctx context.Context, reg *regen.Registry) {
-	if reg == nil {
-		return
-	}
-	_ = reg.ShutdownAll(ctx)
 }

@@ -130,12 +130,3 @@ var _ oci.HelmMirrorHook = (*ociHelmMirrorAdapter)(nil)
 // expects. This is belt-and-suspenders — if the signature ever drifts we
 // want a package-level compile break, not a runtime surprise.
 var _ io.Reader = io.ReadCloser(nil)
-
-// shutdownHelmRegistry drains the coalescer registry returned by wireHelm.
-// Called from app.Run during graceful shutdown.
-func shutdownHelmRegistry(ctx context.Context, reg *regen.Registry) {
-	if reg == nil {
-		return
-	}
-	_ = reg.ShutdownAll(ctx)
-}

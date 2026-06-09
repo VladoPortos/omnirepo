@@ -37,6 +37,12 @@
  *           `twine upload`.
  *   docker: unchanged from v1.0 — already correct.
  *   rpm:    unchanged from v1.0 — already correct.
+ *   go:     Consume sets GOPROXY at the repo root + GOSUMDB=off (the
+ *           public sum DB cannot vouch for privately-hosted modules and
+ *           is unreachable in air-gapped networks anyway). Publish is a
+ *           curl PUT of a module zip to the GOPROXY upload path; the
+ *           module path must be case-escaped per the GOPROXY rule
+ *           (uppercase → "!"+lowercase, see lib/gomod.ts).
  *
  * Placeholders like `<user>`, `<api-key>`, `<region>` render literally —
  * users substitute before running. No real secrets in source.
@@ -146,6 +152,17 @@ export function getSnippets(
         {
           label: 'helm pull (OCI)',
           cmd: `helm pull oci://${host}/${project}/helm/${repo}/<chart> --version <version>`,
+        },
+      ];
+    case 'go':
+      return [
+        {
+          label: 'Consume (GOPROXY)',
+          cmd: `export GOPROXY=${proto}://${host}/${project}/go/${repo}\nexport GOSUMDB=off\ngo get <module>@<version>`,
+        },
+        {
+          label: 'Publish',
+          cmd: `# Use your OmniRepo user + API key; create one at /profile → API Keys\n# module.zip must be a valid Go module zip (e.g. from the go mod download cache).\n# Escape uppercase letters in the module path as "!"+lowercase\n# (e.g. github.com/Azure/Thing → github.com/!azure/!thing).\ncurl -u <user>:<api-key> -T module.zip ${proto}://${host}/${project}/go/${repo}/<escaped-module>/@v/<version>.zip`,
         },
       ];
     case 'git':

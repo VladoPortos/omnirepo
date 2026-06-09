@@ -123,6 +123,32 @@ describe('getSnippets', () => {
     expect(s[3].cmd).toContain(`oci://${HOST}/${P}/helm/charts`);
   });
 
+  it('go: 2 entries — Consume (GOPROXY) + Publish; GOSUMDB=off; no scan refs', () => {
+    const s = getSnippets('go', P, 'mods', HOST);
+    expect(s).toHaveLength(2);
+    expect(s.map((x) => x.label)).toEqual(['Consume (GOPROXY)', 'Publish']);
+    // Consume points GOPROXY at the repo root and disables the public
+    // sum DB (it can't vouch for privately-hosted modules and is
+    // unreachable in air-gapped networks).
+    expect(s[0].cmd).toContain(
+      `export GOPROXY=https://${HOST}/${P}/go/mods`,
+    );
+    expect(s[0].cmd).toContain('export GOSUMDB=off');
+    expect(s[0].cmd).toContain('go get <module>@<version>');
+    // Publish is a curl PUT of a module zip to the GOPROXY upload path.
+    expect(s[1].cmd).toContain('-u <user>:<api-key>');
+    expect(s[1].cmd).toContain('-T module.zip');
+    expect(s[1].cmd).toContain(
+      `https://${HOST}/${P}/go/mods/<escaped-module>/@v/<version>.zip`,
+    );
+    // The escaping rule is explained inline (uppercase → "!"+lowercase).
+    expect(s[1].cmd).toContain('github.com/!azure/!thing');
+    // No inline userinfo URL (credential leakage).
+    for (const entry of s) {
+      expect(entry.cmd).not.toMatch(/https:\/\/[^/\s]+:[^@\s]+@/);
+    }
+  });
+
   it('git: 2 entries — Clone + Authenticate; no inline userinfo URL', () => {
     const s = getSnippets('git', P, 'repo', HOST);
     expect(s).toHaveLength(2);
@@ -212,6 +238,15 @@ describe('getSnippets', () => {
       expect(s[0].cmd).toContain(`http://${HOST}/${P}/helm/charts/`);
       // OCI entries intentionally do not carry scheme — they use oci://.
       expect(s[2].cmd).toContain(`oci://${HOST}/${P}/helm/charts`);
+    });
+
+    it('go GOPROXY export + publish URL respect scheme=http', () => {
+      const s = getSnippets('go', P, 'mods', HOST, 'http');
+      for (const entry of s) {
+        expect(entry.cmd).not.toContain('https://');
+      }
+      expect(s[0].cmd).toContain(`export GOPROXY=http://${HOST}/${P}/go/mods`);
+      expect(s[1].cmd).toContain(`http://${HOST}/${P}/go/mods/`);
     });
 
     it('git clone URL respects scheme=http', () => {

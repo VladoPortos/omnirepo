@@ -3,8 +3,13 @@
  * Query keys structured as ['entity', ...params].
  */
 
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useMemo, useState, useCallback } from 'react';
+import {
+  useQuery,
+  useInfiniteQuery,
+  useMutation,
+  useQueryClient,
+} from '@tanstack/react-query';
+import { useMemo, useCallback } from 'react';
 import { api, ApiError } from './client';
 
 // enc encodes a path segment from a route-param (e.g. projectName, bucketName,
@@ -372,63 +377,69 @@ function fetchRepoContentPage(
   );
 }
 
-// useRepoContentLoadMore maintains append-forward offset state over the
-// paginated repo-content endpoint — fits the existing /loop-more pattern used by the
-// per-row-scan feature (commit 8ffe66c). Call .loadMore() to fetch and
-// concatenate the next window; .hasMore tracks whether the backend is
-// still returning a next_offset.
+// useRepoContentLoadMore exposes append-forward pagination over the
+// paginated repo-content endpoint via useInfiniteQuery — fits the
+// /load-more pattern used by the per-row-scan feature (commit 8ffe66c).
+// Call .loadMore() to fetch and concatenate the next window; .hasMore
+// tracks whether the backend is still returning a next_offset. The
+// target repo is part of the query key, so navigating between repos
+// never leaks rows across.
 export function useRepoContentLoadMore(
   projectName: string,
   repoType: string,
   repoName: string,
   pageSize = 100,
 ) {
-  const [offset, setOffset] = useState(0);
-  const [accumulated, setAccumulated] = useState<RepoContentEntry[]>([]);
-  const [total, setTotal] = useState(0);
-  const [hasMore, setHasMore] = useState(true);
-
-  // Each page is cached under the shared ['repo-content', ...] key so the
-  // scan-polling refetch from useRepoContent also refreshes partials.
-  const q = useQuery({
-    queryKey: ['repo-content', projectName, repoType, repoName, pageSize, offset],
-    queryFn: async () => {
-      const page = await fetchRepoContentPage(projectName, repoType, repoName, {
+  // Keyed under the same ['repo-content', project, type, name] prefix as
+  // useRepoContent so existing invalidations (uploads, deletes, rescans,
+  // clone) refetch the loaded pages too.
+  const q = useInfiniteQuery({
+    queryKey: [
+      'repo-content',
+      projectName,
+      repoType,
+      repoName,
+      'load-more',
+      pageSize,
+    ],
+    queryFn: ({ pageParam }) =>
+      fetchRepoContentPage(projectName, repoType, repoName, {
         limit: pageSize,
-        offset,
-      });
-      setAccumulated((prev) =>
-        offset === 0 ? page.items : [...prev, ...page.items],
-      );
-      setTotal(page.total);
-      setHasMore(page.next_offset != null);
-      return page;
-    },
+        offset: pageParam,
+      }),
+    initialPageParam: 0,
+    getNextPageParam: (lastPage) => lastPage.next_offset ?? undefined,
     staleTime: 15_000,
+    // Mirror useRepoContent's scan polling: while any loaded row is
+    // mid-scan, poll so the severity badge updates as scans finish.
+    refetchInterval: (query) => {
+      const pages = query.state.data?.pages;
+      if (!pages) return false;
+      const scanning = pages.some((p) =>
+        p.items.some((r) => r.scan_severity === 'scanning'),
+      );
+      return scanning ? 3_000 : false;
+    },
   });
 
+  const items = useMemo<RepoContentEntry[]>(
+    () => q.data?.pages.flatMap((p) => p.items) ?? [],
+    [q.data],
+  );
+  const lastPage = q.data?.pages[q.data.pages.length - 1];
+
+  const { fetchNextPage, hasNextPage, isFetchingNextPage } = q;
   const loadMore = useCallback(() => {
-    if (!q.data?.next_offset || q.data.next_offset === offset) return;
-    setOffset(q.data.next_offset);
-  }, [q.data, offset]);
-
-  const reset = useCallback(() => {
-    setOffset(0);
-    setAccumulated([]);
-    setHasMore(true);
-  }, []);
-
-  // Reset accumulator when the target repo changes. Avoids leaking rows
-  // from repo A into repo B when a user navigates between them.
-  useMemo(() => {
-    reset();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectName, repoType, repoName]);
+    if (hasNextPage && !isFetchingNextPage) void fetchNextPage();
+  }, [fetchNextPage, hasNextPage, isFetchingNextPage]);
 
   return {
-    items: accumulated,
-    total,
-    hasMore,
+    items,
+    total: lastPage?.total ?? 0,
+    // Before the first page lands hasNextPage is false; report hasMore as
+    // true while loading so consumers keep their "more may come" state,
+    // matching the previous accumulator implementation.
+    hasMore: q.data ? hasNextPage : true,
     loadMore,
     isLoading: q.isLoading,
     isFetching: q.isFetching,

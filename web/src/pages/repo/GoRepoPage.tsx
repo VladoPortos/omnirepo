@@ -121,7 +121,7 @@ export function GoRepoPage({ repo }: GoRepoPageProps) {
       name: 'Module',
       sortable: true,
       render: (row) => (
-        <span className="inline-flex items-center gap-1.5 text-sm font-medium">
+        <span className="inline-flex items-center gap-1.5 text-sm">
           <Boxes className="size-3.5 text-muted-foreground" />
           <span className="font-mono text-xs">{row.module}</span>
         </span>

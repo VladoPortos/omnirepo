@@ -135,7 +135,7 @@ export function MavenRepoPage({ repo }: MavenRepoPageProps) {
       sortable: true,
       render: (row) => (
         <span
-          className="inline-flex items-center gap-1.5 text-sm font-medium"
+          className="inline-flex items-center gap-1.5 text-sm"
           title={row.filename || undefined}
         >
           <FolderArchive className="size-3.5 text-muted-foreground" />

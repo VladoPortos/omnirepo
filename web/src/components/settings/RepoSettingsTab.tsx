@@ -21,7 +21,7 @@
  *     body to avoid the 400 immutable response.
  */
 
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import {
@@ -88,9 +88,11 @@ export function RepoSettingsTab() {
 
   // Hydrate local state when the repo query settles. Only re-sync when
   // the repo identity changes (id flip) so editing doesn't reset under
-  // the user's fingers when TanStack re-fetches.
-  useEffect(() => {
-    if (!repoQ.data) return;
+  // the user's fingers when TanStack re-fetches. Render-phase previous-
+  // value guard (React-documented pattern) instead of a sync effect.
+  const [hydratedForId, setHydratedForId] = useState<number | null>(null);
+  if (repoQ.data && repoQ.data.id !== hydratedForId) {
+    setHydratedForId(repoQ.data.id);
     const derived = deriveInitial(
       repoQ.data.is_mirror,
       repoQ.data.mirror_upstream_url,
@@ -101,7 +103,7 @@ export function RepoSettingsTab() {
     );
     setInitialCfg(derived);
     setLocalCfg(derived);
-  }, [repoQ.data?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  }
 
   if (repoQ.isLoading || !repoQ.data) {
     return (

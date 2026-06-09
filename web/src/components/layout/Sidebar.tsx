@@ -5,7 +5,7 @@
  * User avatar + menu at bottom with theme toggle, profile, sign out.
  */
 
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard,
@@ -106,12 +106,15 @@ export function AppSidebar() {
     location.pathname.startsWith('/admin'),
   );
 
-  // Expand admin section when navigating to admin routes
-  useEffect(() => {
+  // Expand admin section when navigating to admin routes. Render-phase
+  // previous-value guard (React-documented pattern) instead of an effect.
+  const [prevPathname, setPrevPathname] = useState(location.pathname);
+  if (location.pathname !== prevPathname) {
+    setPrevPathname(location.pathname);
     if (location.pathname.startsWith('/admin')) {
       setAdminOpen(true);
     }
-  }, [location.pathname]);
+  }
 
   return (
       <SidebarRoot collapsible="icon" className="border-r border-border">

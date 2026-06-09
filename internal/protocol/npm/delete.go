@@ -1,6 +1,7 @@
 package npm
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"log/slog"
@@ -69,26 +70,32 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Remaining versions (computed pre-tx) drive the latest re-point.
-	siblings, err := h.packages.ListVersions(r.Context(), res.repo.ID, res.req.Name)
-	if err != nil {
-		http.Error(w, "storage error", http.StatusInternalServerError)
-		return
-	}
-	tags, _ := h.packages.DistTags(r.Context(), res.repo.ID, res.req.Name)
-	latestWasDeleted := tags["latest"] == res.req.Version
-	newLatest := highestVersionExcept(siblings, res.req.Version)
-
 	if err := h.db.WriteTx(r.Context(), func(tx *sql.Tx) error {
 		if err := h.packages.Delete(r.Context(), tx, row.ID); err != nil {
+			return err
+		}
+		// The latest re-point is computed INSIDE the tx (the writer sees
+		// its own delete), so a publish committed concurrently cannot have
+		// its fresh latest tag clobbered by a stale pre-tx snapshot.
+		var hadLatest int
+		if err := tx.QueryRowContext(r.Context(),
+			`SELECT COUNT(*) FROM npm_dist_tags WHERE repo_id=? AND name=? AND tag='latest' AND version=?`,
+			res.repo.ID, res.req.Name, res.req.Version,
+		).Scan(&hadLatest); err != nil {
 			return err
 		}
 		if err := h.packages.DeleteDistTagsPointingAt(r.Context(), tx, res.repo.ID, res.req.Name, res.req.Version); err != nil {
 			return err
 		}
-		if latestWasDeleted && newLatest != "" {
-			if err := h.packages.SetDistTag(r.Context(), tx, res.repo.ID, res.req.Name, "latest", newLatest); err != nil {
+		if hadLatest > 0 {
+			remaining, err := remainingVersions(r.Context(), tx, res.repo.ID, res.req.Name)
+			if err != nil {
 				return err
+			}
+			if newLatest := highestVersion(remaining); newLatest != "" {
+				if err := h.packages.SetDistTag(r.Context(), tx, res.repo.ID, res.req.Name, "latest", newLatest); err != nil {
+					return err
+				}
 			}
 		}
 		return metadata.IndexArtifactDelete(r.Context(), tx, res.repo.ID, row.Integrity)
@@ -124,16 +131,32 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// highestVersionExcept returns the semver-highest version in rows other
-// than excluded ("" when none remain). npm versions lack the "v" prefix
-// x/mod/semver requires, so compare with it prepended.
-func highestVersionExcept(rows []metadata.NPMPackage, excluded string) string {
-	best := ""
-	for i := range rows {
-		v := rows[i].Version
-		if v == excluded {
-			continue
+// remainingVersions lists the package's versions through tx so the
+// caller observes the tx's own uncommitted delete.
+func remainingVersions(ctx context.Context, tx *sql.Tx, repoID int64, name string) ([]string, error) {
+	rows, err := tx.QueryContext(ctx,
+		`SELECT version FROM npm_packages WHERE repo_id=? AND name=?`, repoID, name)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var out []string
+	for rows.Next() {
+		var v string
+		if err := rows.Scan(&v); err != nil {
+			return nil, err
 		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+
+// highestVersion returns the semver-highest version ("" for an empty
+// slice). npm versions lack the "v" prefix x/mod/semver requires, so
+// compare with it prepended.
+func highestVersion(versions []string) string {
+	best := ""
+	for _, v := range versions {
 		if best == "" || semver.Compare("v"+v, "v"+best) > 0 {
 			best = v
 		}

@@ -355,6 +355,11 @@ func (h *Handler) put(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() { _ = os.Remove(st.TmpPath) }()
 
+	// Captured before the overwrite so the failure path knows whether the
+	// on-disk file still backs a committed row.
+	prior, priorErr := h.artifacts.FindByPath(r.Context(), res.repo.ID, res.relPath)
+	hadRow := priorErr == nil && prior != nil
+
 	storageKey := storageKeyFor(res.project.Name, res.repo.Name, res.relPath)
 	if !common.PromoteStaged(w, r, h.pathStore, "maven", storageKey, st.TmpPath, path.Base(res.relPath)) {
 		return
@@ -363,14 +368,6 @@ func (h *Handler) put(w http.ResponseWriter, r *http.Request) {
 	g, primary := classifyPath(res.relPath)
 	if primary {
 		if err := h.db.WriteTx(r.Context(), func(tx *sql.Tx) error {
-			old, ferr := h.artifacts.FindByPath(r.Context(), res.repo.ID, res.relPath)
-			if ferr == nil && old != nil {
-				// Redeploy in place: drop the stale FTS row keyed on the
-				// previous digest before indexing the new one.
-				if err := metadata.IndexArtifactDelete(r.Context(), tx, res.repo.ID, "sha256:"+old.SHA256); err != nil {
-					return err
-				}
-			}
 			if _, err := h.artifacts.Upsert(r.Context(), tx, &metadata.MavenArtifact{
 				RepoID:     res.repo.ID,
 				GroupID:    g.GroupID,
@@ -385,16 +382,26 @@ func (h *Handler) put(w http.ResponseWriter, r *http.Request) {
 			}); err != nil {
 				return err
 			}
-			if err := metadata.IndexArtifactDelete(r.Context(), tx, res.repo.ID, "sha256:"+st.Sum256); err != nil {
+			// FTS rows are keyed on the layout path (raw's convention) so
+			// identical-content artifacts at different paths never delete
+			// each other's search entries, and redeploys replace in place.
+			if err := metadata.IndexArtifactDelete(r.Context(), tx, res.repo.ID, res.relPath); err != nil {
 				return err
 			}
 			return metadata.IndexArtifact(r.Context(), tx,
-				res.repo.ID, g.GroupID+":"+g.ArtifactID, g.Version, "sha256:"+st.Sum256)
+				res.repo.ID, g.GroupID+":"+g.ArtifactID, g.Version, res.relPath)
 		}); err != nil {
-			_ = h.pathStore.Delete(r.Context(), storageKey)
+			// Fresh upload: the file is an orphan — remove it. Redeploy: the
+			// new bytes already replaced the old file, so deleting would
+			// leave the surviving row with NO file; keep the bytes (a PUT
+			// retry heals the row/file mismatch via the upsert).
+			if !hadRow {
+				_ = h.pathStore.Delete(r.Context(), storageKey)
+			}
 			slog.ErrorContext(r.Context(), "maven.put.commit_failed",
 				slog.String("incident_id", chimw.GetReqID(r.Context())),
 				slog.String("path", res.relPath),
+				slog.Bool("kept_file", hadRow),
 				slog.Any("err", err),
 			)
 			http.Error(w, "storage error", http.StatusInternalServerError)
@@ -433,6 +440,17 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 
 	abs := filepath.Join(h.repoRoot, filepath.FromSlash(storageKeyFor(res.project.Name, res.repo.Name, res.relPath)))
 	row, rowErr := h.artifacts.FindByPath(r.Context(), res.repo.ID, res.relPath)
+	if rowErr != nil && !errors.Is(rowErr, metadata.ErrNotFound) {
+		// A real lookup failure must not be treated as "row absent" — that
+		// would trash the file while a stale row survives.
+		slog.ErrorContext(r.Context(), "maven.delete.row_lookup_failed",
+			slog.String("incident_id", chimw.GetReqID(r.Context())),
+			slog.String("path", res.relPath),
+			slog.Any("err", rowErr),
+		)
+		http.Error(w, "storage error", http.StatusInternalServerError)
+		return
+	}
 	onDisk := false
 	if _, err := os.Stat(abs); err == nil {
 		onDisk = true
@@ -455,7 +473,7 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 			if err := h.artifacts.Delete(r.Context(), tx, row.ID); err != nil {
 				return err
 			}
-			return metadata.IndexArtifactDelete(r.Context(), tx, res.repo.ID, "sha256:"+row.SHA256)
+			return metadata.IndexArtifactDelete(r.Context(), tx, res.repo.ID, res.relPath)
 		}); err != nil {
 			slog.ErrorContext(r.Context(), "maven.delete.commit_failed",
 				slog.String("incident_id", chimw.GetReqID(r.Context())),

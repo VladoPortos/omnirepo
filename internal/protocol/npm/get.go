@@ -117,6 +117,28 @@ func (h *Handler) tarballURL(r *http.Request, project, repo, name, file string) 
 // getTarball streams a stored tarball. The row is checked first so a
 // file orphaned by a failed delete cannot resurrect a deleted version.
 func (h *Handler) getTarball(w http.ResponseWriter, r *http.Request, res resolved) {
+	rows, err := h.packages.ListVersions(r.Context(), res.repo.ID, res.req.Name)
+	if err != nil {
+		slog.ErrorContext(r.Context(), "npm.tarball.row_lookup_failed",
+			slog.String("incident_id", chimw.GetReqID(r.Context())),
+			slog.String("package", res.req.Name),
+			slog.Any("err", err),
+		)
+		http.Error(w, "storage error", http.StatusInternalServerError)
+		return
+	}
+	known := false
+	for i := range rows {
+		if rows[i].Tarball == res.req.File {
+			known = true
+			break
+		}
+	}
+	if !known {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+
 	key := storageKeyFor(res.project.Name, res.repo.Name, res.req.Name, res.req.File)
 	abs := filepath.Join(h.repoRoot, filepath.FromSlash(key))
 	info, err := os.Stat(abs)

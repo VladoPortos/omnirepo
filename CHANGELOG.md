@@ -10,11 +10,47 @@ for security fixes against an active minor.
 ## [Unreleased]
 
 ### Added
+- **Go module proxy** repo type (`go`): serves the GOPROXY protocol
+  (`/@v/list`, `.info`, `.mod`, `.zip`, `/@latest`) at
+  `/<project>/go/<repo>`. Publish by `PUT` of a module zip (validated
+  against `module@version` with `x/mod/zip`); module paths are
+  GOPROXY-escaped and validated before any filesystem access. Full UI
+  (repo page, snippets, content listing) and an end-to-end conformance
+  test driving the real `go` toolchain.
+- **npm registry** repo type (`npm`): packument + tarball serving and
+  npm-native `npm publish` (base64 attachment decoded and
+  integrity-verified server-side), scoped packages, dist-tags with
+  automatic `latest` re-pointing on version delete, immutable versions
+  (403 on republish). npm CLI conformance test (`npm publish` +
+  `npm install`).
+- **Maven repository** repo type (`maven`): standard repository layout
+  over HTTP for `mvn deploy` / Gradle `maven-publish` — artifacts,
+  checksum sidecars, and `maven-metadata.xml` stored verbatim; GAV +
+  classifier parsed from the layout path for the content listing.
+- **S3 protocol audit events**: object put/delete (incl. batch delete),
+  multipart complete/abort, and protocol-path bucket create/delete are
+  now recorded in the audit log with S3-access-key actor attribution
+  and outcome (ok/denied/failed). gofakes3's internal error logging now
+  lands in the process slog stream.
 - GitHub Actions security automation: CodeQL (Go + JS/TS), Trivy (filesystem
   + Dockerfile + image), govulncheck, OpenSSF Scorecard, Dependabot.
 - Repo metadata: `LICENSE` (Apache-2.0), `SECURITY.md`, `NOTICE`,
   `CONTRIBUTING.md`, `CHANGELOG.md`, PR template, `.editorconfig`,
   `.gitattributes`.
+
+### Changed
+- Protocol handlers now share one scaffolding package
+  (`internal/protocol/common`) for auth checks, anonymous public-read
+  wiring, upload staging, and audit emission — behavior-preserving
+  dedup of ~900 duplicated lines across rpm/deb/pypi/helm/raw/oci/git.
+- Frontend: all React 19 strict-mode lint findings fixed (zero ESLint
+  warnings); infinite-scroll listing rewritten on TanStack
+  `useInfiniteQuery`; shared CSV-filter and duration-format helpers.
+
+### Removed
+- Dead production API surface in `internal/httperr` (`WithCause` option
+  removed; `IsInternalString` leak screening moved to a test-only
+  package).
 
 ## [v1.0.1] — 2026-06-09
 

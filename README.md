@@ -8,7 +8,7 @@
 [![Dependabot](https://img.shields.io/badge/dependabot-enabled-025E8C?logo=dependabot)](https://github.com/VladoPortos/omnirepo/security/dependabot)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-**A single self-hosted container that serves every artifact type your team produces or consumes — OCI images, RPM/APT/PyPI/Helm packages, Git repos, S3 buckets, and raw blobs — with built-in vulnerability scanning, project-scoped access control, and zero outbound network calls at runtime.**
+**A single self-hosted container that serves every artifact type your team produces or consumes — OCI images, RPM/APT/PyPI/Helm packages, Go modules, npm packages, Maven artifacts, Git repos, S3 buckets, and raw blobs — with built-in vulnerability scanning, project-scoped access control, and zero outbound network calls at runtime.**
 
 Designed as a focused, simpler alternative to JFrog Artifactory or Sonatype Nexus for small-to-mid corporate and air-gapped environments.
 
@@ -27,6 +27,9 @@ One Go binary, one HTTP/HTTPS port, one mounted volume. Drop it on a host, point
 | **APT/Debian repo** | `/<project>/deb/<repo>/dists/<suite>/...` | `apt`, `apt-get` | `Release` + PGP `InRelease` | ✓ Mirror an upstream APT archive (per-suite / component / arch filter) |
 | **PyPI** | `/<project>/pypi/<repo>/simple/...` | `pip`, `uv`, `twine` | PEP 503 + 691 + 694 uploads | ✓ Mirror a PEP 503 upstream (by project name) |
 | **Helm** | `/<project>/helm/<repo>/index.yaml` | `helm` | Helm v3 `index.yaml` + `.tgz` + `.prov` | ✓ Mirror a Helm chart repo (HTTP `index.yaml`; `oci://` charts skipped gracefully) |
+| **Go module proxy** | `/<project>/go/<repo>/...` | `go` (set `GOPROXY`) | GOPROXY protocol: `/@v/list`, `.info`, `.mod`, `.zip`, `/@latest`; publish = `curl -T module.zip` | — |
+| **npm registry** | `/<project>/npm/<repo>/...` | `npm`, `pnpm`, `yarn` | Packument + tarball + npm-native `npm publish`; scoped packages; immutable versions | — |
+| **Maven repository** | `/<project>/maven/<repo>/<group>/...` | `mvn`, `gradle` | Maven repository layout; `mvn deploy` / `maven-publish` upload artifacts, checksums, and metadata | — |
 | **Raw blobs** | `/<project>/raw/<repo>/<path>` | `curl`, `wget`, any HTTP client | Plain HTTP with digest headers | — |
 | **S3-compatible** | `/s3/<bucket>/<key>` with SigV4 | `aws-cli`, `s3cmd`, any AWS SDK | AWS SigV4 + gofakes3 backend | — |
 | **Git hosting** | `/<project>/git/<repo>.git` | `git` CLI (Smart HTTP) | go-git v6 backend + gitkit fallback | — |
@@ -38,7 +41,7 @@ One Go binary, one HTTP/HTTPS port, one mounted volume. Drop it on a host, point
 - **Upstream mirror repos** — APT, RPM, PyPI, and Helm repos can be created as mirrors pointed at a real upstream (pypi.org, archive.ubuntu.com, charts.bitnami.com, etc.), with per-protocol allowlist filters (suite/component/arch for APT, project names for PyPI, chart names + globs for RPM/Helm), optional stored upstream credentials, and an in-UI **Sync now** button that streams byte-level progress and shows a `Sync complete · N files · X MB` confirmation pill when done. Native clients (`pip`, `apt`, `dnf`, `helm`) pull from OmniRepo's locally cached copy — no direct upstream fetch at install time.
 - **Docker clone from external registries** — operators can pull a specific image tag (or digest) from `docker.io`, `quay.io`, or any public OCI registry and retag it into a local OmniRepo repo. Same sync-job progress UI as the package mirrors.
 - **Vulnerability scanning** — embedded Trivy subprocess with an air-gapped baked DB. Per-repo `block_on_severity` gate can refuse pulls of artifacts whose latest scan found findings ≥ threshold. RPM cpio payloads and PyPI wheel transitive deps are unpacked before the scan so Trivy sees real filesystem entries. Scan-on-sync toggle per mirror repo.
-- **Built-in web UI** — React 19 + Tailwind 4 + shadcn/ui + Radix, embedded in the Go binary via `//go:embed`. Zero runtime CDN. Includes a first-class S3 bucket browser (prefix drill-down, object table, delete flow), per-repo client snippets (ready-to-copy `docker pull`, `pip install`, `helm repo add`, `apt source.list` lines with your host pre-filled), dashboard composition cards, and shared empty-state surfaces for every "nothing here yet" scenario.
+- **Built-in web UI** — React 19 + Tailwind 4 + shadcn/ui + Radix, embedded in the Go binary via `//go:embed`. Zero runtime CDN. Includes a first-class S3 bucket browser (prefix drill-down, object table, delete flow), per-repo client snippets (ready-to-copy `docker pull`, `pip install`, `helm repo add`, `apt source.list`, `GOPROXY` exports, `.npmrc` config, and Maven `pom.xml` blocks with your host pre-filled), dashboard composition cards, and shared empty-state surfaces for every "nothing here yet" scenario.
 - **Structured error envelopes** — every `/api/v1` error response is a typed `ApiErrorEnvelope` with a UUID-v7 incident-id, error class (validation / auth / rate / transient / permanent), a machine-readable code, and optional field-level details. The UI renders them via a single `ErrorEnvelopeRenderer`.
 - **Audit log** — every auth decision, upload, admin action, sync job, and settings change recorded in SQLite with an NDJSON file mirror.
 - **Air-gap by default** — no outbound network calls without an explicit admin action. Trivy DB updates only via tarball upload or admin button. Mirror syncs only ever reach upstreams the operator configured. Enforced in CI by `make test-airgap` (boots the binary and verifies zero outbound network calls on its own).
@@ -58,7 +61,7 @@ Everything multiplexes on one HTTP/HTTPS port via a single `chi` router. Each pr
 /var/lib/omnirepo/
   db/omnirepo.sqlite      — metadata (users, projects, repos, scans, sync_jobs, audit log, mirror config, upstream creds)
   blobs/sha256/xx/...     — OCI content-addressed blob tree
-  repos/<project>/...     — per-project artifact trees (rpm, deb, pypi, helm, raw, git)
+  repos/<project>/...     — per-project artifact trees (rpm, deb, pypi, helm, go, npm, maven, raw, git)
   s3/<bucket>/...         — per-bucket S3 object storage (gofakes3 backend)
   sboms/                  — Trivy-produced SBOM JSON files
   trivy/db/               — baked Trivy vulnerability DB (updated via admin tarball upload)
@@ -204,7 +207,7 @@ Field reference:
 - **`super_admin`** (required): `login`, `email`, `password`, `must_change_password`.
 - **`users`** (optional): additional users with the same four fields as `super_admin`.
 - **`projects`** (optional): `name`, `description_md`, `members` (list of user logins that become project members).
-- **`repos`** (optional): `project`, `type` (`docker`/`rpm`/`deb`/`pypi`/`helm`/`raw`/`git`), `name`, `description_md`, `auto_scan` (bool), `block_on_severity` (`LOW`/`MEDIUM`/`HIGH`/`CRITICAL`), `public_read` (bool).
+- **`repos`** (optional): `project`, `type` (`docker`/`rpm`/`deb`/`pypi`/`helm`/`go`/`npm`/`maven`/`raw`/`git`), `name`, `description_md`, `auto_scan` (bool), `block_on_severity` (`LOW`/`MEDIUM`/`HIGH`/`CRITICAL`), `public_read` (bool).
 - **`api_keys`** (optional): `owner_kind` (`user`/`project`), `owner` (user login or project name), `name`, `token` — the plaintext token string including its `omr_u_` / `omr_p_` prefix. Stored hashed at rest; plaintext is not recoverable after bootstrap consumption.
 
 Mirror-repo configuration (`is_mirror`, `mirror_upstream_url`, `mirror_filter`,
@@ -413,7 +416,29 @@ from your host instead of the public internet — use the auth shapes
 from the [Authentication section](#authentication-for-protocol-endpoints)
 below.
 
-### 7. Clone a Docker image from an external registry
+### 7. Publish to the language registries (Go / npm / Maven)
+
+```bash
+# Go module proxy — publish a module zip, consume with GOPROXY
+curl -u admin:<pw> -T mini-v1.0.0.zip \
+  https://<host>:8443/platform/go/modules/example.com/team/mini/@v/v1.0.0.zip
+export GOPROXY=https://<host>:8443/platform/go/modules GOSUMDB=off
+go get example.com/team/mini@v1.0.0
+# (uppercase letters in module paths are GOPROXY-escaped: Azure → !azure)
+
+# npm — npm-native publish + install
+npm config set registry https://<host>:8443/platform/npm/js/
+npm config set //<host>:8443/platform/npm/js/:_auth "$(echo -n 'admin:<api-key>' | base64)"
+npm publish          # from your package directory
+npm install mypkg    # versions are immutable: republish of an existing version → 403
+
+# Maven — standard distributionManagement / repository blocks
+#   <url>https://<host>:8443/platform/maven/libs</url>
+# with a matching <server> entry in settings.xml, then:
+mvn deploy           # uploads artifacts, checksums, and maven-metadata.xml
+```
+
+### 8. Clone a Docker image from an external registry
 
 OmniRepo can pull an image tag (or digest) from `docker.io`, `quay.io`,
 or any public OCI registry and store it locally under a repo of your
@@ -443,9 +468,10 @@ The browser session cookie authenticates the **web UI** and the
 **`/api/v1/...` REST API** only. Every other surface — the native
 package-manager endpoints exposed at `/{project}/pypi/{repo}/…`,
 `/{project}/helm/{repo}/…`, `/{project}/rpm/{repo}/…`,
-`/{project}/deb/{repo}/dists/…`, `/{project}/raw/{repo}/…`, plus the
-OCI registry at `/v2/` and S3 at `/s3/…` — uses **HTTP Basic auth or
-an API key**. Session cookies are ignored there, because `pip`,
+`/{project}/deb/{repo}/dists/…`, `/{project}/go/{repo}/…`,
+`/{project}/npm/{repo}/…`, `/{project}/maven/{repo}/…`,
+`/{project}/raw/{repo}/…`, plus the OCI registry at `/v2/` and S3 at
+`/s3/…` — uses **HTTP Basic auth or an API key**. Session cookies are ignored there, because `pip`,
 `helm`, `docker`, `apt`, `rpm`/`dnf`, and AWS SDKs have no way to send
 one.
 
@@ -524,7 +550,7 @@ Middleware chain: `AnonymousReadOK → skipIfActor(BasicOrAPIKey)`.
 | Update Trivy DB | Upload a DB tarball via Admin → Trivy Database (air-gapped), or click **Pull DB online** to download it directly (an explicit, admin-only outbound action) |
 | Enter maintenance mode | Admin → Maintenance → toggle. Banner appears for all logged-in users |
 | Force user password reset | Admin → Users → edit → "Force Password Reset" toggle; optionally set a temp password in the dialog. Existing sessions for that user are revoked |
-| Copy client snippet | Navigate to any repo's detail page — the **Usage** panel renders a ready-to-copy `docker pull`, `pip install`, `helm repo add`, or `apt source.list` line pre-filled with your host, project, repo, and tag/version |
+| Copy client snippet | Navigate to any repo's detail page — the **Usage** panel renders a ready-to-copy `docker pull`, `pip install`, `helm repo add`, `apt source.list`, `GOPROXY` export, `.npmrc` config, or Maven `pom.xml` block pre-filled with your host, project, repo, and tag/version |
 
 ---
 
@@ -570,8 +596,8 @@ Frontend:
 cd web
 npm run lint            # ESLint (React hooks, react-refresh, typescript-eslint)
 npx tsc --noEmit        # TypeScript type-check
-npm test                # vitest unit + component tests (82 tests at v1.2)
-npx playwright test     # E2E (54 specs at v1.2 — set OMNI_E2E_HTTP_PORT /
+npm test                # vitest unit + component tests
+npx playwright test     # E2E specs (set OMNI_E2E_HTTP_PORT /
                         # OMNI_E2E_HTTPS_PORT / OMNI_E2E_BASE_URL if 8080/8443
                         # are held by other processes)
 ```
@@ -594,12 +620,12 @@ npx playwright test     # E2E (54 specs at v1.2 — set OMNI_E2E_HTTP_PORT /
                           │  chi router    │  one port, one handler tree
                           └───────┬────────┘
                                   │
-      ┌───────┬────────┬──────────┼──────────┬───────┬──────┬──────┐
-      ▼       ▼        ▼          ▼          ▼       ▼      ▼      ▼
-   /v2/*   /api/v1  /<p>/rpm   /<p>/deb   /<p>/pypi /<p>/  /<p>/  /<bkt>
-   (OCI)   (admin)  (RPM)      (APT)      (PyPI)   helm   git    (S3)
-      │       │        │          │          │       │      │      │
-      └───────┴────────┴──────────┴──────────┴───────┴──────┴──────┘
+      ┌───────┬────────┬───────┬───────┼───────┬───────┬──────┬──────┬───────┬──────┬──────┐
+      ▼       ▼        ▼       ▼       ▼       ▼       ▼      ▼      ▼       ▼      ▼      ▼
+   /v2/*   /api/v1  /<p>/rpm /<p>/deb /<p>/  /<p>/   /<p>/  /<p>/  /<p>/   /<p>/  /<p>/  /s3
+   (OCI)   (admin)  (RPM)    (APT)    pypi   helm    go     npm    maven   raw    git   (S3)
+      │       │        │       │       │       │       │      │      │       │      │      │
+      └───────┴────────┴───────┴───────┴───────┴───────┴──────┴──────┴───────┴──────┴──────┘
                                   │
                                   ▼
                    ┌─────────────────────────────┐
@@ -626,24 +652,31 @@ internal/
   auth/                   — Actor, password hashing (argon2id), policy engine, JWT, middleware (session, basic+api-key)
   config/                 — YAML config schema + koanf loader + defaults
   crypto/                 — AEAD helpers for upstream credentials at-rest encryption
+  driftpurge/             — mirror drift detection + soft-delete purge engine (per-protocol adapters)
   httperr/                — canonical ApiErrorEnvelope + error-class taxonomy + incident-id (UUID-v7)
   httpx/                  — shared HTTP helpers (reserved-prefix guard, anonymous-read middleware, sync REST wiring, readyz/healthz handlers)
   jobs/                   — scan pool, sync pool, GC, throttled progress writer, counting reader
   metadata/               — SQLite repos (users, projects, repos, blobs, sessions, sync_jobs, upstream_creds, …) + migrations
-  metadata/migrations/    — 025+ SQL migrations, applied at startup
+  metadata/migrations/    — numbered SQL migrations, applied at startup
   protocol/
+    common/               — handler scaffolding shared by every protocol (auth helpers, anonymous-read wiring, upload staging, audit emission)
     oci/                  — /v2 Docker Registry handler + pull-external (clone) orchestration
     rpm/                  — .rpm upload + repomd/primary regen + detached-sig + upstream mirror sync
     deb/                  — .deb upload + Packages/Release/InRelease + upstream mirror sync
     pypi/                 — PEP 503/691/694 upload + simple index + upstream mirror sync
     helm/                 — chart upload + index.yaml regen + upstream mirror sync (oci:// skipped)
+    goproxy/              — GOPROXY protocol (module zip publish, list/info/mod/zip/@latest)
+    npm/                  — npm registry (packument, tarballs, npm-native publish, dist-tags)
+    maven/                — Maven repository layout (mvn deploy / Gradle publish, GAV parsing)
     raw/                  — raw-blob CRUD
-    s3/                   — gofakes3 backend + SigV4 verifier + access-key mgmt
+    s3/                   — gofakes3 backend + SigV4 verifier + access-key mgmt + protocol audit middleware
     git/                  — go-git v6 backend + gitkit fallback
+    upstreamfetch/        — shared upstream HTTP fetching (cred application, capped metadata GETs, hashed downloads)
     protocoltest/         — shared protocol test harness (fake upstream, fixtures)
     regen/                — metadata-regen coalescer (batches repo-state recomputation)
   scan/                   — Trivy subprocess wrapper + SBOM plumbing
   storage/                — CAS, PathStore, atomic rename helpers, fsync'd parent dirs
+  streamio/               — bounded/counting stream helpers shared by upload paths
   tls/                    — cert holder + hot-reload + upload handler
 web/                      — React SPA (embedded into binary via go:embed)
   web/e2e/                — Playwright specs (mirror, sync, clone, auth, …)
@@ -659,8 +692,8 @@ test/
 Every dependency below is **Apache-2.0-compatible** — a hard constraint for
 corporate deployment. **Exact pins live in `go.mod` and `web/package.json`**
 — those are the source of truth. The tables below capture license + purpose
-+ current major-version baseline at v1.2 ship. No CDN fonts, icons, or
-Swagger assets — everything ships in the binary.
++ the major-version baseline. No CDN fonts, icons, or Swagger assets —
+everything ships in the binary.
 
 ### Go core (single binary, pure-Go)
 
@@ -678,6 +711,7 @@ Swagger assets — everything ships in the binary.
 | `github.com/knadh/koanf/v2` | v2.3.4 | MIT | YAML + env config. Modular, no global state. |
 | `github.com/golang-jwt/jwt/v5` | v5.3.1 | MIT | HS256 JWT for `/v2/token` Docker exchange. 60-min TTL; per-install secret. |
 | `golang.org/x/crypto/argon2` | tracks Go ecosystem | BSD-3 | Password hashing: `m=64MiB, t=3, p=4`. |
+| `golang.org/x/mod` | v0.35.0 | BSD-3 | GOPROXY module-path escaping/validation + module-zip verification (`module`, `semver`, `zip` packages). |
 | `github.com/oapi-codegen/oapi-codegen/v2` (CLI) + `github.com/oapi-codegen/runtime` | CLI v2.6.0 (installed via `go install`, build-time only); runtime v1.4.0 in `go.mod` | Apache-2.0 | CLI generates Go types from the hand-written OpenAPI 3.1 spec; runtime package provides a tiny helper shim. Routes are hand-written on chi. |
 | `github.com/google/uuid` | v1.6.x | BSD-3 | Scan IDs, SBOM IDs, API-key IDs. |
 | `github.com/opencontainers/go-digest` | v1.0.0 | Apache-2.0 | Canonical `sha256:<hex>` digest parsing. |
@@ -687,34 +721,32 @@ Swagger assets — everything ships in the binary.
 
 ### Frontend (bundled; zero CDN at runtime)
 
-Exact pins in `web/package.json`. Versions below are current at v1.2 ship.
+Exact pins in `web/package.json` (the source of truth).
 
-| Dependency | v1.2 version | License | Purpose |
+| Dependency | Version | License | Purpose |
 |---|---|---|---|
-| React | 19.1.0 | MIT | SPA framework. |
-| TypeScript | 5.8.3 | Apache-2.0 | `"moduleResolution": "bundler"`, `"jsx": "react-jsx"`. |
-| Vite | 6.3.3 | MIT | Dev server + production build. Dev proxy forwards `/api`, `/v2`, `/s3`, `/git` to the Go backend when `OMNIREPO_DEV=1`. |
-| Tailwind CSS | 4.1.4 | MIT | Requires `@tailwindcss/vite` plugin (CSS-first config). |
-| shadcn CLI | ^4.2.0 | MIT | Generates Radix-based components into `web/src/components/ui/`. No runtime package. |
-| @base-ui/react | ^1.4.0 | MIT | Base UI primitives complementing shadcn (used for some newer components). |
-| TanStack Query | @tanstack/react-query 5.74.4 | MIT | Server-state cache. Query keys: `['projects', name, 'buckets', …]`. |
-| React Router | react-router-dom 7.5.2 | MIT | Data-router API (`createBrowserRouter`). |
-| lucide-react | ^0.487.0 | ISC | Tree-shaken SVG icons. |
-| @dicebear/core + @dicebear/collection | 9.2.2 | MIT | Client-side SVG avatars from a seed string. |
-| swagger-ui-dist | 5.21.0 | Apache-2.0 | Served from `/api/docs/`. Copied into `web/public/swagger/` at build time (`npm run copy-swagger` prebuild hook). |
-| Milkdown (`@milkdown/kit`, `@milkdown/react`, `@milkdown/theme-nord`) | ^7.20.0 | MIT | Markdown editor for repo / project descriptions. |
-| shiki | ^4.0.2 | MIT | Syntax highlighting in the web UI (code snippets, audit detail diffs). |
+| React | 19.2.x | MIT | SPA framework. |
+| TypeScript | 6.0.x | Apache-2.0 | `"moduleResolution": "bundler"`, `"jsx": "react-jsx"`. |
+| Vite | 8.0.x | MIT | Dev server + production build. Dev proxy forwards `/api`, `/v2`, `/s3`, `/git` to the Go backend when `OMNIREPO_DEV=1`. |
+| Tailwind CSS | 4.2.x | MIT | Requires `@tailwindcss/vite` plugin (CSS-first config). |
+| shadcn CLI | ^4.7.0 | MIT | Generates Radix-based components into `web/src/components/ui/`. No runtime package. |
+| @base-ui/react | ^1.4.1 | MIT | Base UI primitives complementing shadcn (used for some newer components). |
+| TanStack Query | @tanstack/react-query 5.100.x | MIT | Server-state cache. Query keys: `['projects', name, 'buckets', …]`. |
+| React Router | react-router-dom 7.15.x | MIT | Data-router API (`createBrowserRouter`). |
+| lucide-react | ^1.14.0 | ISC | Tree-shaken SVG icons. |
+| @dicebear/core + @dicebear/collection | 9.4.2 | MIT | Client-side SVG avatars from a seed string. |
+| swagger-ui-dist | 5.32.x | Apache-2.0 | Served from `/api/docs/`. Copied into `web/public/swagger/` at build time (`npm run copy-swagger` prebuild hook). |
+| shiki (+ `@shikijs/langs`, `@shikijs/themes`) | ^4.0.2 | MIT | Syntax highlighting in the web UI (code snippets, git file/blame viewers). |
 | framer-motion | ^12.38.0 | MIT | Motion primitives for UI transitions (respects `prefers-reduced-motion`). |
 | sonner | ^2.0.7 | MIT | Toast notifications (error envelopes, success confirmations). |
-| cmdk | ^1.1.1 | MIT | Command palette / fuzzy-search primitive. |
-| dompurify (+ `@types/dompurify`) | ^3.4.0 | Apache-2.0 or MPL-2.0 (dual) | HTML sanitiser for Milkdown-rendered markdown. |
+| dompurify | ^3.4.2 | Apache-2.0 or MPL-2.0 (dual) | HTML sanitiser for rendered git file/blame highlight output. |
 | next-themes | ^0.4.6 | MIT | Light/dark theme toggle. |
-| react-diff-viewer-continued | ^4.2.0 | MIT | Diff view for audit log field-level changes. |
+| react-diff-viewer-continued | ^4.2.2 | MIT | Diff view for audit log field-level changes. |
 | class-variance-authority + clsx + tailwind-merge + tw-animate-css | current | MIT | Tailwind utility helpers shadcn templates depend on. |
 | Inter + JetBrains Mono (`.woff2`) | Inter 4.x, JetBrains Mono 2.304+ | SIL OFL 1.1 | Self-hosted fonts. |
-| Playwright | @playwright/test ^1.59.1 | Apache-2.0 | Developer-run E2E + pre-merge UI verification (54 specs at v1.2). |
-| @axe-core/playwright | ^4.11.2 | MPL-2.0 | WCAG AA axe-core gate, scoped to individual UI regions in Playwright specs. |
-| Vitest | ^4.1.4 | MIT | Frontend unit + component tests (82 tests at v1.2). `npm test`. |
+| Playwright | @playwright/test ^1.59.1 | Apache-2.0 | Developer-run E2E + pre-merge UI verification. |
+| @axe-core/playwright | ^4.11.3 | MPL-2.0 | WCAG AA axe-core gate, scoped to individual UI regions in Playwright specs. |
+| Vitest | ^4.1.5 | MIT | Frontend unit + component tests. `npm test`. |
 
 ### Build / dev tooling
 
@@ -737,9 +769,9 @@ Exact pins in `web/package.json`. Versions below are current at v1.2 ship.
   ProtonMail/go-crypto, golang.org/x/crypto, google/uuid.
 - **MIT** — chi, gofakes3, koanf, golang-jwt, sosedoff/gitkit (fallback),
   React, Vite, Tailwind, shadcn, @base-ui/react, @dicebear/\*, TanStack
-  Query, React Router, Milkdown, shiki, framer-motion, sonner, cmdk,
-  next-themes, react-diff-viewer-continued, class-variance-authority,
-  clsx, tailwind-merge, tw-animate-css, Vitest.
+  Query, React Router, shiki, framer-motion, sonner, next-themes,
+  react-diff-viewer-continued, class-variance-authority, clsx,
+  tailwind-merge, tw-animate-css, Vitest.
 - **ISC** — lucide-react.
 - **MPL-2.0** — @axe-core/playwright (runs only in developer/CI Playwright
   suites; no ship exposure — axe-core is not bundled into the production
@@ -777,7 +809,7 @@ Exact pins in `web/package.json`. Versions below are current at v1.2 ship.
   hashes rather than tagged releases (go-git/v6 is pre-GA alpha;
   gofakes3 carries post-v1.0.0 fixes we need). Upgrade audits happen per
   milestone; see `go.mod` for exact pseudo-versions.
-- **Tailwind 4 + Vite 6 + shadcn@4** — Tailwind 4 requires
+- **Tailwind 4 + Vite 8 + shadcn@4** — Tailwind 4 requires
   `@tailwindcss/vite`; do not mix with Tailwind 3 docs found online.
 - **React 19.1 + React Router 7 + TanStack Query 5** — all support
   React 19 natively.
@@ -791,23 +823,21 @@ Exact pins in `web/package.json`. Versions below are current at v1.2 ship.
 Versioning follows [semver](https://semver.org/). Breaking changes to the
 REST API or on-disk layout bump the major version.
 
-Shipped releases (git tags):
+Public releases (GitHub Releases, `v<major>.<minor>.<patch>` tags; each tag
+builds and pushes `ghcr.io/vladoportos/omnirepo`):
 
-- **v1.2 "Polish & Stability"** (2026-04-20) — sync-complete confirmation
-  pill with `N files · X MB` shape; canonical `apt`/`deb` cred kind;
-  typography lint clean; live PyPI + Helm mirror verification (4
-  in-scope bug fixes); retired static `grep-cdn` (air-gap is a runtime
-  property, enforced by `make test-airgap`).
-- **v1.1 "Immediate Product Polish"** (2026-04-20) —
-  `ApiErrorEnvelope` + visual foundation (axe / typography / contrast /
-  spacing / reduced-motion gates); per-protocol client snippets +
-  dashboard composition cards + shared empty states; upstream mirror
-  repos for APT/RPM/PyPI/Helm; Docker clone from external registries;
-  sync-job progress hook; upstream-credentials CRUD.
-- **v1.0 MVP** (2026-04-17) — all protocol surfaces (OCI/Docker, RPM,
-  APT, PyPI, Helm, Git, RAW, S3); admin UI; Trivy scan pipeline; GC
-  loop; OpenAPI 3.1 contract; SigV4 verifier; multi-stage Docker image
-  with baked Trivy DB.
+- **v1.0.1** (2026-06-09) — security and robustness fixes: S3
+  path-traversal rejection on object delete and multipart-abort cleanup,
+  drift-purge trash moves deferred until after the purge transaction
+  commits, authenticated-actor attribution on git push/fetch audit events.
+- **v1.0.0** (2026-06-02) — initial public release. All protocol surfaces
+  (OCI/Docker, RPM, APT, PyPI, Helm, Git, RAW, S3); admin UI; Trivy scan
+  pipeline; upstream mirrors with drift purge; GC; OpenAPI 3.1 contract;
+  SigV4 verifier; multi-stage Docker image with baked Trivy DB.
+
+Unreleased (on `main` after v1.0.1): Go module proxy, npm registry, and
+Maven repository protocols; S3 protocol-level audit events; shared
+protocol handler scaffolding (`internal/protocol/common`).
 
 ---
 
@@ -823,5 +853,5 @@ File issues against the Git repo. Include:
 
 - OmniRepo version (`omnirepo version`)
 - Config (with secrets redacted)
-- Relevant audit log entries (`/var/lib/omnirepo/logs/audit.ndjson`)
+- Relevant audit log entries (`/var/lib/omnirepo/logs/audit.log`, NDJSON)
 - Steps to reproduce

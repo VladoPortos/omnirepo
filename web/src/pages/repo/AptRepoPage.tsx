@@ -43,10 +43,8 @@ import {
 } from '@/api/queries';
 import { useRoleFor } from '@/hooks/useAuth';
 import { ErrorEnvelopeRenderer } from '@/components/common/ErrorEnvelope';
-import {
-  SyncNowButton,
-  formatFilterSummary,
-} from '@/components/SyncNowButton';
+import { SyncNowButton } from '@/components/SyncNowButton';
+import { formatFilterSummary } from '@/lib/filter-summary';
 import type { Repo } from '@/api/types';
 
 interface DebPackage {

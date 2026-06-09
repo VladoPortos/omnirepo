@@ -87,22 +87,17 @@ export function SyncNowButton({
   // `enabled` flag so we don't fetch until first open.
   const [historyOpen, setHistoryOpen] = useState(false);
 
-  // When the polled job terminates, invalidate content + repo caches
-  // so the UI reflects newly-synced artifacts without a manual refresh.
-  // ALSO snapshot the terminal progress numbers and flip the pill on —
-  // the separate auto-dismiss effect below arms the 8s timer.
-  useEffect(() => {
-    if (jobId == null) return;
-    if (progress.status === 'done') {
-      qc.invalidateQueries({
-        queryKey: ['repo-content', projectName, repoType, repoName],
-      });
-      qc.invalidateQueries({
-        queryKey: ['repo-scans', projectName, repoType, repoName],
-      });
-      qc.invalidateQueries({
-        queryKey: ['projects', projectName, 'repos', repoType, repoName],
-      });
+  // Snapshot the terminal progress numbers and flip the pill on the
+  // moment the polled job transitions to `done`. Uses the React-
+  // documented render-phase previous-value guard instead of a setState
+  // effect; the transition is always observable because handleClick
+  // resets jobId to null first, which makes useJobProgress report the
+  // idle 'pending' status between jobs. The separate auto-dismiss effect
+  // below arms the 8s timer.
+  const [prevStatus, setPrevStatus] = useState(progress.status);
+  if (progress.status !== prevStatus) {
+    setPrevStatus(progress.status);
+    if (jobId != null && progress.status === 'done') {
       setPillSnapshot({
         bytes: progress.progressBytes,
         totalBytes: progress.totalBytes,
@@ -111,18 +106,22 @@ export function SyncNowButton({
       });
       setPillVisible(true);
     }
-  }, [
-    progress.status,
-    jobId,
-    projectName,
-    repoType,
-    repoName,
-    qc,
-    progress.progressBytes,
-    progress.totalBytes,
-    progress.currentStep,
-    progress.filesSynced,
-  ]);
+  }
+
+  // When the polled job terminates, invalidate content + repo caches
+  // so the UI reflects newly-synced artifacts without a manual refresh.
+  useEffect(() => {
+    if (jobId == null || progress.status !== 'done') return;
+    qc.invalidateQueries({
+      queryKey: ['repo-content', projectName, repoType, repoName],
+    });
+    qc.invalidateQueries({
+      queryKey: ['repo-scans', projectName, repoType, repoName],
+    });
+    qc.invalidateQueries({
+      queryKey: ['projects', projectName, 'repos', repoType, repoName],
+    });
+  }, [progress.status, jobId, projectName, repoType, repoName, qc]);
 
   // Auto-dismiss the pill 8 seconds after it becomes visible. Cleanup
   // handles the re-click path (handleClick flips pillVisible false → this
@@ -320,43 +319,4 @@ export function SyncNowButton({
       />
     </div>
   );
-}
-
-/**
- * formatFilterSummary — renders a compact human summary of a mirror
- * filter JSON for display beside the Sync now button. Non-throwing —
- * malformed JSON returns the empty string so the button still renders.
- *
- * Protocol-specific rendering:
- *   - deb:  "{suites} · {components} · {arches}"
- *   - rpm:  "{names}"
- *   - pypi: "{names}" or "{names} · {globs}"
- *   - helm: same as pypi
- */
-export function formatFilterSummary(
-  filterJSON: string,
-  protocol: string,
-): string | undefined {
-  if (!filterJSON) return undefined;
-  let obj: Record<string, unknown>;
-  try {
-    obj = JSON.parse(filterJSON);
-  } catch {
-    return undefined;
-  }
-  const parts: string[] = [];
-  if (protocol === 'deb') {
-    const suites = (obj.Suites as string[] | undefined) ?? [];
-    const comps = (obj.Components as string[] | undefined) ?? [];
-    const arches = (obj.Arches as string[] | undefined) ?? [];
-    if (suites.length) parts.push(suites.join(', '));
-    if (comps.length) parts.push(comps.join(', '));
-    if (arches.length) parts.push(arches.join(', '));
-  } else {
-    const names = (obj.Names as string[] | undefined) ?? [];
-    const globs = (obj.Globs as string[] | undefined) ?? [];
-    if (names.length) parts.push(names.join(', '));
-    if (globs.length) parts.push(`globs: ${globs.join(', ')}`);
-  }
-  return parts.length ? parts.join(' · ') : undefined;
 }

@@ -36,10 +36,8 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog';
 import { ErrorEnvelopeRenderer } from '@/components/common/ErrorEnvelope';
-import {
-  SyncNowButton,
-  formatFilterSummary,
-} from '@/components/SyncNowButton';
+import { SyncNowButton } from '@/components/SyncNowButton';
+import { formatFilterSummary } from '@/lib/filter-summary';
 import type { Repo } from '@/api/types';
 
 interface PypiFile {

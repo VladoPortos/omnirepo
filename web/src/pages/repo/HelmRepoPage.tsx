@@ -33,10 +33,8 @@ import { formatBytes, formatDate } from '@/lib/format';
 import { api } from '@/api/client';
 import { useRepoContent } from '@/api/queries';
 import { useRoleFor } from '@/hooks/useAuth';
-import {
-  SyncNowButton,
-  formatFilterSummary,
-} from '@/components/SyncNowButton';
+import { SyncNowButton } from '@/components/SyncNowButton';
+import { formatFilterSummary } from '@/lib/filter-summary';
 import type { Repo } from '@/api/types';
 
 interface HelmChartVersion {

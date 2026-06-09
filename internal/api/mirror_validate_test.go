@@ -194,33 +194,29 @@ func TestValidateMirrorUpstreamURL(t *testing.T) {
 func TestClassifyHelmUpstream(t *testing.T) {
 	cases := []struct {
 		raw     string
-		want    HelmSourceKind
 		wantErr bool
 	}{
-		{"http://ex.com/charts", HelmSourceHTTP, false},
-		{"https://ex.com/charts", HelmSourceHTTP, false},
-		{"HTTPS://EX.COM/charts", HelmSourceHTTP, false}, // scheme is case-insensitive
-		{"oci://registry-1.docker.io/bitnamicharts/nginx", HelmSourceOCI, false},
-		{"OCI://reg.io/chart", HelmSourceOCI, false},
-		{"oci://", HelmSourceUnknown, true},     // missing host+path
-		{"oci://host", HelmSourceUnknown, true}, // missing /path
-		{"ftp://x", HelmSourceUnknown, true},
-		{"", HelmSourceUnknown, true},
-		{"file:///etc/passwd", HelmSourceUnknown, true},
-		{"javascript:alert(1)", HelmSourceUnknown, true},
-		{"not a url", HelmSourceUnknown, true},
+		{"http://ex.com/charts", false},
+		{"https://ex.com/charts", false},
+		{"HTTPS://EX.COM/charts", false}, // scheme is case-insensitive
+		{"oci://registry-1.docker.io/bitnamicharts/nginx", false},
+		{"OCI://reg.io/chart", false},
+		{"oci://", true},     // missing host+path
+		{"oci://host", true}, // missing /path
+		{"ftp://x", true},
+		{"", true},
+		{"file:///etc/passwd", true},
+		{"javascript:alert(1)", true},
+		{"not a url", true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.raw, func(t *testing.T) {
-			got, err := classifyHelmUpstream(tc.raw)
+			err := classifyHelmUpstream(tc.raw)
 			if tc.wantErr && err == nil {
-				t.Fatalf("classifyHelmUpstream(%q): want error, got nil (kind=%v)", tc.raw, got)
+				t.Fatalf("classifyHelmUpstream(%q): want error, got nil", tc.raw)
 			}
 			if !tc.wantErr && err != nil {
 				t.Fatalf("classifyHelmUpstream(%q): unexpected err: %v", tc.raw, err)
-			}
-			if got != tc.want {
-				t.Fatalf("classifyHelmUpstream(%q) kind: got %v want %v", tc.raw, got, tc.want)
 			}
 		})
 	}

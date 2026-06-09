@@ -264,7 +264,3 @@ func (g *GCHandler) Handle(ctx context.Context, jobID int64) error {
 
 	return nil
 }
-
-// Report is the public alias for the report shape produced by Handle.
-// Useful for tests that decode sync_jobs.log back into a typed value.
-type Report = GCReport

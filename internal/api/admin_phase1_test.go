@@ -90,7 +90,6 @@ func newTestServer(t *testing.T, opts ...testServerOpt) *testServer {
 		DataRoot: dataRoot,
 		Audit:    auditLogger,
 		Trash:    storage.NewTrash(filepath.Join(dataRoot, "trash")),
-		Locks:    storage.NewLocks(),
 	}
 	for _, opt := range opts {
 		opt(&deps)

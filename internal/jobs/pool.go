@@ -71,10 +71,6 @@ func sanitizeJobError(err error) string {
 // ctx during shutdown drain.
 type Handler func(ctx context.Context, job *JobView) error
 
-// HandlerFunc is a convenience alias so downstream plans can register
-// plain functions as handlers.
-type HandlerFunc = Handler
-
 // Handlers maps job kind ("pull_external", "promote", "gc", "scan_image"
 // etc.) to its handler. Empty maps are valid; the Pool will lease rows
 // and immediately fail them with "no handler for kind" so poison rows

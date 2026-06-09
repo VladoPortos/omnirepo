@@ -75,7 +75,6 @@ func newTestServerWithUpstream(t *testing.T) *testServer {
 		DataRoot:      dataRoot,
 		Audit:         auditLogger,
 		Trash:         storage.NewTrash(filepath.Join(dataRoot, "trash")),
-		Locks:         storage.NewLocks(),
 	}
 
 	mux := chi.NewRouter()

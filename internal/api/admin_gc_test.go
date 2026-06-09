@@ -57,7 +57,6 @@ func newGCRESTServer(t *testing.T) *testServer {
 		DataRoot: dataRoot,
 		Audit:    auditLogger,
 		Trash:    storage.NewTrash(filepath.Join(dataRoot, "trash")),
-		Locks:    storage.NewLocks(),
 		GCDeps: &api.GCDeps{
 			SyncJobs: metadata.NewSyncJobsRepo(db),
 			SyncKick: func() {},

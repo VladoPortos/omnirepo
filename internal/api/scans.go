@@ -44,7 +44,6 @@ import (
 // api.Deps. Wired by app.Run via Deps.ScanDeps.
 type ScansDeps struct {
 	Scans    *metadata.ScansRepo
-	Vulns    *metadata.VulnerabilitiesRepo
 	ScanKick func() // pool kick; nil-safe
 	SBOMRoot string // <DataRoot>/sboms
 }

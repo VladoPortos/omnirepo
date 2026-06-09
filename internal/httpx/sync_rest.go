@@ -74,14 +74,6 @@ type SyncActor struct {
 	IsSuperAdmin  bool
 }
 
-// SyncMembershipChecker reports whether actor (UserID) is a member of
-// projectID. May be nil — when nil, membership is considered satisfied
-// (the caller is expected to gate on something else, e.g. the wrapping
-// middleware already required project-write).
-type SyncMembershipChecker interface {
-	IsMember(ctx interface{ Done() <-chan struct{} }, projectID, userID int64) (bool, error)
-}
-
 // SyncRESTDeps bundles dependencies for MountSyncRoutes.
 type SyncRESTDeps struct {
 	DB            *metadata.DB

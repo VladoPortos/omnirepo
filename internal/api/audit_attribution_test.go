@@ -182,7 +182,6 @@ func newTestServerForAuditAttribution(t *testing.T) *testServer {
 		DataRoot:      dataRoot,
 		Audit:         auditLogger,
 		Trash:         storage.NewTrash(filepath.Join(dataRoot, "trash")),
-		Locks:         locks,
 	}
 
 	mux := chi.NewRouter()

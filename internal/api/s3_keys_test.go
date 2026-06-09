@@ -71,7 +71,6 @@ func newTestServerWithS3Keys(t *testing.T) (*testServer, *omrcrypto.AEAD) {
 		DataRoot:      dataRoot,
 		Audit:         auditLogger,
 		Trash:         storage.NewTrash(filepath.Join(dataRoot, "trash")),
-		Locks:         storage.NewLocks(),
 	}
 
 	mux := chi.NewRouter()

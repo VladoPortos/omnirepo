@@ -65,10 +65,8 @@ func newScanRESTServer(t *testing.T) *testServer {
 		DataRoot: dataRoot,
 		Audit:    auditLogger,
 		Trash:    storage.NewTrash(filepath.Join(dataRoot, "trash")),
-		Locks:    storage.NewLocks(),
 		ScanDeps: &api.ScansDeps{
 			Scans:    metadata.NewScansRepo(db),
-			Vulns:    metadata.NewVulnerabilitiesRepo(db),
 			ScanKick: func() {},
 			SBOMRoot: filepath.Join(dataRoot, "sboms"),
 		},

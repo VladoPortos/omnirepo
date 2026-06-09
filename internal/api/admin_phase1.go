@@ -60,7 +60,6 @@ type Deps struct {
 	DataRoot string
 	Audit    audit.Logger
 	Trash    storage.Trash
-	Locks    storage.Locks
 
 	// TrivyDBDir is the directory admin_trivy reads/writes. When empty,
 	// falls back to DataRoot/trivy/db. Set by app.Run from cfg.Trivy.DBPath

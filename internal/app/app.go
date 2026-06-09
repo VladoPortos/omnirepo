@@ -705,7 +705,6 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 		TLSKeyPath:           cfg.TLS.KeyPath,
 		Audit:                auditLogger,
 		Trash:                storage.NewTrash(filepath.Join(cfg.DataRoot, "trash")),
-		Locks:                storage.NewLocks(),
 		SessionTTL:           cfg.Auth.SessionTTL,
 		S3MultipartRetention: cfg.S3.MultipartRetention,
 
@@ -713,7 +712,6 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 		// scan REST endpoints.
 		ScanDeps: &api.ScansDeps{
 			Scans:    metadata.NewScansRepo(db),
-			Vulns:    metadata.NewVulnerabilitiesRepo(db),
 			ScanKick: scanPool.Kick,
 			SBOMRoot: filepath.Join(cfg.DataRoot, "sboms"),
 		},

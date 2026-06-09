@@ -35,6 +35,7 @@ require (
 	github.com/sosedoff/gitkit v0.4.0
 	github.com/ulikunitz/xz v0.5.15
 	golang.org/x/crypto v0.52.0
+	golang.org/x/mod v0.35.0
 	golang.org/x/sys v0.45.0
 	golang.org/x/text v0.37.0
 	helm.sh/helm/v3 v3.20.2

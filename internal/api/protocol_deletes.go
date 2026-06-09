@@ -32,6 +32,7 @@ type ProtocolDeletesDeps struct {
 	DEB  ProtocolDeleteHandler
 	PyPI ProtocolDeleteHandler
 	Helm ProtocolDeleteHandler
+	Go   ProtocolDeleteHandler
 }
 
 // RegisterProtocolDeleteRoutes mounts session-authed DELETE routes that
@@ -57,5 +58,10 @@ func RegisterProtocolDeleteRoutes(r chi.Router, d *ProtocolDeletesDeps) {
 	}
 	if d.Helm != nil {
 		r.Delete("/projects/{name}/repos/helm/{repo}/charts/{filename}", d.Helm.DeleteREST)
+	}
+	if d.Go != nil {
+		// Wildcard carries <escaped-module>/@v/<version> — same tail shape
+		// as the protocol-native DELETE route.
+		r.Delete("/projects/{name}/repos/go/{repo}/*", d.Go.DeleteREST)
 	}
 }

@@ -194,6 +194,13 @@ const (
 	EvtS3MultipartCompleted EventKind = "s3.multipart.complete"
 	EvtS3MultipartAborted   EventKind = "s3.multipart.abort"
 
+	// Go module proxy (GOPROXY protocol). Emitted by the goproxy handler
+	// for module-zip publishes and version deletes.
+	// Details: {project, repo, module, version} (+size_bytes, digest on
+	// upload; reason+error on rejected uploads).
+	EvtGoUpload EventKind = "go.upload"
+	EvtGoDelete EventKind = "go.delete"
+
 	// Git refs walker. Emitted by the post-ReceivePack hook after a
 	// successful git_refs sync.
 	// Details: {repo_id, ref_count, project}.

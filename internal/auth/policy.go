@@ -59,6 +59,7 @@ const (
 	ActionDEBUpload  Action = "deb.upload"
 	ActionPyPIUpload Action = "pypi.upload"
 	ActionHelmUpload Action = "helm.upload"
+	ActionGoUpload   Action = "go.upload"
 
 	// S3 bucket permission actions.
 	// Read/Write require project membership; Admin requires super-admin.
@@ -119,6 +120,7 @@ var AllActions = []Action{
 	ActionDEBUpload,
 	ActionPyPIUpload,
 	ActionHelmUpload,
+	ActionGoUpload,
 	ActionS3BucketRead,
 	ActionS3BucketWrite,
 	ActionS3BucketAdmin,
@@ -279,6 +281,7 @@ func Can(ctx context.Context, actor Actor, action Action, target Target) (bool, 
 		ActionManageProjectAPIKeys,
 		ActionRPMUpload, ActionDEBUpload,
 		ActionPyPIUpload, ActionHelmUpload,
+		ActionGoUpload,
 		ActionGitRepoWrite:
 		role, member := memberRoleOfProject(ctx, target.ProjectID)
 		if !member {

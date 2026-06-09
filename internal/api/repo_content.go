@@ -178,6 +178,8 @@ func (d Deps) handleListRepoContent(w http.ResponseWriter, r *http.Request) {
 		entries, qerr = d.listRawContent(r, repo.ID, limit, offset)
 	case "docker":
 		entries, qerr = d.listDockerContent(r, repo.ID, limit, offset)
+	case "go":
+		entries, qerr = d.listGoContent(r, repo.ID, limit, offset)
 	case "git":
 		// Git has its own dedicated listing surface (tree/refs under
 		// /projects/.../git/...). Return an empty list here so the UI's
@@ -239,6 +241,8 @@ func (d Deps) countRepoContent(r *http.Request, repoType string, repoID int64) (
 		query = `SELECT COUNT(*) FROM raw_files WHERE repo_id=?`
 	case "docker":
 		query = `SELECT COUNT(*) FROM docker_tags WHERE repo_id=?`
+	case "go":
+		query = `SELECT COUNT(*) FROM go_modules WHERE repo_id=?`
 	default:
 		return 0, nil
 	}
@@ -762,6 +766,42 @@ func (d Deps) aggregateIndexScan(r *http.Request, repoID int64, body []byte) (st
 		"low":      low,
 	})
 	return status, string(summaryJSON), true
+}
+
+// listGoContent produces one row per hosted Go module version. Go module
+// zips are not scanned (no scan materialization for the type yet), so the
+// scan columns are left at their zero values.
+func (d Deps) listGoContent(r *http.Request, repoID, limit, offset int64) ([]RepoContentEntry, error) {
+	query := `
+		SELECT gm.id, gm.module_path, gm.version, gm.size_bytes, gm.digest, gm.uploaded_at
+		FROM go_modules gm
+		WHERE gm.repo_id=?
+		ORDER BY gm.module_path ASC, gm.version ASC
+		LIMIT ? OFFSET ?`
+	rows, err := d.DB.Reader.QueryContext(r.Context(), query, repoID, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var out []RepoContentEntry
+	for rows.Next() {
+		var id, size int64
+		var modulePath, version, digest, uploadedAt string
+		if err := rows.Scan(&id, &modulePath, &version, &size, &digest, &uploadedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, RepoContentEntry{
+			ID:         id,
+			Name:       modulePath,
+			Version:    version,
+			SizeBytes:  size,
+			UploadedAt: uploadedAt,
+			Extra: map[string]any{
+				"digest": digest,
+			},
+		})
+	}
+	return out, rows.Err()
 }
 
 func (d Deps) listRawContent(r *http.Request, repoID, limit, offset int64) ([]RepoContentEntry, error) {

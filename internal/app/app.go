@@ -28,6 +28,7 @@ import (
 	"github.com/vladoportos/omnirepo/internal/metadata/migrations"
 	"github.com/vladoportos/omnirepo/internal/protocol/deb"
 	gitpkg "github.com/vladoportos/omnirepo/internal/protocol/git"
+	"github.com/vladoportos/omnirepo/internal/protocol/goproxy"
 	"github.com/vladoportos/omnirepo/internal/protocol/helm"
 	"github.com/vladoportos/omnirepo/internal/protocol/oci"
 	"github.com/vladoportos/omnirepo/internal/protocol/pypi"
@@ -486,6 +487,25 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 	defer shutdownRegistry(context.Background(), helmRegistry)
 	ociHelmMirrorHook := wireHelmMirror(ociCAS, helmMirror)
 
+	// 6a.1. Go module proxy (GOPROXY) handler. Hosted Go modules at
+	// /<project>/go/<repo>/<module>/@v/...; constructed before api.Mount
+	// so the row-delete REST shim can reference it.
+	goHandler := goproxy.New(goproxy.Deps{
+		DB:        db,
+		Users:     metadata.NewUsersRepo(db),
+		APIKeys:   metadata.NewAPIKeysRepo(db),
+		Sessions:  metadata.NewSessionsRepo(db),
+		Repos:     metadata.NewReposRepo(db),
+		Projects:  metadata.NewProjectsRepo(db),
+		Members:   metadata.NewMembersRepo(db),
+		GoModules: metadata.NewGoModulesRepo(db),
+		Path:      storage.NewPathStore(filepath.Join(cfg.DataRoot, "repos")),
+		Trash:     storage.NewTrash(filepath.Join(cfg.DataRoot, "trash")),
+		Audit:     auditLogger,
+		RepoRoot:  filepath.Join(cfg.DataRoot, "repos"),
+	})
+	goHandler.Mount(router)
+
 	// blobRoot + ociCAS already constructed in step 5e (scan handler wiring).
 	ociHandler := oci.New(oci.Deps{
 		DB:          db,
@@ -727,6 +747,7 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 			DEB:  debHandler,
 			PyPI: pypiHandler,
 			Helm: helmHandler,
+			Go:   goHandler,
 		},
 		// super-admin GC trigger.
 		GCDeps: &api.GCDeps{

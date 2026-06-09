@@ -86,14 +86,11 @@ type PullExternalJob struct {
 // PullExternalDeps bundles what PullExternalHandler needs. Built in
 // app.Run and wired onto the sync pool's handler map.
 type PullExternalDeps struct {
-	DB        *metadata.DB
-	CAS       storage.CAS
-	Blobs     *metadata.DockerBlobsRepo
-	Manifests *metadata.DockerManifestsRepo
-	Tags      *metadata.DockerTagsRepo
-	Scans     *metadata.ScansRepo
-	ScanKick  func()
-	Repos     *metadata.ReposRepo
+	DB       *metadata.DB
+	CAS      storage.CAS
+	Blobs    *metadata.DockerBlobsRepo
+	ScanKick func()
+	Repos    *metadata.ReposRepo
 	Projects  *metadata.ProjectsRepo
 	Creds     *metadata.UpstreamCredsRepo
 	Audit     audit.Logger
@@ -127,7 +124,7 @@ func NewPullExternalHandler(deps PullExternalDeps) *PullExternalHandler {
 // ProgressWriter. The shim in internal/app/app.go passes j.ID; older unit
 // tests that call Handle directly may pass 0 — the ProgressWriter is
 // nil-safe in that case.
-func (p *PullExternalHandler) Handle(ctx context.Context, payload string, projectID, repoID, jobID int64) error {
+func (p *PullExternalHandler) Handle(ctx context.Context, payload string, projectID, repoID, jobID int64) (retErr error) {
 	timeout := p.deps.Timeout
 	if timeout <= 0 {
 		timeout = DefaultPullExternalTimeout
@@ -139,6 +136,29 @@ func (p *PullExternalHandler) Handle(ctx context.Context, payload string, projec
 	if err := json.Unmarshal([]byte(payload), &job); err != nil {
 		return fmt.Errorf("pull_external: payload: %w", err)
 	}
+
+	// Terminal failure audit. The lifecycle is started (emitted at enqueue
+	// by the HTTP handler) → finished (emitted on success by persistManifest).
+	// Without this, a job that errors out leaves a "started" with no
+	// resolution in the trail. Best-effort + nil-safe; the returned error is
+	// already upstream-sanitized at every return site. Uses a detached
+	// context so a pull that fails *because* ctx timed out still records.
+	defer func() {
+		if retErr == nil || p.deps.Audit == nil {
+			return
+		}
+		_ = p.deps.Audit.Record(context.WithoutCancel(ctx), audit.Event{
+			Kind:       audit.EvtOCIPullExternalFailed,
+			TargetKind: "repo",
+			TargetID:   strconv.FormatInt(repoID, 10),
+			Details: map[string]any{
+				"src":     job.SrcImage,
+				"dst_tag": job.DstTag,
+				"job_id":  jobID,
+				"error":   retErr.Error(),
+			},
+		})
+	}()
 	srcRef, err := name.ParseReference(job.SrcImage)
 	if err != nil {
 		return fmt.Errorf("pull_external: parse ref %q: %w", job.SrcImage, err)

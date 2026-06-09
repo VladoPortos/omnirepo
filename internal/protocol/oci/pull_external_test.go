@@ -217,9 +217,6 @@ func newPullFixture(t *testing.T, requireBasic bool) *pullFixture {
 		DB:        mf.db,
 		CAS:       mf.cas,
 		Blobs:     mf.blobs,
-		Manifests: mf.manifests,
-		Tags:      mf.tags,
-		Scans:     mf.scans,
 		ScanKick:  func() {},
 		Repos:     mf.repos,
 		Projects:  mf.projects,
@@ -479,6 +476,31 @@ func TestPullExternalREST_HappyPath_Enqueues202(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("no pull_external.started audit; got %v", rf.audit.kinds())
+	}
+}
+
+// TestPullExternal_FailureEmitsFailedAudit: a job that errors out must emit
+// the terminal EvtOCIPullExternalFailed event so the audit trail has a
+// resolution for the started event (which fires at enqueue). A non-existent
+// dst repoID fails Handle at repo resolution — after the payload is parsed,
+// before any upstream contact — which is the deterministic, network-free way
+// to exercise the failure path.
+func TestPullExternal_FailureEmitsFailedAudit(t *testing.T) {
+	f := newPullFixture(t, false /* anonymous upstream */)
+	const missingRepoID = 999999
+	buf, _ := json.Marshal(&oci.PullExternalJob{SrcImage: "example.com/foo/bar:1.0", DstTag: "x"})
+	err := f.pull.Handle(context.Background(), string(buf), f.projectID, missingRepoID, 0)
+	if err == nil {
+		t.Fatal("Handle: want error for missing dst repo, got nil")
+	}
+	var found bool
+	for _, k := range f.audit.kinds() {
+		if k == string(audit.EvtOCIPullExternalFailed) {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("no pull_external.failed audit; got %v", f.audit.kinds())
 	}
 }
 

@@ -706,6 +706,44 @@ func TestBackend_GetBucketForProject_DeletedProjectFalse(t *testing.T) {
 	}
 }
 
+// TestDeleteObject_PathTraversalRejected verifies a crafted key with ".."
+// segments cannot escape the bucket tree and delete an arbitrary file. The
+// DB delete is idempotent and os.Remove ran unconditionally, so before the
+// validateObjectKey guard an authenticated key could delete e.g.
+// ../../certs/server.key. bucketRoot is <dataRoot>/s3/<bucket>, so
+// "../../secret.key" resolves to <dataRoot>/secret.key.
+func TestDeleteObject_PathTraversalRejected(t *testing.T) {
+	f := newFixture(t)
+	if err := f.b.CreateBucket("bucket1"); err != nil {
+		t.Fatalf("create bucket: %v", err)
+	}
+	secret := filepath.Join(f.dataRoot, "secret.key")
+	if err := os.WriteFile(secret, []byte("PRIVATE KEY"), 0o600); err != nil {
+		t.Fatalf("seed secret: %v", err)
+	}
+	const evilKey = "../../secret.key"
+
+	// Single delete must reject the key and leave the out-of-bucket file.
+	if _, err := f.b.DeleteObject("bucket1", evilKey); err == nil {
+		t.Fatal("DeleteObject(traversal): want error, got nil")
+	}
+	if _, err := os.Stat(secret); err != nil {
+		t.Fatalf("secret deleted via single-delete traversal: %v", err)
+	}
+
+	// Multi-delete must reject each crafted key (per-key error) and leave it.
+	res, err := f.b.DeleteMulti("bucket1", evilKey, "also/../../secret.key")
+	if err != nil {
+		t.Fatalf("DeleteMulti top-level error: %v", err)
+	}
+	if len(res.Error) != 2 {
+		t.Fatalf("DeleteMulti: want 2 per-key errors, got %d (%+v)", len(res.Error), res.Error)
+	}
+	if _, err := os.Stat(secret); err != nil {
+		t.Fatalf("secret deleted via multi-delete traversal: %v", err)
+	}
+}
+
 // -- helpers --------------------------------------------------------------
 
 func bucketID(t *testing.T, f *fixture, name string) int64 {

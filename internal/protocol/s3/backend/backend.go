@@ -513,6 +513,13 @@ func (b *Backend) PutObject(bucketName, key string, meta map[string]string, inpu
 
 // GetObject returns the object body, respecting an optional range request.
 func (b *Backend) GetObject(bucketName, key string, rangeRequest *gofakes3.ObjectRangeRequest) (*gofakes3.Object, error) {
+	// Defense-in-depth: the FindByBucketAndKey lookup below already makes a
+	// traversal key un-matchable (PutObject rejects "../" so no such row can
+	// exist), but validating up front keeps os.Open from ever seeing an
+	// escaped path even if that invariant is later weakened.
+	if err := validateObjectKey(key); err != nil {
+		return nil, err
+	}
 	ctx := context.Background()
 	id, ok, err := b.findBucketID(ctx, bucketName)
 	if err != nil {
@@ -588,6 +595,15 @@ func (b *Backend) HeadObject(bucketName, key string) (*gofakes3.Object, error) {
 // DeleteObject removes the row and the on-disk file. Idempotent — absence
 // is not an error (S3 semantics).
 func (b *Backend) DeleteObject(bucketName, key string) (gofakes3.ObjectDeleteResult, error) {
+	// Validate BEFORE joining the key into a filesystem path. Unlike GetObject
+	// (gated by a required DB-row lookup that can never match a traversal key),
+	// the DB delete here is idempotent and os.Remove runs unconditionally, so
+	// an unvalidated "../../certs/server.key" would escape the bucket tree and
+	// delete an arbitrary file. PutObject already rejects such keys, so a
+	// traversal key can never name a legitimately stored object.
+	if err := validateObjectKey(key); err != nil {
+		return gofakes3.ObjectDeleteResult{}, err
+	}
 	ctx := context.Background()
 	id, ok, err := b.findBucketID(ctx, bucketName)
 	if err != nil {

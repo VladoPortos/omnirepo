@@ -65,10 +65,10 @@ func (a *helmAdapter) LocalRows(ctx context.Context, _ *sql.Tx, repoID int64) ([
 	return out, nil
 }
 
-func (a *helmAdapter) Purge(ctx context.Context, tx *sql.Tx, row Row, actor string) error {
+func (a *helmAdapter) Purge(ctx context.Context, tx *sql.Tx, row Row, actor string) (PendingMove, error) {
 	pr, ok := row.(*helmRow)
 	if !ok {
-		return fmt.Errorf("helm adapter: unexpected row type %T", row)
+		return PendingMove{}, fmt.Errorf("helm adapter: unexpected row type %T", row)
 	}
 	inner := pr.inner
 

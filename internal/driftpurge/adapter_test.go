@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -13,6 +15,117 @@ import (
 	"github.com/vladoportos/omnirepo/internal/storage"
 )
 
+// failingAdapter wraps a real DriftAdapter and injects a Purge failure on the
+// failOn-th call (1-indexed), to exercise the post-commit-move guarantee.
+type failingAdapter struct {
+	driftpurge.DriftAdapter
+	failOn int
+	calls  int
+}
+
+func (f *failingAdapter) Purge(ctx context.Context, tx *sql.Tx, row driftpurge.Row, actor string) (driftpurge.PendingMove, error) {
+	f.calls++
+	if f.calls == f.failOn {
+		return driftpurge.PendingMove{}, errors.New("injected purge failure")
+	}
+	return f.DriftAdapter.Purge(ctx, tx, row, actor)
+}
+
+// TestRun_RollbackDoesNotMoveFiles is the regression guard for the multi-row
+// rollback bug: when a later row's purge fails and the caller's WriteTx rolls
+// back, NO earlier file may have been moved to trash. Trash moves are now
+// deferred (PendingMove) and applied only after commit, so a failed purge —
+// where the caller never reaches ApplyPendingMoves — relocates nothing and
+// every restored row keeps its file. Before the fix, the first row's file was
+// os.Rename'd into trash inside the tx and survived the rollback, leaving a
+// restored row pointing at a missing artifact.
+func TestRun_RollbackDoesNotMoveFiles(t *testing.T) {
+	t.Parallel()
+	db := sqlitetest.New(t)
+	ctx := context.Background()
+
+	if _, err := db.Writer.ExecContext(ctx, `INSERT INTO projects(name) VALUES ('p1')`); err != nil {
+		t.Fatalf("project: %v", err)
+	}
+	res, err := db.Writer.ExecContext(ctx, `INSERT INTO repos(project_id,type,name) VALUES (1,'pypi','r1')`)
+	if err != nil {
+		t.Fatalf("repo: %v", err)
+	}
+	repoID, _ := res.LastInsertId()
+
+	pypiFiles := metadata.NewPyPIFilesRepo(db)
+	seed := []*metadata.PyPIFile{
+		{RepoID: repoID, ProjectNormalized: "foo", Version: "1.0.0", Filename: "foo-1.0.0.tar.gz", Kind: "sdist", Digest: "sha256:a"},
+		{RepoID: repoID, ProjectNormalized: "foo", Version: "1.0.1", Filename: "foo-1.0.1.tar.gz", Kind: "sdist", Digest: "sha256:b"},
+		{RepoID: repoID, ProjectNormalized: "bar", Version: "2.0.0", Filename: "bar-2.0.0.tar.gz", Kind: "sdist", Digest: "sha256:c"},
+	}
+	for _, f := range seed {
+		if err := db.WriteTx(ctx, func(tx *sql.Tx) error {
+			_, ierr := pypiFiles.Insert(ctx, tx, f)
+			return ierr
+		}); err != nil {
+			t.Fatalf("seed %s: %v", f.Filename, err)
+		}
+	}
+
+	// Real on-disk files so a stray move would actually relocate them.
+	bucketRoot := t.TempDir()
+	for _, f := range seed {
+		if err := os.WriteFile(filepath.Join(bucketRoot, f.Filename), []byte("data-"+f.Filename), 0o600); err != nil {
+			t.Fatalf("write %s: %v", f.Filename, err)
+		}
+	}
+
+	trashRoot := filepath.Join(t.TempDir(), "trash")
+	trash := storage.NewTrash(trashRoot)
+
+	// Upstream keeps only foo/1.0.0 → foo/1.0.1 and bar/2.0.0 are drift (2 rows).
+	upstream := []driftpurge.Key{{A: "foo", B: "foo-1.0.0.tar.gz", C: "sha256:a"}}
+	pathFn := func(row *metadata.PyPIFile) string { return filepath.Join(bucketRoot, row.Filename) }
+	base := driftpurge.NewPyPIAdapter(upstream, pypiFiles, trash, pathFn)
+
+	// Fail the 2nd purge so the first row is DELETE'd in-tx before the failure
+	// rolls everything back.
+	adapter := &failingAdapter{DriftAdapter: base, failOn: 2}
+
+	var pending []driftpurge.PendingMove
+	txErr := db.WriteTx(ctx, func(tx *sql.Tx) error {
+		var rerr error
+		_, pending, rerr = driftpurge.Run(ctx, tx, repoID, "tester", adapter, 0, false)
+		return rerr
+	})
+	if txErr == nil {
+		t.Fatal("expected drift purge to fail (injected), got nil")
+	}
+	// Run returns no moves on failure; the caller skips ApplyPendingMoves.
+	if len(pending) != 0 {
+		t.Fatalf("pending moves after failed run = %d, want 0", len(pending))
+	}
+
+	// All three rows survive (the in-tx DELETE was rolled back).
+	remaining, err := pypiFiles.ListByRepo(ctx, repoID)
+	if err != nil {
+		t.Fatalf("ListByRepo: %v", err)
+	}
+	if len(remaining) != 3 {
+		t.Fatalf("rows after rolled-back purge = %d, want 3", len(remaining))
+	}
+
+	// No file was moved to trash, and every artifact is still on disk.
+	entries, err := trash.List(ctx)
+	if err != nil {
+		t.Fatalf("trash.List: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("trash entries after rolled-back purge = %d, want 0 (no move may survive a rollback)", len(entries))
+	}
+	for _, f := range seed {
+		if _, err := os.Stat(filepath.Join(bucketRoot, f.Filename)); err != nil {
+			t.Fatalf("artifact %s missing after rolled-back purge: %v", f.Filename, err)
+		}
+	}
+}
+
 // runDriftAdapter calls driftpurge.Run inside a real WriteTx and returns
 // the report. Test helper kept terse so the four per-protocol tests
 // stay readable.
@@ -20,14 +133,20 @@ func runDriftAdapter(t *testing.T, db *metadata.DB, repoID int64, actor string, 
 	t.Helper()
 	ctx := context.Background()
 	var report driftpurge.DriftReport
+	var pending []driftpurge.PendingMove
 	if err := db.WriteTx(ctx, func(tx *sql.Tx) error {
 		var rerr error
 		// thresholdPct=0 disables the percent-threshold guard so the
 		// per-protocol adapter tests focus on adapter mechanics.
-		report, rerr = driftpurge.Run(ctx, tx, repoID, actor, adapter, 0, false)
+		report, pending, rerr = driftpurge.Run(ctx, tx, repoID, actor, adapter, 0, false)
 		return rerr
 	}); err != nil {
 		t.Fatalf("driftpurge.Run: %v", err)
+	}
+	// Trash moves are deferred until after the tx commits (see ApplyPendingMoves);
+	// run them so the per-protocol trash-entry assertions observe the move.
+	if err := driftpurge.ApplyPendingMoves(ctx, pending); err != nil {
+		t.Fatalf("driftpurge.ApplyPendingMoves: %v", err)
 	}
 	return report
 }

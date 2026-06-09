@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -320,15 +321,24 @@ func (h *SyncHandler) Handle(ctx context.Context, payload string, projectID, rep
 			},
 		)
 		var report driftpurge.DriftReport
+		var pending []driftpurge.PendingMove
 		if err := h.deps.DB.WriteTx(ctx, func(tx *sql.Tx) error {
 			var rerr error
-			report, rerr = driftpurge.Run(
+			report, pending, rerr = driftpurge.Run(
 				ctx, tx, repo.ID, "", adapter,
 				h.deps.Cfg.DriftPurgeThresholdPct, pl.ForceDriftThreshold,
 			)
 			return rerr
 		}); err != nil {
 			return h.fail(ctx, repo.ID, pl, startedAt, fmt.Errorf("drift purge: %w", err))
+		}
+
+		// Perform the deferred trash moves only AFTER the purge tx commits, so
+		// a rolled-back purge can never strand a restored row against an
+		// already-trashed file. Best-effort: a failure leaves an orphaned
+		// on-disk file (recoverable by GC), never a missing artifact.
+		if err := driftpurge.ApplyPendingMoves(ctx, pending); err != nil {
+			slog.WarnContext(ctx, "driftpurge.trash_move_failed", "err", err, "repo_id", repo.ID)
 		}
 
 		driftpurge.EmitReportAudit(ctx, driftpurge.AuditSink{

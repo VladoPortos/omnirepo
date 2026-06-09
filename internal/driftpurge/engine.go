@@ -110,10 +110,13 @@ type DriftAdapter interface {
 	// in drift. Called once per Run; ordering does not matter —
 	// the engine sorts by SampleFilename for the Sample output.
 	LocalRows(ctx context.Context, tx *sql.Tx, repoID int64) ([]Row, error)
-	// Purge soft-deletes one row: writes a trash holder carrying
-	// the row snapshot and DELETEs the row. Called once per drift
-	// row; failures propagate up via Run's error return.
-	Purge(ctx context.Context, tx *sql.Tx, row Row, actor string) error
+	// Purge DELETEs one drift row inside the caller's tx and returns the
+	// deferred file relocation (PendingMove) that the caller must apply
+	// AFTER the tx commits. The on-disk move is NOT performed inside Purge:
+	// it is irreversible, so doing it mid-tx would let a later rollback
+	// strand a restored row against an already-trashed file. Called once
+	// per drift row; failures propagate up via Run's error return.
+	Purge(ctx context.Context, tx *sql.Tx, row Row, actor string) (PendingMove, error)
 }
 
 // reasonUpstreamEmpty is the reason string emitted when the
@@ -156,7 +159,7 @@ func Run(
 	adapter DriftAdapter,
 	thresholdPct int,
 	force bool,
-) (DriftReport, error) {
+) (DriftReport, []PendingMove, error) {
 	report := DriftReport{Protocol: adapter.Protocol()}
 
 	// 1. Collect upstream keys into a set (O(N) scan).
@@ -169,7 +172,7 @@ func Run(
 	// 2. Load local rows.
 	local, err := adapter.LocalRows(ctx, tx, repoID)
 	if err != nil {
-		return report, fmt.Errorf("driftpurge: load local rows (proto=%s repo=%d): %w",
+		return report, nil, fmt.Errorf("driftpurge: load local rows (proto=%s repo=%d): %w",
 			adapter.Protocol(), repoID, err)
 	}
 	report.LocalCount = len(local)
@@ -181,7 +184,7 @@ func Run(
 	if len(upstream) == 0 && len(local) > 0 {
 		report.Skipped = true
 		report.Reason = reasonUpstreamEmpty
-		return report, nil
+		return report, nil, nil
 	}
 
 	// 4. Compute drift = local \ upstream.
@@ -230,44 +233,99 @@ func Run(
 		report.Skipped = true
 		report.Reason = reasonThresholdExceeded
 		report.BlockedCount = len(drift)
-		return report, nil
+		return report, nil, nil
 	}
 
-	// 8. Iterate drift and purge each row. Stop on first error —
-	//    the caller's tx decides rollback vs partial-commit.
+	// 8. Iterate drift and DELETE each row inside the caller's tx, collecting
+	//    the corresponding file relocations as deferred PendingMoves. The
+	//    actual trash moves are NOT performed here: they are irreversible
+	//    (os.Rename) and must run only AFTER the caller's WriteTx commits, so
+	//    a rollback (e.g. a later row's DELETE failing) can never strand an
+	//    earlier restored row against an already-trashed file. The caller
+	//    runs ApplyPendingMoves on the returned slice post-commit. Stop on
+	//    first error — the caller's tx decides rollback vs partial-commit.
+	pending := make([]PendingMove, 0, len(drift))
 	for _, row := range drift {
-		if err := adapter.Purge(ctx, tx, row, actor); err != nil {
-			return report, fmt.Errorf("driftpurge: purge %v (proto=%s repo=%d, %d of %d purged): %w",
+		move, err := adapter.Purge(ctx, tx, row, actor)
+		if err != nil {
+			return report, nil, fmt.Errorf("driftpurge: purge %v (proto=%s repo=%d, %d of %d purged): %w",
 				row.Key(), adapter.Protocol(), repoID, report.PurgedCount, len(drift), err)
 		}
+		pending = append(pending, move)
 		report.PurgedCount++
 	}
 
-	return report, nil
+	return report, pending, nil
 }
 
-// purgeRow is the shared tail of every adapter's Purge: marshal the
-// snapshot sidecar, DELETE the metadata row inside the caller's tx, then
-// soft-move the on-disk blob to trash with the snapshot attached.
-//
-// DELETE-before-move ordering: the reverse leaves a window where the file
-// is moved, the caller's WriteTx rolls back the DELETE, and the row then
-// points at a missing file (404 on download). With this order a
-// trash-move failure rolls back the DELETE cleanly — row + file both stay
-// where they were. A missing source file (os.ErrNotExist) is tolerated:
-// the sidecar still landed and the DELETE is the truth-of-record.
-func purgeRow(ctx context.Context, tx *sql.Tx, trash storage.Trash, label, deleteSQL, trashKind string, id int64, snap map[string]any, path, actor string) error {
+// PendingMove is a deferred trash relocation produced by purgeRow. The DELETE
+// has already happened inside the caller's tx; the file move is held back so
+// it runs only after that tx commits (see ApplyPendingMoves). Fields are
+// unexported — callers obtain these from Run and hand them straight back to
+// ApplyPendingMoves; they cannot (and need not) construct or inspect them.
+type PendingMove struct {
+	trash     storage.Trash
+	label     string
+	trashKind string
+	id        int64
+	path      string
+	actor     string
+	snapshot  []byte
+}
+
+// purgeRow is the shared tail of every adapter's Purge: marshal the snapshot
+// sidecar and DELETE the metadata row inside the caller's tx. It returns the
+// on-disk relocation as a PendingMove rather than performing it, because the
+// move is irreversible (os.Rename) and must run only after the caller's
+// WriteTx commits — otherwise a later row's failure rolling back the tx would
+// leave earlier restored rows pointing at already-trashed files. A marshal or
+// DELETE failure aborts the row (and the caller's tx) with nothing moved.
+func purgeRow(ctx context.Context, tx *sql.Tx, trash storage.Trash, label, deleteSQL, trashKind string, id int64, snap map[string]any, path, actor string) (PendingMove, error) {
 	snapBytes, err := json.Marshal(snap)
 	if err != nil {
-		return fmt.Errorf("%s: marshal snapshot id=%d: %w", label, id, err)
+		return PendingMove{}, fmt.Errorf("%s: marshal snapshot id=%d: %w", label, id, err)
 	}
 	if _, err := tx.ExecContext(ctx, deleteSQL, id); err != nil {
-		return fmt.Errorf("%s: delete id=%d: %w", label, id, err)
+		return PendingMove{}, fmt.Errorf("%s: delete id=%d: %w", label, id, err)
 	}
-	if _, err := trash.MoveWithSnapshot(ctx, path, trashKind, id, actor, snapBytes); err != nil {
-		if !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("%s: trash move id=%d path=%q: %w", label, id, path, err)
+	return PendingMove{
+		trash:     trash,
+		label:     label,
+		trashKind: trashKind,
+		id:        id,
+		path:      path,
+		actor:     actor,
+		snapshot:  snapBytes,
+	}, nil
+}
+
+// ApplyPendingMoves performs the deferred trash relocations returned by Run,
+// AFTER the caller's purge tx has committed. It is best-effort and order-
+// independent: every move is attempted even if an earlier one fails, because
+// each row is already deleted (committed) and the moves are independent. A
+// missing source file (os.ErrNotExist) is tolerated — the DELETE is the
+// truth-of-record and the snapshot sidecar still lets an admin restore. A
+// genuine move failure leaves an orphaned file (the drifted artifact stays on
+// disk with no row); that is a recoverable storage leak, never a restored row
+// pointing at a missing file. The first such error is returned (with the count
+// of failures) so the caller can log it; callers treat drift purge as
+// best-effort and do not fail the sync on it.
+func ApplyPendingMoves(ctx context.Context, moves []PendingMove) error {
+	var firstErr error
+	failures := 0
+	for _, m := range moves {
+		if _, err := m.trash.MoveWithSnapshot(ctx, m.path, m.trashKind, m.id, m.actor, m.snapshot); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			failures++
+			if firstErr == nil {
+				firstErr = fmt.Errorf("%s: trash move id=%d path=%q: %w", m.label, m.id, m.path, err)
+			}
 		}
+	}
+	if firstErr != nil {
+		return fmt.Errorf("driftpurge: %d of %d trash move(s) failed; first: %w", failures, len(moves), firstErr)
 	}
 	return nil
 }

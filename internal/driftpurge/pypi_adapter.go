@@ -62,10 +62,10 @@ func (a *pypiAdapter) LocalRows(ctx context.Context, _ *sql.Tx, repoID int64) ([
 	return out, nil
 }
 
-func (a *pypiAdapter) Purge(ctx context.Context, tx *sql.Tx, row Row, actor string) error {
+func (a *pypiAdapter) Purge(ctx context.Context, tx *sql.Tx, row Row, actor string) (PendingMove, error) {
 	pr, ok := row.(*pypiRow)
 	if !ok {
-		return fmt.Errorf("pypi adapter: unexpected row type %T", row)
+		return PendingMove{}, fmt.Errorf("pypi adapter: unexpected row type %T", row)
 	}
 	inner := pr.inner
 

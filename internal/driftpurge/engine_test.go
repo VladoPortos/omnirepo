@@ -37,12 +37,12 @@ func (a *fakeAdapter) UpstreamKeys() []Key {
 func (a *fakeAdapter) LocalRows(_ context.Context, _ *sql.Tx, _ int64) ([]Row, error) {
 	return a.localRows, a.localErr
 }
-func (a *fakeAdapter) Purge(_ context.Context, _ *sql.Tx, row Row, _ string) error {
+func (a *fakeAdapter) Purge(_ context.Context, _ *sql.Tx, row Row, _ string) (PendingMove, error) {
 	a.purgeCalls = append(a.purgeCalls, row)
 	if a.purgeErrAt > 0 && len(a.purgeCalls) == a.purgeErrAt {
-		return errors.New("fake purge error")
+		return PendingMove{}, errors.New("fake purge error")
 	}
-	return nil
+	return PendingMove{}, nil
 }
 
 func mkRow(name string) Row {
@@ -57,7 +57,7 @@ func TestRun_EmptyUpstreamGuard(t *testing.T) {
 		upstream:  []Key{},
 		localRows: []Row{mkRow("a"), mkRow("b"), mkRow("c")},
 	}
-	rep, err := Run(context.Background(), nil, 42, "alice", a, 0, false)
+	rep, _, err := Run(context.Background(), nil, 42, "alice", a, 0, false)
 	if err != nil {
 		t.Fatalf("Run returned err: %v", err)
 	}
@@ -80,7 +80,7 @@ func TestRun_EmptyUpstreamGuard(t *testing.T) {
 
 func TestRun_EmptyUpstream_EmptyLocal(t *testing.T) {
 	a := &fakeAdapter{protocol: "test", upstream: []Key{}, localRows: []Row{}}
-	rep, err := Run(context.Background(), nil, 1, "", a, 0, false)
+	rep, _, err := Run(context.Background(), nil, 1, "", a, 0, false)
 	if err != nil {
 		t.Fatalf("Run err: %v", err)
 	}
@@ -98,7 +98,7 @@ func TestRun_NoDrift(t *testing.T) {
 		upstream:  []Key{mkKey("a"), mkKey("b"), mkKey("c")},
 		localRows: []Row{mkRow("a"), mkRow("b"), mkRow("c")},
 	}
-	rep, err := Run(context.Background(), nil, 1, "", a, 0, false)
+	rep, _, err := Run(context.Background(), nil, 1, "", a, 0, false)
 	if err != nil {
 		t.Fatalf("Run err: %v", err)
 	}
@@ -119,7 +119,7 @@ func TestRun_FullDrift(t *testing.T) {
 		upstream:  []Key{mkKey("a")},
 		localRows: []Row{mkRow("a"), mkRow("d"), mkRow("e")},
 	}
-	rep, err := Run(context.Background(), nil, 1, "", a, 0, false)
+	rep, _, err := Run(context.Background(), nil, 1, "", a, 0, false)
 	if err != nil {
 		t.Fatalf("Run err: %v", err)
 	}
@@ -144,7 +144,7 @@ func TestRun_Sample20Cap(t *testing.T) {
 	}
 	// 1 ('a' in upstream) + 25 (b..z) = 26 local rows; drift = 25.
 	a := &fakeAdapter{protocol: "test", upstream: upstream, localRows: local}
-	rep, err := Run(context.Background(), nil, 1, "", a, 0, false)
+	rep, _, err := Run(context.Background(), nil, 1, "", a, 0, false)
 	if err != nil {
 		t.Fatalf("Run err: %v", err)
 	}
@@ -175,7 +175,7 @@ func TestRun_SampleLexOrderFromScrambledInput(t *testing.T) {
 		mkRow("apple"),
 		mkRow("mango"),
 	}
-	rep, err := Run(context.Background(), nil, 1, "", a, 0, false)
+	rep, _, err := Run(context.Background(), nil, 1, "", a, 0, false)
 	if err != nil {
 		t.Fatalf("Run err: %v", err)
 	}
@@ -196,7 +196,7 @@ func TestRun_LocalRowsError(t *testing.T) {
 		upstream: []Key{mkKey("a")},
 		localErr: errors.New("db boom"),
 	}
-	_, err := Run(context.Background(), nil, 1, "", a, 0, false)
+	_, _, err := Run(context.Background(), nil, 1, "", a, 0, false)
 	if err == nil {
 		t.Fatal("Run err = nil, want non-nil")
 	}
@@ -215,7 +215,7 @@ func TestRun_ThresholdGuard_Trips(t *testing.T) {
 		upstream:  []Key{mkKey("keep")},
 		localRows: []Row{mkRow("keep"), mkRow("a"), mkRow("b"), mkRow("c")},
 	}
-	rep, err := Run(context.Background(), nil, 1, "", a, 50, false)
+	rep, _, err := Run(context.Background(), nil, 1, "", a, 50, false)
 	if err != nil {
 		t.Fatalf("Run err: %v", err)
 	}
@@ -242,7 +242,7 @@ func TestRun_ThresholdGuard_BoundaryAtThreshold(t *testing.T) {
 		upstream:  []Key{mkKey("a"), mkKey("b")},
 		localRows: []Row{mkRow("a"), mkRow("b"), mkRow("c"), mkRow("d")},
 	}
-	rep, err := Run(context.Background(), nil, 1, "", a, 50, false)
+	rep, _, err := Run(context.Background(), nil, 1, "", a, 50, false)
 	if err != nil {
 		t.Fatalf("Run err: %v", err)
 	}
@@ -262,7 +262,7 @@ func TestRun_ThresholdGuard_DisabledByZero(t *testing.T) {
 		upstream:  []Key{mkKey("nope")}, // no local row matches
 		localRows: []Row{mkRow("a"), mkRow("b"), mkRow("c")},
 	}
-	rep, err := Run(context.Background(), nil, 1, "", a, 0, false)
+	rep, _, err := Run(context.Background(), nil, 1, "", a, 0, false)
 	if err != nil {
 		t.Fatalf("Run err: %v", err)
 	}
@@ -283,7 +283,7 @@ func TestRun_ThresholdGuard_ForceBypasses(t *testing.T) {
 		localRows: []Row{mkRow("keep"), mkRow("a"), mkRow("b"), mkRow("c"), mkRow("d")},
 	}
 	// 4/5 drift = 80% > 50 threshold; force=true bypasses.
-	rep, err := Run(context.Background(), nil, 1, "", a, 50, true)
+	rep, _, err := Run(context.Background(), nil, 1, "", a, 50, true)
 	if err != nil {
 		t.Fatalf("Run err: %v", err)
 	}
@@ -308,7 +308,7 @@ func TestRun_ThresholdGuard_LocalEmpty_NoBlock(t *testing.T) {
 		upstream:  []Key{mkKey("a"), mkKey("b")},
 		localRows: []Row{},
 	}
-	rep, err := Run(context.Background(), nil, 1, "", a, 50, false)
+	rep, _, err := Run(context.Background(), nil, 1, "", a, 50, false)
 	if err != nil {
 		t.Fatalf("Run err: %v", err)
 	}
@@ -326,7 +326,7 @@ func TestRun_ThresholdGuard_OrderedAfterEmptyUpstream(t *testing.T) {
 		upstream:  []Key{},
 		localRows: []Row{mkRow("a"), mkRow("b")},
 	}
-	rep, err := Run(context.Background(), nil, 1, "", a, 50, false)
+	rep, _, err := Run(context.Background(), nil, 1, "", a, 50, false)
 	if err != nil {
 		t.Fatalf("Run err: %v", err)
 	}
@@ -347,7 +347,7 @@ func TestRun_PurgeErrorMidIteration(t *testing.T) {
 		localRows:  []Row{mkRow("keep"), mkRow("a"), mkRow("b"), mkRow("c")},
 		purgeErrAt: 3,
 	}
-	rep, err := Run(context.Background(), nil, 1, "", a, 0, false)
+	rep, _, err := Run(context.Background(), nil, 1, "", a, 0, false)
 	if err == nil {
 		t.Fatal("Run err = nil, want non-nil on Purge failure")
 	}

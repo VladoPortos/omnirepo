@@ -96,3 +96,16 @@ export function formatDuration(ms: number): string {
   }
   return `${hours}h`;
 }
+
+/**
+ * Format a duration in (possibly fractional) seconds into a compact
+ * string. e.g. 0.4 -> "<1s", 42 -> "42s", 95 -> "1m 35s".
+ * Note the different input unit and output format vs formatDuration(ms).
+ */
+export function formatDurationSeconds(seconds: number): string {
+  if (seconds < 1) return '<1s';
+  if (seconds < 60) return `${Math.round(seconds)}s`;
+  const m = Math.floor(seconds / 60);
+  const s = Math.round(seconds % 60);
+  return `${m}m ${s.toString().padStart(2, '0')}s`;
+}

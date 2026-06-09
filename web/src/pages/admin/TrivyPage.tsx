@@ -14,7 +14,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
 import { toast } from 'sonner';
-import { formatDate } from '@/lib/format';
+import { formatDate, formatDurationSeconds } from '@/lib/format';
 import {
   Database,
   Upload,
@@ -97,14 +97,6 @@ function formatFileSize(bytes: number): string {
   const units = ['B', 'KB', 'MB', 'GB'];
   const i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
   return `${(bytes / Math.pow(1024, i)).toFixed(1)} ${units[i]}`;
-}
-
-function formatDuration(seconds: number): string {
-  if (seconds < 1) return '<1s';
-  if (seconds < 60) return `${Math.round(seconds)}s`;
-  const m = Math.floor(seconds / 60);
-  const s = Math.round(seconds % 60);
-  return `${m}m ${s.toString().padStart(2, '0')}s`;
 }
 
 // ---------- Component ----------
@@ -414,7 +406,7 @@ export default function TrivyPage() {
                         <div>
                           <span className="text-muted-foreground">Elapsed</span>
                           <p className="font-medium tabular-nums">
-                            {formatDuration(elapsedSec)}
+                            {formatDurationSeconds(elapsedSec)}
                           </p>
                         </div>
                         <div>

@@ -44,6 +44,8 @@ const TYPE_LABELS: Record<RepoType, string> = {
   pypi: 'PyPI',
   helm: 'Helm',
   go: 'Go',
+  npm: 'npm',
+  maven: 'Maven',
   git: 'Git',
   raw: 'RAW',
   s3: 'S3',
@@ -66,6 +68,10 @@ function itemUnit(type: RepoType, n: number): string {
       return `chart${plural}`;
     case 'go':
       return `module version${plural}`;
+    case 'npm':
+      return `package version${plural}`;
+    case 'maven':
+      return `artifact${plural}`;
     case 'raw':
       return `file${plural}`;
     case 'git':

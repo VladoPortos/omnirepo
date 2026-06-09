@@ -81,6 +81,8 @@ const REPO_TYPES: { value: RepoType; label: string }[] = [
   { value: 'pypi', label: 'PyPI' },
   { value: 'helm', label: 'Helm' },
   { value: 'go', label: 'Go modules' },
+  { value: 'npm', label: 'npm' },
+  { value: 'maven', label: 'Maven' },
   { value: 'git', label: 'Git' },
   { value: 'raw', label: 'RAW' },
 ];
@@ -293,6 +295,25 @@ export function CreateRepoDialog({
                 consume with <span className="font-semibold">GOPROXY</span>{' '}
                 — see the snippets on the repo page. Go repos have no
                 mirroring and are not vulnerability-scanned.
+              </p>
+            )}
+            {repoType === 'npm' && (
+              <p className="rounded-md border border-muted bg-muted/40 p-3 text-xs text-muted-foreground">
+                npm repos serve the npm registry protocol. Publish with{' '}
+                <span className="font-semibold">npm publish</span> and
+                install with <span className="font-semibold">npm install</span>{' '}
+                — see the snippets on the repo page. Published versions are
+                immutable. npm repos have no mirroring and are not
+                vulnerability-scanned.
+              </p>
+            )}
+            {repoType === 'maven' && (
+              <p className="rounded-md border border-muted bg-muted/40 p-3 text-xs text-muted-foreground">
+                Maven repos accept uploads via{' '}
+                <span className="font-semibold">mvn deploy</span> (or
+                Gradle&apos;s maven-publish plugin) — see the snippets on
+                the repo page. Maven repos have no mirroring and are not
+                vulnerability-scanned.
               </p>
             )}
             {repoType === 'docker' && (

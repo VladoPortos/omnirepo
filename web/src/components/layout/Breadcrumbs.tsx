@@ -34,6 +34,8 @@ const LABEL_MAP: Record<string, string> = {
   docker: 'Docker',
   helm: 'Helm',
   go: 'Go',
+  npm: 'npm',
+  maven: 'Maven',
   git: 'Git',
   raw: 'RAW',
   s3: 'S3',

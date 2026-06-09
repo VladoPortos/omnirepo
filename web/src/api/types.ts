@@ -221,7 +221,18 @@ export interface ActivityItem {
 
 // -- Repo --
 
-export type RepoType = 'docker' | 'rpm' | 'deb' | 'pypi' | 'helm' | 'go' | 'git' | 'raw' | 's3';
+export type RepoType =
+  | 'docker'
+  | 'rpm'
+  | 'deb'
+  | 'pypi'
+  | 'helm'
+  | 'go'
+  | 'npm'
+  | 'maven'
+  | 'git'
+  | 'raw'
+  | 's3';
 
 export type BlockSeverity = 'none' | 'low' | 'medium' | 'high' | 'critical';
 

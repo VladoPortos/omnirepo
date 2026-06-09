@@ -133,21 +133,25 @@ func (p *PullExternalHandler) Handle(ctx context.Context, payload string, projec
 	defer cancel()
 
 	var job PullExternalJob
-	if err := json.Unmarshal([]byte(payload), &job); err != nil {
-		return fmt.Errorf("pull_external: payload: %w", err)
-	}
 
-	// Terminal failure audit. The lifecycle is started (emitted at enqueue
-	// by the HTTP handler) → finished (emitted on success by persistManifest).
-	// Without this, a job that errors out leaves a "started" with no
-	// resolution in the trail. Best-effort + nil-safe; the returned error is
-	// already upstream-sanitized at every return site. Uses a detached
-	// context so a pull that fails *because* ctx timed out still records.
+	// Terminal failure audit. The lifecycle is started (emitted at enqueue by
+	// the HTTP handler) → finished (emitted on success by persistManifest);
+	// without this a job that errors out leaves a "started" with no resolution
+	// in the trail. Best-effort + nil-safe, and installed BEFORE the payload
+	// unmarshal so even a malformed job is recorded. The failure REASON is
+	// deliberately NOT included here: it lands upstream-sanitized in
+	// sync_jobs.last_error (correlatable via sync_job_id), so no raw error or
+	// credential-bearing string can reach the audit log. The write runs on a
+	// detached, short-deadline context so a pull that failed because ctx was
+	// cancelled still records, without the write itself being able to hang
+	// handler return.
 	defer func() {
 		if retErr == nil || p.deps.Audit == nil {
 			return
 		}
-		_ = p.deps.Audit.Record(context.WithoutCancel(ctx), audit.Event{
+		auditCtx, auditCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer auditCancel()
+		_ = p.deps.Audit.Record(auditCtx, audit.Event{
 			Kind:       audit.EvtOCIPullExternalFailed,
 			TargetKind: "repo",
 			TargetID:   strconv.FormatInt(repoID, 10),
@@ -155,10 +159,13 @@ func (p *PullExternalHandler) Handle(ctx context.Context, payload string, projec
 				"src":     job.SrcImage,
 				"dst_tag": job.DstTag,
 				"job_id":  jobID,
-				"error":   retErr.Error(),
 			},
 		})
 	}()
+
+	if err := json.Unmarshal([]byte(payload), &job); err != nil {
+		return fmt.Errorf("pull_external: payload: %w", err)
+	}
 	srcRef, err := name.ParseReference(job.SrcImage)
 	if err != nil {
 		return fmt.Errorf("pull_external: parse ref %q: %w", job.SrcImage, err)

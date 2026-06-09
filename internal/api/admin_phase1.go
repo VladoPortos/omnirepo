@@ -1218,6 +1218,7 @@ func (d Deps) handleTLSUpload(w http.ResponseWriter, r *http.Request) {
 
 var validRepoTypes = map[string]struct{}{
 	"rpm": {}, "deb": {}, "pypi": {}, "docker": {}, "helm": {}, "git": {}, "raw": {}, "go": {},
+	"npm": {}, "maven": {},
 }
 
 // readFormFile loads the full contents of an uploaded multipart file field.

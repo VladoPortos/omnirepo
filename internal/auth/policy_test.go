@@ -139,10 +139,10 @@ func TestUnknownActionDenied(t *testing.T) {
 func TestAllActionsSliceMatchesConstants(t *testing.T) {
 	// Sanity check: every Action constant appears in AllActions. The sum of
 	// these constants should equal len(AllActions). This includes the
-	// five package-upload actions (RPM/DEB/PyPI/Helm/Go), ActionResetState
-	// (DEV-only super-admin-gated state wipe), and
+	// seven package-upload actions (RPM/DEB/PyPI/Helm/Go/NPM/Maven),
+	// ActionResetState (DEV-only super-admin-gated state wipe), and
 	// ActionChangeProjectMemberRole.
-	want := 34
+	want := 36
 	if len(auth.AllActions) != want {
 		t.Fatalf("AllActions length: %d, want %d", len(auth.AllActions), want)
 	}

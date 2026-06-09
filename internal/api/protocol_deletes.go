@@ -28,11 +28,13 @@ type ProtocolDeleteHandler interface {
 // surface is re-exposed under /api/v1. Any field may be nil — the route is
 // skipped for that protocol. Mirrors the OCIActionsDeps pattern.
 type ProtocolDeletesDeps struct {
-	RPM  ProtocolDeleteHandler
-	DEB  ProtocolDeleteHandler
-	PyPI ProtocolDeleteHandler
-	Helm ProtocolDeleteHandler
-	Go   ProtocolDeleteHandler
+	RPM   ProtocolDeleteHandler
+	DEB   ProtocolDeleteHandler
+	PyPI  ProtocolDeleteHandler
+	Helm  ProtocolDeleteHandler
+	Go    ProtocolDeleteHandler
+	NPM   ProtocolDeleteHandler
+	Maven ProtocolDeleteHandler
 }
 
 // RegisterProtocolDeleteRoutes mounts session-authed DELETE routes that
@@ -63,5 +65,14 @@ func RegisterProtocolDeleteRoutes(r chi.Router, d *ProtocolDeletesDeps) {
 		// Wildcard carries <escaped-module>/@v/<version> — same tail shape
 		// as the protocol-native DELETE route.
 		r.Delete("/projects/{name}/repos/go/{repo}/*", d.Go.DeleteREST)
+	}
+	if d.NPM != nil {
+		// Wildcard carries <name>/-/<version> — same tail shape as the
+		// protocol-native DELETE route.
+		r.Delete("/projects/{name}/repos/npm/{repo}/*", d.NPM.DeleteREST)
+	}
+	if d.Maven != nil {
+		// Wildcard carries the layout path of the file to delete.
+		r.Delete("/projects/{name}/repos/maven/{repo}/*", d.Maven.DeleteREST)
 	}
 }

@@ -30,6 +30,8 @@ import (
 	gitpkg "github.com/vladoportos/omnirepo/internal/protocol/git"
 	"github.com/vladoportos/omnirepo/internal/protocol/goproxy"
 	"github.com/vladoportos/omnirepo/internal/protocol/helm"
+	"github.com/vladoportos/omnirepo/internal/protocol/maven"
+	npmpkg "github.com/vladoportos/omnirepo/internal/protocol/npm"
 	"github.com/vladoportos/omnirepo/internal/protocol/oci"
 	"github.com/vladoportos/omnirepo/internal/protocol/pypi"
 	"github.com/vladoportos/omnirepo/internal/protocol/raw"
@@ -506,6 +508,43 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 	})
 	goHandler.Mount(router)
 
+	// 6a.2. npm registry handler. Hosted npm packages at
+	// /<project>/npm/<repo>/...; constructed before api.Mount so the
+	// row-delete REST shim can reference it.
+	npmHandler := npmpkg.New(npmpkg.Deps{
+		DB:       db,
+		Users:    metadata.NewUsersRepo(db),
+		APIKeys:  metadata.NewAPIKeysRepo(db),
+		Sessions: metadata.NewSessionsRepo(db),
+		Repos:    metadata.NewReposRepo(db),
+		Projects: metadata.NewProjectsRepo(db),
+		Members:  metadata.NewMembersRepo(db),
+		Packages: metadata.NewNPMPackagesRepo(db),
+		Path:     storage.NewPathStore(filepath.Join(cfg.DataRoot, "repos")),
+		Trash:    storage.NewTrash(filepath.Join(cfg.DataRoot, "trash")),
+		Audit:    auditLogger,
+		RepoRoot: filepath.Join(cfg.DataRoot, "repos"),
+	})
+	npmHandler.Mount(router)
+
+	// 6a.3. Maven repository handler. Hosted Maven artifacts at
+	// /<project>/maven/<repo>/...
+	mavenHandler := maven.New(maven.Deps{
+		DB:        db,
+		Users:     metadata.NewUsersRepo(db),
+		APIKeys:   metadata.NewAPIKeysRepo(db),
+		Sessions:  metadata.NewSessionsRepo(db),
+		Repos:     metadata.NewReposRepo(db),
+		Projects:  metadata.NewProjectsRepo(db),
+		Members:   metadata.NewMembersRepo(db),
+		Artifacts: metadata.NewMavenArtifactsRepo(db),
+		Path:      storage.NewPathStore(filepath.Join(cfg.DataRoot, "repos")),
+		Trash:     storage.NewTrash(filepath.Join(cfg.DataRoot, "trash")),
+		Audit:     auditLogger,
+		RepoRoot:  filepath.Join(cfg.DataRoot, "repos"),
+	})
+	mavenHandler.Mount(router)
+
 	// blobRoot + ociCAS already constructed in step 5e (scan handler wiring).
 	ociHandler := oci.New(oci.Deps{
 		DB:          db,
@@ -743,11 +782,13 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 		// re-expose them under /api/v1 where SessionOrAPIKey is active
 		// so the browser's session cookie can drive row-level deletes.
 		ProtocolDeletes: &api.ProtocolDeletesDeps{
-			RPM:  rpmHandler,
-			DEB:  debHandler,
-			PyPI: pypiHandler,
-			Helm: helmHandler,
-			Go:   goHandler,
+			RPM:   rpmHandler,
+			DEB:   debHandler,
+			PyPI:  pypiHandler,
+			Helm:  helmHandler,
+			Go:    goHandler,
+			NPM:   npmHandler,
+			Maven: mavenHandler,
 		},
 		// super-admin GC trigger.
 		GCDeps: &api.GCDeps{

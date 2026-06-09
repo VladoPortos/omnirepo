@@ -82,6 +82,8 @@ const repoItemCountExpr = `(
         WHEN 'raw'    THEN (SELECT COUNT(*) FROM raw_files WHERE repo_id = r.id)
         WHEN 'git'    THEN (SELECT COUNT(*) FROM git_refs WHERE repo_id = r.id AND type IN ('branch','tag'))
         WHEN 'go'     THEN (SELECT COUNT(*) FROM go_modules WHERE repo_id = r.id)
+        WHEN 'npm'    THEN (SELECT COUNT(*) FROM npm_packages WHERE repo_id = r.id)
+        WHEN 'maven'  THEN (SELECT COUNT(*) FROM maven_artifacts WHERE repo_id = r.id)
         ELSE 0
     END
 )`

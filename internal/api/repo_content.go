@@ -180,6 +180,10 @@ func (d Deps) handleListRepoContent(w http.ResponseWriter, r *http.Request) {
 		entries, qerr = d.listDockerContent(r, repo.ID, limit, offset)
 	case "go":
 		entries, qerr = d.listGoContent(r, repo.ID, limit, offset)
+	case "npm":
+		entries, qerr = d.listNpmContent(r, repo.ID, limit, offset)
+	case "maven":
+		entries, qerr = d.listMavenContent(r, repo.ID, limit, offset)
 	case "git":
 		// Git has its own dedicated listing surface (tree/refs under
 		// /projects/.../git/...). Return an empty list here so the UI's
@@ -243,6 +247,10 @@ func (d Deps) countRepoContent(r *http.Request, repoType string, repoID int64) (
 		query = `SELECT COUNT(*) FROM docker_tags WHERE repo_id=?`
 	case "go":
 		query = `SELECT COUNT(*) FROM go_modules WHERE repo_id=?`
+	case "npm":
+		query = `SELECT COUNT(*) FROM npm_packages WHERE repo_id=?`
+	case "maven":
+		query = `SELECT COUNT(*) FROM maven_artifacts WHERE repo_id=?`
 	default:
 		return 0, nil
 	}
@@ -798,6 +806,88 @@ func (d Deps) listGoContent(r *http.Request, repoID, limit, offset int64) ([]Rep
 			UploadedAt: uploadedAt,
 			Extra: map[string]any{
 				"digest": digest,
+			},
+		})
+	}
+	return out, rows.Err()
+}
+
+// listNpmContent produces one row per published npm package version.
+// npm packages are not scanned, so scan columns stay at zero values.
+func (d Deps) listNpmContent(r *http.Request, repoID, limit, offset int64) ([]RepoContentEntry, error) {
+	query := `
+		SELECT np.id, np.name, np.version, COALESCE(np.description, ''),
+		       np.tarball, np.size_bytes, np.shasum, np.uploaded_at
+		FROM npm_packages np
+		WHERE np.repo_id=?
+		ORDER BY np.name ASC, np.version ASC
+		LIMIT ? OFFSET ?`
+	rows, err := d.DB.Reader.QueryContext(r.Context(), query, repoID, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var out []RepoContentEntry
+	for rows.Next() {
+		var id, size int64
+		var name, version, description, tarball, shasum, uploadedAt string
+		if err := rows.Scan(&id, &name, &version, &description, &tarball, &size, &shasum, &uploadedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, RepoContentEntry{
+			ID:         id,
+			Name:       name,
+			Version:    version,
+			SizeBytes:  size,
+			UploadedAt: uploadedAt,
+			Extra: map[string]any{
+				"description": description,
+				"tarball":     tarball,
+				"shasum":      shasum,
+			},
+		})
+	}
+	return out, rows.Err()
+}
+
+// listMavenContent produces one row per deployed primary Maven artifact.
+// Maven artifacts are not scanned, so scan columns stay at zero values.
+func (d Deps) listMavenContent(r *http.Request, repoID, limit, offset int64) ([]RepoContentEntry, error) {
+	query := `
+		SELECT ma.id, ma.group_id, ma.artifact_id, ma.version,
+		       COALESCE(ma.classifier, ''), ma.extension, ma.filename,
+		       ma.path, ma.size_bytes, ma.sha256, ma.uploaded_at
+		FROM maven_artifacts ma
+		WHERE ma.repo_id=?
+		ORDER BY ma.group_id ASC, ma.artifact_id ASC, ma.version ASC, ma.filename ASC
+		LIMIT ? OFFSET ?`
+	rows, err := d.DB.Reader.QueryContext(r.Context(), query, repoID, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var out []RepoContentEntry
+	for rows.Next() {
+		var id, size int64
+		var groupID, artifactID, version, classifier, extension, filename, pth, sha, uploadedAt string
+		if err := rows.Scan(&id, &groupID, &artifactID, &version, &classifier, &extension,
+			&filename, &pth, &size, &sha, &uploadedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, RepoContentEntry{
+			ID:         id,
+			Name:       groupID + ":" + artifactID,
+			Version:    version,
+			SizeBytes:  size,
+			UploadedAt: uploadedAt,
+			Extra: map[string]any{
+				"group_id":    groupID,
+				"artifact_id": artifactID,
+				"classifier":  classifier,
+				"extension":   extension,
+				"filename":    filename,
+				"path":        pth,
+				"sha256":      sha,
 			},
 		})
 	}

@@ -55,11 +55,13 @@ const (
 	// caller may upload RPM/APT/PyPI/Helm artifacts only if they're a member
 	// of the target repo's project (or super-admin). Anonymous callers are
 	// rejected at the top of Can via ReasonRequiresAuth.
-	ActionRPMUpload  Action = "rpm.upload"
-	ActionDEBUpload  Action = "deb.upload"
-	ActionPyPIUpload Action = "pypi.upload"
-	ActionHelmUpload Action = "helm.upload"
-	ActionGoUpload   Action = "go.upload"
+	ActionRPMUpload   Action = "rpm.upload"
+	ActionDEBUpload   Action = "deb.upload"
+	ActionPyPIUpload  Action = "pypi.upload"
+	ActionHelmUpload  Action = "helm.upload"
+	ActionGoUpload    Action = "go.upload"
+	ActionNPMUpload   Action = "npm.upload"
+	ActionMavenUpload Action = "maven.upload"
 
 	// S3 bucket permission actions.
 	// Read/Write require project membership; Admin requires super-admin.
@@ -121,6 +123,8 @@ var AllActions = []Action{
 	ActionPyPIUpload,
 	ActionHelmUpload,
 	ActionGoUpload,
+	ActionNPMUpload,
+	ActionMavenUpload,
 	ActionS3BucketRead,
 	ActionS3BucketWrite,
 	ActionS3BucketAdmin,
@@ -281,7 +285,7 @@ func Can(ctx context.Context, actor Actor, action Action, target Target) (bool, 
 		ActionManageProjectAPIKeys,
 		ActionRPMUpload, ActionDEBUpload,
 		ActionPyPIUpload, ActionHelmUpload,
-		ActionGoUpload,
+		ActionGoUpload, ActionNPMUpload, ActionMavenUpload,
 		ActionGitRepoWrite:
 		role, member := memberRoleOfProject(ctx, target.ProjectID)
 		if !member {

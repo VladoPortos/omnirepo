@@ -201,6 +201,18 @@ const (
 	EvtGoUpload EventKind = "go.upload"
 	EvtGoDelete EventKind = "go.delete"
 
+	// npm registry. Emitted by the npm handler for publishes and version
+	// deletes. Details: {project, repo, package, version} (+size_bytes on
+	// upload; reason on rejected publishes).
+	EvtNPMUpload EventKind = "npm.upload"
+	EvtNPMDelete EventKind = "npm.delete"
+
+	// Maven repository. Emitted by the maven handler for artifact
+	// deploys and deletes. Details: {project, repo, path} (+gav fields,
+	// size_bytes on upload).
+	EvtMavenUpload EventKind = "maven.upload"
+	EvtMavenDelete EventKind = "maven.delete"
+
 	// Git refs walker. Emitted by the post-ReceivePack hook after a
 	// successful git_refs sync.
 	// Details: {repo_id, ref_count, project}.

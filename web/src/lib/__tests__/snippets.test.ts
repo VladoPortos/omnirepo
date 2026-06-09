@@ -149,6 +149,59 @@ describe('getSnippets', () => {
     }
   });
 
+  it('npm: 2 entries — Consume (npm) + Publish; registry-scoped _auth; no inline userinfo URL', () => {
+    const s = getSnippets('npm', P, 'pkgs', HOST);
+    expect(s).toHaveLength(2);
+    expect(s.map((x) => x.label)).toEqual(['Consume (npm)', 'Publish']);
+    // Consume points the npm registry at the repo root (trailing slash).
+    expect(s[0].cmd).toContain(
+      `npm config set registry https://${HOST}/${P}/npm/pkgs/`,
+    );
+    expect(s[0].cmd).toContain('npm install <package>');
+    // Both entries carry the registry-scoped _auth line (base64 of
+    // user:api-key) keyed under the scheme-less registry URL — auth never
+    // leaks to other registries.
+    for (const entry of s) {
+      expect(entry.cmd).toContain(
+        `npm config set //${HOST}/${P}/npm/pkgs/:_auth $(echo -n <user>:<api-key> | base64)`,
+      );
+      // No inline userinfo URL (credential leakage).
+      expect(entry.cmd).not.toMatch(/https:\/\/[^/\s]+:[^@\s]+@/);
+    }
+    // Publish targets the repo registry explicitly.
+    expect(s[1].cmd).toContain(
+      `npm publish --registry https://${HOST}/${P}/npm/pkgs/`,
+    );
+  });
+
+  it('maven: 3 entries — pom.xml consume, settings.xml credentials, mvn deploy', () => {
+    const s = getSnippets('maven', P, 'libs', HOST);
+    expect(s).toHaveLength(3);
+    expect(s.map((x) => x.label)).toEqual([
+      'pom.xml (consume)',
+      'settings.xml (credentials)',
+      'Publish (mvn deploy)',
+    ]);
+    // Consume repository block points at the repo root.
+    expect(s[0].cmd).toContain(
+      `<url>https://${HOST}/${P}/maven/libs</url>`,
+    );
+    // The server id is shared across all three blocks so settings.xml
+    // credentials attach to the pom.xml repository entries.
+    for (const entry of s) {
+      expect(entry.cmd).toContain('<id>omnirepo-libs</id>');
+      // No inline userinfo URL (credential leakage).
+      expect(entry.cmd).not.toMatch(/https:\/\/[^/\s]+:[^@\s]+@/);
+    }
+    expect(s[1].cmd).toContain('<username><user></username>');
+    expect(s[1].cmd).toContain('<password><api-key></password>');
+    // Publish carries the distributionManagement block + the deploy
+    // command, with the Gradle maven-publish mention as a comment.
+    expect(s[2].cmd).toContain('<distributionManagement>');
+    expect(s[2].cmd).toContain('mvn deploy');
+    expect(s[2].cmd).toContain('maven-publish');
+  });
+
   it('git: 2 entries — Clone + Authenticate; no inline userinfo URL', () => {
     const s = getSnippets('git', P, 'repo', HOST);
     expect(s).toHaveLength(2);
@@ -247,6 +300,31 @@ describe('getSnippets', () => {
       }
       expect(s[0].cmd).toContain(`export GOPROXY=http://${HOST}/${P}/go/mods`);
       expect(s[1].cmd).toContain(`http://${HOST}/${P}/go/mods/`);
+    });
+
+    it('npm registry + publish URLs respect scheme=http', () => {
+      const s = getSnippets('npm', P, 'pkgs', HOST, 'http');
+      for (const entry of s) {
+        expect(entry.cmd).not.toContain('https://');
+      }
+      expect(s[0].cmd).toContain(
+        `npm config set registry http://${HOST}/${P}/npm/pkgs/`,
+      );
+      expect(s[1].cmd).toContain(
+        `npm publish --registry http://${HOST}/${P}/npm/pkgs/`,
+      );
+      // The _auth key is scheme-less by design (npm registry-scoped
+      // config keys start with //host/path) — unchanged by scheme.
+      expect(s[0].cmd).toContain(`//${HOST}/${P}/npm/pkgs/:_auth`);
+    });
+
+    it('maven repository URLs respect scheme=http', () => {
+      const s = getSnippets('maven', P, 'libs', HOST, 'http');
+      for (const entry of s) {
+        expect(entry.cmd).not.toContain('https://');
+      }
+      expect(s[0].cmd).toContain(`<url>http://${HOST}/${P}/maven/libs</url>`);
+      expect(s[2].cmd).toContain(`<url>http://${HOST}/${P}/maven/libs</url>`);
     });
 
     it('git clone URL respects scheme=http', () => {

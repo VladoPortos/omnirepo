@@ -43,6 +43,17 @@
  *           curl PUT of a module zip to the GOPROXY upload path; the
  *           module path must be case-escaped per the GOPROXY rule
  *           (uppercase → "!"+lowercase, see lib/gomod.ts).
+ *   npm:    Consume points the npm registry at the repo root and adds a
+ *           registry-scoped `_auth` line (base64 of user:api-key) —
+ *           scoped to the registry URL so credentials never leak to
+ *           other registries. Anonymous read works on public repos.
+ *           Publish reuses the same auth + `npm publish --registry`.
+ *           NO inline userinfo URLs anywhere.
+ *   maven:  pom.xml <repositories> block for consume, settings.xml
+ *           <server> block for credentials (id must match), and a
+ *           <distributionManagement> block + `mvn deploy` for publish
+ *           (Gradle's maven-publish plugin works with the same URL +
+ *           credentials — mentioned in a comment).
  *
  * Placeholders like `<user>`, `<api-key>`, `<region>` render literally —
  * users substitute before running. No real secrets in source.
@@ -163,6 +174,32 @@ export function getSnippets(
         {
           label: 'Publish',
           cmd: `# Use your OmniRepo user + API key; create one at /profile → API Keys\n# module.zip must be a valid Go module zip (e.g. from the go mod download cache).\n# Escape uppercase letters in the module path as "!"+lowercase\n# (e.g. github.com/Azure/Thing → github.com/!azure/!thing).\ncurl -u <user>:<api-key> -T module.zip ${proto}://${host}/${project}/go/${repo}/<escaped-module>/@v/<version>.zip`,
+        },
+      ];
+    case 'npm':
+      return [
+        {
+          label: 'Consume (npm)',
+          cmd: `# Point npm at this registry; auth is registry-scoped (skip the _auth\n# line for anonymous read on public repos). Use your OmniRepo user +\n# API key; create one at /profile → API Keys.\nnpm config set registry ${proto}://${host}/${project}/npm/${repo}/\nnpm config set //${host}/${project}/npm/${repo}/:_auth $(echo -n <user>:<api-key> | base64)\nnpm install <package>`,
+        },
+        {
+          label: 'Publish',
+          cmd: `# Use your OmniRepo user + API key; create one at /profile → API Keys\nnpm config set //${host}/${project}/npm/${repo}/:_auth $(echo -n <user>:<api-key> | base64)\nnpm publish --registry ${proto}://${host}/${project}/npm/${repo}/`,
+        },
+      ];
+    case 'maven':
+      return [
+        {
+          label: 'pom.xml (consume)',
+          cmd: `<repositories>\n  <repository>\n    <id>omnirepo-${repo}</id>\n    <url>${proto}://${host}/${project}/maven/${repo}</url>\n  </repository>\n</repositories>`,
+        },
+        {
+          label: 'settings.xml (credentials)',
+          cmd: `<!-- ~/.m2/settings.xml — use your OmniRepo user + API key; create one\n     at /profile → API Keys. The <id> must match the pom.xml entries. -->\n<servers>\n  <server>\n    <id>omnirepo-${repo}</id>\n    <username><user></username>\n    <password><api-key></password>\n  </server>\n</servers>`,
+        },
+        {
+          label: 'Publish (mvn deploy)',
+          cmd: `<!-- pom.xml — Gradle users: the maven-publish plugin works with the\n     same URL + credentials. -->\n<distributionManagement>\n  <repository>\n    <id>omnirepo-${repo}</id>\n    <url>${proto}://${host}/${project}/maven/${repo}</url>\n  </repository>\n</distributionManagement>\n\nmvn deploy`,
         },
       ];
     case 'git':

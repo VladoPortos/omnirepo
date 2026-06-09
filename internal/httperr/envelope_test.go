@@ -245,40 +245,6 @@ func TestInternal_EnvelopeMessageNeverLeaksCause(t *testing.T) {
 }
 
 // ----------------------------------------------------------------------------
-// IsInternalString
-// ----------------------------------------------------------------------------
-
-func TestIsInternalString_DetectsLeakage(t *testing.T) {
-	cases := []struct {
-		in   string
-		want bool
-	}{
-		{"/foo/bar", true},
-		{"failed: .go:123", true},
-		{"sqlite3 error", true},
-		{"sqlite", true},
-		{"goroutine 1 [running]", true},
-		{"runtime.something", true},
-		{"read: connection reset", true},
-		{"open: no such file", true},
-		{"stat: not found", true},
-		{"Name is required", false},
-		{"You do not have permission", false},
-		{"Trivy database not installed.", false},
-		{"", false},
-	}
-	for _, c := range cases {
-		c := c
-		t.Run(c.in, func(t *testing.T) {
-			got := httperr.IsInternalString(c.in)
-			if got != c.want {
-				t.Errorf("IsInternalString(%q) = %v, want %v", c.in, got, c.want)
-			}
-		})
-	}
-}
-
-// ----------------------------------------------------------------------------
 // JSON marshalling
 // ----------------------------------------------------------------------------
 
@@ -400,14 +366,6 @@ func TestOptions_WithHintStatusDetail(t *testing.T) {
 	}
 	if e.Envelope.Details["extra"] != "info" {
 		t.Errorf("detail extra = %v", e.Envelope.Details["extra"])
-	}
-}
-
-func TestOptions_WithCause(t *testing.T) {
-	cause := errors.New("disk full")
-	e := httperr.Transient("storage.temporarily_unavailable", "We couldn't reach the server.", 0, httperr.WithCause(cause))
-	if e.Cause != cause {
-		t.Errorf("WithCause did not set cause")
 	}
 }
 

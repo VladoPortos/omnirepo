@@ -77,13 +77,10 @@ func WithHint(h string) Option { return func(e *Error) { e.Envelope.Hint = h } }
 // validation that specifically needs Unprocessable Entity semantics).
 func WithStatus(s int) Option { return func(e *Error) { e.Status = s } }
 
-// WithCause attaches an internal error that will be logged (not serialized)
-// by httperr.Write. The cause never appears in the client envelope.
-func WithCause(c error) Option { return func(e *Error) { e.Cause = c } }
-
 // WithDetail adds a single key/value pair to Envelope.Details. Primitive
 // values are fine; caller is responsible for ensuring they do not carry
-// internal-only information. Use IsInternalString for screening.
+// internal-only information. Leak-screening tests use
+// httperrtest.IsInternalString to enforce this.
 func WithDetail(k string, v any) Option {
 	return func(e *Error) {
 		if e.Envelope.Details == nil {
@@ -91,36 +88,6 @@ func WithDetail(k string, v any) Option {
 		}
 		e.Envelope.Details[k] = v
 	}
-}
-
-// internalMarkers flags strings that look like internal-only leakage
-// (filesystem paths, Go driver messages, stack markers). Used by tests
-// (e.g. the api handlers envelope integration test) to assert
-// Envelope.Message / Envelope.Hint never carry these substrings.
-var internalMarkers = []*regexp.Regexp{
-	// Filesystem absolute paths (matches both leading and mid-string).
-	regexp.MustCompile(`(^|\s)/[a-zA-Z0-9_/.-]+`),
-	// Go source locations (e.g. "file.go:123").
-	regexp.MustCompile(`\.go:\d+`),
-	// Stack markers — the word "goroutine" or a runtime.* frame.
-	regexp.MustCompile(`\b(goroutine|runtime\.)`),
-	// Go driver / syscall leaks. Note: "sqlite" is matched as a bare
-	// substring because the driver appears in messages like "sqlite3 ...".
-	regexp.MustCompile(`sqlite`),
-	regexp.MustCompile(`\b(sql:|read:|open:|stat:)`),
-}
-
-// IsInternalString reports whether s contains substrings that look like
-// internal-only information (paths, source locations, stack markers,
-// driver leaks). Used by leak-screening tests (api envelope integration
-// gate) to prevent internal-string leaks reaching wire envelopes.
-func IsInternalString(s string) bool {
-	for _, re := range internalMarkers {
-		if re.MatchString(s) {
-			return true
-		}
-	}
-	return false
 }
 
 // codeRegex enforces the OpenAPI pattern ^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$

@@ -21,7 +21,7 @@ import (
 	"testing"
 
 	"github.com/vladoportos/omnirepo/internal/api"
-	"github.com/vladoportos/omnirepo/internal/httperr"
+	"github.com/vladoportos/omnirepo/internal/httperr/httperrtest"
 )
 
 // uuidV7Regex matches a version-7 UUID as emitted by google/uuid.NewV7.
@@ -48,7 +48,7 @@ type envelope struct {
 
 // pathLikeMarker / sourceLocMarker / stackMarker enumerate the
 // internal-leakage substrings that MUST NEVER appear in a wire envelope
-// message or hint. httperr.IsInternalString is the primary
+// message or hint. httperrtest.IsInternalString is the primary
 // gate; these are extra belt-and-braces checks that fire on any slash,
 // source location, or runtime stack frame even if IsInternalString
 // misses a niche case.
@@ -65,7 +65,7 @@ var (
 //   - code+message+class are non-empty
 //   - code matches the wire regex
 //   - class is one of the 4 known values
-//   - message and hint do NOT trip httperr.IsInternalString
+//   - message and hint do NOT trip httperrtest.IsInternalString
 //   - message and hint do NOT contain raw paths, source locations,
 //     stack markers, or sqlite driver strings
 //
@@ -89,10 +89,10 @@ func assertEnvelope(t *testing.T, body []byte) envelope {
 	default:
 		t.Errorf("unknown class %q", e.Class)
 	}
-	if httperr.IsInternalString(e.Message) {
+	if httperrtest.IsInternalString(e.Message) {
 		t.Errorf("message leaks internal string: %q", e.Message)
 	}
-	if e.Hint != "" && httperr.IsInternalString(e.Hint) {
+	if e.Hint != "" && httperrtest.IsInternalString(e.Hint) {
 		t.Errorf("hint leaks internal string: %q", e.Hint)
 	}
 	for label, re := range map[string]*regexp.Regexp{

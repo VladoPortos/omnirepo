@@ -34,8 +34,8 @@ func TestWrite_SerializesEnvelopeOnly(t *testing.T) {
 		"Name is required",
 		httperr.WithHint("Enter a name."),
 		httperr.WithDetail("field", "user.name"),
-		httperr.WithCause(errors.New("internal detail that must not be exposed")),
 	)
+	e.Cause = errors.New("internal detail that must not be exposed")
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("POST", "/t", nil)
 	httperr.Write(rec, req, e)

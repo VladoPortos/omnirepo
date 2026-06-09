@@ -7,6 +7,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/johannesboyne/gofakes3"
 
+	"github.com/vladoportos/omnirepo/internal/audit"
 	"github.com/vladoportos/omnirepo/internal/protocol/s3/backend"
 	s3keys "github.com/vladoportos/omnirepo/internal/protocol/s3/keys"
 )
@@ -25,6 +26,10 @@ type Deps struct {
 
 	// Hostnames is cfg.Server.ExternalHostnames for v-host rewrite.
 	Hostnames []string
+
+	// Audit records object/bucket mutation events. nil disables protocol
+	// auditing (tests).
+	Audit audit.Logger
 }
 
 // Mount registers the S3 HTTP surface on parent. The middleware chain is:
@@ -41,12 +46,21 @@ type Deps struct {
 // Chi requires all Use() calls before Route() calls.
 func (d *Deps) Mount(parent chi.Router) {
 	// Disable gofakes3's own time-skew check; our SigV4Middleware already
-	// verifies clock skew with proper XML error responses.
-	server := gofakes3.New(d.Backend, gofakes3.WithTimeSkewLimit(0)).Server()
+	// verifies clock skew with proper XML error responses. Route gofakes3's
+	// internal logging (backend DB/IO failures that surface as 500
+	// InternalError XML) onto slog so S3 errors are operationally visible
+	// like every other protocol's.
+	server := gofakes3.New(d.Backend,
+		gofakes3.WithTimeSkewLimit(0),
+		gofakes3.WithLogger(slogAdapter{}),
+	).Server()
 
 	parent.Route("/s3", func(r chi.Router) {
 		r.Use(RejectNonSigV4)
 		r.Use(SigV4Middleware(d.Service, d.Skew))
+		// Audit sits after SigV4 (actor on ctx) and before bucket-access
+		// enforcement so 403 denials are recorded with outcome=denied.
+		r.Use(AuditMiddleware(d.Audit))
 		r.Use(RequireBucketAccess(d.Backend.FindBucketProjectID))
 		// chi-side PutObject SHA enforcement.
 		// Mounted AFTER SigV4Middleware (which stashes the declared SHA in

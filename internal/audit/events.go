@@ -171,11 +171,28 @@ const (
 	EvtUserAPIKeyRevoked EventKind = "user.api-key.revoke"
 
 	// S3 bucket provisioning. Emitted by the REST endpoint that
-	// creates/deletes an s3_buckets row + on-disk dir.
+	// creates/deletes an s3_buckets row + on-disk dir, and by the S3
+	// protocol audit middleware for bucket-level PUT/DELETE through the
+	// S3 API itself (details then carry source="s3-api").
 	// Details: {project, name}. Delete additionally carries
 	// size_bytes_at_delete so post-mortem work can reason about drops.
 	EvtS3BucketCreated EventKind = "s3.bucket.create"
 	EvtS3BucketDeleted EventKind = "s3.bucket.delete"
+
+	// S3 object mutations through the S3 protocol surface. Emitted by the
+	// protocol audit middleware (internal/protocol/s3/audit.go) after the
+	// response completes; actor is the SigV4-resolved S3 access key.
+	// Details: {bucket, key, status} (+batch=true for POST ?delete).
+	// Outcome: ok | denied | failed (from response status).
+	EvtS3ObjectPut    EventKind = "s3.object.put"
+	EvtS3ObjectDelete EventKind = "s3.object.delete"
+
+	// S3 multipart lifecycle endpoints that materialize or discard an
+	// object: CompleteMultipartUpload (POST ?uploadId) and
+	// AbortMultipartUpload (DELETE ?uploadId). Part uploads themselves are
+	// deliberately not audited (high volume, no artifact-level meaning).
+	EvtS3MultipartCompleted EventKind = "s3.multipart.complete"
+	EvtS3MultipartAborted   EventKind = "s3.multipart.abort"
 
 	// Git refs walker. Emitted by the post-ReceivePack hook after a
 	// successful git_refs sync.

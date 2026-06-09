@@ -7,6 +7,13 @@
 //   - multipart.go — Create/Upload/Complete/Abort + OrphanGC sweeper
 //
 // Design notes:
+//   - Context: the gofakes3.Backend / MultipartBackend interfaces carry no
+//     context.Context, so the interface bridge methods necessarily run DB
+//     and storage calls under context.Background() — request cancellation
+//     cannot reach them. Where a caller CAN supply a context (the chi-side
+//     intercepts, app shutdown, the orphan sweeper), ctx-aware variants
+//     exist instead (CreateMultipartUploadCtx, abortMultipartUploadCtx);
+//     add new ones in that style rather than new Background() sites.
 //   - Every write path uses storage.WriteAndRename so mid-stream client
 //     disconnects never leave partial files at the canonical key path.
 //   - Per-bucket writes are serialized via storage.Locks. Reads are

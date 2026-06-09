@@ -808,6 +808,7 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 		Backend:   s3Be,
 		Skew:      cfg.Auth.SigV4Skew,
 		Hostnames: cfg.Server.ExternalHostnames,
+		Audit:     auditLogger,
 	}
 	s3Deps.Mount(router)
 

@@ -91,9 +91,9 @@ type PullExternalDeps struct {
 	Blobs    *metadata.DockerBlobsRepo
 	ScanKick func()
 	Repos    *metadata.ReposRepo
-	Projects  *metadata.ProjectsRepo
-	Creds     *metadata.UpstreamCredsRepo
-	Audit     audit.Logger
+	Projects *metadata.ProjectsRepo
+	Creds    *metadata.UpstreamCredsRepo
+	Audit    audit.Logger
 	// SyncJobs is the sync_jobs repo the handler uses to emit throttled
 	// byte-level progress. Nil-safe: when unwired the handler still runs
 	// but progress writes are silently skipped (ProgressWriter.Set

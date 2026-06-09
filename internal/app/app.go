@@ -536,14 +536,14 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 	// Register the sync-pool handler for kind="pull_external"; the REST
 	// endpoints are mounted via api.Mount below (they live on /api/v1).
 	pullExternalJob := oci.NewPullExternalHandler(oci.PullExternalDeps{
-		DB:        db,
-		CAS:       ociCAS,
-		Blobs:     metadata.NewDockerBlobsRepo(db),
-		ScanKick:  scanPool.Kick,
-		Repos:     metadata.NewReposRepo(db),
-		Projects:  metadata.NewProjectsRepo(db),
-		Creds:     upstreamCreds,
-		Audit:     auditLogger,
+		DB:       db,
+		CAS:      ociCAS,
+		Blobs:    metadata.NewDockerBlobsRepo(db),
+		ScanKick: scanPool.Kick,
+		Repos:    metadata.NewReposRepo(db),
+		Projects: metadata.NewProjectsRepo(db),
+		Creds:    upstreamCreds,
+		Audit:    auditLogger,
 		// sync-jobs repo for throttled progress writes.
 		SyncJobs: metadata.NewSyncJobsRepo(db),
 		OCI:      ociHandler,

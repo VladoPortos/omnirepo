@@ -214,14 +214,14 @@ func newPullFixture(t *testing.T, requireBasic bool) *pullFixture {
 	})
 
 	pull := oci.NewPullExternalHandler(oci.PullExternalDeps{
-		DB:        mf.db,
-		CAS:       mf.cas,
-		Blobs:     mf.blobs,
-		ScanKick:  func() {},
-		Repos:     mf.repos,
-		Projects:  mf.projects,
-		Creds:     credsRepo,
-		Audit:     mf.audit,
+		DB:       mf.db,
+		CAS:      mf.cas,
+		Blobs:    mf.blobs,
+		ScanKick: func() {},
+		Repos:    mf.repos,
+		Projects: mf.projects,
+		Creds:    credsRepo,
+		Audit:    mf.audit,
 		// Phase 8 Plan 02 (M2.3): SyncJobs wired so progress-emit tests
 		// read back the persisted triple via SyncJobsRepo.
 		SyncJobs: metadata.NewSyncJobsRepo(mf.db),

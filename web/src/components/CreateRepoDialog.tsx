@@ -26,7 +26,7 @@
  *     matching the Go SyncFilter struct.
  */
 
-import { useEffect, useState, type FormEvent } from 'react';
+import { useState, type FormEvent } from 'react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -129,8 +129,12 @@ export function CreateRepoDialog({
   const createRepo = useCreateRepo();
   const fieldErrors = fieldErrorsFromEnvelope(serverError);
 
-  // Reset state on open/close so re-opening never shows stale input.
-  useEffect(() => {
+  // Reset state when the dialog opens so re-opening never shows stale
+  // input. React-documented render-phase pattern (previous-value guard)
+  // rather than a reset effect.
+  const [prevOpen, setPrevOpen] = useState(open);
+  if (open !== prevOpen) {
+    setPrevOpen(open);
     if (open) {
       setRepoName('');
       setRepoType(initialType);
@@ -138,15 +142,20 @@ export function CreateRepoDialog({
       setClientError(null);
       setServerError(null);
     }
-  }, [open, initialType]);
+  }
 
   // When the protocol flips off the mirror-eligible set, force is_mirror
   // back to false so a stale toggle doesn't leak into the submit body.
-  useEffect(() => {
-    if (!isMirrorProtocol(repoType) && mirrorCfg.is_mirror) {
+  // Handled in the type-change handler (the only place repoType changes
+  // after open).
+  const handleTypeChange = (v: string | null) => {
+    if (v == null) return;
+    const next = v as RepoType;
+    setRepoType(next);
+    if (!isMirrorProtocol(next) && mirrorCfg.is_mirror) {
       setMirrorCfg(EMPTY_MIRROR);
     }
-  }, [repoType, mirrorCfg.is_mirror]);
+  };
 
   const showMirrorSection = isMirrorProtocol(repoType);
 
@@ -236,7 +245,7 @@ export function CreateRepoDialog({
               <Label htmlFor="repo-type">Type</Label>
               <Select
                 value={repoType}
-                onValueChange={(v) => setRepoType(v as RepoType)}
+                onValueChange={handleTypeChange}
               >
                 <SelectTrigger id="repo-type">
                   <SelectValue />

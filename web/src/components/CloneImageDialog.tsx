@@ -95,8 +95,14 @@ export function CloneImageDialog({
   const credsQ = useUpstreamCreds(projectName);
 
   // Reset form + phase whenever the dialog opens. Prevents stale values
-  // from flashing on a reopen after a previous clone.
-  useEffect(() => {
+  // from flashing on a reopen after a previous clone. Uses the React-
+  // documented "adjust state during render with a previous-value guard"
+  // pattern instead of a reset effect: state must survive a close (the
+  // job-progress poller keeps running so the image list refreshes when a
+  // background pull finishes), so unmount-based resets don't apply here.
+  const [prevOpen, setPrevOpen] = useState(open);
+  if (open !== prevOpen) {
+    setPrevOpen(open);
     if (open) {
       setPhase('form');
       setSrcImage('');
@@ -104,30 +110,28 @@ export function CloneImageDialog({
       setCredId('');
       setJobId(null);
       setMutationError(null);
-      mutation.reset();
     }
-    // `mutation` is stable across renders (TanStack memoises); omitting
-    // it from deps is intentional to avoid reset loops.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
+  }
 
-  // Advance to result phase when the polled job terminates.
+  // The result phase is derived: once the polled job terminates while we
+  // are showing progress, render the result view. handleRetry flips
+  // `phase` back to 'form' (with a fresh jobId), which also clears this.
+  const terminal = progress.status === 'done' || progress.status === 'failed';
+  const effectivePhase: Phase =
+    phase === 'progress' && terminal ? 'result' : phase;
+
+  // Refresh repo caches when the polled job completes successfully.
   useEffect(() => {
-    if (phase !== 'progress') return;
-    if (progress.status === 'done') {
-      setPhase('result');
-      qc.invalidateQueries({
-        queryKey: ['repo-content', projectName, 'docker', repoName],
-      });
-      qc.invalidateQueries({
-        queryKey: ['repo-scans', projectName, 'docker', repoName],
-      });
-      qc.invalidateQueries({
-        queryKey: ['projects', projectName, 'repos'],
-      });
-    } else if (progress.status === 'failed') {
-      setPhase('result');
-    }
+    if (phase !== 'progress' || progress.status !== 'done') return;
+    qc.invalidateQueries({
+      queryKey: ['repo-content', projectName, 'docker', repoName],
+    });
+    qc.invalidateQueries({
+      queryKey: ['repo-scans', projectName, 'docker', repoName],
+    });
+    qc.invalidateQueries({
+      queryKey: ['projects', projectName, 'repos'],
+    });
     // repoId is tracked on the props for future per-repo caches (e.g. a
     // `['repo', repoId]` key). Touch it in effect deps so
     // switching repos mid-modal doesn't stall the invalidation.
@@ -198,7 +202,7 @@ export function CloneImageDialog({
           </DialogDescription>
         </DialogHeader>
 
-        {phase === 'form' ? (
+        {effectivePhase === 'form' ? (
           <div className="space-y-3 py-2">
             <div className="space-y-1.5">
               <Label htmlFor="clone-src">Source reference</Label>
@@ -243,7 +247,7 @@ export function CloneImageDialog({
           </div>
         ) : null}
 
-        {phase === 'progress' ? (
+        {effectivePhase === 'progress' ? (
           <div className="space-y-3 py-2">
             <h3 className="text-sm font-semibold">
               Pulling <span className="font-mono">{srcImage}</span>&hellip;
@@ -264,7 +268,7 @@ export function CloneImageDialog({
           </div>
         ) : null}
 
-        {phase === 'result' && progress.status === 'done' ? (
+        {effectivePhase === 'result' && progress.status === 'done' ? (
           <div className="flex items-start gap-2 py-4">
             <CheckCircle2
               className="size-5 mt-0.5 text-status-healthy-foreground shrink-0"
@@ -282,14 +286,14 @@ export function CloneImageDialog({
           </div>
         ) : null}
 
-        {phase === 'result' && progress.status === 'failed' ? (
+        {effectivePhase === 'result' && progress.status === 'failed' ? (
           <div className="py-2">
             <ErrorEnvelopeRenderer envelope={progress.error} mode="inline" />
           </div>
         ) : null}
 
         <DialogFooter>
-          {phase === 'form' ? (
+          {effectivePhase === 'form' ? (
             <>
               <Button variant="outline" onClick={handleClose}>
                 Cancel
@@ -307,7 +311,7 @@ export function CloneImageDialog({
               </Button>
             </>
           ) : null}
-          {phase === 'progress' ? (
+          {effectivePhase === 'progress' ? (
             <Button
               variant="outline"
               onClick={handleClose}
@@ -316,7 +320,7 @@ export function CloneImageDialog({
               Close (pull continues in background)
             </Button>
           ) : null}
-          {phase === 'result' ? (
+          {effectivePhase === 'result' ? (
             <>
               {progress.status === 'failed' ? (
                 <Button variant="outline" onClick={handleRetry}>

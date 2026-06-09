@@ -1,21 +1,17 @@
 package rpm
 
 import (
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
-	"errors"
-	"io"
 	"log/slog"
 	"net/http"
 	"os"
-	"path/filepath"
 
 	chimw "github.com/go-chi/chi/v5/middleware"
 
 	"github.com/vladoportos/omnirepo/internal/audit"
 	"github.com/vladoportos/omnirepo/internal/auth"
 	"github.com/vladoportos/omnirepo/internal/metadata"
+	"github.com/vladoportos/omnirepo/internal/protocol/common"
 )
 
 // put handles PUT /<project>/rpm/<repo>/packages/<filename>.
@@ -47,61 +43,18 @@ func (h *Handler) put(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	r.Body = http.MaxBytesReader(w, r.Body, h.maxPutBytes)
 	defer func() { _ = r.Body.Close() }()
 
 	// Stream the request body straight to a temp file under the repo root
 	// while computing sha256 in one pass. Memory consumption stays bounded
-	// by the OS write buffer (~256 KiB) regardless of artifact size — the
-	// previous full-body in-memory staging pattern let an authenticated
-	// project member drive container RSS toward the 5 GiB upload cap.
-	tmpDir := filepath.Join(h.repoRoot, ".tmp-rpm-uploads")
-	if err := os.MkdirAll(tmpDir, 0o750); err != nil {
-		slog.ErrorContext(r.Context(), "rpm.put.mkdir_tmp_failed",
-			slog.String("incident_id", chimw.GetReqID(r.Context())),
-			slog.Any("err", err),
-		)
-		http.Error(w, "storage error", http.StatusInternalServerError)
+	// by the OS write buffer (~256 KiB) regardless of artifact size.
+	st, ok := common.StageBody(w, r, h.repoRoot, "rpm", "rpm-upload-*.rpm", res.filename, h.maxPutBytes)
+	if !ok {
 		return
 	}
-	tmpF, err := os.CreateTemp(tmpDir, "rpm-upload-*.rpm")
-	if err != nil {
-		slog.ErrorContext(r.Context(), "rpm.put.tmp_create_failed",
-			slog.String("incident_id", chimw.GetReqID(r.Context())),
-			slog.Any("err", err),
-		)
-		http.Error(w, "storage error", http.StatusInternalServerError)
-		return
-	}
-	tmpPath := tmpF.Name()
+	tmpPath := st.TmpPath
+	size := st.Size
 	defer func() { _ = os.Remove(tmpPath) }()
-
-	hasher := sha256.New()
-	size, err := io.Copy(io.MultiWriter(tmpF, hasher), r.Body)
-	if err != nil {
-		_ = tmpF.Close()
-		var maxErr *http.MaxBytesError
-		if errors.As(err, &maxErr) {
-			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
-			return
-		}
-		slog.ErrorContext(r.Context(), "rpm.put.read_body_failed",
-			slog.String("incident_id", chimw.GetReqID(r.Context())),
-			slog.String("filename", res.filename),
-			slog.Any("err", err),
-		)
-		http.Error(w, "storage error", http.StatusInternalServerError)
-		return
-	}
-	if err := tmpF.Close(); err != nil {
-		slog.ErrorContext(r.Context(), "rpm.put.tmp_close_failed",
-			slog.String("incident_id", chimw.GetReqID(r.Context())),
-			slog.String("tmp_path", tmpPath),
-			slog.Any("err", err),
-		)
-		http.Error(w, "storage error", http.StatusInternalServerError)
-		return
-	}
 
 	parsed, perr := Parse(tmpPath)
 	if perr != nil {
@@ -134,34 +87,13 @@ func (h *Handler) put(w http.ResponseWriter, r *http.Request) {
 			http.StatusBadRequest)
 		return
 	}
-	digest := hex.EncodeToString(hasher.Sum(nil))
+	digest := st.Sum256
 	parsed.Digest = digest
 
 	storageKey := storageKeyFor(res.project.Name, res.repo.Name, res.filename)
-	// Re-open the temp file as the source for PathStore.Put — the OS page
-	// cache covers the bytes we just wrote, and *os.File satisfies io.Reader
-	// without allocating a full-body buffer.
-	putF, err := os.Open(tmpPath)
-	if err != nil {
-		slog.ErrorContext(r.Context(), "rpm.put.tmp_reopen_failed",
-			slog.String("incident_id", chimw.GetReqID(r.Context())),
-			slog.String("tmp_path", tmpPath),
-			slog.Any("err", err),
-		)
-		http.Error(w, "storage error", http.StatusInternalServerError)
+	if !common.PromoteStaged(w, r, h.pathStore, "rpm", storageKey, tmpPath, res.filename) {
 		return
 	}
-	if _, err := h.pathStore.Put(r.Context(), storageKey, putF); err != nil {
-		_ = putF.Close()
-		slog.ErrorContext(r.Context(), "rpm.put.storage_failed",
-			slog.String("incident_id", chimw.GetReqID(r.Context())),
-			slog.String("filename", res.filename),
-			slog.Any("err", err),
-		)
-		http.Error(w, "storage error", http.StatusInternalServerError)
-		return
-	}
-	_ = putF.Close()
 
 	if err := h.db.WriteTx(r.Context(), func(tx *sql.Tx) error {
 		if _, err := h.rpmPackages.Insert(r.Context(), tx, &metadata.RPMPackage{

@@ -1,11 +1,8 @@
 package helm
 
 import (
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"errors"
-	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -17,6 +14,7 @@ import (
 	"github.com/vladoportos/omnirepo/internal/audit"
 	"github.com/vladoportos/omnirepo/internal/auth"
 	"github.com/vladoportos/omnirepo/internal/metadata"
+	"github.com/vladoportos/omnirepo/internal/protocol/common"
 )
 
 // put handles PUT /<project>/helm/<repo>/charts/<filename>.
@@ -62,61 +60,17 @@ func (h *Handler) put(w http.ResponseWriter, r *http.Request) {
 
 // putChart implements the chart-archive upload path.
 func (h *Handler) putChart(w http.ResponseWriter, r *http.Request, res resolved) {
-	// Cap body. MaxBytesReader returns *MaxBytesError on overflow.
-	r.Body = http.MaxBytesReader(w, r.Body, h.maxPutBytes)
 	defer func() { _ = r.Body.Close() }()
 
 	// Stream chart body to a temp file under the repo root so memory stays
-	// bounded by parser need (~1 KB Chart.yaml), not chart size. The prior
-	// full-body in-memory staging pattern let an authenticated project
-	// member drive container RSS toward the 5 GiB upload cap.
-	tmpDir := filepath.Join(h.repoRoot, ".tmp-helm-uploads")
-	if err := os.MkdirAll(tmpDir, 0o750); err != nil {
-		slog.ErrorContext(r.Context(), "helm.put.mkdir_tmp_failed",
-			slog.String("incident_id", chimw.GetReqID(r.Context())),
-			slog.Any("err", err),
-		)
-		http.Error(w, "storage error", http.StatusInternalServerError)
+	// bounded by parser need (~1 KB Chart.yaml), not chart size.
+	st, ok := common.StageBody(w, r, h.repoRoot, "helm", "helm-upload-*.tgz", res.filename, h.maxPutBytes)
+	if !ok {
 		return
 	}
-	tmpF, err := os.CreateTemp(tmpDir, "helm-upload-*.tgz")
-	if err != nil {
-		slog.ErrorContext(r.Context(), "helm.put.tmp_create_failed",
-			slog.String("incident_id", chimw.GetReqID(r.Context())),
-			slog.Any("err", err),
-		)
-		http.Error(w, "storage error", http.StatusInternalServerError)
-		return
-	}
-	tmpPath := tmpF.Name()
+	tmpPath := st.TmpPath
+	size := st.Size
 	defer func() { _ = os.Remove(tmpPath) }()
-
-	hasher := sha256.New()
-	size, err := io.Copy(io.MultiWriter(tmpF, hasher), r.Body)
-	if err != nil {
-		_ = tmpF.Close()
-		var maxErr *http.MaxBytesError
-		if errors.As(err, &maxErr) {
-			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
-			return
-		}
-		slog.ErrorContext(r.Context(), "helm.put.read_body_failed",
-			slog.String("incident_id", chimw.GetReqID(r.Context())),
-			slog.String("filename", res.filename),
-			slog.Any("err", err),
-		)
-		http.Error(w, "storage error", http.StatusInternalServerError)
-		return
-	}
-	if err := tmpF.Close(); err != nil {
-		slog.ErrorContext(r.Context(), "helm.put.tmp_close_failed",
-			slog.String("incident_id", chimw.GetReqID(r.Context())),
-			slog.String("tmp_path", tmpPath),
-			slog.Any("err", err),
-		)
-		http.Error(w, "storage error", http.StatusInternalServerError)
-		return
-	}
 
 	// Parse Chart.yaml from the buffered tgz. Failure is a 400.
 	chartMeta, perr := Parse(tmpPath)
@@ -131,34 +85,14 @@ func (h *Handler) putChart(w http.ResponseWriter, r *http.Request, res resolved)
 		return
 	}
 
-	digest := "sha256:" + hex.EncodeToString(hasher.Sum(nil))
+	digest := "sha256:" + st.Sum256
 
 	// Promote the staged tmp file into the canonical PathStore key via the
 	// atomic path-store Put (temp+fsync+rename inside PathStore.Put).
-	// Re-open the temp file as the source — *os.File satisfies io.Reader
-	// without allocating a full-body buffer.
 	storageKey := storageKeyFor(res.project.Name, res.repo.Name, res.filename)
-	putF, err := os.Open(tmpPath)
-	if err != nil {
-		slog.ErrorContext(r.Context(), "helm.put.tmp_reopen_failed",
-			slog.String("incident_id", chimw.GetReqID(r.Context())),
-			slog.String("tmp_path", tmpPath),
-			slog.Any("err", err),
-		)
-		http.Error(w, "storage error", http.StatusInternalServerError)
+	if !common.PromoteStaged(w, r, h.pathStore, "helm", storageKey, tmpPath, res.filename) {
 		return
 	}
-	if _, err := h.pathStore.Put(r.Context(), storageKey, putF); err != nil {
-		_ = putF.Close()
-		slog.ErrorContext(r.Context(), "helm.put.storage_failed",
-			slog.String("incident_id", chimw.GetReqID(r.Context())),
-			slog.String("filename", res.filename),
-			slog.Any("err", err),
-		)
-		http.Error(w, "storage error", http.StatusInternalServerError)
-		return
-	}
-	_ = putF.Close()
 
 	// Single writer tx: helm_charts upsert + FTS5 refresh + metadata_state
 	// + optional auto-scan enqueue.

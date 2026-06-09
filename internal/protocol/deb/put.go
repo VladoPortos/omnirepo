@@ -1,12 +1,8 @@
 package deb
 
 import (
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
-	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -19,6 +15,7 @@ import (
 	"github.com/vladoportos/omnirepo/internal/audit"
 	"github.com/vladoportos/omnirepo/internal/auth"
 	"github.com/vladoportos/omnirepo/internal/metadata"
+	"github.com/vladoportos/omnirepo/internal/protocol/common"
 )
 
 // put handles PUT /<project>/deb/<repo>/pool/<c>/<pkg>/<filename>.deb.
@@ -66,7 +63,6 @@ func (h *Handler) put(w http.ResponseWriter, r *http.Request) {
 	poolPath := tail
 	filename := path.Base(poolPath)
 
-	r.Body = http.MaxBytesReader(w, r.Body, h.maxPutBytes)
 	defer func() { _ = r.Body.Close() }()
 
 	// Stream the request body to a temp file under the repo root while
@@ -74,53 +70,13 @@ func (h *Handler) put(w http.ResponseWriter, r *http.Request) {
 	// stream-write completes we re-open the file (twice — once for
 	// ParseDeb, once for PathStore.Put). Two opens, not two reads of the
 	// body — the OS page cache covers the actual bytes.
-	tmpDir := filepath.Join(h.repoRoot, ".tmp-deb-uploads")
-	if err := os.MkdirAll(tmpDir, 0o750); err != nil {
-		slog.ErrorContext(r.Context(), "deb.put.mkdir_tmp_failed",
-			slog.String("incident_id", chimw.GetReqID(r.Context())),
-			slog.Any("err", err),
-		)
-		http.Error(w, "storage error", http.StatusInternalServerError)
+	st, ok := common.StageBody(w, r, h.repoRoot, "deb", "deb-upload-*.deb", filename, h.maxPutBytes)
+	if !ok {
 		return
 	}
-	tmpF, err := os.CreateTemp(tmpDir, "deb-upload-*.deb")
-	if err != nil {
-		slog.ErrorContext(r.Context(), "deb.put.tmp_create_failed",
-			slog.String("incident_id", chimw.GetReqID(r.Context())),
-			slog.Any("err", err),
-		)
-		http.Error(w, "storage error", http.StatusInternalServerError)
-		return
-	}
-	tmpPath := tmpF.Name()
+	tmpPath := st.TmpPath
+	size := st.Size
 	defer func() { _ = os.Remove(tmpPath) }()
-
-	hasher := sha256.New()
-	size, err := io.Copy(io.MultiWriter(tmpF, hasher), r.Body)
-	if err != nil {
-		_ = tmpF.Close()
-		var maxErr *http.MaxBytesError
-		if errors.As(err, &maxErr) {
-			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
-			return
-		}
-		slog.ErrorContext(r.Context(), "deb.put.read_body_failed",
-			slog.String("incident_id", chimw.GetReqID(r.Context())),
-			slog.String("filename", filename),
-			slog.Any("err", err),
-		)
-		http.Error(w, "storage error", http.StatusInternalServerError)
-		return
-	}
-	if err := tmpF.Close(); err != nil {
-		slog.ErrorContext(r.Context(), "deb.put.tmp_close_failed",
-			slog.String("incident_id", chimw.GetReqID(r.Context())),
-			slog.String("tmp_path", tmpPath),
-			slog.Any("err", err),
-		)
-		http.Error(w, "storage error", http.StatusInternalServerError)
-		return
-	}
 
 	// Parse control from the staged tmp file (re-opened as io.Reader).
 	parseF, perr := os.Open(tmpPath)
@@ -179,33 +135,13 @@ func (h *Handler) put(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	digest := hex.EncodeToString(hasher.Sum(nil))
+	digest := st.Sum256
 
 	// Write to pool via PathStore (atomic tmp+fsync+rename underneath).
-	// Re-open the temp file as the source — *os.File satisfies io.Reader
-	// without allocating a full-body buffer.
 	storageKey := storageKeyForPool(res.project.Name, res.repo.Name, poolPath)
-	putF, err := os.Open(tmpPath)
-	if err != nil {
-		slog.ErrorContext(r.Context(), "deb.put.tmp_reopen_failed",
-			slog.String("incident_id", chimw.GetReqID(r.Context())),
-			slog.String("tmp_path", tmpPath),
-			slog.Any("err", err),
-		)
-		http.Error(w, "storage error", http.StatusInternalServerError)
+	if !common.PromoteStaged(w, r, h.pathStore, "deb", storageKey, tmpPath, filename) {
 		return
 	}
-	if _, err := h.pathStore.Put(r.Context(), storageKey, putF); err != nil {
-		_ = putF.Close()
-		slog.ErrorContext(r.Context(), "deb.put.storage_failed",
-			slog.String("incident_id", chimw.GetReqID(r.Context())),
-			slog.String("filename", filename),
-			slog.Any("err", err),
-		)
-		http.Error(w, "storage error", http.StatusInternalServerError)
-		return
-	}
-	_ = putF.Close()
 
 	if err := h.db.WriteTx(r.Context(), func(tx *sql.Tx) error {
 		if _, err := h.debPackages.Insert(r.Context(), tx, &metadata.DEBPackage{

@@ -293,66 +293,11 @@ func (h *SyncHandler) Handle(ctx context.Context, payload string, projectID, rep
 			return h.fail(ctx, repo.ID, pl, startedAt, fmt.Errorf("drift purge: %w", err))
 		}
 
-		switch {
-		case report.Skipped && report.Reason == "threshold_exceeded":
-			// Percent-threshold guard tripped.
-			if h.deps.SyncJobs != nil {
-				_ = h.deps.SyncJobs.SetSummaryDriftBlocked(ctx, jobID, int64(report.BlockedCount))
-			}
-			if h.deps.Audit != nil {
-				_ = h.deps.Audit.Record(ctx, audit.Event{
-					Kind:       audit.EvtMirrorDriftPurgeSkipped,
-					TargetKind: "repo",
-					TargetID:   strconv.FormatInt(repo.ID, 10),
-					Details: map[string]any{
-						"protocol":      "rpm",
-						"reason":        report.Reason,
-						"local_count":   int64(report.LocalCount),
-						"blocked_count": int64(report.BlockedCount),
-						"threshold_pct": int64(h.deps.Cfg.DriftPurgeThresholdPct),
-						"sync_job_id":   jobID,
-						"upstream_url":  pl.UpstreamURL,
-					},
-				})
-			}
-		case report.Skipped:
-			if h.deps.Audit != nil {
-				_ = h.deps.Audit.Record(ctx, audit.Event{
-					Kind:       audit.EvtMirrorDriftPurgeSkipped,
-					TargetKind: "repo",
-					TargetID:   strconv.FormatInt(repo.ID, 10),
-					Details: map[string]any{
-						"protocol":     "rpm",
-						"reason":       report.Reason,
-						"local_count":  int64(report.LocalCount),
-						"sync_job_id":  jobID,
-						"upstream_url": pl.UpstreamURL,
-					},
-				})
-			}
-		case report.PurgedCount > 0:
-			if h.deps.Audit != nil {
-				_ = h.deps.Audit.Record(ctx, audit.Event{
-					Kind:       audit.EvtMirrorDriftPurged,
-					TargetKind: "repo",
-					TargetID:   strconv.FormatInt(repo.ID, 10),
-					Details: map[string]any{
-						"protocol":     "rpm",
-						"count":        int64(report.PurgedCount),
-						"sample":       report.Sample,
-						"sync_job_id":  jobID,
-						"upstream_url": pl.UpstreamURL,
-					},
-				})
-			}
-			if h.deps.SyncJobs != nil {
-				_ = h.deps.SyncJobs.SetSummaryDriftPurged(ctx, jobID, int64(report.PurgedCount))
-			}
-		default:
-			if h.deps.SyncJobs != nil {
-				_ = h.deps.SyncJobs.SetSummaryDriftPurged(ctx, jobID, 0)
-			}
-		}
+		driftpurge.EmitReportAudit(ctx, driftpurge.AuditSink{
+			Audit:        h.deps.Audit,
+			SyncJobs:     h.deps.SyncJobs,
+			ThresholdPct: h.deps.Cfg.DriftPurgeThresholdPct,
+		}, report, repo.ID, jobID, pl.UpstreamURL)
 	}
 
 	// Persist per-job file count once so the UI pill can render

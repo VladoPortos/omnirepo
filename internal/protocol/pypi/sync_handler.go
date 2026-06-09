@@ -365,75 +365,11 @@ func (h *SyncHandler) Handle(ctx context.Context, payload string, projectID, rep
 			return h.fail(ctx, repo.ID, pl, startedAt, fmt.Errorf("drift purge: %w", err))
 		}
 
-		switch {
-		case report.Skipped && report.Reason == "threshold_exceeded":
-			// Percent-threshold guard tripped. Stamp summary.drift_blocked
-			// so the UI can render the override banner; reuse
-			// EvtMirrorDriftPurgeSkipped (the audit reason enum was
-			// pre-extended for this in events.go).
-			if h.deps.SyncJobs != nil {
-				_ = h.deps.SyncJobs.SetSummaryDriftBlocked(ctx, jobID, int64(report.BlockedCount))
-			}
-			if h.deps.Audit != nil {
-				_ = h.deps.Audit.Record(ctx, audit.Event{
-					Kind:       audit.EvtMirrorDriftPurgeSkipped,
-					TargetKind: "repo",
-					TargetID:   strconv.FormatInt(repo.ID, 10),
-					Details: map[string]any{
-						"protocol":      "pypi",
-						"reason":        report.Reason,
-						"local_count":   int64(report.LocalCount),
-						"blocked_count": int64(report.BlockedCount),
-						"threshold_pct": int64(h.deps.Cfg.DriftPurgeThresholdPct),
-						"sync_job_id":   jobID,
-						"upstream_url":  pl.UpstreamURL,
-					},
-				})
-			}
-		case report.Skipped:
-			// Empty-upstream guard tripped. SetSummaryDriftPurged NOT
-			// called per the absence rule.
-			if h.deps.Audit != nil {
-				_ = h.deps.Audit.Record(ctx, audit.Event{
-					Kind:       audit.EvtMirrorDriftPurgeSkipped,
-					TargetKind: "repo",
-					TargetID:   strconv.FormatInt(repo.ID, 10),
-					Details: map[string]any{
-						"protocol":     "pypi",
-						"reason":       report.Reason,
-						"local_count":  int64(report.LocalCount),
-						"sync_job_id":  jobID,
-						"upstream_url": pl.UpstreamURL,
-					},
-				})
-			}
-		case report.PurgedCount > 0:
-			// Drift purged with count > 0 — emit audit + summary.
-			if h.deps.Audit != nil {
-				_ = h.deps.Audit.Record(ctx, audit.Event{
-					Kind:       audit.EvtMirrorDriftPurged,
-					TargetKind: "repo",
-					TargetID:   strconv.FormatInt(repo.ID, 10),
-					Details: map[string]any{
-						"protocol":     "pypi",
-						"count":        int64(report.PurgedCount),
-						"sample":       report.Sample,
-						"sync_job_id":  jobID,
-						"upstream_url": pl.UpstreamURL,
-					},
-				})
-			}
-			if h.deps.SyncJobs != nil {
-				_ = h.deps.SyncJobs.SetSummaryDriftPurged(ctx, jobID, int64(report.PurgedCount))
-			}
-		default:
-			// Zero-count drift run is run-evidence only; no audit
-			// emission, but stamp the summary integer so the sync record
-			// carries proof drift detection ran.
-			if h.deps.SyncJobs != nil {
-				_ = h.deps.SyncJobs.SetSummaryDriftPurged(ctx, jobID, 0)
-			}
-		}
+		driftpurge.EmitReportAudit(ctx, driftpurge.AuditSink{
+			Audit:        h.deps.Audit,
+			SyncJobs:     h.deps.SyncJobs,
+			ThresholdPct: h.deps.Cfg.DriftPurgeThresholdPct,
+		}, report, repo.ID, jobID, pl.UpstreamURL)
 	}
 
 	// Persist per-job file count once so the UI pill can render

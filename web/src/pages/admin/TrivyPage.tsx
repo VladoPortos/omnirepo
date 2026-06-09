@@ -56,8 +56,12 @@ function useTrivyDBPullStatus(polling: boolean) {
   return useQuery({
     queryKey: ['admin', 'trivy', 'pull-status'],
     queryFn: () => api.get<TrivyDBPullStatus>('/admin/trivy/db/pull/status'),
-    refetchInterval: polling ? 500 : false,
-    refetchIntervalInBackground: polling,
+    // Poll while the operator has started a pull (`polling`) OR the
+    // backend reports one already running — the latter covers mounting
+    // the page mid-pull, replacing the old resume-polling effect.
+    refetchInterval: (query) =>
+      polling || query.state.data?.state === 'running' ? 500 : false,
+    refetchIntervalInBackground: true,
     staleTime: 0,
   });
 }
@@ -114,21 +118,20 @@ export default function TrivyPage() {
   const { data: pullStatus } = useTrivyDBPullStatus(polling);
   const lastStateRef = useRef<TrivyDBPullStatus['state'] | undefined>(undefined);
 
+  // A pull is in flight when the operator just started one (polling) or
+  // the backend reports one running (e.g. page mounted mid-pull; the
+  // pull-status query keeps polling on its own in that case).
+  const isRunning = polling || pullStatus?.state === 'running';
+
   // Clock tick so the "Elapsed" counter updates between backend polls.
-  const [, setNow] = useState(Date.now());
+  // `now` starts at 0 (elapsed renders as 0 until the first 500 ms tick)
+  // so render stays pure — Date.now() is only read inside the interval.
+  const [now, setNow] = useState(0);
   useEffect(() => {
-    if (!polling) return;
+    if (!isRunning) return;
     const id = window.setInterval(() => setNow(Date.now()), 500);
     return () => window.clearInterval(id);
-  }, [polling]);
-
-  // If a pull is already running when the page mounts (e.g. admin navigated
-  // away and back), resume polling automatically.
-  useEffect(() => {
-    if (pullStatus?.state === 'running' && !polling) {
-      setPolling(true);
-    }
-  }, [pullStatus?.state, polling]);
+  }, [isRunning]);
 
   // React to terminal transitions: toast + invalidate cached status/history,
   // stop polling.
@@ -345,13 +348,13 @@ export default function TrivyPage() {
           </CardHeader>
           <CardContent className="flex flex-col items-stretch gap-3">
             {(() => {
-              const isRunning = pullStatus?.state === 'running' || polling;
               const startedAtMs = pullStatus?.started_at
                 ? new Date(pullStatus.started_at).getTime()
                 : undefined;
+              // `now` is interval-driven state; 0 until the first tick.
               const elapsedSec =
-                startedAtMs !== undefined
-                  ? Math.max(0, (Date.now() - startedAtMs) / 1000)
+                startedAtMs !== undefined && now > startedAtMs
+                  ? (now - startedAtMs) / 1000
                   : 0;
               const bytes = pullStatus?.bytes_downloaded ?? 0;
               const speed = elapsedSec > 0.5 ? bytes / elapsedSec : 0;

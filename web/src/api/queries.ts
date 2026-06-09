@@ -11,6 +11,7 @@ import {
 } from '@tanstack/react-query';
 import { useMemo, useCallback } from 'react';
 import { api, ApiError } from './client';
+import { escapeGoModulePath } from '@/lib/gomod';
 
 // enc encodes a path segment from a route-param (e.g. projectName, bucketName,
 // repoName) before interpolating into the URL. Defense-in-depth: the router
@@ -330,6 +331,32 @@ export function useDeleteHelmChart(projectName: string, repoName: string) {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['repo-content', projectName, 'helm', repoName] });
       qc.invalidateQueries({ queryKey: ['repo-scans', projectName, 'helm', repoName] });
+    },
+  });
+}
+
+/**
+ * useDeleteGoModuleVersion — session-authed row-delete for Go module
+ * proxy repos:
+ *   DELETE /projects/{name}/repos/go/{repo}/{escaped-module}/@v/{version}
+ * The module path (and, defensively, the version) is GOPROXY
+ * case-escaped first (uppercase → "!"+lowercase, see lib/gomod.ts),
+ * then percent-encoded per path segment so the slashes inside the
+ * module path survive as route separators. No repo-scans invalidation —
+ * go artifacts are never scanned.
+ */
+export function useDeleteGoModuleVersion(projectName: string, repoName: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ module, version }: { module: string; version: string }) =>
+      api.del<void>(
+        `/projects/${enc(projectName)}/repos/go/${enc(repoName)}/${escapeGoModulePath(module)
+          .split('/')
+          .map(enc)
+          .join('/')}/@v/${enc(escapeGoModulePath(version))}`,
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['repo-content', projectName, 'go', repoName] });
     },
   });
 }

@@ -14,6 +14,7 @@ import { PypiRepoPage } from './PypiRepoPage';
 import { HelmRepoPage } from './HelmRepoPage';
 import { RawRepoPage } from './RawRepoPage';
 import { GitRepoPage } from './GitRepoPage';
+import { GoRepoPage } from './GoRepoPage';
 
 export function RepoDetailRouter() {
   const { name, type, repo } = useParams<{ name: string; type: string; repo: string }>();
@@ -40,6 +41,8 @@ export function RepoDetailRouter() {
       return <PypiRepoPage repo={data} />;
     case 'helm':
       return <HelmRepoPage repo={data} />;
+    case 'go':
+      return <GoRepoPage repo={data} />;
     case 'raw':
       return <RawRepoPage repo={data} />;
     case 'git':

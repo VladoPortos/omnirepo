@@ -306,8 +306,10 @@ func purgeRow(ctx context.Context, tx *sql.Tx, trash storage.Trash, label, delet
 // missing source file (os.ErrNotExist) is tolerated — the DELETE is the
 // truth-of-record and the snapshot sidecar still lets an admin restore. A
 // genuine move failure leaves an orphaned file (the drifted artifact stays on
-// disk with no row); that is a recoverable storage leak, never a restored row
-// pointing at a missing file. The first such error is returned (with the count
+// disk with no metadata row) — a storage leak, but never a restored row
+// pointing at a missing file, which is the strictly safer direction. The
+// caller logs the returned error so the leak is visible. The first such error
+// is returned (with the count
 // of failures) so the caller can log it; callers treat drift purge as
 // best-effort and do not fail the sync on it.
 func ApplyPendingMoves(ctx context.Context, moves []PendingMove) error {

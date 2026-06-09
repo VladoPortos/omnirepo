@@ -744,6 +744,29 @@ func TestDeleteObject_PathTraversalRejected(t *testing.T) {
 	}
 }
 
+// TestAbortMultipartUpload_PathTraversalRejected verifies a crafted uploadId
+// cannot escape the staging tree and recursively delete an arbitrary
+// directory. The abort path RemoveAll's the staging dir even for an unknown
+// upload (idempotent cleanup), so the validateUploadID guard — not the
+// ownership lookup — is what blocks "../.." here. multipartStaging is
+// <dataRoot>/tmp/s3/<id>, so "../../sentinel" resolves to <dataRoot>/sentinel.
+func TestAbortMultipartUpload_PathTraversalRejected(t *testing.T) {
+	f := newFixture(t)
+	if err := f.b.CreateBucket("bucket1"); err != nil {
+		t.Fatalf("create bucket: %v", err)
+	}
+	sentinel := filepath.Join(f.dataRoot, "sentinel")
+	if err := os.MkdirAll(sentinel, 0o750); err != nil {
+		t.Fatalf("seed sentinel dir: %v", err)
+	}
+	if err := f.b.AbortMultipartUpload("bucket1", "obj", gofakes3.UploadID("../../sentinel")); err == nil {
+		t.Fatal("AbortMultipartUpload(traversal id): want error, got nil")
+	}
+	if _, err := os.Stat(sentinel); err != nil {
+		t.Fatalf("sentinel dir deleted via uploadId traversal: %v", err)
+	}
+}
+
 // -- helpers --------------------------------------------------------------
 
 func bucketID(t *testing.T, f *fixture, name string) int64 {

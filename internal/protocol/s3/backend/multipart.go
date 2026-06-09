@@ -61,6 +61,20 @@ func (b *Backend) multipartStaging(uploadID string) string {
 	return filepath.Join(b.DataRoot, "tmp", "s3", uploadID)
 }
 
+// validateUploadID rejects upload ids that are not the server-issued UUID
+// shape, BEFORE the id is joined into a staging path. CreateMultipartUpload
+// issues uuid.NewString(); a crafted id (path separators, ".." segments, an
+// arbitrary string) must never reach multipartStaging + os.RemoveAll/MkdirAll.
+// This matters most on the abort path, which RemoveAll's the staging dir even
+// for an unknown upload (idempotent cleanup) and so cannot rely on the
+// ownership lookup to gate the filesystem op.
+func validateUploadID(uploadID string) error {
+	if _, err := uuid.Parse(uploadID); err != nil {
+		return gofakes3.ErrorMessage(gofakes3.ErrInvalidArgument, "invalid upload id")
+	}
+	return nil
+}
+
 func (b *Backend) partCountLimit() int {
 	if b.PartCountLimit > 0 {
 		return b.PartCountLimit
@@ -163,6 +177,9 @@ func (b *Backend) UploadPart(bucket, object string, id gofakes3.UploadID, partNu
 		return "", gofakes3.ErrorMessage(gofakes3.ErrInvalidPart, "part exceeds 5 GiB maximum")
 	}
 	uploadID := string(id)
+	if err := validateUploadID(uploadID); err != nil {
+		return "", err
+	}
 	if _, err := b.verifyUploadOwnership(ctx, bucket, object, uploadID); err != nil {
 		return "", err
 	}
@@ -207,6 +224,9 @@ func (b *Backend) UploadPart(bucket, object string, id gofakes3.UploadID, partNu
 func (b *Backend) CompleteMultipartUpload(bucket, object string, id gofakes3.UploadID, input *gofakes3.CompleteMultipartUploadRequest) (versionID gofakes3.VersionID, etag string, err error) {
 	ctx := context.Background()
 	uploadID := string(id)
+	if err := validateUploadID(uploadID); err != nil {
+		return "", "", err
+	}
 
 	up, err := b.verifyUploadOwnership(ctx, bucket, object, uploadID)
 	if err != nil {
@@ -368,6 +388,14 @@ func (b *Backend) CompleteMultipartUpload(bucket, object string, id gofakes3.Upl
 // abortMultipartUploadCtx directly so app shutdown can cancel
 // in-flight aborts.
 func (b *Backend) AbortMultipartUpload(bucket, object string, id gofakes3.UploadID) error {
+	// Client-supplied id (gofakes3 DELETE ?uploadId=): validate before the ctx
+	// impl joins it into a staging path. The internal sweeper calls
+	// abortMultipartUploadCtx directly with trusted DB-sourced ids (always the
+	// server-issued UUID from CreateMultipartUpload) and is intentionally not
+	// gated here, so it can still clean up rows regardless of id shape.
+	if err := validateUploadID(string(id)); err != nil {
+		return err
+	}
 	return b.abortMultipartUploadCtx(context.Background(), bucket, object, id)
 }
 
@@ -476,6 +504,9 @@ func (b *Backend) ListMultipartUploads(bucket string, marker *gofakes3.UploadLis
 // the part_number of the last INCLUDED part.
 func (b *Backend) ListParts(bucket, object string, uploadID gofakes3.UploadID, marker int, limit int64) (*gofakes3.ListMultipartUploadPartsResult, error) {
 	ctx := context.Background()
+	if err := validateUploadID(string(uploadID)); err != nil {
+		return nil, err
+	}
 	if _, err := b.verifyUploadOwnership(ctx, bucket, object, string(uploadID)); err != nil {
 		return nil, err
 	}

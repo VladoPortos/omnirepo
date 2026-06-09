@@ -370,7 +370,7 @@ func (h *SyncHandler) Handle(ctx context.Context, payload string, projectID, rep
 		// Perform the deferred trash moves only AFTER the purge tx commits, so
 		// a rolled-back purge can never strand a restored row against an
 		// already-trashed file. Best-effort: a failure leaves an orphaned
-		// on-disk file (recoverable by GC), never a missing artifact.
+		// on-disk file (a storage leak), never a missing artifact.
 		if err := driftpurge.ApplyPendingMoves(ctx, pending); err != nil {
 			slog.WarnContext(ctx, "driftpurge.trash_move_failed", "err", err, "repo_id", repo.ID)
 		}

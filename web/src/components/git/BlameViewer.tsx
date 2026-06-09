@@ -41,17 +41,21 @@ export function BlameViewer({
     currentRef,
     filePath,
   );
-  const [highlightedLines, setHighlightedLines] = useState<string[]>([]);
-  const [highlighting, setHighlighting] = useState(false);
+  // The async highlight result is stored together with the blame payload
+  // it was computed from; `highlighting` and `highlightedLines` are then
+  // derived by identity instead of being mirrored into state from inside
+  // the effect body (no synchronous setState in the effect).
+  const [highlightResult, setHighlightResult] = useState<{
+    source: NonNullable<typeof blameData>;
+    lines: string[];
+  } | null>(null);
 
   useEffect(() => {
     if (!blameData?.lines?.length) {
-      setHighlightedLines([]);
       return;
     }
 
     let cancelled = false;
-    setHighlighting(true);
 
     const fullCode = blameData.lines.map((l) => l.content).join('\n');
     const lang = detectLanguage(filePath);
@@ -76,24 +80,34 @@ export function BlameViewer({
         if (codeEl) {
           const innerHtml = codeEl.innerHTML;
           const lines = innerHtml.split('\n');
-          setHighlightedLines(lines);
+          setHighlightResult({ source: blameData, lines });
         } else {
-          setHighlightedLines(blameData.lines.map((l) => escapeHtml(l.content)));
+          setHighlightResult({
+            source: blameData,
+            lines: blameData.lines.map((l) => escapeHtml(l.content)),
+          });
         }
       })
       .catch(() => {
         if (!cancelled) {
-          setHighlightedLines(blameData.lines.map((l) => escapeHtml(l.content)));
+          setHighlightResult({
+            source: blameData,
+            lines: blameData.lines.map((l) => escapeHtml(l.content)),
+          });
         }
-      })
-      .finally(() => {
-        if (!cancelled) setHighlighting(false);
       });
 
     return () => {
       cancelled = true;
     };
   }, [blameData, filePath]);
+
+  // Derived: we are mid-highlight while there is blame data but the
+  // stored result was computed from a different (stale or absent) payload.
+  const resultIsCurrent =
+    highlightResult !== null && highlightResult.source === blameData;
+  const highlighting = !!blameData?.lines?.length && !resultIsCurrent;
+  const highlightedLines = resultIsCurrent ? highlightResult.lines : [];
 
   if (isLoading || highlighting) {
     return (
@@ -130,9 +144,21 @@ export function BlameViewer({
     );
   }
 
-  // Group consecutive lines by SHA for alternating shading
-  let prevSha = '';
-  let blockIndex = 0;
+  // Group consecutive lines by SHA for alternating shading. Precomputed
+  // as a pure pass so the JSX map below doesn't mutate render-scope
+  // variables.
+  const blockParity: boolean[] = [];
+  {
+    let prevSha = '';
+    let blockIndex = 0;
+    for (const line of blameData.lines) {
+      if (line.sha !== prevSha) {
+        blockIndex++;
+        prevSha = line.sha;
+      }
+      blockParity.push(blockIndex % 2 === 0);
+    }
+  }
 
   return (
     <div className="space-y-3">
@@ -148,11 +174,7 @@ export function BlameViewer({
         <table className="w-full border-collapse">
           <tbody>
             {blameData.lines.map((line, idx) => {
-              if (line.sha !== prevSha) {
-                blockIndex++;
-                prevSha = line.sha;
-              }
-              const isEvenBlock = blockIndex % 2 === 0;
+              const isEvenBlock = blockParity[idx];
               const showBlameInfo = idx === 0 || blameData.lines[idx - 1].sha !== line.sha;
 
               // Each line's highlighted HTML was already DOMPurify-sanitized above

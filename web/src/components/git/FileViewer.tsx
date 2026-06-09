@@ -30,22 +30,21 @@ export function FileViewer({
   onBack,
   downloadUrl,
 }: FileViewerProps) {
-  const [html, setHtml] = useState('');
-  const [highlighting, setHighlighting] = useState(false);
+  // The async highlight result is stored together with the file it was
+  // computed from; `html` and `highlighting` are derived by identity
+  // instead of being mirrored into state from inside the effect body
+  // (no synchronous setState in the effect).
+  const [highlightResult, setHighlightResult] = useState<{
+    source: GitFileContent;
+    html: string;
+  } | null>(null);
 
   useEffect(() => {
-    if (!file?.content) {
-      setHtml('');
-      return;
-    }
-
-    if (file.size > MAX_DISPLAY_SIZE) {
-      setHtml('');
+    if (!file?.content || file.size > MAX_DISPLAY_SIZE) {
       return;
     }
 
     let cancelled = false;
-    setHighlighting(true);
 
     const content =
       file.encoding === 'base64'
@@ -68,7 +67,7 @@ export function FileViewer({
             ALLOWED_TAGS: ['pre', 'code', 'span'],
             ALLOWED_ATTR: ['class', 'style'],
           });
-          setHtml(sanitized);
+          setHighlightResult({ source: file, html: sanitized });
         }
       })
       .catch(() => {
@@ -77,17 +76,26 @@ export function FileViewer({
             .replace(/&/g, '&amp;')
             .replace(/</g, '&lt;')
             .replace(/>/g, '&gt;');
-          setHtml(`<pre><code>${escaped}</code></pre>`);
+          setHighlightResult({
+            source: file,
+            html: `<pre><code>${escaped}</code></pre>`,
+          });
         }
-      })
-      .finally(() => {
-        if (!cancelled) setHighlighting(false);
       });
 
     return () => {
       cancelled = true;
     };
   }, [file]);
+
+  // Derived: mid-highlight while a displayable file is set but the stored
+  // result was computed from a different (stale or absent) file.
+  const displayable =
+    !!file?.content && file.size <= MAX_DISPLAY_SIZE;
+  const resultIsCurrent =
+    highlightResult !== null && highlightResult.source === file;
+  const highlighting = displayable && !resultIsCurrent;
+  const html = displayable && resultIsCurrent ? highlightResult.html : '';
 
   if (loading) {
     return (

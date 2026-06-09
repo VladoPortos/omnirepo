@@ -16,6 +16,42 @@ for security fixes against an active minor.
   `CONTRIBUTING.md`, `CHANGELOG.md`, PR template, `.editorconfig`,
   `.gitattributes`.
 
+## [v1.0.1] — 2026-06-09
+
+Security and correctness patch against v1.0, plus a dead-code / duplication
+cleanup pass. No new features; no functional change to any documented config.
+
+### Security
+- **S3 object delete** now rejects path-traversal keys. `DeleteObject` /
+  `DeleteMulti` joined the raw object key into a filesystem path and removed
+  it with no validation, and the DB delete is idempotent (no matching row
+  required) — an authenticated project S3 key could delete a file outside its
+  bucket (e.g. `../../certs/server.key`).
+- **S3 multipart abort** now rejects path-traversal upload ids. The abort
+  cleanup `RemoveAll`'d the per-upload staging directory even for an unknown
+  upload, so a crafted `uploadId` could recursively delete an arbitrary
+  directory tree.
+
+### Fixed
+- **Drift purge**: trash moves are deferred until after the purge transaction
+  commits, so a rolled-back multi-row purge can no longer strand restored rows
+  against already-trashed files (rpm/deb/pypi/helm).
+- **Git audit**: push (`git.refs.synced`) and fetch (`git.fetch`) events now
+  carry the authenticated actor (`actor_user_id` / `actor_api_key_id`);
+  previously authenticated Git activity appeared anonymous in the audit log.
+- **OCI**: failed `pull_external` jobs now emit a terminal
+  `oci.pull_external.failed` audit event — a failure previously left a
+  `started` event with no resolution in the trail.
+
+### Removed
+- Dead config knobs that were parsed but never read: `auth.docker_jwt_ttl`
+  (the live knob is `docker.jwt_ttl_seconds`), `scan.auto_scan_default`,
+  `scan.db_warn_age_days` (read from the settings table, not config), and the
+  `air_gap` block / `air_gap.allow_external_actions` (never enforced).
+- Internal dead-code and duplication cleanup: unused exported identifiers,
+  methods, and struct fields removed; per-protocol drift-audit emission and
+  registry-shutdown helpers consolidated.
+
 ## [v1.8] — 2026-04-26
 
 Walkthrough #4 close-out. 5 findings opened, 5 closed (3 BLOCKERs +

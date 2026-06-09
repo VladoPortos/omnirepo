@@ -48,21 +48,29 @@ export function ProjectsPage() {
   const { data, isLoading } = useProjects();
   const createProject = useCreateProject();
 
-  const [dialogOpen, setDialogOpen] = useState(false);
+  // Open create dialog when arriving from dashboard with ?create=1 —
+  // seeded on mount, then via a render-phase previous-value guard for
+  // in-page navigations that re-add the marker.
+  const wantsCreate = searchParams.get('create') === '1';
+  const [dialogOpen, setDialogOpen] = useState(wantsCreate);
+  const [prevWantsCreate, setPrevWantsCreate] = useState(wantsCreate);
+  if (wantsCreate !== prevWantsCreate) {
+    setPrevWantsCreate(wantsCreate);
+    if (wantsCreate) setDialogOpen(true);
+  }
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [errorEnvelope, setErrorEnvelope] = useState<ApiErrorEnvelope | null>(null);
   const fieldErrors = fieldErrorsFromEnvelope(errorEnvelope);
 
-  // Open create dialog when arriving from dashboard with ?create=1.
+  // Strip the one-shot ?create=1 marker from the URL (external-system
+  // sync — a legitimate effect).
   useEffect(() => {
-    if (searchParams.get('create') === '1') {
-      setDialogOpen(true);
-      const next = new URLSearchParams(searchParams);
-      next.delete('create');
-      setSearchParams(next, { replace: true });
-    }
-  }, [searchParams, setSearchParams]);
+    if (!wantsCreate) return;
+    const next = new URLSearchParams(searchParams);
+    next.delete('create');
+    setSearchParams(next, { replace: true });
+  }, [wantsCreate, searchParams, setSearchParams]);
 
   const projects = data?.items ?? [];
 

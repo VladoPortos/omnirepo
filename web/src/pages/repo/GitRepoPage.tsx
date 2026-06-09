@@ -4,7 +4,7 @@
  * refs, blame, diff, and branch comparison.
  */
 
-import { useState, useCallback, useEffect, useMemo } from 'react';
+import { useState, useCallback, useMemo } from 'react';
 import { useParams } from 'react-router-dom';
 import { GitBranch, Terminal } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -34,7 +34,7 @@ export function GitRepoPage({ repo }: GitRepoPageProps) {
   const { name: projectName } = useParams<{ name: string }>();
   const hostname = window.location.host;
 
-  const [currentRef, setCurrentRef] = useState('');
+  const [selectedRef, setSelectedRef] = useState('');
   const [currentPath, setCurrentPath] = useState('');
   const [viewingFile, setViewingFile] = useState<string | null>(null);
   const [tab, setTab] = useState('files');
@@ -53,15 +53,17 @@ export function GitRepoPage({ repo }: GitRepoPageProps) {
   );
   const refs = useMemo(() => refsData?.items ?? [], [refsData?.items]);
 
-  // Default to first branch (HEAD-like) or first ref
-  useEffect(() => {
-    if (refs.length > 0 && !currentRef) {
-      const main = refs.find(
-        (r) => r.type === 'branch' && (r.name === 'main' || r.name === 'master'),
-      );
-      setCurrentRef(main?.name ?? refs[0].name);
-    }
-  }, [refs, currentRef]);
+  // Default to first branch (HEAD-like) or first ref. Derived during
+  // render instead of mirrored into state via an effect: until the user
+  // explicitly picks a ref, currentRef follows the default.
+  const defaultRef = useMemo(() => {
+    if (refs.length === 0) return '';
+    const main = refs.find(
+      (r) => r.type === 'branch' && (r.name === 'main' || r.name === 'master'),
+    );
+    return main?.name ?? refs[0].name;
+  }, [refs]);
+  const currentRef = selectedRef || defaultRef;
 
   // Fetch tree for current path
   const { data: treeData, isLoading: treeLoading } = useGitTree(
@@ -107,7 +109,7 @@ export function GitRepoPage({ repo }: GitRepoPageProps) {
   }, [showBlame, viewingFile, currentPath]);
 
   const handleRefChange = useCallback((ref: string) => {
-    setCurrentRef(ref);
+    setSelectedRef(ref);
     setCurrentPath('');
     setViewingFile(null);
     setShowBlame(false);

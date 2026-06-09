@@ -19,7 +19,6 @@ import (
 	"net/url"
 	"path"
 	"strings"
-	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -28,12 +27,13 @@ import (
 	authmw "github.com/vladoportos/omnirepo/internal/auth/middleware"
 	"github.com/vladoportos/omnirepo/internal/httpx"
 	"github.com/vladoportos/omnirepo/internal/metadata"
+	"github.com/vladoportos/omnirepo/internal/protocol/common"
 	"github.com/vladoportos/omnirepo/internal/protocol/regen"
 	"github.com/vladoportos/omnirepo/internal/storage"
 )
 
 // SeverityGateFn is the scan-severity gate hook. nil = no-op.
-type SeverityGateFn func(ctx context.Context, repoID int64, artifactKind, artifactID string) (blocked bool, severity string, scanID int64)
+type SeverityGateFn = common.SeverityGateFn
 
 // Deps bundles the dependencies the DEB handler needs.
 type Deps struct {
@@ -133,8 +133,8 @@ func (h *Handler) Mount(parent chi.Router) {
 		APIKeys:  h.apiKeys,
 	}
 	parent.Group(func(r chi.Router) {
-		r.Use(httpx.AnonymousReadOK(h.lookupRepoPublicRead, h.extractRepoFromDEBURL, attachAnonymous))
-		r.Use(skipIfActor(authmw.BasicOrAPIKey(midDeps)))
+		r.Use(httpx.AnonymousReadOK(common.RepoPublicReadLookup(h.projects, h.repos), common.RepoURLExtractor("deb"), common.AttachAnonymous))
+		r.Use(common.SkipIfActor(authmw.BasicOrAPIKey(midDeps)))
 
 		r.Get("/{project}/deb/{repo}/public-key.asc", h.servePublicKey)
 		r.Get("/{project}/deb/{repo}/dists/*", h.serveDistsFile)
@@ -149,56 +149,6 @@ func (h *Handler) Mount(parent chi.Router) {
 			rw.Patch("/{project}/deb/{repo}/suites", h.patchSuites)
 		})
 	})
-}
-
-// attachAnonymous wires an anonymous Actor into ctx.
-var attachAnonymous httpx.AttachAnonymousFn = func(ctx context.Context) context.Context {
-	return auth.WithActor(ctx, auth.Actor{Kind: auth.ActorKindAnonymous})
-}
-
-// skipIfActor wraps a middleware so it passes through when an Actor already
-// sits in ctx.
-func skipIfActor(mw func(http.Handler) http.Handler) func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		wrapped := mw(next)
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if _, ok := auth.ActorFromContext(r.Context()); ok {
-				next.ServeHTTP(w, r)
-				return
-			}
-			wrapped.ServeHTTP(w, r)
-		})
-	}
-}
-
-func (h *Handler) extractRepoFromDEBURL(r *http.Request) (project, repoType, repo string, ok bool) {
-	p := strings.TrimPrefix(r.URL.Path, "/")
-	parts := strings.SplitN(p, "/", 4)
-	if len(parts) < 3 {
-		return "", "", "", false
-	}
-	if parts[1] != "deb" {
-		return "", "", "", false
-	}
-	if parts[0] == "" || parts[2] == "" {
-		return "", "", "", false
-	}
-	return parts[0], "deb", parts[2], true
-}
-
-func (h *Handler) lookupRepoPublicRead(ctx context.Context, project, repoType, repo string) (bool, bool) {
-	if h.projects == nil || h.repos == nil {
-		return false, false
-	}
-	p, err := h.projects.FindByName(ctx, project)
-	if err != nil || p == nil {
-		return false, false
-	}
-	rr, err := h.repos.FindByTriple(ctx, p.ID, repoType, repo)
-	if err != nil || rr == nil {
-		return false, false
-	}
-	return rr.PublicRead, true
 }
 
 // resolved wraps a successful repo lookup. `rest` is the chi wildcard.
@@ -303,60 +253,18 @@ func storageKeyForPool(project, repo, rest string) string {
 	return strings.Join([]string{project, "deb", repo, rest}, "/")
 }
 
-// auditEvent emits an audit row with actor + request fields filled in.
+// auditEvent records a deb_package audit event via common.AuditEvent.
 func (h *Handler) auditEvent(r *http.Request, kind audit.EventKind, targetID, outcome string, details map[string]any) {
-	if h.auditLogger == nil {
-		return
-	}
-	e := audit.Event{
-		Kind:       kind,
-		IP:         r.RemoteAddr,
-		UserAgent:  r.Header.Get("User-Agent"),
-		TargetKind: "deb_package",
-		TargetID:   targetID,
-		Outcome:    outcome,
-		Details:    details,
-		OccurredAt: time.Now().UTC(),
-	}
-	if a, ok := auth.ActorFromContext(r.Context()); ok {
-		switch a.Kind {
-		case auth.ActorKindUser:
-			id := a.ID
-			e.ActorUserID = &id
-		case auth.ActorKindAPIKey:
-			id := a.APIKeyID
-			e.ActorAPIKeyID = &id
-		}
-	}
-	_ = h.auditLogger.Record(r.Context(), e)
+	common.AuditEvent(h.auditLogger, r, kind, "deb_package", targetID, outcome, details)
 }
 
 // requireRepoWrite enforces the maintainer-required policy for artifact
-// writes/deletes via auth.Can: super-admin bypasses, the project key's / user's
-// role is resolved through ResolveMembership, and viewers + viewer-scoped keys
-// are denied. Replaces the former role-blind membership check (which let any
-// member, and any project-scoped key regardless of role, publish/delete).
+// writes/deletes (see common.RequireRepoWrite).
 func (h *Handler) requireRepoWrite(ctx context.Context, actor auth.Actor, projectID int64, action auth.Action) bool {
-	mctx := auth.ResolveMembership(ctx, actor, h.members)
-	allowed, _ := auth.Can(mctx, actor, action, auth.Target{
-		Kind:      "repo",
-		ProjectID: projectID,
-	})
-	return allowed
+	return common.RequireRepoWrite(ctx, actor, h.members, projectID, action)
 }
 
-// actorCanRead consults auth.Can for ActionRepoRead.
+// actorCanRead consults auth.Can for ActionRepoRead (see common.ActorCanRead).
 func (h *Handler) actorCanRead(r *http.Request, repo *metadata.Repo) bool {
-	a, ok := auth.ActorFromContext(r.Context())
-	if !ok {
-		return false
-	}
-	ctx := auth.ResolveMembership(r.Context(), a, h.members)
-	allowed, _ := auth.Can(ctx, a, auth.ActionRepoRead, auth.Target{
-		Kind:       "repo",
-		ProjectID:  repo.ProjectID,
-		RepoID:     repo.ID,
-		PublicRead: repo.PublicRead,
-	})
-	return allowed
+	return common.ActorCanRead(r, h.members, repo)
 }

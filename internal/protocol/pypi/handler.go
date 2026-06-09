@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -23,13 +22,14 @@ import (
 	authmw "github.com/vladoportos/omnirepo/internal/auth/middleware"
 	"github.com/vladoportos/omnirepo/internal/httpx"
 	"github.com/vladoportos/omnirepo/internal/metadata"
+	"github.com/vladoportos/omnirepo/internal/protocol/common"
 	"github.com/vladoportos/omnirepo/internal/protocol/regen"
 	"github.com/vladoportos/omnirepo/internal/storage"
 )
 
 // SeverityGateFn is the scan-severity gate hook. Plug nil for tests; app.Run
 // wires a real gate that inspects repos.block_on_severity + scans.
-type SeverityGateFn func(ctx context.Context, repoID int64, artifactKind, artifactID string) (blocked bool, severity string, scanID int64)
+type SeverityGateFn = common.SeverityGateFn
 
 // Deps bundles the dependencies the PyPI handler needs at construction time.
 type Deps struct {
@@ -148,8 +148,8 @@ func (h *Handler) Mount(parent chi.Router) {
 		APIKeys:  h.apiKeys,
 	}
 	parent.Group(func(r chi.Router) {
-		r.Use(httpx.AnonymousReadOK(h.lookupRepoPublicRead, h.extractRepoFromPyPIURL, attachAnonymous))
-		r.Use(skipIfActor(authmw.BasicOrAPIKey(midDeps)))
+		r.Use(httpx.AnonymousReadOK(common.RepoPublicReadLookup(h.projects, h.repos), common.RepoURLExtractor("pypi"), common.AttachAnonymous))
+		r.Use(common.SkipIfActor(authmw.BasicOrAPIKey(midDeps)))
 
 		// Reads: PEP 503 HTML + PEP 691 JSON via content negotiation.
 		r.Get("/{project}/pypi/{repo}/simple/", h.getSimpleIndex)
@@ -176,59 +176,6 @@ func (h *Handler) Mount(parent chi.Router) {
 			rw.Post("/{project}/pypi/{repo}/+upload/{session_id}/commit", h.handleCommit)
 		})
 	})
-}
-
-// attachAnonymous wires an anonymous Actor into ctx (for AnonymousReadOK).
-var attachAnonymous httpx.AttachAnonymousFn = func(ctx context.Context) context.Context {
-	return auth.WithActor(ctx, auth.Actor{Kind: auth.ActorKindAnonymous})
-}
-
-// skipIfActor wraps a middleware so it pass-throughs when an Actor is
-// already in ctx (the anonymous fast path set by AnonymousReadOK).
-func skipIfActor(mw func(http.Handler) http.Handler) func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		wrapped := mw(next)
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if _, ok := auth.ActorFromContext(r.Context()); ok {
-				next.ServeHTTP(w, r)
-				return
-			}
-			wrapped.ServeHTTP(w, r)
-		})
-	}
-}
-
-// extractRepoFromPyPIURL returns (project, "pypi", repo, ok=true) when
-// the URL matches /<project>/pypi/<repo>/.... Used by AnonymousReadOK.
-func (h *Handler) extractRepoFromPyPIURL(r *http.Request) (project, repoType, repo string, ok bool) {
-	p := strings.TrimPrefix(r.URL.Path, "/")
-	parts := strings.SplitN(p, "/", 4)
-	if len(parts) < 3 {
-		return "", "", "", false
-	}
-	if parts[1] != "pypi" {
-		return "", "", "", false
-	}
-	if parts[0] == "" || parts[2] == "" {
-		return "", "", "", false
-	}
-	return parts[0], "pypi", parts[2], true
-}
-
-// lookupRepoPublicRead resolves (project, "pypi", repo) → (public_read, found).
-func (h *Handler) lookupRepoPublicRead(ctx context.Context, project, repoType, repo string) (bool, bool) {
-	if h.projects == nil || h.repos == nil {
-		return false, false
-	}
-	p, err := h.projects.FindByName(ctx, project)
-	if err != nil || p == nil {
-		return false, false
-	}
-	rr, err := h.repos.FindByTriple(ctx, p.ID, repoType, repo)
-	if err != nil || rr == nil {
-		return false, false
-	}
-	return rr.PublicRead, true
 }
 
 // resolved bundles the result of resolveRepo.
@@ -266,25 +213,10 @@ func (h *Handler) resolveRepo(w http.ResponseWriter, r *http.Request) (resolved,
 }
 
 // validateFilename rejects path traversal, NUL bytes, separators, and
-// non-canonical names. PyPI files live in a single packages/ dir per
-// repo; no nested layout.
+// non-canonical names (see common.ValidateFilename). PyPI files live in a
+// single packages/ dir per repo; no nested layout.
 func validateFilename(raw string) (string, error) {
-	if raw == "" {
-		return "", errors.New("empty filename")
-	}
-	if strings.ContainsRune(raw, '\x00') {
-		return "", errors.New("nul byte in filename")
-	}
-	if strings.ContainsAny(raw, "/\\") {
-		return "", errors.New("filename must not contain separators")
-	}
-	if raw == "." || raw == ".." {
-		return "", errors.New("invalid filename")
-	}
-	if path.Clean(raw) != raw {
-		return "", errors.New("non-canonical filename")
-	}
-	return raw, nil
+	return common.ValidateFilename(raw, "")
 }
 
 // packageStorageKey builds the PathStore key for a given filename.
@@ -292,63 +224,20 @@ func packageStorageKey(project, repo, filename string) string {
 	return strings.Join([]string{project, "pypi", repo, "packages", filename}, "/")
 }
 
-// auditEvent records an audit row with actor + request fields filled in.
+// auditEvent records a pypi_file audit event via common.AuditEvent.
 func (h *Handler) auditEvent(r *http.Request, kind audit.EventKind, targetID, outcome string, details map[string]any) {
-	if h.auditLogger == nil {
-		return
-	}
-	e := audit.Event{
-		Kind:       kind,
-		IP:         r.RemoteAddr,
-		UserAgent:  r.Header.Get("User-Agent"),
-		TargetKind: "pypi_file",
-		TargetID:   targetID,
-		Outcome:    outcome,
-		Details:    details,
-		OccurredAt: time.Now().UTC(),
-	}
-	if a, ok := auth.ActorFromContext(r.Context()); ok {
-		switch a.Kind {
-		case auth.ActorKindUser:
-			id := a.ID
-			e.ActorUserID = &id
-		case auth.ActorKindAPIKey:
-			id := a.APIKeyID
-			e.ActorAPIKeyID = &id
-		}
-	}
-	_ = h.auditLogger.Record(r.Context(), e)
+	common.AuditEvent(h.auditLogger, r, kind, "pypi_file", targetID, outcome, details)
 }
 
 // requireRepoWrite enforces the maintainer-required policy for artifact
-// writes/deletes via auth.Can: super-admin bypasses, the project key's / user's
-// role is resolved through ResolveMembership, and viewers + viewer-scoped keys
-// are denied. Replaces the former role-blind membership check (which let any
-// member, and any project-scoped key regardless of role, publish/delete).
+// writes/deletes (see common.RequireRepoWrite).
 func (h *Handler) requireRepoWrite(ctx context.Context, actor auth.Actor, projectID int64, action auth.Action) bool {
-	mctx := auth.ResolveMembership(ctx, actor, h.members)
-	allowed, _ := auth.Can(mctx, actor, action, auth.Target{
-		Kind:      "repo",
-		ProjectID: projectID,
-	})
-	return allowed
+	return common.RequireRepoWrite(ctx, actor, h.members, projectID, action)
 }
 
-// actorCanRead checks ActionRepoRead via auth.Can with ctx-resolved
-// project membership.
+// actorCanRead consults auth.Can for ActionRepoRead (see common.ActorCanRead).
 func (h *Handler) actorCanRead(r *http.Request, repo *metadata.Repo) bool {
-	a, ok := auth.ActorFromContext(r.Context())
-	if !ok {
-		return false
-	}
-	ctx := auth.ResolveMembership(r.Context(), a, h.members)
-	allowed, _ := auth.Can(ctx, a, auth.ActionRepoRead, auth.Target{
-		Kind:       "repo",
-		ProjectID:  repo.ProjectID,
-		RepoID:     repo.ID,
-		PublicRead: repo.PublicRead,
-	})
-	return allowed
+	return common.ActorCanRead(r, h.members, repo)
 }
 
 // -----------------------------------------------------------------------------
@@ -538,9 +427,7 @@ func (h *Handler) getPackage(w http.ResponseWriter, r *http.Request) {
 				"severity": severity,
 				"scan_id":  scanID,
 			})
-			w.Header().Set("Content-Type", "application/json; charset=utf-8")
-			w.WriteHeader(http.StatusForbidden)
-			fmt.Fprintf(w, `{"error":"blocked_by_scan","severity":%q,"scan_id":%d}`, severity, scanID)
+			common.WriteSeverityBlocked(w, severity, scanID)
 			return
 		}
 	}

@@ -16,6 +16,7 @@ import (
 	"github.com/vladoportos/omnirepo/internal/audit"
 	"github.com/vladoportos/omnirepo/internal/auth"
 	"github.com/vladoportos/omnirepo/internal/metadata"
+	"github.com/vladoportos/omnirepo/internal/protocol/common"
 )
 
 // put handles PUT /<project>/raw/<repo>/<path...>.
@@ -146,17 +147,7 @@ func detectMIMEFromExt(relPath string) string {
 }
 
 // requireRepoWrite enforces the maintainer-required policy for repo
-// content writes/deletes. It replaces the former role-blind membership check
-// (which let any project member — and any project-scoped API key regardless of
-// role — publish/delete). Authorization now goes through auth.Can: super-admin
-// bypasses, the project key's / user's role is resolved via ResolveMembership,
-// and viewers + viewer-scoped keys are denied. RepoID is omitted from the
-// Target because the maintainer branch keys only on ProjectID.
+// content writes/deletes (see common.RequireRepoWrite).
 func (h *Handler) requireRepoWrite(ctx context.Context, actor auth.Actor, projectID int64, action auth.Action) bool {
-	mctx := auth.ResolveMembership(ctx, actor, h.members)
-	allowed, _ := auth.Can(mctx, actor, action, auth.Target{
-		Kind:      "repo",
-		ProjectID: projectID,
-	})
-	return allowed
+	return common.RequireRepoWrite(ctx, actor, h.members, projectID, action)
 }

@@ -2,7 +2,6 @@ package deb
 
 import (
 	"errors"
-	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -14,6 +13,7 @@ import (
 	chimw "github.com/go-chi/chi/v5/middleware"
 
 	"github.com/vladoportos/omnirepo/internal/audit"
+	"github.com/vladoportos/omnirepo/internal/protocol/common"
 )
 
 // servePublicKey GET /<project>/deb/<repo>/public-key.asc.
@@ -83,9 +83,7 @@ func (h *Handler) servePoolPackage(w http.ResponseWriter, r *http.Request) {
 			h.auditEvent(r, audit.EvtDEBUpload, filename, "blocked", map[string]any{
 				"severity": severity, "scan_id": scanID,
 			})
-			w.Header().Set("Content-Type", "application/json; charset=utf-8")
-			w.WriteHeader(http.StatusForbidden)
-			fmt.Fprintf(w, `{"error":"blocked_by_scan","severity":%q,"scan_id":%d}`, severity, scanID)
+			common.WriteSeverityBlocked(w, severity, scanID)
 			return
 		}
 	}

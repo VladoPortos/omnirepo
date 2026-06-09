@@ -17,6 +17,7 @@ import (
 	"github.com/vladoportos/omnirepo/internal/config"
 	"github.com/vladoportos/omnirepo/internal/httperr"
 	"github.com/vladoportos/omnirepo/internal/metadata"
+	"github.com/vladoportos/omnirepo/internal/protocol/common"
 	"github.com/vladoportos/omnirepo/internal/protocol/git/gitkit"
 	"github.com/vladoportos/omnirepo/internal/protocol/git/gogit"
 	"github.com/vladoportos/omnirepo/internal/storage"
@@ -122,7 +123,7 @@ func (h *Handler) mountAt(parent chi.Router, route string, authDeps authmw.Deps)
 		r.Use(ResolveRepoFromURL(h.projects, h.repos))
 		r.Use(AuditMiddleware(h))
 		r.Use(AnonymousGitRead())
-		r.Use(skipIfActor(authmw.BasicOrAPIKey(authDeps)))
+		r.Use(common.SkipIfActor(authmw.BasicOrAPIKey(authDeps)))
 		r.Use(resolveMembership(h.members))
 		r.Use(RequireGitPermission())
 		r.Use(PerRepoMutex(h.locks))

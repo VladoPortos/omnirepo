@@ -10,10 +10,10 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/vladoportos/omnirepo/internal/audit"
-	"github.com/vladoportos/omnirepo/internal/auth"
 	authmw "github.com/vladoportos/omnirepo/internal/auth/middleware"
 	"github.com/vladoportos/omnirepo/internal/httpx"
 	"github.com/vladoportos/omnirepo/internal/metadata"
+	"github.com/vladoportos/omnirepo/internal/protocol/common"
 	"github.com/vladoportos/omnirepo/internal/storage"
 )
 
@@ -217,7 +217,7 @@ func (h *Handler) Mount(parent chi.Router) {
 		// Everything else runs under the guarded chain. The blob and
 		// manifests/tags/catalog routes plug into this subrouter.
 		r.Group(func(r chi.Router) {
-			r.Use(httpx.AnonymousReadOK(h.lookupRepoPublicRead, h.extractRepoFromV2URL, attachAnonymous))
+			r.Use(httpx.AnonymousReadOK(common.RepoPublicReadLookup(h.projects, h.repos), h.extractRepoFromV2URL, common.AttachAnonymous))
 			r.Use(h.VerifyBearer)
 
 			// Blob routes. The name parameter is a full
@@ -293,14 +293,6 @@ func (h *Handler) ping(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-// attachAnonymous is the AnonymousReadOK callback that wires an anonymous
-// Actor into ctx. Declared as a package-level var rather than inlined so
-// test code can reach for the same reference when exercising the middleware
-// in isolation.
-var attachAnonymous httpx.AttachAnonymousFn = func(ctx context.Context) context.Context {
-	return auth.WithActor(ctx, auth.Actor{Kind: auth.ActorKindAnonymous})
-}
-
 // extractRepoFromV2URL parses /v2/<project>/<type>/<repo>/... URLs into
 // the (project, type, repo) triple. The V2 distribution spec allows
 // arbitrary "<name>" path components separated by "/"; OmniRepo narrows
@@ -335,22 +327,3 @@ func (h *Handler) extractRepoFromV2URL(r *http.Request) (project, repoType, repo
 	return parts[0], parts[1], parts[2], true
 }
 
-// lookupRepoPublicRead is the AnonymousReadOK callback that resolves
-// (project, type, repo) → (public_read, found) via the
-// ProjectsRepo + ReposRepo pair. Missing ProjectsRepo or ReposRepo at
-// construction time surfaces as found=false (the middleware then falls
-// through to the real auth chain, which 401s safely).
-func (h *Handler) lookupRepoPublicRead(ctx context.Context, project, repoType, repoName string) (bool, bool) {
-	if h.projects == nil || h.repos == nil {
-		return false, false
-	}
-	p, err := h.projects.FindByName(ctx, project)
-	if err != nil || p == nil {
-		return false, false
-	}
-	rr, err := h.repos.FindByTriple(ctx, p.ID, repoType, repoName)
-	if err != nil || rr == nil {
-		return false, false
-	}
-	return rr.PublicRead, true
-}

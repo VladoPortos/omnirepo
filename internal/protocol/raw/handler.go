@@ -11,21 +11,19 @@
 package raw
 
 import (
-	"context"
 	"errors"
 	"net/http"
 	"net/url"
 	"path"
 	"strings"
-	"time"
 
 	"github.com/go-chi/chi/v5"
 
 	"github.com/vladoportos/omnirepo/internal/audit"
-	"github.com/vladoportos/omnirepo/internal/auth"
 	authmw "github.com/vladoportos/omnirepo/internal/auth/middleware"
 	"github.com/vladoportos/omnirepo/internal/httpx"
 	"github.com/vladoportos/omnirepo/internal/metadata"
+	"github.com/vladoportos/omnirepo/internal/protocol/common"
 	"github.com/vladoportos/omnirepo/internal/storage"
 )
 
@@ -41,7 +39,7 @@ const (
 
 // SeverityGateFn plugs in the block_on_severity gate without
 // raw needing to import scan packages. nil = no-op (default).
-type SeverityGateFn func(ctx context.Context, repoID int64, artifactKind, artifactID string) (blocked bool, severity string, scanID int64)
+type SeverityGateFn = common.SeverityGateFn
 
 // Deps is the dependency bundle the RAW handler needs at construction time.
 type Deps struct {
@@ -138,69 +136,13 @@ func (h *Handler) Mount(parent chi.Router) {
 		APIKeys:  h.apiKeys,
 	}
 	parent.Group(func(r chi.Router) {
-		r.Use(httpx.AnonymousReadOK(h.lookupRepoPublicRead, h.extractRepoFromRawURL, attachAnonymous))
-		r.Use(skipIfActor(authmw.BasicOrAPIKey(midDeps)))
+		r.Use(httpx.AnonymousReadOK(common.RepoPublicReadLookup(h.projects, h.repos), common.RepoURLExtractor("raw"), common.AttachAnonymous))
+		r.Use(common.SkipIfActor(authmw.BasicOrAPIKey(midDeps)))
 		r.Put("/{project}/raw/{repo}/*", h.put)
 		r.Get("/{project}/raw/{repo}/*", h.get)
 		r.Head("/{project}/raw/{repo}/*", h.head)
 		r.Delete("/{project}/raw/{repo}/*", h.delete)
 	})
-}
-
-// attachAnonymous is the AnonymousReadOK callback that wires an anonymous
-// Actor into ctx. Mirrors the OCI handler's identical helper.
-var attachAnonymous httpx.AttachAnonymousFn = func(ctx context.Context) context.Context {
-	return auth.WithActor(ctx, auth.Actor{Kind: auth.ActorKindAnonymous})
-}
-
-// skipIfActor wraps a middleware so it pass-throughs when an Actor is already
-// in ctx (the anonymous fast path set by AnonymousReadOK). Without this the
-// BasicOrAPIKey middleware would 401 anonymous-read requests because they
-// have no Authorization header.
-func skipIfActor(mw func(http.Handler) http.Handler) func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		wrapped := mw(next)
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if _, ok := auth.ActorFromContext(r.Context()); ok {
-				next.ServeHTTP(w, r)
-				return
-			}
-			wrapped.ServeHTTP(w, r)
-		})
-	}
-}
-
-// extractRepoFromRawURL returns (project, "raw", repo, ok=true) when the URL
-// matches /<project>/raw/<repo>/.... Used by AnonymousReadOK.
-func (h *Handler) extractRepoFromRawURL(r *http.Request) (project, repoType, repo string, ok bool) {
-	p := strings.TrimPrefix(r.URL.Path, "/")
-	parts := strings.SplitN(p, "/", 4)
-	if len(parts) < 3 {
-		return "", "", "", false
-	}
-	if parts[1] != "raw" {
-		return "", "", "", false
-	}
-	if parts[0] == "" || parts[2] == "" {
-		return "", "", "", false
-	}
-	return parts[0], "raw", parts[2], true
-}
-
-// lookupRepoPublicRead resolves (project, "raw", repo) → (public_read, found).
-func (h *Handler) lookupRepoPublicRead(ctx context.Context, project, repoType, repo string) (bool, bool) {
-	if h.projects == nil || h.repos == nil {
-		return false, false
-	}
-	p, err := h.projects.FindByName(ctx, project)
-	if err != nil || p == nil {
-		return false, false
-	}
-	rr, err := h.repos.FindByTriple(ctx, p.ID, repoType, repo)
-	if err != nil || rr == nil {
-		return false, false
-	}
-	return rr.PublicRead, true
 }
 
 // resolved wraps a successful repo+path lookup.
@@ -373,31 +315,7 @@ func validateRawPath(raw string, strict bool) (string, error) {
 	return cleaned, nil
 }
 
-// auditEvent is a tiny helper around d.Audit.Record that fills in actor +
-// request fields uniformly. Best-effort: errors are swallowed.
+// auditEvent records a raw_file audit event via common.AuditEvent.
 func (h *Handler) auditEvent(r *http.Request, kind audit.EventKind, targetID, outcome string, details map[string]any) {
-	if h.auditLogger == nil {
-		return
-	}
-	e := audit.Event{
-		Kind:       kind,
-		IP:         r.RemoteAddr,
-		UserAgent:  r.Header.Get("User-Agent"),
-		TargetKind: "raw_file",
-		TargetID:   targetID,
-		Outcome:    outcome,
-		Details:    details,
-		OccurredAt: time.Now().UTC(),
-	}
-	if a, ok := auth.ActorFromContext(r.Context()); ok {
-		switch a.Kind {
-		case auth.ActorKindUser:
-			id := a.ID
-			e.ActorUserID = &id
-		case auth.ActorKindAPIKey:
-			id := a.APIKeyID
-			e.ActorAPIKeyID = &id
-		}
-	}
-	_ = h.auditLogger.Record(r.Context(), e)
+	common.AuditEvent(h.auditLogger, r, kind, "raw_file", targetID, outcome, details)
 }

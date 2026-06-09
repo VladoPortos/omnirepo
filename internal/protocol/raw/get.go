@@ -13,8 +13,8 @@ import (
 	chimw "github.com/go-chi/chi/v5/middleware"
 
 	"github.com/vladoportos/omnirepo/internal/audit"
-	"github.com/vladoportos/omnirepo/internal/auth"
 	"github.com/vladoportos/omnirepo/internal/metadata"
+	"github.com/vladoportos/omnirepo/internal/protocol/common"
 )
 
 // get serves GET /<project>/raw/<repo>/<path...>.
@@ -185,23 +185,11 @@ func (h *Handler) contentTypeFor(absPath, relPath string) string {
 }
 
 // actorCanRead returns true when the actor (already in ctx) is allowed to
-// read repo. Delegates to auth.Can(ActionRepoRead) so project membership is
-// enforced for private repos.
+// read repo (see common.ActorCanRead).
 //
 // Earlier this function unconditionally returned true for any
 // authenticated actor, which leaked private RAW repo contents to cross-project
-// API keys and to any logged-in user. The current form mirrors oci.canOnRepo exactly.
+// API keys and to any logged-in user.
 func (h *Handler) actorCanRead(r *http.Request, repo *metadata.Repo) bool {
-	a, ok := auth.ActorFromContext(r.Context())
-	if !ok {
-		return false
-	}
-	ctx := auth.ResolveMembership(r.Context(), a, h.members)
-	allowed, _ := auth.Can(ctx, a, auth.ActionRepoRead, auth.Target{
-		Kind:       "repo",
-		ProjectID:  repo.ProjectID,
-		RepoID:     repo.ID,
-		PublicRead: repo.PublicRead,
-	})
-	return allowed
+	return common.ActorCanRead(r, h.members, repo)
 }

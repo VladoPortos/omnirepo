@@ -220,22 +220,6 @@ func AnonymousGitRead() func(http.Handler) http.Handler {
 	}
 }
 
-// skipIfActor wraps mw so it pass-throughs when an Actor is already on
-// ctx (the anonymous fast path set by AnonymousGitRead). Matches the
-// pattern used by pypi/rpm/deb handlers.
-func skipIfActor(mw func(http.Handler) http.Handler) func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		wrapped := mw(next)
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if _, ok := auth.ActorFromContext(r.Context()); ok {
-				next.ServeHTTP(w, r)
-				return
-			}
-			wrapped.ServeHTTP(w, r)
-		})
-	}
-}
-
 // resolveGitAction determines ActionGitRepoRead or ActionGitRepoWrite from
 // the request path and query string.
 func resolveGitAction(r *http.Request) auth.Action {

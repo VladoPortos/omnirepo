@@ -13,12 +13,9 @@ package rpm
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"net/url"
-	"path"
 	"strings"
-	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -27,12 +24,13 @@ import (
 	authmw "github.com/vladoportos/omnirepo/internal/auth/middleware"
 	"github.com/vladoportos/omnirepo/internal/httpx"
 	"github.com/vladoportos/omnirepo/internal/metadata"
+	"github.com/vladoportos/omnirepo/internal/protocol/common"
 	"github.com/vladoportos/omnirepo/internal/protocol/regen"
 	"github.com/vladoportos/omnirepo/internal/storage"
 )
 
 // SeverityGateFn is the scan-severity gate hook. nil = no-op.
-type SeverityGateFn func(ctx context.Context, repoID int64, artifactKind, artifactID string) (blocked bool, severity string, scanID int64)
+type SeverityGateFn = common.SeverityGateFn
 
 // Deps bundles the dependencies the RPM handler needs.
 type Deps struct {
@@ -125,8 +123,8 @@ func (h *Handler) Mount(parent chi.Router) {
 		APIKeys:  h.apiKeys,
 	}
 	parent.Group(func(r chi.Router) {
-		r.Use(httpx.AnonymousReadOK(h.lookupRepoPublicRead, h.extractRepoFromRPMURL, attachAnonymous))
-		r.Use(skipIfActor(authmw.BasicOrAPIKey(midDeps)))
+		r.Use(httpx.AnonymousReadOK(common.RepoPublicReadLookup(h.projects, h.repos), common.RepoURLExtractor("rpm"), common.AttachAnonymous))
+		r.Use(common.SkipIfActor(authmw.BasicOrAPIKey(midDeps)))
 
 		r.Get("/{project}/rpm/{repo}/public-key.asc", h.servePublicKey)
 		r.Get("/{project}/rpm/{repo}/repodata/*", h.serveRepodata)
@@ -141,56 +139,6 @@ func (h *Handler) Mount(parent chi.Router) {
 			rw.Delete("/{project}/rpm/{repo}/packages/{filename}", h.delete)
 		})
 	})
-}
-
-// attachAnonymous wires an anonymous Actor into ctx.
-var attachAnonymous httpx.AttachAnonymousFn = func(ctx context.Context) context.Context {
-	return auth.WithActor(ctx, auth.Actor{Kind: auth.ActorKindAnonymous})
-}
-
-// skipIfActor wraps a middleware so it pass-throughs when an Actor already
-// sits in ctx (the anonymous fast path set by AnonymousReadOK).
-func skipIfActor(mw func(http.Handler) http.Handler) func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		wrapped := mw(next)
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if _, ok := auth.ActorFromContext(r.Context()); ok {
-				next.ServeHTTP(w, r)
-				return
-			}
-			wrapped.ServeHTTP(w, r)
-		})
-	}
-}
-
-func (h *Handler) extractRepoFromRPMURL(r *http.Request) (project, repoType, repo string, ok bool) {
-	p := strings.TrimPrefix(r.URL.Path, "/")
-	parts := strings.SplitN(p, "/", 4)
-	if len(parts) < 3 {
-		return "", "", "", false
-	}
-	if parts[1] != "rpm" {
-		return "", "", "", false
-	}
-	if parts[0] == "" || parts[2] == "" {
-		return "", "", "", false
-	}
-	return parts[0], "rpm", parts[2], true
-}
-
-func (h *Handler) lookupRepoPublicRead(ctx context.Context, project, repoType, repo string) (bool, bool) {
-	if h.projects == nil || h.repos == nil {
-		return false, false
-	}
-	p, err := h.projects.FindByName(ctx, project)
-	if err != nil || p == nil {
-		return false, false
-	}
-	rr, err := h.repos.FindByTriple(ctx, p.ID, repoType, repo)
-	if err != nil || rr == nil {
-		return false, false
-	}
-	return rr.PublicRead, true
 }
 
 // resolved wraps a successful repo lookup.
@@ -229,7 +177,7 @@ func (h *Handler) resolveRepo(w http.ResponseWriter, r *http.Request, requireFil
 		return resolved{}, false
 	}
 	if requireFilename {
-		cleaned, perr := validateFilename(filename)
+		cleaned, perr := common.ValidateFilename(filename, ".rpm")
 		if perr != nil {
 			http.Error(w, "invalid filename", http.StatusBadRequest)
 			return resolved{}, false
@@ -239,90 +187,23 @@ func (h *Handler) resolveRepo(w http.ResponseWriter, r *http.Request, requireFil
 	return resolved{project: proj, repo: rr, filename: filename}, true
 }
 
-// validateFilename rejects path traversal, NUL bytes, and any filename
-// containing a path separator. RPM packages live in a single packages/ dir.
-func validateFilename(raw string) (string, error) {
-	if raw == "" {
-		return "", errors.New("empty filename")
-	}
-	if strings.ContainsRune(raw, '\x00') {
-		return "", errors.New("nul byte")
-	}
-	if strings.ContainsAny(raw, "/\\") {
-		return "", errors.New("filename must not contain separators")
-	}
-	if raw == "." || raw == ".." {
-		return "", errors.New("invalid filename")
-	}
-	if path.Clean(raw) != raw {
-		return "", errors.New("non-canonical filename")
-	}
-	if !strings.HasSuffix(raw, ".rpm") {
-		return "", errors.New("filename must end in .rpm")
-	}
-	return raw, nil
-}
-
 // storageKeyFor builds the PathStore-relative key for a package file.
 func storageKeyFor(project, repo, filename string) string {
 	return strings.Join([]string{project, "rpm", repo, "packages", filename}, "/")
 }
 
-// auditEvent is a tiny helper around d.Audit.Record that fills actor + req
-// fields uniformly. Best-effort: errors swallowed.
+// auditEvent records an rpm_package audit event via common.AuditEvent.
 func (h *Handler) auditEvent(r *http.Request, kind audit.EventKind, targetID, outcome string, details map[string]any) {
-	if h.auditLogger == nil {
-		return
-	}
-	e := audit.Event{
-		Kind:       kind,
-		IP:         r.RemoteAddr,
-		UserAgent:  r.Header.Get("User-Agent"),
-		TargetKind: "rpm_package",
-		TargetID:   targetID,
-		Outcome:    outcome,
-		Details:    details,
-		OccurredAt: time.Now().UTC(),
-	}
-	if a, ok := auth.ActorFromContext(r.Context()); ok {
-		switch a.Kind {
-		case auth.ActorKindUser:
-			id := a.ID
-			e.ActorUserID = &id
-		case auth.ActorKindAPIKey:
-			id := a.APIKeyID
-			e.ActorAPIKeyID = &id
-		}
-	}
-	_ = h.auditLogger.Record(r.Context(), e)
+	common.AuditEvent(h.auditLogger, r, kind, "rpm_package", targetID, outcome, details)
 }
 
 // requireRepoWrite enforces the maintainer-required policy for artifact
-// writes/deletes via auth.Can: super-admin bypasses, the project key's / user's
-// role is resolved through ResolveMembership, and viewers + viewer-scoped keys
-// are denied. Replaces the former role-blind membership check (which let any
-// member, and any project-scoped key regardless of role, publish/delete).
+// writes/deletes (see common.RequireRepoWrite).
 func (h *Handler) requireRepoWrite(ctx context.Context, actor auth.Actor, projectID int64, action auth.Action) bool {
-	mctx := auth.ResolveMembership(ctx, actor, h.members)
-	allowed, _ := auth.Can(mctx, actor, action, auth.Target{
-		Kind:      "repo",
-		ProjectID: projectID,
-	})
-	return allowed
+	return common.RequireRepoWrite(ctx, actor, h.members, projectID, action)
 }
 
-// actorCanRead consults auth.Can for ActionRepoRead.
+// actorCanRead consults auth.Can for ActionRepoRead (see common.ActorCanRead).
 func (h *Handler) actorCanRead(r *http.Request, repo *metadata.Repo) bool {
-	a, ok := auth.ActorFromContext(r.Context())
-	if !ok {
-		return false
-	}
-	ctx := auth.ResolveMembership(r.Context(), a, h.members)
-	allowed, _ := auth.Can(ctx, a, auth.ActionRepoRead, auth.Target{
-		Kind:       "repo",
-		ProjectID:  repo.ProjectID,
-		RepoID:     repo.ID,
-		PublicRead: repo.PublicRead,
-	})
-	return allowed
+	return common.ActorCanRead(r, h.members, repo)
 }

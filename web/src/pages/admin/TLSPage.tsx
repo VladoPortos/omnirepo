@@ -60,6 +60,15 @@ function useTLSUpload() {
   });
 }
 
+// ---------- Helpers ----------
+
+// expiresWithin30Days — snapshot-at-render check; day-level resolution
+// means drift across a page's lifetime is irrelevant. Kept out of the
+// component body so render itself stays pure.
+function expiresWithin30Days(notAfter: string): boolean {
+  return new Date(notAfter).getTime() - Date.now() < 30 * 86400 * 1000;
+}
+
 // ---------- Component ----------
 
 export default function TLSPage() {
@@ -101,7 +110,7 @@ export default function TLSPage() {
   }, [certPem, keyPem, uploadMutation]);
 
   const isExpiringSoon = currentCert
-    ? new Date(currentCert.not_after).getTime() - Date.now() < 30 * 86400 * 1000
+    ? expiresWithin30Days(currentCert.not_after)
     : false;
 
   const historyColumns: ColumnDef<TLSHistoryEntry>[] = [

@@ -233,6 +233,15 @@ function daysUntil(rfc3339: string | null | undefined): number {
   return Math.floor((target - Date.now()) / (24 * 60 * 60 * 1000));
 }
 
+// minutesUntil — whole minutes (rounded up, floored at 0) between `now`
+// and an RFC3339 string. Same snapshot-at-render convention as daysUntil:
+// no setInterval; the dashboard's polling refetch is the update vehicle
+// and drift up to one refetch window is accepted.
+function minutesUntil(rfc3339: string | null | undefined): number {
+  if (!rfc3339) return 0;
+  return Math.max(0, Math.ceil((Date.parse(rfc3339) - Date.now()) / 60_000));
+}
+
 export function DashboardPage() {
   const { data, isLoading, isError: dashIsError, error: dashError, refetch: dashRefetch } = useDashboard();
   const { data: storageData, isLoading: storageLoading, isError: storageIsError, error: storageError, refetch: storageRefetch } = useDashboardStorage();
@@ -1161,12 +1170,7 @@ function DBHealthCard({
 
   // N computed ONCE at render — no setInterval. The polling refetch is
   // the update vehicle; accepted drift is up to 5 s.
-  const minutesUntilAvailable = data.next_available_at
-    ? Math.max(
-        0,
-        Math.ceil((Date.parse(data.next_available_at) - Date.now()) / 60_000),
-      )
-    : 0;
+  const minutesUntilAvailable = minutesUntil(data.next_available_at);
 
   // Button state resolution:
   //   - Running: spinner + "Running…" label, disabled.

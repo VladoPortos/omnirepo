@@ -72,7 +72,8 @@ export function ScanReportPage() {
   const [severityFilter, setSeverityFilter] = useState<SeverityUpper[]>([]);
   const [search, setSearch] = useState('');
 
-  const vulns = vulnsQ.data ?? [];
+  // Stable identity so the memos below don't recompute every render.
+  const vulns = useMemo(() => vulnsQ.data ?? [], [vulnsQ.data]);
   const summary = useMemo(
     () => parseSummary(scanQ.data?.severity_summary_json ?? ''),
     [scanQ.data],

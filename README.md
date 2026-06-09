@@ -156,13 +156,7 @@ bootstrap:
   path: /var/lib/omnirepo/config/bootstrap.json
 auth:
   session_ttl: 12h
-  docker_jwt_ttl: 60m
   sigv4_skew: 15m
-scan:
-  auto_scan_default: true
-  db_warn_age_days: 7
-air_gap:
-  allow_external_actions: true
 log:
   level: info
   format: json
@@ -527,7 +521,7 @@ Middleware chain: `AnonymousReadOK → skipIfActor(BasicOrAPIKey)`.
 | Docker clone from external registry | `POST /api/v1/projects/<name>/repos/docker/<repo>/pull-external` with `{"src_image":"docker.io/library/nginx:1.27","dst_tag":"nginx:1.27"}`. UI → Docker repo page → **Clone image** dialog |
 | Apply migrations manually | `omnirepo migrate up --config <path>` |
 | Rotate TLS cert | Upload PEM pair via Admin → TLS Certificates; hot-swapped |
-| Update Trivy DB | Upload DB tarball via Admin → Trivy Database; or enable the refresh button (requires `air_gap.allow_external_actions: true`) |
+| Update Trivy DB | Upload a DB tarball via Admin → Trivy Database (air-gapped), or click **Pull DB online** to download it directly (an explicit, admin-only outbound action) |
 | Enter maintenance mode | Admin → Maintenance → toggle. Banner appears for all logged-in users |
 | Force user password reset | Admin → Users → edit → "Force Password Reset" toggle; optionally set a temp password in the dialog. Existing sessions for that user are revoked |
 | Copy client snippet | Navigate to any repo's detail page — the **Usage** panel renders a ready-to-copy `docker pull`, `pip install`, `helm repo add`, or `apt source.list` line pre-filled with your host, project, repo, and tag/version |

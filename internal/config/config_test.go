@@ -25,23 +25,14 @@ func TestDefaults(t *testing.T) {
 	if d.Auth.SessionTTL != 12*time.Hour {
 		t.Errorf("Auth.SessionTTL = %s, want 12h", d.Auth.SessionTTL)
 	}
-	if d.Auth.DockerJWTTTL != 60*time.Minute {
-		t.Errorf("Auth.DockerJWTTTL = %s, want 60m", d.Auth.DockerJWTTTL)
-	}
 	if d.Auth.SigV4Skew != 15*time.Minute {
 		t.Errorf("Auth.SigV4Skew = %s, want 15m", d.Auth.SigV4Skew)
-	}
-	if d.Scan.DBWarnAgeDays != 7 {
-		t.Errorf("Scan.DBWarnAgeDays = %d, want 7", d.Scan.DBWarnAgeDays)
 	}
 	if d.Log.Level != "info" {
 		t.Errorf("Log.Level = %q, want info", d.Log.Level)
 	}
 	if d.Log.Format != "json" {
 		t.Errorf("Log.Format = %q, want json", d.Log.Format)
-	}
-	if !d.AirGap.AllowExternalActions {
-		t.Errorf("AirGap.AllowExternalActions = false, want true (default)")
 	}
 }
 
@@ -87,7 +78,7 @@ func TestLoadYAML(t *testing.T) {
 
 func TestEnvOverride(t *testing.T) {
 	t.Setenv("OMNIREPO_SERVER__HTTP_PORT", "9000")
-	t.Setenv("OMNIREPO_AIR_GAP__ALLOW_EXTERNAL_ACTIONS", "false")
+	t.Setenv("OMNIREPO_LOG__LEVEL", "debug")
 
 	cfg, err := config.Load("testdata/omnirepo.example.yaml")
 	if err != nil {
@@ -96,8 +87,8 @@ func TestEnvOverride(t *testing.T) {
 	if cfg.Server.HTTPPort != 9000 {
 		t.Errorf("Server.HTTPPort = %d, want 9000 (env override)", cfg.Server.HTTPPort)
 	}
-	if cfg.AirGap.AllowExternalActions {
-		t.Errorf("AirGap.AllowExternalActions = true, want false (env override)")
+	if cfg.Log.Level != "debug" {
+		t.Errorf("Log.Level = %q, want debug (env override)", cfg.Log.Level)
 	}
 }
 

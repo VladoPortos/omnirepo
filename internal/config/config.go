@@ -40,7 +40,6 @@ type Config struct {
 	Jobs      Jobs            `koanf:"jobs"`
 	Docker    Docker          `koanf:"docker"`
 	GC        GC              `koanf:"gc"`
-	AirGap    AirGapConfig    `koanf:"air_gap"`
 	Log       LogConfig       `koanf:"log"`
 	Regen     RegenConfig     `koanf:"regen"`
 	Sync      SyncConfig      `koanf:"sync"`
@@ -201,19 +200,12 @@ type BootstrapConfig struct {
 }
 
 type AuthConfig struct {
-	SessionTTL   time.Duration `koanf:"session_ttl"`
-	DockerJWTTTL time.Duration `koanf:"docker_jwt_ttl"`
-	SigV4Skew    time.Duration `koanf:"sigv4_skew"`
+	SessionTTL time.Duration `koanf:"session_ttl"`
+	SigV4Skew  time.Duration `koanf:"sigv4_skew"`
 }
 
 type ScanConfig struct {
-	AutoScanDefault  bool          `koanf:"auto_scan_default"`
-	DBWarnAgeDays    int           `koanf:"db_warn_age_days"`
 	SeverityCacheTTL time.Duration `koanf:"severity_cache_ttl"`
-}
-
-type AirGapConfig struct {
-	AllowExternalActions bool `koanf:"allow_external_actions"`
 }
 
 type LogConfig struct {
@@ -248,13 +240,10 @@ func Defaults() Config {
 		},
 		DataRoot: "/var/lib/omnirepo",
 		Auth: AuthConfig{
-			SessionTTL:   12 * time.Hour,
-			DockerJWTTTL: 60 * time.Minute,
-			SigV4Skew:    15 * time.Minute,
+			SessionTTL: 12 * time.Hour,
+			SigV4Skew:  15 * time.Minute,
 		},
 		Scan: ScanConfig{
-			AutoScanDefault:  true,
-			DBWarnAgeDays:    7,
 			SeverityCacheTTL: 30 * time.Second,
 		},
 		Trivy: Trivy{
@@ -280,9 +269,6 @@ func Defaults() Config {
 		GC: GC{
 			TrashRetentionDays:    7,
 			BlobQuiescenceSeconds: 3600,
-		},
-		AirGap: AirGapConfig{
-			AllowExternalActions: true,
 		},
 		Log: LogConfig{
 			Level:           "info",

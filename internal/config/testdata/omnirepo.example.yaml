@@ -13,13 +13,7 @@ bootstrap:
   path: /var/lib/omnirepo/config/bootstrap.json
 auth:
   session_ttl: 12h
-  docker_jwt_ttl: 60m
   sigv4_skew: 15m
-scan:
-  auto_scan_default: true
-  db_warn_age_days: 7
-air_gap:
-  allow_external_actions: true
 log:
   level: info
   format: json

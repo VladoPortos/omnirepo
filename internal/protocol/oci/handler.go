@@ -326,4 +326,3 @@ func (h *Handler) extractRepoFromV2URL(r *http.Request) (project, repoType, repo
 	}
 	return parts[0], parts[1], parts[2], true
 }
-

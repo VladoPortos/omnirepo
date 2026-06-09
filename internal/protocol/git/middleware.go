@@ -311,6 +311,13 @@ type GitAuditRecorder interface {
 func AuditMiddleware(rec GitAuditRecorder) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Seed an actor box so the downstream auth middleware's WithActor
+			// surfaces the authenticated actor back here. This middleware
+			// wraps auth (so denied attempts are still logged), which means
+			// the actor it sets lives in a derived context we never see —
+			// the mutable box pointer bridges that gap.
+			box := &auth.ActorBox{}
+			r = r.WithContext(auth.WithActorBox(r.Context(), box))
 			sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
 			next.ServeHTTP(sw, r)
 			rec.RecordGitRequest(r, sw.status, sw.written)

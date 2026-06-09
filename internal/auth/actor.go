@@ -113,13 +113,44 @@ func WithLoginBox(ctx context.Context, box *LoginBox) context.Context {
 	return context.WithValue(ctx, loginBoxKey{}, box)
 }
 
+// actorBoxKey stashes a *ActorBox on the context.
+type actorBoxKey struct{}
+
+// ActorBox is a mutable holder for the authenticated Actor, mirroring
+// LoginBox but carrying the full actor (ids included). A middleware that runs
+// BEFORE auth — e.g. the Git AuditMiddleware, which must wrap auth so it can
+// also log denied attempts — seeds one; WithActor then fills it from inside
+// the auth middleware, so the outer middleware can attribute the request to
+// the authenticated actor after the inner chain returns, even though the
+// actor was added to a derived context it never observes directly.
+type ActorBox struct {
+	// Actor is the last actor WithActor stored. Concurrent access is not
+	// expected — the box is scoped to a single request goroutine.
+	Actor Actor
+}
+
+// WithActorBox returns ctx annotated with box.
+func WithActorBox(ctx context.Context, box *ActorBox) context.Context {
+	return context.WithValue(ctx, actorBoxKey{}, box)
+}
+
+// ActorBoxFromContext returns the *ActorBox stashed by WithActorBox, or nil.
+func ActorBoxFromContext(ctx context.Context) *ActorBox {
+	box, _ := ctx.Value(actorBoxKey{}).(*ActorBox)
+	return box
+}
+
 // WithActor returns ctx annotated with a. Middlewares call this after
 // successful authentication. If ctx carries a *LoginBox (attached by the
-// outer StructuredLogger), its Login field is updated so request logs
-// pick up the authenticated login automatically.
+// outer StructuredLogger) or a *ActorBox (attached by a wrapping audit
+// middleware), those are updated so outer middlewares pick up the
+// authenticated identity automatically.
 func WithActor(ctx context.Context, a Actor) context.Context {
 	if box, _ := ctx.Value(loginBoxKey{}).(*LoginBox); box != nil {
 		box.Login = a.Login
+	}
+	if box, _ := ctx.Value(actorBoxKey{}).(*ActorBox); box != nil {
+		box.Actor = a
 	}
 	return context.WithValue(ctx, ctxKey{}, a)
 }

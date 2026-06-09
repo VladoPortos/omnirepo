@@ -12,6 +12,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/vladoportos/omnirepo/internal/audit"
+	"github.com/vladoportos/omnirepo/internal/auth"
 	authmw "github.com/vladoportos/omnirepo/internal/auth/middleware"
 	"github.com/vladoportos/omnirepo/internal/config"
 	"github.com/vladoportos/omnirepo/internal/httperr"
@@ -209,7 +210,7 @@ func (h *Handler) dispatchToBackend(w http.ResponseWriter, r *http.Request) {
 			// Emit audit event with ref count.
 			refs, _ := h.refs.List(r.Context(), repo.ID)
 			if h.audit != nil {
-				_ = h.audit.Record(r.Context(), audit.Event{
+				ev := audit.Event{
 					Kind:       audit.EvtGitRefsSynced,
 					TargetKind: "repo",
 					TargetID:   repo.Name,
@@ -218,7 +219,13 @@ func (h *Handler) dispatchToBackend(w http.ResponseWriter, r *http.Request) {
 						"ref_count": len(refs),
 						"project":   projectName,
 					},
-				})
+				}
+				// dispatchToBackend is the innermost handler, so auth has
+				// already stored the actor on the request context.
+				if actor, ok := auth.ActorFromContext(r.Context()); ok {
+					applyGitActor(&ev, actor)
+				}
+				_ = h.audit.Record(r.Context(), ev)
 			}
 		}
 	}
@@ -241,7 +248,7 @@ func (h *Handler) RecordGitRequest(r *http.Request, status int, written int64) {
 	if status >= 400 {
 		outcome = "error"
 	}
-	_ = h.audit.Record(r.Context(), audit.Event{
+	ev := audit.Event{
 		Kind:       audit.EvtGitFetch,
 		TargetKind: "repo",
 		TargetID:   repo.Name,
@@ -252,7 +259,27 @@ func (h *Handler) RecordGitRequest(r *http.Request, status int, written int64) {
 			"status":  status,
 			"bytes":   written,
 		},
-	})
+	}
+	// This runs in AuditMiddleware, which wraps auth, so r.Context() here does
+	// not carry the actor directly — read it from the actor box the middleware
+	// seeded (auth's WithActor filled it from inside the chain).
+	if box := auth.ActorBoxFromContext(r.Context()); box != nil {
+		applyGitActor(&ev, box.Actor)
+	}
+	_ = h.audit.Record(r.Context(), ev)
+}
+
+// applyGitActor attributes ev to the authenticated actor. Anonymous and
+// zero-value actors leave the actor fields nil, so the event stays anonymous.
+func applyGitActor(ev *audit.Event, actor auth.Actor) {
+	switch actor.Kind {
+	case auth.ActorKindUser:
+		id := actor.ID
+		ev.ActorUserID = &id
+	case auth.ActorKindAPIKey:
+		id := actor.APIKeyID
+		ev.ActorAPIKeyID = &id
+	}
 }
 
 // SelectBackend returns the GitServer implementation selected by config.

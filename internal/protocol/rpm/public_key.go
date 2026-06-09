@@ -15,9 +15,9 @@ import (
 	"github.com/vladoportos/omnirepo/internal/metadata"
 )
 
-// PublicKeyCache caches armored public-key bytes keyed on repo id. Cache
-// invalidation is explicit (Invalidate) — no TTL because keys do not rotate
-// in v1.
+// PublicKeyCache caches armored public-key bytes keyed on repo id. There is
+// no TTL or invalidation: signing keys do not rotate in v1, so a cached
+// entry stays valid for the process lifetime.
 type PublicKeyCache struct {
 	mu          sync.RWMutex
 	m           map[int64][]byte
@@ -60,14 +60,6 @@ func (c *PublicKeyCache) Lookup(ctx context.Context, repoID int64) ([]byte, erro
 	c.m[repoID] = bytes
 	c.mu.Unlock()
 	return bytes, nil
-}
-
-// Invalidate drops the cache entry for repoID. Called on key rotation
-// (out of scope for v1 but exposed for completeness).
-func (c *PublicKeyCache) Invalidate(repoID int64) {
-	c.mu.Lock()
-	delete(c.m, repoID)
-	c.mu.Unlock()
 }
 
 // ServePublicKey writes the armored public key for repoID to w with

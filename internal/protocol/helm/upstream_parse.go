@@ -58,7 +58,6 @@ const (
 type UpstreamEntry struct {
 	Path     string // absolute URL to fetch the .tgz
 	Digest   string // "sha256:<hex>" or "" if upstream omitted it
-	Size     int64
 	Filename string // canonical chart filename (<name>-<version>.tgz)
 	Metadata *helmrepo.ChartVersion
 	Source   EntrySourceKind // http vs oci vs unknown

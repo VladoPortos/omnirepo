@@ -38,8 +38,6 @@ type SecretLookup func(akid string) (secret string, err error)
 // signature as it's consumed — callers MUST read through the wrapped body.
 type VerifyResult struct {
 	AccessKeyID string
-	Scope       string
-	RequestTime time.Time
 	BodyMode    BodyMode
 	// PayloadSHA256 is the literal x-amz-content-sha256 header value the
 	// client signed: a 64-char lowercase hex digest, the "UNSIGNED-PAYLOAD"
@@ -187,8 +185,6 @@ func Verify(r *http.Request, lookup SecretLookup, skew time.Duration) (*VerifyRe
 
 	return &VerifyResult{
 		AccessKeyID:   parsed.AKID,
-		Scope:         parsed.Scope,
-		RequestTime:   reqTime,
 		BodyMode:      mode,
 		PayloadSHA256: bodyHash,
 	}, nil

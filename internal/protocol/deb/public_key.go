@@ -63,13 +63,6 @@ func (c *PublicKeyCache) Lookup(ctx context.Context, repoID int64) ([]byte, erro
 	return b, nil
 }
 
-// Invalidate drops the cache entry for repoID.
-func (c *PublicKeyCache) Invalidate(repoID int64) {
-	c.mu.Lock()
-	delete(c.m, repoID)
-	c.mu.Unlock()
-}
-
 // ServePublicKey writes the armored public key for repoID to w with
 // Content-Type: application/pgp-keys. 404 when no signing key exists.
 func (c *PublicKeyCache) ServePublicKey(w http.ResponseWriter, r *http.Request, repoID int64) {

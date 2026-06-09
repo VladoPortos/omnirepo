@@ -28,8 +28,6 @@ import (
 // staged inside a PEP 694 upload session, awaiting commit.
 type stagedFile struct {
 	TmpPath string
-	Digest  string
-	Size    int64
 	Parsed  *File
 }
 
@@ -37,9 +35,8 @@ type stagedFile struct {
 // authenticated principal that created it — Get() rejects mismatched
 // actors so a session-id leak alone can't be used to upload.
 type PEP694Session struct {
-	ID        string
-	RepoID    int64
-	ProjectID int64
+	ID     string
+	RepoID int64
 	// ActorKey is "user:<id>" or "apikey:<id>" — Get checks equality.
 	ActorKey  string
 	Project   string
@@ -74,7 +71,6 @@ func (s *PEP694Sessions) Create(repoID, projectID int64, actorKey, project, vers
 	sess := &PEP694Session{
 		ID:        id,
 		RepoID:    repoID,
-		ProjectID: projectID,
 		ActorKey:  actorKey,
 		Project:   project,
 		Version:   version,
@@ -388,8 +384,6 @@ func (h *Handler) handleUploadFile(w http.ResponseWriter, r *http.Request) {
 	}
 	sess.Files[filename] = &stagedFile{
 		TmpPath: tmpPath,
-		Digest:  digest,
-		Size:    n,
 		Parsed:  parsed,
 	}
 	sess.mu.Unlock()

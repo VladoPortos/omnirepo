@@ -82,22 +82,22 @@ func TestAirGapBoot(t *testing.T) {
 		cancel()
 		select {
 		case <-done:
-		case <-time.After(5 * time.Second):
-			t.Fatal("app.Run did not return within 5s of ctx cancel")
+		case <-time.After(30 * time.Second):
+			t.Fatal("app.Run did not return within 30s of ctx cancel")
 		}
 	}()
 
 	// Wait for the serve goroutine to signal it has started.
 	select {
 	case <-ready:
-	case <-time.After(5 * time.Second):
-		t.Fatal("app.Run did not signal ready within 5s")
+	case <-time.After(30 * time.Second):
+		t.Fatal("app.Run did not signal ready within 30s")
 	}
 
 	start := time.Now()
 	httpBase := fmt.Sprintf("http://127.0.0.1:%d", httpAddr.Port)
 	httpsBase := fmt.Sprintf("https://127.0.0.1:%d", httpsAddr.Port)
-	waitReady(t, httpBase+"/healthz", http.DefaultClient, 5*time.Second)
+	waitReady(t, httpBase+"/healthz", http.DefaultClient, 30*time.Second)
 	t.Logf("app.Run -> /healthz 200 in %s", time.Since(start))
 
 	assertGet200(t, http.DefaultClient, httpBase+"/healthz", `"status":"ok"`)

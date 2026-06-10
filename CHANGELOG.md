@@ -9,6 +9,12 @@ for security fixes against an active minor.
 
 ## [Unreleased]
 
+## [v1.1.0] — 2026-06-10
+
+Three new hosted repository types (Go module proxy, npm registry, Maven),
+S3 protocol audit coverage, a shared protocol-handler scaffold, and a full
+React strict-mode lint cleanup.
+
 ### Added
 - **Go module proxy** repo type (`go`): serves the GOPROXY protocol
   (`/@v/list`, `.info`, `.mod`, `.zip`, `/@latest`) at
@@ -51,6 +57,13 @@ for security fixes against an active minor.
 - Dead production API surface in `internal/httperr` (`WithCause` option
   removed; `IsInternalString` leak screening moved to a test-only
   package).
+
+### Security
+- Bumped the `hono` npm override to `^4.12.21` (resolved 4.12.25),
+  clearing four moderate Dependabot advisories
+  (GHSA-3hrh-pfw6-9m5x, GHSA-2gcr-mfcq-wcc3, GHSA-xrhx-7g5j-rcj5,
+  GHSA-f577-qrjj-4474). `hono` is a build-time devtool dependency
+  (shadcn CLI → MCP SDK), not shipped at runtime.
 
 ## [v1.0.1] — 2026-06-09
 
@@ -183,7 +196,10 @@ Helm, RAW, S3 (SigV4), and Git on one HTTP/HTTPS port.
 - 5 phases, 52 plans, 175 requirements, 230 commits
   (2026-04-14 → 2026-04-17).
 
-[Unreleased]: https://github.com/VladoPortos/omnirepo/compare/v1.8...HEAD
+[Unreleased]: https://github.com/VladoPortos/omnirepo/compare/v1.1.0...HEAD
+[v1.1.0]: https://github.com/VladoPortos/omnirepo/compare/v1.0.1...v1.1.0
+[v1.0.1]: https://github.com/VladoPortos/omnirepo/compare/v1.0.0...v1.0.1
+[v1.0.0]: https://github.com/VladoPortos/omnirepo/releases/tag/v1.0.0
 [v1.8]: https://github.com/VladoPortos/omnirepo/releases/tag/v1.8
 [v1.6]: https://github.com/VladoPortos/omnirepo/releases/tag/v1.6
 [v1.5]: https://github.com/VladoPortos/omnirepo/releases/tag/v1.5

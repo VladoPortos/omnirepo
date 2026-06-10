@@ -58,7 +58,7 @@ jobs:
           # check-latest from this input — the bare "1.25" spec resolves
           # to whatever the action manifest contains, which lags Go's
           # daily release stream by several hours.
-          go-version-input: "1.25.10"
+          go-version-input: "1.25.11"
           go-package: ./...
           # CRITICAL: disable the action's internal `actions/checkout` —
           # we already did one on a SHA-pinned v6 above. Running it again

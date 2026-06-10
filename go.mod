@@ -4,7 +4,7 @@ module github.com/vladoportos/omnirepo
 
 go 1.25.0
 
-toolchain go1.25.10
+toolchain go1.25.11
 
 require (
 	github.com/Masterminds/semver/v3 v3.4.0

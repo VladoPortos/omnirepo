@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -998,36 +999,65 @@ func SeedTrivyDB(ctx context.Context, dataRoot, bakedDir string) error {
 		return nil
 	}
 
-	// Already seeded — skip.
-	entries, err := os.ReadDir(dbDir)
-	if err == nil && len(entries) > 0 {
+	// A non-empty trivy.db is the completion signal. Merely finding any file
+	// is insufficient because an interrupted file-by-file seed may have copied
+	// metadata.json but not the database.
+	if info, err := os.Stat(filepath.Join(dbDir, "trivy.db")); err == nil && info.Mode().IsRegular() && info.Size() > 0 {
 		slog.InfoContext(ctx, "trivy.db.seed.skipped", "reason", "already_present", "dir", dbDir)
 		return nil
 	}
 
-	// Ensure target dir exists.
-	if err := os.MkdirAll(dbDir, 0755); err != nil {
-		return fmt.Errorf("trivy db seed: mkdir %s: %w", dbDir, err)
+	parent := filepath.Dir(dbDir)
+	if err := os.MkdirAll(parent, 0o750); err != nil {
+		return fmt.Errorf("trivy db seed: mkdir %s: %w", parent, err)
 	}
-
-	// Copy all files from baked to target.
 	srcEntries, err := os.ReadDir(bakedDir)
 	if err != nil {
 		return fmt.Errorf("trivy db seed: read %s: %w", bakedDir, err)
 	}
+	stage, err := os.MkdirTemp(parent, ".db-seed-*")
+	if err != nil {
+		return fmt.Errorf("trivy db seed: create staging dir: %w", err)
+	}
+	defer func() { _ = os.RemoveAll(stage) }()
+
 	for _, e := range srcEntries {
 		if e.IsDir() {
 			continue
 		}
 		src := filepath.Join(bakedDir, e.Name())
-		dst := filepath.Join(dbDir, e.Name())
-		data, err := os.ReadFile(src)
+		dst := filepath.Join(stage, e.Name())
+		in, err := os.Open(src)
 		if err != nil {
-			return fmt.Errorf("trivy db seed: read %s: %w", src, err)
+			return fmt.Errorf("trivy db seed: open %s: %w", src, err)
 		}
-		if err := os.WriteFile(dst, data, 0644); err != nil {
-			return fmt.Errorf("trivy db seed: write %s: %w", dst, err)
+		out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+		if err != nil {
+			_ = in.Close()
+			return fmt.Errorf("trivy db seed: create %s: %w", dst, err)
 		}
+		_, copyErr := io.Copy(out, in)
+		closeInErr := in.Close()
+		syncErr := out.Sync()
+		closeOutErr := out.Close()
+		if copyErr != nil {
+			return fmt.Errorf("trivy db seed: copy %s: %w", src, copyErr)
+		}
+		if closeInErr != nil {
+			return fmt.Errorf("trivy db seed: close %s: %w", src, closeInErr)
+		}
+		if syncErr != nil {
+			return fmt.Errorf("trivy db seed: sync %s: %w", dst, syncErr)
+		}
+		if closeOutErr != nil {
+			return fmt.Errorf("trivy db seed: close %s: %w", dst, closeOutErr)
+		}
+	}
+	if info, err := os.Stat(filepath.Join(stage, "trivy.db")); err != nil || info.Size() == 0 {
+		return fmt.Errorf("trivy db seed: baked directory has no non-empty trivy.db")
+	}
+	if err := storage.SwapDir(stage, dbDir); err != nil {
+		return fmt.Errorf("trivy db seed: publish staging dir: %w", err)
 	}
 	slog.InfoContext(ctx, "trivy.db.seeded", "from", bakedDir, "to", dbDir, "files", len(srcEntries))
 	return nil

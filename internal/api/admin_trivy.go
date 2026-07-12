@@ -37,6 +37,23 @@ import (
 	"github.com/vladoportos/omnirepo/internal/storage"
 )
 
+// maxTrivyDBUploadBytes is a total HTTP request cap, including multipart
+// framing. ParseMultipartForm's argument only controls how much data remains
+// in memory before spilling to disk; it is not a request-size limit.
+const maxTrivyDBUploadBytes = int64(512 << 20)
+
+// limitTrivyDBUpload rejects known-oversize bodies without reading them and
+// wraps unknown/chunked bodies so parsing cannot consume more than the cap.
+func limitTrivyDBUpload(w http.ResponseWriter, r *http.Request) bool {
+	if r.ContentLength > maxTrivyDBUploadBytes {
+		writeJSONError(w, r, http.StatusRequestEntityTooLarge, ErrValidationFailed,
+			"upload exceeds 512 MiB")
+		return false
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxTrivyDBUploadBytes)
+	return true
+}
+
 // minTrivyDBBytes is the lower-bound size check applied to the extracted
 // trivy.db file before the live DB is rotated in. The upload
 // handler previously accepted any valid .tar.gz and SwapDir-rotated its
@@ -303,8 +320,18 @@ func (d Deps) handleTrivyDBStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (d Deps) handleTrivyDBUpload(w http.ResponseWriter, r *http.Request) {
-	// Tarball extraction security.
-	if err := r.ParseMultipartForm(512 << 20); err != nil { // 512 MiB max
+	if !limitTrivyDBUpload(w, r) {
+		return
+	}
+	// Keep at most 32 MiB in RAM; larger accepted bodies spill to temporary
+	// files while MaxBytesReader above enforces the actual 512 MiB total cap.
+	if err := r.ParseMultipartForm(32 << 20); err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			writeJSONError(w, r, http.StatusRequestEntityTooLarge, ErrValidationFailed,
+				"upload exceeds 512 MiB")
+			return
+		}
 		writeJSONError(w, r, http.StatusBadRequest, ErrValidationFailed, "multipart parse: "+err.Error())
 		return
 	}

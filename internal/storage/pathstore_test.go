@@ -3,10 +3,12 @@ package storage_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/vladoportos/omnirepo/internal/storage"
@@ -48,6 +50,74 @@ func TestPathStorePutGetDeleteExists(t *testing.T) {
 	exists, _ = ps.Exists(context.Background(), "acme/raw/foo/bar.txt")
 	if exists {
 		t.Fatal("Exists true after Delete")
+	}
+}
+
+func TestPathStoreReplaceRestoresPreviousFileWhenCommitFails(t *testing.T) {
+	root := t.TempDir()
+	ps := storage.NewPathStore(root)
+	ctx := context.Background()
+	if err := os.MkdirAll(filepath.Join(root, "repo"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "repo", "file"), []byte("old"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	commitErr := errors.New("metadata commit failed")
+	_, err := ps.Replace(ctx, "repo/file", strings.NewReader("new"), func(int64) error {
+		return commitErr
+	})
+	if !errors.Is(err, commitErr) {
+		t.Fatalf("Replace error=%v want %v", err, commitErr)
+	}
+	rc, err := ps.Get(ctx, "repo/file")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ := io.ReadAll(rc)
+	_ = rc.Close()
+	if string(got) != "old" {
+		t.Fatalf("content=%q want restored old bytes", got)
+	}
+}
+
+func TestPathStoreReplaceSerializesFileAndCommitForSameKey(t *testing.T) {
+	ps := storage.NewPathStore(t.TempDir())
+	ctx := context.Background()
+	var mu sync.Mutex
+	lastCommitted := ""
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for _, body := range []string{"first", "second"} {
+		body := body
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			if _, err := ps.Replace(ctx, "repo/file", strings.NewReader(body), func(int64) error {
+				mu.Lock()
+				lastCommitted = body
+				mu.Unlock()
+				return nil
+			}); err != nil {
+				t.Errorf("Replace(%q): %v", body, err)
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	rc, err := ps.Get(ctx, "repo/file")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ := io.ReadAll(rc)
+	_ = rc.Close()
+	mu.Lock()
+	want := lastCommitted
+	mu.Unlock()
+	if string(got) != want {
+		t.Fatalf("file=%q metadata winner=%q", got, want)
 	}
 }
 

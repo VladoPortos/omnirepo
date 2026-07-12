@@ -675,6 +675,12 @@ func (t *togglePathStore) Delete(ctx context.Context, key string) error {
 func (t *togglePathStore) Exists(ctx context.Context, key string) (bool, error) {
 	return t.inner.Exists(ctx, key)
 }
+func (t *togglePathStore) Replace(ctx context.Context, key string, r io.Reader, commit func(int64) error) (int64, error) {
+	if t.failPut {
+		return 0, t.putErr
+	}
+	return t.inner.Replace(ctx, key, r, commit)
+}
 
 // recordingTrash wraps storage.Trash and records every Move call so tests
 // can assert whether the rebound trash hop fired before/after the

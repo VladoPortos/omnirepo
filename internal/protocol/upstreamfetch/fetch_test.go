@@ -5,8 +5,11 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -40,6 +43,52 @@ func TestApplyCreds(t *testing.T) {
 	upstreamfetch.ApplyCreds(r, upstreamfetch.Creds{})
 	if got := r.Header.Get("Authorization"); got != "" {
 		t.Fatalf("Authorization should be empty, got %q", got)
+	}
+
+	// Stored credentials are bound to the configured upstream host. Absolute
+	// artifact URLs in a hostile index must not forward them cross-origin.
+	r = mk()
+	upstreamfetch.ApplyCreds(r, upstreamfetch.Creds{Token: "tok", BoundHost: "cdn.attacker.example"})
+	if got := r.Header.Get("Authorization"); got != "" {
+		t.Fatalf("cross-origin Authorization leaked: %q", got)
+	}
+
+	r = mk()
+	upstreamfetch.ApplyCreds(r, upstreamfetch.Creds{Token: "tok", BoundHost: "UPSTREAM.EXAMPLE"})
+	if got := r.Header.Get("Authorization"); got != "Bearer tok" {
+		t.Fatalf("same-origin Authorization = %q, want Bearer tok", got)
+	}
+
+	r = mk()
+	upstreamfetch.ApplyCreds(r, upstreamfetch.Creds{Token: "tok", BoundScheme: "https", BoundHost: "upstream.example"})
+	if got := r.Header.Get("Authorization"); got != "" {
+		t.Fatalf("scheme-downgrade Authorization leaked: %q", got)
+	}
+}
+
+func TestFetchAllDoesNotForwardBoundCredentialsAcrossRedirect(t *testing.T) {
+	var receivedAuth string
+	destination := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedAuth = r.Header.Get("Authorization")
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer destination.Close()
+
+	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, destination.URL, http.StatusFound)
+	}))
+	defer source.Close()
+	sourceURL, err := url.Parse(source.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := upstreamfetch.FetchAll(context.Background(), source.Client(), source.URL,
+		upstreamfetch.Creds{Token: "secret", BoundHost: sourceURL.Host}, 1024, "test"); err != nil {
+		t.Fatalf("FetchAll: %v", err)
+	}
+	if receivedAuth != "" {
+		t.Fatalf("redirect destination received Authorization %q", receivedAuth)
 	}
 }
 
@@ -107,5 +156,34 @@ func TestDownloadAndHash(t *testing.T) {
 	_, _, _, err = upstreamfetch.DownloadAndHash(context.Background(), srv.Client(), srv.URL, upstreamfetch.Creds{}, nil, "", nil, 0, int64(len(body)-1))
 	if !errors.Is(err, streamio.ErrArtifactTooLarge) {
 		t.Fatalf("want ErrArtifactTooLarge, got %v", err)
+	}
+}
+
+func TestDownloadToTempStreamsAndRewinds(t *testing.T) {
+	body := strings.Repeat("artifact-", 1024)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, body)
+	}))
+	defer srv.Close()
+
+	f, size, digest, err := upstreamfetch.DownloadToTemp(
+		context.Background(), srv.Client(), srv.URL, upstreamfetch.Creds{},
+		t.TempDir(), nil, "", nil, 0, int64(len(body)),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		name := f.Name()
+		_ = f.Close()
+		_ = os.Remove(name)
+	}()
+	got, err := io.ReadAll(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantSum := sha256.Sum256([]byte(body))
+	if string(got) != body || size != int64(len(body)) || digest != hex.EncodeToString(wantSum[:]) {
+		t.Fatalf("download mismatch size=%d digest=%s bytes=%d", size, digest, len(got))
 	}
 }

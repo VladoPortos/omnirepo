@@ -64,6 +64,21 @@ func (d Deps) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (d Deps) handleSetupSuperAdmin(w http.ResponseWriter, r *http.Request) {
+	// Setup is permanently retired as soon as the first live user exists.
+	// Reject before decoding or hashing so the unauthenticated one-shot route
+	// cannot be abused as an Argon2 CPU/memory sink after installation. The
+	// authoritative empty-check remains inside WriteTx below to serialize two
+	// legitimate first-run requests racing an empty database.
+	empty, err := d.usersEmpty(r.Context())
+	if err != nil {
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
+		return
+	}
+	if !empty {
+		writeJSONError(w, r, http.StatusConflict, ErrConflict, "setup already completed")
+		return
+	}
+
 	var req SetupSuperAdminRequest
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8192)).Decode(&req); err != nil {
 		writeJSONError(w, r, http.StatusBadRequest, ErrValidationFailed, "invalid JSON")

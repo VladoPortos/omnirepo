@@ -9,7 +9,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -133,7 +132,7 @@ func (h *SyncHandler) Handle(ctx context.Context, payload string, projectID, rep
 			return httpx.SanitizeUpstreamErr(
 				fmt.Errorf("cred_host_mismatch: cred=%s upstream=%s", host, u.Host))
 		}
-		creds = AuthCreds{User: user, Password: pw, Token: tok}
+		creds = AuthCreds{User: user, Password: pw, Token: tok, BoundScheme: u.Scheme, BoundHost: host}
 		if h.deps.Audit != nil {
 			_ = h.deps.Audit.Record(ctx, audit.Event{
 				Kind:       audit.EvtUpstreamCredUsed,
@@ -398,10 +397,16 @@ func (h *SyncHandler) fetchAndCommit(ctx context.Context, projectName string, re
 			return 0, nil
 		}
 	}
-	body, size, dgst, err := upstreamfetch.DownloadAndHash(ctx, h.deps.HTTPClient, ent.Path, creds, progress, step, accumulatedDone, totalBytes, maxArtifactBytes)
+	tmpFile, size, dgst, err := upstreamfetch.DownloadToTemp(ctx, h.deps.HTTPClient, ent.Path, creds,
+		filepath.Join(h.deps.RepoRoot, ".tmp-deb-sync"), progress, step, accumulatedDone, totalBytes, maxArtifactBytes)
 	if err != nil {
 		return 0, fmt.Errorf("apt_sync: download %s: %w", ent.Filename, err)
 	}
+	tmpPath := tmpFile.Name()
+	defer func() {
+		_ = tmpFile.Close()
+		_ = os.Remove(tmpPath)
+	}()
 	digest := "sha256:" + dgst
 	if ent.Digest != "" && !strings.EqualFold(ent.Digest, digest) {
 		return 0, fmt.Errorf("apt_sync: digest mismatch on %s", ent.Filename)
@@ -420,52 +425,50 @@ func (h *SyncHandler) fetchAndCommit(ctx context.Context, projectName string, re
 	}
 	rest := relPoolPath(h.deps.RepoRoot, projectName, repo.Name, suite, ent.Filename, ent.Control)
 	storageKey := strings.Join([]string{projectName, "deb", repo.Name, rest}, "/")
-	if _, err := h.deps.Path.Put(ctx, storageKey, openBytesReader(body)); err != nil {
-		return 0, fmt.Errorf("apt_sync: store %s: %w", ent.Filename, err)
-	}
 
 	// Resolve / upsert apt_suites row, then insert deb_packages.
-	if err := h.deps.DB.WriteTx(ctx, func(tx *sql.Tx) error {
-		suiteID, err := h.deps.AptSuites.Insert(ctx, tx, repo.ID, ent.Suite, ent.Component, ent.Arch)
-		if err != nil {
-			return err
-		}
-		if _, err := h.deps.DEBPackages.Insert(ctx, tx, &metadata.DEBPackage{
-			RepoID:       repo.ID,
-			SuiteID:      suiteID,
-			Package:      ent.Control.Package,
-			Version:      ent.Control.Version,
-			Architecture: ent.Control.Architecture,
-			Maintainer:   ent.Control.Maintainer,
-			Section:      ent.Control.Section,
-			Priority:     ent.Control.Priority,
-			Depends:      ent.Control.Depends,
-			Description:  ent.Control.Description,
-			SizeBytes:    size,
-			Digest:       digest,
-			Filename:     ent.Filename,
-			// Persist the real pool path so regen.go emits it
-			// verbatim as the Filename field. `rest` already matches the
-			// on-disk layout relPoolPath() just computed.
-			StoragePoolPath: rest,
-		}); err != nil {
-			return err
-		}
-		if err := metadata.IndexDEBDelete(ctx, tx, repo.ID, ent.Control.Package, ent.Control.Version, ent.Control.Architecture); err != nil {
-			return err
-		}
-		if err := metadata.IndexDEB(ctx, tx, repo.ID, ent.Control.Package, ent.Control.Version, ent.Control.Architecture, ent.Control.Description); err != nil {
-			return err
-		}
-		if repo.AutoScan && h.deps.Scans != nil {
-			if _, err := h.deps.Scans.Enqueue(ctx, tx, repo.ID, "deb", ent.Filename); err != nil {
+	_, err = h.deps.Path.Replace(ctx, storageKey, tmpFile, func(int64) error {
+		return h.deps.DB.WriteTx(ctx, func(tx *sql.Tx) error {
+			suiteID, err := h.deps.AptSuites.Insert(ctx, tx, repo.ID, ent.Suite, ent.Component, ent.Arch)
+			if err != nil {
 				return err
 			}
-		}
-		return h.deps.Repos.SetMetadataState(ctx, tx, repo.ID, metadata.MetadataStateDirty)
-	}); err != nil {
-		abs := filepath.Join(h.deps.RepoRoot, filepath.FromSlash(storageKey))
-		_ = os.Remove(abs)
+			if _, err := h.deps.DEBPackages.Insert(ctx, tx, &metadata.DEBPackage{
+				RepoID:       repo.ID,
+				SuiteID:      suiteID,
+				Package:      ent.Control.Package,
+				Version:      ent.Control.Version,
+				Architecture: ent.Control.Architecture,
+				Maintainer:   ent.Control.Maintainer,
+				Section:      ent.Control.Section,
+				Priority:     ent.Control.Priority,
+				Depends:      ent.Control.Depends,
+				Description:  ent.Control.Description,
+				SizeBytes:    size,
+				Digest:       digest,
+				Filename:     ent.Filename,
+				// Persist the real pool path so regen.go emits it
+				// verbatim as the Filename field. `rest` already matches the
+				// on-disk layout relPoolPath() just computed.
+				StoragePoolPath: rest,
+			}); err != nil {
+				return err
+			}
+			if err := metadata.IndexDEBDelete(ctx, tx, repo.ID, ent.Control.Package, ent.Control.Version, ent.Control.Architecture); err != nil {
+				return err
+			}
+			if err := metadata.IndexDEB(ctx, tx, repo.ID, ent.Control.Package, ent.Control.Version, ent.Control.Architecture, ent.Control.Description); err != nil {
+				return err
+			}
+			if repo.AutoScan && h.deps.Scans != nil {
+				if _, err := h.deps.Scans.Enqueue(ctx, tx, repo.ID, "deb", ent.Filename); err != nil {
+					return err
+				}
+			}
+			return h.deps.Repos.SetMetadataState(ctx, tx, repo.ID, metadata.MetadataStateDirty)
+		})
+	})
+	if err != nil {
 		return 0, fmt.Errorf("apt_sync: commit %s: %w", ent.Filename, err)
 	}
 	return size, nil
@@ -487,22 +490,6 @@ func relPoolPath(repoRoot, projectName, repoName, suite, filename string, ctrl *
 // downloads. Test-overridable (var, not const) so cap+1 oversized-upstream
 // regression guards can run without serving multi-GiB bodies.
 var maxArtifactBytes int64 = 4 * 1024 * 1024 * 1024
-
-func openBytesReader(b []byte) io.Reader { return &bytesReader{b: b} }
-
-type bytesReader struct {
-	b []byte
-	i int
-}
-
-func (r *bytesReader) Read(p []byte) (int, error) {
-	if r.i >= len(r.b) {
-		return 0, io.EOF
-	}
-	n := copy(p, r.b[r.i:])
-	r.i += n
-	return n, nil
-}
 
 func truncateErr(s string) string {
 	const max = 1024

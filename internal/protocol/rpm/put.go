@@ -91,48 +91,51 @@ func (h *Handler) put(w http.ResponseWriter, r *http.Request) {
 	parsed.Digest = digest
 
 	storageKey := storageKeyFor(res.project.Name, res.repo.Name, res.filename)
-	if !common.PromoteStaged(w, r, h.pathStore, "rpm", storageKey, tmpPath, res.filename) {
+	putF, err := os.Open(tmpPath)
+	if err != nil {
+		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
-
-	if err := h.db.WriteTx(r.Context(), func(tx *sql.Tx) error {
-		if _, err := h.rpmPackages.Insert(r.Context(), tx, &metadata.RPMPackage{
-			RepoID:      res.repo.ID,
-			Name:        parsed.Name,
-			Epoch:       parsed.Epoch,
-			Version:     parsed.Version,
-			Release:     parsed.Release,
-			Arch:        parsed.Arch,
-			Summary:     parsed.Summary,
-			Description: parsed.Description,
-			License:     parsed.License,
-			URL:         parsed.URL,
-			SourceRPM:   parsed.SourceRPM,
-			SizeBytes:   size,
-			Digest:      "sha256:" + digest,
-			Filename:    res.filename,
-			FilesJSON:   MarshalFiles(parsed.Files),
-		}); err != nil {
-			return err
-		}
-		if err := metadata.IndexRPMDelete(r.Context(), tx, res.repo.ID, parsed.Name, parsed.Version, parsed.Arch); err != nil {
-			return err
-		}
-		if err := metadata.IndexRPM(r.Context(), tx, res.repo.ID, parsed.Name, parsed.Version, parsed.Arch, parsed.Summary); err != nil {
-			return err
-		}
-		if err := h.repos.SetMetadataState(r.Context(), tx, res.repo.ID, metadata.MetadataStateDirty); err != nil {
-			return err
-		}
-		if res.repo.AutoScan && h.scans != nil {
-			if _, err := h.scans.Enqueue(r.Context(), tx, res.repo.ID, "rpm", res.filename); err != nil {
+	_, err = h.pathStore.Replace(r.Context(), storageKey, putF, func(int64) error {
+		return h.db.WriteTx(r.Context(), func(tx *sql.Tx) error {
+			if _, err := h.rpmPackages.Insert(r.Context(), tx, &metadata.RPMPackage{
+				RepoID:      res.repo.ID,
+				Name:        parsed.Name,
+				Epoch:       parsed.Epoch,
+				Version:     parsed.Version,
+				Release:     parsed.Release,
+				Arch:        parsed.Arch,
+				Summary:     parsed.Summary,
+				Description: parsed.Description,
+				License:     parsed.License,
+				URL:         parsed.URL,
+				SourceRPM:   parsed.SourceRPM,
+				SizeBytes:   size,
+				Digest:      "sha256:" + digest,
+				Filename:    res.filename,
+				FilesJSON:   MarshalFiles(parsed.Files),
+			}); err != nil {
 				return err
 			}
-		}
-		return nil
-	}); err != nil {
-		// Roll back the on-disk artifact when the metadata tx fails.
-		_ = h.pathStore.Delete(r.Context(), storageKey)
+			if err := metadata.IndexRPMDelete(r.Context(), tx, res.repo.ID, parsed.Name, parsed.Version, parsed.Arch); err != nil {
+				return err
+			}
+			if err := metadata.IndexRPM(r.Context(), tx, res.repo.ID, parsed.Name, parsed.Version, parsed.Arch, parsed.Summary); err != nil {
+				return err
+			}
+			if err := h.repos.SetMetadataState(r.Context(), tx, res.repo.ID, metadata.MetadataStateDirty); err != nil {
+				return err
+			}
+			if res.repo.AutoScan && h.scans != nil {
+				if _, err := h.scans.Enqueue(r.Context(), tx, res.repo.ID, "rpm", res.filename); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+	})
+	_ = putF.Close()
+	if err != nil {
 		slog.ErrorContext(r.Context(), "rpm.put.commit_failed",
 			slog.String("incident_id", chimw.GetReqID(r.Context())),
 			slog.String("filename", res.filename),

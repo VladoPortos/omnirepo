@@ -12,7 +12,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -137,7 +136,7 @@ func (h *SyncHandler) Handle(ctx context.Context, payload string, projectID, rep
 			return httpx.SanitizeUpstreamErr(
 				fmt.Errorf("cred_host_mismatch: cred=%s upstream=%s", host, u.Host))
 		}
-		creds = AuthCreds{User: user, Password: pw, Token: tok}
+		creds = AuthCreds{User: user, Password: pw, Token: tok, BoundScheme: u.Scheme, BoundHost: host}
 		if h.deps.Audit != nil {
 			_ = h.deps.Audit.Record(ctx, audit.Event{
 				Kind:       audit.EvtUpstreamCredUsed,
@@ -462,48 +461,51 @@ func (h *SyncHandler) fetchAndCommit(ctx context.Context, projectName string, re
 		version = v
 	}
 
-	body, size, dgst, err := upstreamfetch.DownloadAndHash(ctx, h.deps.HTTPClient, f.URL, creds, progress, step, accumulatedDone, totalBytes, maxArtifactBytes)
+	tmpFile, size, dgst, err := upstreamfetch.DownloadToTemp(ctx, h.deps.HTTPClient, f.URL, creds,
+		filepath.Join(h.deps.RepoRoot, ".tmp-pypi-sync"), progress, step, accumulatedDone, totalBytes, maxArtifactBytes)
 	if err != nil {
 		return 0, fmt.Errorf("pypi_sync: download %s: %w", f.Filename, err)
 	}
+	tmpPath := tmpFile.Name()
+	defer func() {
+		_ = tmpFile.Close()
+		_ = os.Remove(tmpPath)
+	}()
 	digest := "sha256:" + dgst
 	if f.SHA256 != "" && !strings.EqualFold(strings.ToLower(f.SHA256), dgst) {
 		return 0, fmt.Errorf("pypi_sync: digest mismatch on %s", f.Filename)
 	}
 
 	storageKey := strings.Join([]string{projectName, "pypi", repo.Name, "packages", f.Filename}, "/")
-	if _, err := h.deps.Path.Put(ctx, storageKey, openBytesReader(body)); err != nil {
-		return 0, fmt.Errorf("pypi_sync: store %s: %w", f.Filename, err)
-	}
-
-	if err := h.deps.DB.WriteTx(ctx, func(tx *sql.Tx) error {
-		if _, err := h.deps.PyPIFiles.Insert(ctx, tx, &metadata.PyPIFile{
-			RepoID:            repo.ID,
-			ProjectNormalized: normalizedProject,
-			Version:           version,
-			Filename:          f.Filename,
-			Kind:              kind,
-			RequiresPython:    f.RequiresPython,
-			SizeBytes:         size,
-			Digest:            digest,
-		}); err != nil {
-			return err
-		}
-		if err := metadata.IndexPyPIDelete(ctx, tx, repo.ID, normalizedProject, version, f.RequiresPython); err != nil {
-			return err
-		}
-		if err := metadata.IndexPyPI(ctx, tx, repo.ID, normalizedProject, version, f.RequiresPython, ""); err != nil {
-			return err
-		}
-		if repo.AutoScan && h.deps.Scans != nil {
-			if _, err := h.deps.Scans.Enqueue(ctx, tx, repo.ID, "pypi", f.Filename); err != nil {
+	_, err = h.deps.Path.Replace(ctx, storageKey, tmpFile, func(int64) error {
+		return h.deps.DB.WriteTx(ctx, func(tx *sql.Tx) error {
+			if _, err := h.deps.PyPIFiles.Insert(ctx, tx, &metadata.PyPIFile{
+				RepoID:            repo.ID,
+				ProjectNormalized: normalizedProject,
+				Version:           version,
+				Filename:          f.Filename,
+				Kind:              kind,
+				RequiresPython:    f.RequiresPython,
+				SizeBytes:         size,
+				Digest:            digest,
+			}); err != nil {
 				return err
 			}
-		}
-		return h.deps.Repos.SetMetadataState(ctx, tx, repo.ID, metadata.MetadataStateDirty)
-	}); err != nil {
-		abs := filepath.Join(h.deps.RepoRoot, filepath.FromSlash(storageKey))
-		_ = os.Remove(abs)
+			if err := metadata.IndexPyPIDelete(ctx, tx, repo.ID, normalizedProject, version, f.RequiresPython); err != nil {
+				return err
+			}
+			if err := metadata.IndexPyPI(ctx, tx, repo.ID, normalizedProject, version, f.RequiresPython, ""); err != nil {
+				return err
+			}
+			if repo.AutoScan && h.deps.Scans != nil {
+				if _, err := h.deps.Scans.Enqueue(ctx, tx, repo.ID, "pypi", f.Filename); err != nil {
+					return err
+				}
+			}
+			return h.deps.Repos.SetMetadataState(ctx, tx, repo.ID, metadata.MetadataStateDirty)
+		})
+	})
+	if err != nil {
 		return 0, fmt.Errorf("pypi_sync: commit %s: %w", f.Filename, err)
 	}
 	return size, nil
@@ -513,22 +515,6 @@ func (h *SyncHandler) fetchAndCommit(ctx context.Context, projectName string, re
 // downloads. Test-overridable (var, not const) so cap+1 oversized-upstream
 // regression guards can run without serving multi-GiB bodies.
 var maxArtifactBytes int64 = 2 * 1024 * 1024 * 1024
-
-func openBytesReader(b []byte) io.Reader { return &bytesReader{b: b} }
-
-type bytesReader struct {
-	b []byte
-	i int
-}
-
-func (r *bytesReader) Read(p []byte) (int, error) {
-	if r.i >= len(r.b) {
-		return 0, io.EOF
-	}
-	n := copy(p, r.b[r.i:])
-	r.i += n
-	return n, nil
-}
 
 func truncateErr(s string) string {
 	const max = 1024

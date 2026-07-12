@@ -128,7 +128,7 @@ func (h *SyncHandler) Handle(ctx context.Context, payload string, projectID, rep
 			return httpx.SanitizeUpstreamErr(
 				fmt.Errorf("cred_host_mismatch: cred=%s upstream=%s", host, u.Host))
 		}
-		creds = AuthCreds{User: user, Password: pw, Token: tok}
+		creds = AuthCreds{User: user, Password: pw, Token: tok, BoundScheme: u.Scheme, BoundHost: host}
 		// Emit upstream_cred.used ONCE per job.
 		if h.deps.Audit != nil {
 			_ = h.deps.Audit.Record(ctx, audit.Event{
@@ -366,10 +366,16 @@ func (h *SyncHandler) fetchAndCommit(ctx context.Context, projectName string, re
 			return 0, nil
 		}
 	}
-	body, size, dgst, err := upstreamfetch.DownloadAndHash(ctx, h.deps.HTTPClient, ent.Path, creds, progress, step, accumulatedDone, totalBytes, maxArtifactBytes)
+	tmpDir := filepath.Join(h.deps.RepoRoot, ".tmp-rpm-sync")
+	tmpFile, size, dgst, err := upstreamfetch.DownloadToTemp(ctx, h.deps.HTTPClient, ent.Path, creds, tmpDir, progress, step, accumulatedDone, totalBytes, maxArtifactBytes)
 	if err != nil {
 		return 0, fmt.Errorf("rpm_sync: download %s: %w", ent.Filename, err)
 	}
+	tmpPath := tmpFile.Name()
+	defer func() {
+		_ = tmpFile.Close()
+		_ = os.Remove(tmpPath)
+	}()
 	digest := "sha256:" + dgst
 	if ent.Digest != "" && !strings.EqualFold(ent.Digest, digest) {
 		return 0, fmt.Errorf("rpm_sync: digest mismatch on %s: upstream=%s computed=%s", ent.Filename, ent.Digest, digest)
@@ -387,27 +393,6 @@ func (h *SyncHandler) fetchAndCommit(ctx context.Context, projectName string, re
 	// download to a tmp path, parse, then commit storage + DB entries under
 	// the canonical NEVRA filename so every published href points at a
 	// file that actually exists.
-	tmpDir := filepath.Join(h.deps.RepoRoot, ".tmp-rpm-sync")
-	if err := os.MkdirAll(tmpDir, 0o750); err != nil {
-		return 0, fmt.Errorf("rpm_sync: mkdir tmp %s: %w", ent.Filename, err)
-	}
-	tmpFile, err := os.CreateTemp(tmpDir, "rpm-sync-*.rpm")
-	if err != nil {
-		return 0, fmt.Errorf("rpm_sync: tmp %s: %w", ent.Filename, err)
-	}
-	tmpPath := tmpFile.Name()
-	// Belt-and-braces: always delete the staging copy on the way out —
-	// succeeded or not. Storage Put reads the body buffer directly (not
-	// the file) so the canonical storage is independent of tmpPath.
-	defer func() { _ = os.Remove(tmpPath) }()
-	if _, err := tmpFile.Write(body); err != nil {
-		_ = tmpFile.Close()
-		return 0, fmt.Errorf("rpm_sync: tmp write %s: %w", ent.Filename, err)
-	}
-	if err := tmpFile.Close(); err != nil {
-		return 0, fmt.Errorf("rpm_sync: tmp close %s: %w", ent.Filename, err)
-	}
-
 	parsed, perr := Parse(tmpPath)
 	if perr != nil {
 		return 0, fmt.Errorf("rpm_sync: parse %s: %w", ent.Filename, perr)
@@ -415,46 +400,46 @@ func (h *SyncHandler) fetchAndCommit(ctx context.Context, projectName string, re
 
 	canonicalName := parsed.canonicalFilename()
 	storageKey := storageKeyFor(projectName, repo.Name, canonicalName)
-	if _, err := h.deps.Path.Put(ctx, storageKey, openBytesReader(body)); err != nil {
-		return 0, fmt.Errorf("rpm_sync: store %s: %w", canonicalName, err)
+	if _, err := tmpFile.Seek(0, io.SeekStart); err != nil {
+		return 0, fmt.Errorf("rpm_sync: rewind %s: %w", canonicalName, err)
 	}
-	abs := filepath.Join(h.deps.RepoRoot, filepath.FromSlash(storageKey))
-
-	if err := h.deps.DB.WriteTx(ctx, func(tx *sql.Tx) error {
-		if _, err := h.deps.RPMPackages.Insert(ctx, tx, &metadata.RPMPackage{
-			RepoID:      repo.ID,
-			Name:        parsed.Name,
-			Epoch:       parsed.Epoch,
-			Version:     parsed.Version,
-			Release:     parsed.Release,
-			Arch:        parsed.Arch,
-			Summary:     parsed.Summary,
-			Description: parsed.Description,
-			License:     parsed.License,
-			URL:         parsed.URL,
-			SourceRPM:   parsed.SourceRPM,
-			SizeBytes:   size,
-			Digest:      digest,
-			Filename:    canonicalName,
-		}); err != nil {
-			return err
-		}
-		if err := metadata.IndexRPMDelete(ctx, tx, repo.ID, parsed.Name, parsed.Version, parsed.Arch); err != nil {
-			return err
-		}
-		if err := metadata.IndexRPM(ctx, tx, repo.ID, parsed.Name, parsed.Version, parsed.Arch, parsed.Summary); err != nil {
-			return err
-		}
-		if repo.AutoScan && h.deps.Scans != nil {
-			if _, err := h.deps.Scans.Enqueue(ctx, tx, repo.ID, "rpm", canonicalName); err != nil {
+	_, err = h.deps.Path.Replace(ctx, storageKey, tmpFile, func(int64) error {
+		return h.deps.DB.WriteTx(ctx, func(tx *sql.Tx) error {
+			if _, err := h.deps.RPMPackages.Insert(ctx, tx, &metadata.RPMPackage{
+				RepoID:      repo.ID,
+				Name:        parsed.Name,
+				Epoch:       parsed.Epoch,
+				Version:     parsed.Version,
+				Release:     parsed.Release,
+				Arch:        parsed.Arch,
+				Summary:     parsed.Summary,
+				Description: parsed.Description,
+				License:     parsed.License,
+				URL:         parsed.URL,
+				SourceRPM:   parsed.SourceRPM,
+				SizeBytes:   size,
+				Digest:      digest,
+				Filename:    canonicalName,
+			}); err != nil {
 				return err
 			}
-		}
-		// NOTE: per-file Insert intentionally does NOT call coalescer.Kick.
-		// The single end-of-batch kick happens in Handle after parse+wait.
-		return h.deps.Repos.SetMetadataState(ctx, tx, repo.ID, metadata.MetadataStateDirty)
-	}); err != nil {
-		_ = os.Remove(abs)
+			if err := metadata.IndexRPMDelete(ctx, tx, repo.ID, parsed.Name, parsed.Version, parsed.Arch); err != nil {
+				return err
+			}
+			if err := metadata.IndexRPM(ctx, tx, repo.ID, parsed.Name, parsed.Version, parsed.Arch, parsed.Summary); err != nil {
+				return err
+			}
+			if repo.AutoScan && h.deps.Scans != nil {
+				if _, err := h.deps.Scans.Enqueue(ctx, tx, repo.ID, "rpm", canonicalName); err != nil {
+					return err
+				}
+			}
+			// NOTE: per-file Insert intentionally does NOT call coalescer.Kick.
+			// The single end-of-batch kick happens in Handle after parse+wait.
+			return h.deps.Repos.SetMetadataState(ctx, tx, repo.ID, metadata.MetadataStateDirty)
+		})
+	})
+	if err != nil {
 		return 0, fmt.Errorf("rpm_sync: commit %s: %w", canonicalName, err)
 	}
 	return size, nil
@@ -464,24 +449,6 @@ func (h *SyncHandler) fetchAndCommit(ctx context.Context, projectName string, re
 // downloads. Test-overridable (var, not const) so cap+1 oversized-upstream
 // regression guards can run without serving multi-GiB bodies.
 var maxArtifactBytes int64 = 4 * 1024 * 1024 * 1024
-
-// openBytesReader is a tiny helper so callers can pass a []byte to a
-// PathStore.Put without an inline import dance.
-func openBytesReader(b []byte) io.Reader { return &bytesReader{b: b} }
-
-type bytesReader struct {
-	b []byte
-	i int
-}
-
-func (r *bytesReader) Read(p []byte) (int, error) {
-	if r.i >= len(r.b) {
-		return 0, io.EOF
-	}
-	n := copy(p, r.b[r.i:])
-	r.i += n
-	return n, nil
-}
 
 // truncateErr keeps last_error reasonable for sync_jobs storage.
 func truncateErr(s string) string {

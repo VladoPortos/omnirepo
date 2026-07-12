@@ -59,7 +59,28 @@ func (h *Handler) put(w http.ResponseWriter, r *http.Request) {
 	// rejected dotted segments — defense in depth.
 	storageKey := storageKeyFor(res.project.Name, res.repo.Name, res.relPath)
 
-	size, err := h.pathStore.Put(r.Context(), storageKey, tee)
+	var digest string
+	size, err := h.pathStore.Replace(r.Context(), storageKey, tee, func(size int64) error {
+		digest = "sha256:" + hex.EncodeToString(hasher.Sum(nil))
+		mimeType := detectMIMEFromExt(res.relPath)
+		return h.db.WriteTx(r.Context(), func(tx *sql.Tx) error {
+			if err := h.files.Insert(r.Context(), tx, res.repo.ID, res.relPath, size, mimeType, digest); err != nil {
+				return err
+			}
+			if err := metadata.IndexArtifactDelete(r.Context(), tx, res.repo.ID, res.relPath); err != nil {
+				return err
+			}
+			if err := metadata.IndexArtifact(r.Context(), tx, res.repo.ID, res.relPath, "", res.relPath); err != nil {
+				return err
+			}
+			if res.repo.AutoScan && h.scans != nil {
+				if _, err := h.scans.Enqueue(r.Context(), tx, res.repo.ID, "raw", res.relPath); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+	})
 	if err != nil {
 		var maxErr *http.MaxBytesError
 		if errors.As(err, &maxErr) {
@@ -75,40 +96,7 @@ func (h *Handler) put(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	digest := "sha256:" + hex.EncodeToString(hasher.Sum(nil))
 	mimeType := detectMIMEFromExt(res.relPath)
-
-	// Single writer tx: raw_files upsert + FTS5 + optional scan enqueue.
-	if err := h.db.WriteTx(r.Context(), func(tx *sql.Tx) error {
-		if err := h.files.Insert(r.Context(), tx, res.repo.ID, res.relPath, size, mimeType, digest); err != nil {
-			return err
-		}
-		// FTS5 index — refresh by deleting any prior digest+repo entry,
-		// then inserting a new one. The artifact key is path so search by
-		// filename works.
-		if err := metadata.IndexArtifactDelete(r.Context(), tx, res.repo.ID, res.relPath); err != nil {
-			return err
-		}
-		if err := metadata.IndexArtifact(r.Context(), tx, res.repo.ID, res.relPath, "", res.relPath); err != nil {
-			return err
-		}
-		if res.repo.AutoScan && h.scans != nil {
-			if _, err := h.scans.Enqueue(r.Context(), tx, res.repo.ID, "raw", res.relPath); err != nil {
-				return err
-			}
-		}
-		return nil
-	}); err != nil {
-		// DB commit failed after bytes were written to disk. Roll the file
-		// back so we don't leak an orphan the metadata layer has no row for.
-		// Best-effort: if the delete itself fails, log via audit below.
-		_ = h.pathStore.Delete(r.Context(), storageKey)
-		slog.ErrorContext(r.Context(), "raw.put.commit_failed",
-			"project", res.project.Name, "repo", res.repo.Name,
-			"path", res.relPath, "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
-		return
-	}
 
 	// Audit. Best-effort.
 	h.auditEvent(r, audit.EvtRawPut, res.relPath, "ok", map[string]any{

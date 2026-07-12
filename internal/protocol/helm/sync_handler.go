@@ -131,7 +131,7 @@ func (h *SyncHandler) Handle(ctx context.Context, payload string, projectID, rep
 			return httpx.SanitizeUpstreamErr(
 				fmt.Errorf("cred_host_mismatch: cred=%s upstream=%s", host, u.Host))
 		}
-		creds = AuthCreds{User: user, Password: pw, Token: tok}
+		creds = AuthCreds{User: user, Password: pw, Token: tok, BoundScheme: u.Scheme, BoundHost: host}
 		if h.deps.Audit != nil {
 			_ = h.deps.Audit.Record(ctx, audit.Event{
 				Kind:       audit.EvtUpstreamCredUsed,
@@ -499,10 +499,16 @@ func (h *SyncHandler) fetchAndCommit(ctx context.Context, projectName string, re
 			return 0, nil
 		}
 	}
-	body, size, dgst, err := upstreamfetch.DownloadAndHash(ctx, h.deps.HTTPClient, ent.Path, creds, nil, "", nil, 0, maxArtifactBytes)
+	tmpFile, size, dgst, err := upstreamfetch.DownloadToTemp(ctx, h.deps.HTTPClient, ent.Path, creds,
+		filepath.Join(h.deps.RepoRoot, ".tmp-helm-sync"), nil, "", nil, 0, maxArtifactBytes)
 	if err != nil {
 		return 0, fmt.Errorf("helm_sync: download %s: %w", ent.Filename, err)
 	}
+	tmpPath := tmpFile.Name()
+	defer func() {
+		_ = tmpFile.Close()
+		_ = os.Remove(tmpPath)
+	}()
 	digest := "sha256:" + dgst
 	if ent.Digest != "" && !strings.EqualFold(ent.Digest, digest) {
 		return 0, fmt.Errorf("helm_sync: digest mismatch on %s", ent.Filename)
@@ -512,46 +518,45 @@ func (h *SyncHandler) fetchAndCommit(ctx context.Context, projectName string, re
 	}
 
 	storageKey := strings.Join([]string{projectName, "helm", repo.Name, "charts", ent.Filename}, "/")
-	if _, err := h.deps.Path.Put(ctx, storageKey, openBytesReader(body)); err != nil {
-		return 0, fmt.Errorf("helm_sync: store %s: %w", ent.Filename, err)
-	}
-
-	abs := filepath.Join(h.deps.RepoRoot, filepath.FromSlash(storageKey))
-	chart, perr := Parse(abs)
+	chart, perr := Parse(tmpPath)
 	if perr != nil {
-		_ = os.Remove(abs)
 		return 0, fmt.Errorf("helm_sync: parse %s: %w", ent.Filename, perr)
 	}
 
-	if err := h.deps.DB.WriteTx(ctx, func(tx *sql.Tx) error {
-		if _, err := h.deps.HelmCharts.Insert(ctx, tx, &metadata.HelmChart{
-			RepoID:          repo.ID,
-			Name:            chart.Name,
-			Version:         chart.Version,
-			AppVersion:      chart.AppVersion,
-			Description:     chart.Description,
-			KeywordsJSON:    chart.KeywordsJSON(),
-			MaintainersJSON: chart.MaintainersJSON(),
-			SizeBytes:       size,
-			Digest:          digest,
-			Filename:        ent.Filename,
-		}); err != nil {
-			return err
-		}
-		if err := metadata.IndexHelmDelete(ctx, tx, repo.ID, chart.Name, chart.Version, chart.AppVersion); err != nil {
-			return err
-		}
-		if err := metadata.IndexHelm(ctx, tx, repo.ID, chart.Name, chart.Version, chart.AppVersion, chart.Description); err != nil {
-			return err
-		}
-		if repo.AutoScan && h.deps.Scans != nil {
-			if _, err := h.deps.Scans.Enqueue(ctx, tx, repo.ID, "helm", ent.Filename); err != nil {
+	if _, err := tmpFile.Seek(0, io.SeekStart); err != nil {
+		return 0, fmt.Errorf("helm_sync: rewind %s: %w", ent.Filename, err)
+	}
+	_, err = h.deps.Path.Replace(ctx, storageKey, tmpFile, func(int64) error {
+		return h.deps.DB.WriteTx(ctx, func(tx *sql.Tx) error {
+			if _, err := h.deps.HelmCharts.Insert(ctx, tx, &metadata.HelmChart{
+				RepoID:          repo.ID,
+				Name:            chart.Name,
+				Version:         chart.Version,
+				AppVersion:      chart.AppVersion,
+				Description:     chart.Description,
+				KeywordsJSON:    chart.KeywordsJSON(),
+				MaintainersJSON: chart.MaintainersJSON(),
+				SizeBytes:       size,
+				Digest:          digest,
+				Filename:        ent.Filename,
+			}); err != nil {
 				return err
 			}
-		}
-		return h.deps.Repos.SetMetadataState(ctx, tx, repo.ID, metadata.MetadataStateDirty)
-	}); err != nil {
-		_ = os.Remove(abs)
+			if err := metadata.IndexHelmDelete(ctx, tx, repo.ID, chart.Name, chart.Version, chart.AppVersion); err != nil {
+				return err
+			}
+			if err := metadata.IndexHelm(ctx, tx, repo.ID, chart.Name, chart.Version, chart.AppVersion, chart.Description); err != nil {
+				return err
+			}
+			if repo.AutoScan && h.deps.Scans != nil {
+				if _, err := h.deps.Scans.Enqueue(ctx, tx, repo.ID, "helm", ent.Filename); err != nil {
+					return err
+				}
+			}
+			return h.deps.Repos.SetMetadataState(ctx, tx, repo.ID, metadata.MetadataStateDirty)
+		})
+	})
+	if err != nil {
 		return 0, fmt.Errorf("helm_sync: commit %s: %w", ent.Filename, err)
 	}
 	return size, nil

@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"os"
 	"path"
-	"path/filepath"
 	"strings"
 
 	chimw "github.com/go-chi/chi/v5/middleware"
@@ -139,50 +138,53 @@ func (h *Handler) put(w http.ResponseWriter, r *http.Request) {
 
 	// Write to pool via PathStore (atomic tmp+fsync+rename underneath).
 	storageKey := storageKeyForPool(res.project.Name, res.repo.Name, poolPath)
-	if !common.PromoteStaged(w, r, h.pathStore, "deb", storageKey, tmpPath, filename) {
+	putF, err := os.Open(tmpPath)
+	if err != nil {
+		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
-
-	if err := h.db.WriteTx(r.Context(), func(tx *sql.Tx) error {
-		if _, err := h.debPackages.Insert(r.Context(), tx, &metadata.DEBPackage{
-			RepoID:       res.repo.ID,
-			SuiteID:      suiteRow.ID,
-			Package:      ctrl.Package,
-			Version:      ctrl.Version,
-			Architecture: ctrl.Architecture,
-			Maintainer:   ctrl.Maintainer,
-			Section:      ctrl.Section,
-			Priority:     ctrl.Priority,
-			Depends:      ctrl.Depends,
-			Description:  ctrl.Description,
-			SizeBytes:    size,
-			Digest:       "sha256:" + digest,
-			Filename:     filename,
-			// Store the real pool-relative path so Packages.gz can emit
-			// it verbatim as the Filename field (apt needs it to fetch the
-			// .deb — the old synthesised path dropped `main/` and broke apt).
-			StoragePoolPath: poolPath,
-		}); err != nil {
-			return err
-		}
-		if err := metadata.IndexDEBDelete(r.Context(), tx, res.repo.ID, ctrl.Package, ctrl.Version, ctrl.Architecture); err != nil {
-			return err
-		}
-		if err := metadata.IndexDEB(r.Context(), tx, res.repo.ID, ctrl.Package, ctrl.Version, ctrl.Architecture, firstLine(ctrl.Description)); err != nil {
-			return err
-		}
-		if err := h.repos.SetMetadataState(r.Context(), tx, res.repo.ID, metadata.MetadataStateDirty); err != nil {
-			return err
-		}
-		if res.repo.AutoScan && h.scans != nil {
-			if _, err := h.scans.Enqueue(r.Context(), tx, res.repo.ID, "deb", filename); err != nil {
+	_, err = h.pathStore.Replace(r.Context(), storageKey, putF, func(int64) error {
+		return h.db.WriteTx(r.Context(), func(tx *sql.Tx) error {
+			if _, err := h.debPackages.Insert(r.Context(), tx, &metadata.DEBPackage{
+				RepoID:       res.repo.ID,
+				SuiteID:      suiteRow.ID,
+				Package:      ctrl.Package,
+				Version:      ctrl.Version,
+				Architecture: ctrl.Architecture,
+				Maintainer:   ctrl.Maintainer,
+				Section:      ctrl.Section,
+				Priority:     ctrl.Priority,
+				Depends:      ctrl.Depends,
+				Description:  ctrl.Description,
+				SizeBytes:    size,
+				Digest:       "sha256:" + digest,
+				Filename:     filename,
+				// Store the real pool-relative path so Packages.gz can emit
+				// it verbatim as the Filename field (apt needs it to fetch the
+				// .deb — the old synthesised path dropped `main/` and broke apt).
+				StoragePoolPath: poolPath,
+			}); err != nil {
 				return err
 			}
-		}
-		return nil
-	}); err != nil {
-		// Best-effort: attempt to remove the pool file that made it to disk.
-		_ = os.Remove(filepath.Join(h.repoRoot, filepath.FromSlash(storageKey)))
+			if err := metadata.IndexDEBDelete(r.Context(), tx, res.repo.ID, ctrl.Package, ctrl.Version, ctrl.Architecture); err != nil {
+				return err
+			}
+			if err := metadata.IndexDEB(r.Context(), tx, res.repo.ID, ctrl.Package, ctrl.Version, ctrl.Architecture, firstLine(ctrl.Description)); err != nil {
+				return err
+			}
+			if err := h.repos.SetMetadataState(r.Context(), tx, res.repo.ID, metadata.MetadataStateDirty); err != nil {
+				return err
+			}
+			if res.repo.AutoScan && h.scans != nil {
+				if _, err := h.scans.Enqueue(r.Context(), tx, res.repo.ID, "deb", filename); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+	})
+	_ = putF.Close()
+	if err != nil {
 		slog.ErrorContext(r.Context(), "deb.put.commit_failed",
 			slog.String("incident_id", chimw.GetReqID(r.Context())),
 			slog.String("filename", filename),

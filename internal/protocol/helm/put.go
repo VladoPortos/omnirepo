@@ -90,48 +90,52 @@ func (h *Handler) putChart(w http.ResponseWriter, r *http.Request, res resolved)
 	// Promote the staged tmp file into the canonical PathStore key via the
 	// atomic path-store Put (temp+fsync+rename inside PathStore.Put).
 	storageKey := storageKeyFor(res.project.Name, res.repo.Name, res.filename)
-	if !common.PromoteStaged(w, r, h.pathStore, "helm", storageKey, tmpPath, res.filename) {
+	putF, err := os.Open(tmpPath)
+	if err != nil {
+		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
 
 	// Single writer tx: helm_charts upsert + FTS5 refresh + metadata_state
 	// + optional auto-scan enqueue.
-	if err := h.db.WriteTx(r.Context(), func(tx *sql.Tx) error {
-		if _, err := h.helmCharts.Insert(r.Context(), tx, &metadata.HelmChart{
-			RepoID:          res.repo.ID,
-			Name:            chartMeta.Name,
-			Version:         chartMeta.Version,
-			AppVersion:      chartMeta.AppVersion,
-			Description:     chartMeta.Description,
-			KeywordsJSON:    chartMeta.KeywordsJSON(),
-			MaintainersJSON: chartMeta.MaintainersJSON(),
-			SizeBytes:       size,
-			Digest:          digest,
-			Filename:        res.filename,
-		}); err != nil {
-			return err
-		}
-		// Refresh FTS: delete then insert (composite key = repo,name,version,appVer).
-		if err := metadata.IndexHelmDelete(r.Context(), tx, res.repo.ID,
-			chartMeta.Name, chartMeta.Version, chartMeta.AppVersion); err != nil {
-			return err
-		}
-		if err := metadata.IndexHelm(r.Context(), tx, res.repo.ID,
-			chartMeta.Name, chartMeta.Version, chartMeta.AppVersion, chartMeta.Description); err != nil {
-			return err
-		}
-		if err := h.repos.SetMetadataState(r.Context(), tx, res.repo.ID, metadata.MetadataStateDirty); err != nil {
-			return err
-		}
-		if res.repo.AutoScan && h.scans != nil {
-			if _, err := h.scans.Enqueue(r.Context(), tx, res.repo.ID, "helm", res.filename); err != nil {
+	_, err = h.pathStore.Replace(r.Context(), storageKey, putF, func(int64) error {
+		return h.db.WriteTx(r.Context(), func(tx *sql.Tx) error {
+			if _, err := h.helmCharts.Insert(r.Context(), tx, &metadata.HelmChart{
+				RepoID:          res.repo.ID,
+				Name:            chartMeta.Name,
+				Version:         chartMeta.Version,
+				AppVersion:      chartMeta.AppVersion,
+				Description:     chartMeta.Description,
+				KeywordsJSON:    chartMeta.KeywordsJSON(),
+				MaintainersJSON: chartMeta.MaintainersJSON(),
+				SizeBytes:       size,
+				Digest:          digest,
+				Filename:        res.filename,
+			}); err != nil {
 				return err
 			}
-		}
-		return nil
-	}); err != nil {
-		// Roll back the chart tgz on disk when the metadata tx fails.
-		_ = h.pathStore.Delete(r.Context(), storageKey)
+			// Refresh FTS: delete then insert (composite key = repo,name,version,appVer).
+			if err := metadata.IndexHelmDelete(r.Context(), tx, res.repo.ID,
+				chartMeta.Name, chartMeta.Version, chartMeta.AppVersion); err != nil {
+				return err
+			}
+			if err := metadata.IndexHelm(r.Context(), tx, res.repo.ID,
+				chartMeta.Name, chartMeta.Version, chartMeta.AppVersion, chartMeta.Description); err != nil {
+				return err
+			}
+			if err := h.repos.SetMetadataState(r.Context(), tx, res.repo.ID, metadata.MetadataStateDirty); err != nil {
+				return err
+			}
+			if res.repo.AutoScan && h.scans != nil {
+				if _, err := h.scans.Enqueue(r.Context(), tx, res.repo.ID, "helm", res.filename); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+	})
+	_ = putF.Close()
+	if err != nil {
 		slog.ErrorContext(r.Context(), "helm.put.commit_failed",
 			slog.String("incident_id", chimw.GetReqID(r.Context())),
 			slog.String("filename", res.filename),

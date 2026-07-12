@@ -94,38 +94,33 @@ func (h *Handler) put(w http.ResponseWriter, r *http.Request) {
 	zipKey := storageKeyFor(res.project.Name, res.repo.Name, res.req.EscapedPath, res.req.Version, "zip")
 	modKey := storageKeyFor(res.project.Name, res.repo.Name, res.req.EscapedPath, res.req.Version, "mod")
 
-	if !common.PromoteStaged(w, r, h.pathStore, "go", zipKey, tmpPath, target) {
-		return
-	}
-	if _, err := h.pathStore.Put(r.Context(), modKey, strings.NewReader(goMod)); err != nil {
-		_ = h.pathStore.Delete(r.Context(), zipKey)
-		slog.ErrorContext(r.Context(), "goproxy.put.mod_write_failed",
-			slog.String("incident_id", chimw.GetReqID(r.Context())),
-			slog.String("module", target),
-			slog.Any("err", err),
-		)
+	zipF, err := os.Open(tmpPath)
+	if err != nil {
 		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
-
-	if err := h.db.WriteTx(r.Context(), func(tx *sql.Tx) error {
-		if _, err := h.goModules.Insert(r.Context(), tx, &metadata.GoModule{
-			RepoID:     res.repo.ID,
-			ModulePath: res.req.ModulePath,
-			Version:    res.req.Version,
-			SizeBytes:  st.Size,
-			Digest:     digest,
-		}); err != nil {
-			return err
-		}
-		if err := metadata.IndexArtifactDelete(r.Context(), tx, res.repo.ID, digest); err != nil {
-			return err
-		}
-		return metadata.IndexArtifact(r.Context(), tx, res.repo.ID, res.req.ModulePath, res.req.Version, digest)
-	}); err != nil {
-		// Roll back the on-disk artifacts when the metadata tx fails.
-		_ = h.pathStore.Delete(r.Context(), zipKey)
-		_ = h.pathStore.Delete(r.Context(), modKey)
+	_, err = h.pathStore.Replace(r.Context(), zipKey, zipF, func(int64) error {
+		_, innerErr := h.pathStore.Replace(r.Context(), modKey, strings.NewReader(goMod), func(int64) error {
+			return h.db.WriteTx(r.Context(), func(tx *sql.Tx) error {
+				if _, err := h.goModules.Insert(r.Context(), tx, &metadata.GoModule{
+					RepoID:     res.repo.ID,
+					ModulePath: res.req.ModulePath,
+					Version:    res.req.Version,
+					SizeBytes:  st.Size,
+					Digest:     digest,
+				}); err != nil {
+					return err
+				}
+				if err := metadata.IndexArtifactDelete(r.Context(), tx, res.repo.ID, digest); err != nil {
+					return err
+				}
+				return metadata.IndexArtifact(r.Context(), tx, res.repo.ID, res.req.ModulePath, res.req.Version, digest)
+			})
+		})
+		return innerErr
+	})
+	_ = zipF.Close()
+	if err != nil {
 		slog.ErrorContext(r.Context(), "goproxy.put.commit_failed",
 			slog.String("incident_id", chimw.GetReqID(r.Context())),
 			slog.String("module", target),

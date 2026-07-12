@@ -355,19 +355,23 @@ func (h *Handler) put(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() { _ = os.Remove(st.TmpPath) }()
 
-	// Captured before the overwrite so the failure path knows whether the
-	// on-disk file still backs a committed row.
-	prior, priorErr := h.artifacts.FindByPath(r.Context(), res.repo.ID, res.relPath)
-	hadRow := priorErr == nil && prior != nil
-
 	storageKey := storageKeyFor(res.project.Name, res.repo.Name, res.relPath)
-	if !common.PromoteStaged(w, r, h.pathStore, "maven", storageKey, st.TmpPath, path.Base(res.relPath)) {
+	g, primary := classifyPath(res.relPath)
+	if !primary {
+		if !common.PromoteStaged(w, r, h.pathStore, "maven", storageKey, st.TmpPath, path.Base(res.relPath)) {
+			return
+		}
+		w.WriteHeader(http.StatusCreated)
 		return
 	}
 
-	g, primary := classifyPath(res.relPath)
-	if primary {
-		if err := h.db.WriteTx(r.Context(), func(tx *sql.Tx) error {
+	putF, err := os.Open(st.TmpPath)
+	if err != nil {
+		http.Error(w, "storage error", http.StatusInternalServerError)
+		return
+	}
+	_, err = h.pathStore.Replace(r.Context(), storageKey, putF, func(int64) error {
+		return h.db.WriteTx(r.Context(), func(tx *sql.Tx) error {
 			if _, err := h.artifacts.Upsert(r.Context(), tx, &metadata.MavenArtifact{
 				RepoID:     res.repo.ID,
 				GroupID:    g.GroupID,
@@ -390,32 +394,26 @@ func (h *Handler) put(w http.ResponseWriter, r *http.Request) {
 			}
 			return metadata.IndexArtifact(r.Context(), tx,
 				res.repo.ID, g.GroupID+":"+g.ArtifactID, g.Version, res.relPath)
-		}); err != nil {
-			// Fresh upload: the file is an orphan — remove it. Redeploy: the
-			// new bytes already replaced the old file, so deleting would
-			// leave the surviving row with NO file; keep the bytes (a PUT
-			// retry heals the row/file mismatch via the upsert).
-			if !hadRow {
-				_ = h.pathStore.Delete(r.Context(), storageKey)
-			}
-			slog.ErrorContext(r.Context(), "maven.put.commit_failed",
-				slog.String("incident_id", chimw.GetReqID(r.Context())),
-				slog.String("path", res.relPath),
-				slog.Bool("kept_file", hadRow),
-				slog.Any("err", err),
-			)
-			http.Error(w, "storage error", http.StatusInternalServerError)
-			return
-		}
-		h.auditEvent(r, audit.EvtMavenUpload, res.relPath, "ok", map[string]any{
-			"project":     res.project.Name,
-			"repo":        res.repo.Name,
-			"group_id":    g.GroupID,
-			"artifact_id": g.ArtifactID,
-			"version":     g.Version,
-			"size_bytes":  st.Size,
 		})
+	})
+	_ = putF.Close()
+	if err != nil {
+		slog.ErrorContext(r.Context(), "maven.put.commit_failed",
+			slog.String("incident_id", chimw.GetReqID(r.Context())),
+			slog.String("path", res.relPath),
+			slog.Any("err", err),
+		)
+		http.Error(w, "storage error", http.StatusInternalServerError)
+		return
 	}
+	h.auditEvent(r, audit.EvtMavenUpload, res.relPath, "ok", map[string]any{
+		"project":     res.project.Name,
+		"repo":        res.repo.Name,
+		"group_id":    g.GroupID,
+		"artifact_id": g.ArtifactID,
+		"version":     g.Version,
+		"size_bytes":  st.Size,
+	})
 
 	w.WriteHeader(http.StatusCreated)
 }

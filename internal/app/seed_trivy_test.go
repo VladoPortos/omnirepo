@@ -89,6 +89,42 @@ func TestSeedTrivyDB_SkipsWhenAlreadyPresent(t *testing.T) {
 	}
 }
 
+func TestSeedTrivyDB_RepairsIncompleteTargetAtomically(t *testing.T) {
+	dataRoot := t.TempDir()
+	bakedDir := filepath.Join(t.TempDir(), "trivy-db")
+	if err := os.MkdirAll(bakedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bakedDir, "metadata.json"), []byte("fresh-meta"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bakedDir, "trivy.db"), []byte("fresh-db"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	dbDir := filepath.Join(dataRoot, "trivy", "db")
+	if err := os.MkdirAll(dbDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Simulate a crash after the old implementation copied its first file.
+	if err := os.WriteFile(filepath.Join(dbDir, "metadata.json"), []byte("partial"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := app.SeedTrivyDB(context.Background(), dataRoot, bakedDir); err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string]string{"metadata.json": "fresh-meta", "trivy.db": "fresh-db"} {
+		got, err := os.ReadFile(filepath.Join(dbDir, name))
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		if string(got) != want {
+			t.Fatalf("%s=%q want %q", name, got, want)
+		}
+	}
+}
+
 // TestRecordBakedTrivyDBMeta_InsertsRow covers F-T13: after SeedTrivyDB has
 // copied Trivy's metadata.json onto disk, the app must populate trivy_db_meta
 // so the dashboard age widget reads a real timestamp instead of "unknown".

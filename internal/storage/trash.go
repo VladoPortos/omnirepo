@@ -93,6 +93,22 @@ type trashImpl struct {
 	root string
 }
 
+var writeTrashSidecar = func(path string, data []byte, perm os.FileMode) error {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, perm)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		return err
+	}
+	return f.Close()
+}
+
 // NewTrash returns a Trash rooted at root. Callers typically pass
 // /var/lib/omnirepo/trash.
 func NewTrash(root string) Trash {
@@ -162,14 +178,13 @@ func (t *trashImpl) moveInternal(ctx context.Context, srcPath, kind string, id i
 	var missing bool
 	if _, statErr := os.Stat(srcPath); errors.Is(statErr, os.ErrNotExist) {
 		missing = true
-	} else if err := os.Rename(srcPath, dst); err != nil {
-		return "", fmt.Errorf("trash: rename: %w", err)
+	} else if statErr != nil {
+		_ = os.Remove(dstDir)
+		return "", fmt.Errorf("trash: stat source: %w", statErr)
 	}
-	// Sidecar metadata — written after the rename so a failed Move doesn't
-	// leave a stale metadata file behind. Best-effort: trash restore falls
-	// back to basename-only behavior if the sidecar is missing, which
-	// preserves the legacy invariant for callers that might still
-	// rely on the old shape (no regressions on read).
+	// Persist restore metadata before removing the live source. A successful
+	// rename without this sidecar cannot be restored to its exact nested path
+	// and may later be purged by retention GC.
 	meta := trashMetadata{
 		OriginalPath:  srcPath,
 		Kind:          kind,
@@ -179,8 +194,21 @@ func (t *trashImpl) moveInternal(ctx context.Context, srcPath, kind string, id i
 		Empty:         missing,
 		RowSnapshot:   rowSnapshot,
 	}
-	if b, err := json.Marshal(meta); err == nil {
-		_ = os.WriteFile(filepath.Join(dstDir, trashMetaFile), b, 0o640)
+	b, err := json.Marshal(meta)
+	if err != nil {
+		_ = os.Remove(dstDir)
+		return "", fmt.Errorf("trash: marshal sidecar: %w", err)
+	}
+	if err := writeTrashSidecar(filepath.Join(dstDir, trashMetaFile), b, 0o640); err != nil {
+		_ = os.Remove(dstDir)
+		return "", fmt.Errorf("trash: write sidecar: %w", err)
+	}
+	if !missing {
+		if err := os.Rename(srcPath, dst); err != nil {
+			_ = os.Remove(filepath.Join(dstDir, trashMetaFile))
+			_ = os.Remove(dstDir)
+			return "", fmt.Errorf("trash: rename: %w", err)
+		}
 	}
 	if missing {
 		return "", os.ErrNotExist

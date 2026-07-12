@@ -112,7 +112,7 @@ func DownloadToTemp(
 	}
 
 	hasher := sha256.New()
-	var reader io.Reader = io.LimitReader(resp.Body, maxBytes+1)
+	reader := io.Reader(io.LimitReader(resp.Body, maxBytes+1))
 	if progress != nil && accumulatedDone != nil {
 		reader = &jobs.CountingReader{R: reader, OnRead: func(n int) {
 			done := atomic.AddInt64(accumulatedDone, int64(n))

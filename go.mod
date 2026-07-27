@@ -18,7 +18,7 @@ require (
 	github.com/cavaliergopher/cpio v1.0.1
 	github.com/cavaliergopher/rpm v1.3.0
 	github.com/go-chi/chi/v5 v5.2.5
-	github.com/go-git/go-billy/v6 v6.0.0-alpha.1
+	github.com/go-git/go-billy/v6 v6.0.0-alpha.2
 	github.com/go-git/go-git/v6 v6.0.0-alpha.4
 	github.com/go-viper/mapstructure/v2 v2.4.0
 	github.com/golang-jwt/jwt/v5 v5.3.1
@@ -36,7 +36,7 @@ require (
 	github.com/ulikunitz/xz v0.5.15
 	golang.org/x/crypto v0.52.0
 	golang.org/x/mod v0.35.0
-	golang.org/x/sys v0.45.0
+	golang.org/x/sys v0.47.0
 	golang.org/x/text v0.37.0
 	helm.sh/helm/v3 v3.20.2
 	modernc.org/sqlite v1.48.2

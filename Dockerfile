@@ -11,7 +11,7 @@ RUN npm run build
 # ==============================================================================
 # Stage 2: Build Go binary (with embedded SPA)
 # ==============================================================================
-FROM golang:1.26-alpine AS go-build
+FROM golang:1.27-alpine AS go-build
 RUN apk add --no-cache git
 WORKDIR /src
 COPY go.mod go.sum ./

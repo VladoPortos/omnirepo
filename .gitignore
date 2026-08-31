@@ -44,6 +44,9 @@ web/vite.config.d.ts
 # Local editor/agent session state (per-developer, never shared).
 .claude/
 
+# Local isolated worktrees created by development agents.
+.worktrees/
+
 # Local generated reports from dev workflows. Per project standard "no
 # docs unless explicitly required", these stay out of the tree.
 docs/reports/

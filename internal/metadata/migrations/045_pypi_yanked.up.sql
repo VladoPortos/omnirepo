@@ -1,0 +1,2 @@
+ALTER TABLE pypi_files ADD COLUMN yanked INTEGER NOT NULL DEFAULT 0 CHECK(yanked IN (0, 1));
+ALTER TABLE pypi_files ADD COLUMN yanked_reason TEXT NOT NULL DEFAULT '';

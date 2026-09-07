@@ -77,6 +77,7 @@ func deriveScanSeverity(status, summaryJSON string) string {
 		High     int `json:"high"`
 		Medium   int `json:"medium"`
 		Low      int `json:"low"`
+		Unknown  int `json:"unknown"`
 	}
 	if summaryJSON != "" {
 		_ = json.Unmarshal([]byte(summaryJSON), &summary)
@@ -90,6 +91,8 @@ func deriveScanSeverity(status, summaryJSON string) string {
 		return "medium"
 	case summary.Low > 0:
 		return "low"
+	case summary.Unknown > 0:
+		return "unknown"
 	}
 	return "clean"
 }

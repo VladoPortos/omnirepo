@@ -95,6 +95,10 @@ type Deps struct {
 	// nil-safe.
 	ProtocolDeletes *ProtocolDeletesDeps
 
+	// ProtocolUploads repairs browser uploads using the existing protocol
+	// implementation under the REST session-authentication boundary.
+	ProtocolUploads *ProtocolUploadsDeps
+
 	// GCDeps is the admin GC trigger dependency bundle.
 	// nil-safe — when nil, /api/v1/admin/gc is not mounted.
 	GCDeps *GCDeps
@@ -314,6 +318,7 @@ func Mount(r chi.Router, d Deps) {
 			// so the UI's row Delete button can dispatch from a session
 			// cookie.
 			RegisterProtocolDeleteRoutes(r, d.ProtocolDeletes)
+			RegisterProtocolUploadRoutes(r, d.ProtocolUploads)
 
 			// Super-admin garbage collection trigger.
 			// RequireCan(ActionTriggerGC) gate inside.

@@ -17,6 +17,26 @@ import (
 // never lazily).
 type DockerBlobsRepo struct{ db *DB }
 
+// Link records that a repository acquired these bytes by upload, authorized
+// mount, external pull or manifest promotion. It shares the publication tx.
+func (r *DockerBlobsRepo) Link(ctx context.Context, tx *sql.Tx, repoID int64, digest string) error {
+	_, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO docker_repo_blobs(repo_id, digest) VALUES (?, ?)`, repoID, digest)
+	return err
+}
+
+// HasInRepo checks ownership independently of the global refcount.
+func (r *DockerBlobsRepo) HasInRepo(ctx context.Context, repoID int64, digest string) (bool, error) {
+	var exists bool
+	err := r.db.Reader.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM docker_repo_blobs WHERE repo_id=? AND digest=?)`, repoID, digest).Scan(&exists)
+	return exists, err
+}
+
+func (r *DockerBlobsRepo) HasInRepoTx(ctx context.Context, tx *sql.Tx, repoID int64, digest string) (bool, error) {
+	var exists bool
+	err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM docker_repo_blobs WHERE repo_id=? AND digest=?)`, repoID, digest).Scan(&exists)
+	return exists, err
+}
+
 // DockerBlob is the in-memory projection of a docker_blobs row.
 type DockerBlob struct {
 	Digest        string
@@ -139,8 +159,8 @@ func (r *DockerBlobsRepo) GCCandidates(ctx context.Context, quiescence time.Dura
 	return out, rows.Err()
 }
 
-// Delete removes the blob row. Caller is responsible for deleting the CAS
-// file first (GC sweep order: file then row).
+// Delete removes the global blob row and all ownership links. GC coordinates
+// row deletion and CAS unlink under storage.CASLifecycle.
 func (r *DockerBlobsRepo) Delete(ctx context.Context, tx *sql.Tx, digest string) error {
 	_, err := tx.ExecContext(ctx, `DELETE FROM docker_blobs WHERE digest = ?`, digest)
 	if err != nil {

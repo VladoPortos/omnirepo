@@ -74,6 +74,7 @@ type Handler struct {
 	packages *metadata.NPMPackagesRepo
 
 	pathStore   storage.PathStore
+	writeLocks  storage.Locks
 	trash       storage.Trash
 	auditLogger audit.Logger
 
@@ -102,6 +103,7 @@ func New(d Deps) *Handler {
 		members:     d.Members,
 		packages:    d.Packages,
 		pathStore:   d.Path,
+		writeLocks:  storage.NewLocks(),
 		trash:       d.Trash,
 		auditLogger: d.Audit,
 		maxPutBytes: max,

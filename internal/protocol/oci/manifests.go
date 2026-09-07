@@ -190,12 +190,12 @@ func (h *Handler) manifestPut(w http.ResponseWriter, r *http.Request) {
 		}
 	} else {
 		for _, d := range refs {
-			b, err := h.blobs.Stat(ctx, d)
+			owned, err := h.blobs.HasInRepo(ctx, rr.repo.ID, d)
 			if err != nil {
 				writeOCIErr(w, http.StatusInternalServerError, ErrCodeUnknown, err)
 				return
 			}
-			if b == nil {
+			if !owned {
 				writeOCIErr(w, http.StatusNotFound, ErrCodeBlobUnknown,
 					fmt.Errorf("referenced blob %s missing", d))
 				return
@@ -208,6 +208,18 @@ func (h *Handler) manifestPut(w http.ResponseWriter, r *http.Request) {
 	var scanEnqueued bool
 
 	err = h.db.WriteTx(ctx, func(tx *sql.Tx) error {
+		if !isIndex {
+			for _, d := range refs {
+				owned, err := h.blobs.HasInRepoTx(ctx, tx, rr.repo.ID, d)
+				if err != nil {
+					return err
+				}
+				if !owned {
+					return fmt.Errorf("referenced blob missing from repo")
+				}
+			}
+		}
+
 		enq, err := h.writeManifestWithRefcounts(
 			ctx, tx, rr.repo.ID, repoPath, rr.image, reference, mfDigest, mediaType, body,
 			refs, isIndex, rr.repo.AutoScan,
@@ -685,6 +697,13 @@ func (h *Handler) writeManifestWithRefcounts(
 	existingMf, err := h.manifests.GetByDigestTx(ctx, tx, repoID, mfDigest)
 	if err != nil {
 		return false, err
+	}
+	if !isIndex {
+		for _, d := range refs {
+			if err := h.blobs.Link(ctx, tx, repoID, d); err != nil {
+				return false, err
+			}
+		}
 	}
 	inserted := existingMf == nil
 	if err := h.manifests.Insert(ctx, tx, repoID, mfDigest, mediaType, body); err != nil {

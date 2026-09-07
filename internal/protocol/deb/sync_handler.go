@@ -191,13 +191,23 @@ func (h *SyncHandler) Handle(ctx context.Context, payload string, projectID, rep
 				C: ent.Control.Architecture,
 			})
 		}
-		if ent.Digest != "" {
-			if existing, ferr := h.deps.DEBPackages.FindByDigest(ctx, repoID, ent.Digest); ferr == nil && existing != nil {
+		if ent.Digest != "" && ent.Control != nil {
+			var present bool
+			if err := h.deps.DB.Reader.QueryRowContext(ctx, `SELECT EXISTS(
+				SELECT 1 FROM deb_packages p JOIN apt_suites s ON s.id=p.suite_id
+				WHERE p.repo_id=? AND s.suite=? AND s.component=? AND s.architecture=?
+				AND p.package=? AND p.version=? AND p.architecture=? AND p.digest=?)`,
+				repoID, ent.Suite, ent.Component, ent.Arch, ent.Control.Package, ent.Control.Version, ent.Control.Architecture, ent.Digest).Scan(&present); err != nil {
+				return err
+			}
+			if present {
 				return nil
 			}
 		}
 		entries = append(entries, ent)
-		totalBytes += ent.Size
+		if existing, err := h.deps.DEBPackages.FindByDigest(ctx, repoID, ent.Digest); err != nil || existing == nil {
+			totalBytes += ent.Size
+		}
 		return nil
 	}
 	// Iterate ParseUpstream over each suite the
@@ -394,7 +404,7 @@ func (h *SyncHandler) fail(ctx context.Context, repoID int64, pl SyncPayload, st
 func (h *SyncHandler) fetchAndCommit(ctx context.Context, projectName string, repo *metadata.Repo, ent UpstreamEntry, creds AuthCreds, progress *jobs.ProgressWriter, step string, accumulatedDone *int64, totalBytes int64) (int64, error) {
 	if ent.Digest != "" {
 		if existing, ferr := h.deps.DEBPackages.FindByDigest(ctx, repo.ID, ent.Digest); ferr == nil && existing != nil {
-			return 0, nil
+			return 0, h.commitMembership(ctx, repo, ent, existing.SizeBytes, existing.Digest, existingPoolPath(existing))
 		}
 	}
 	tmpFile, size, dgst, err := upstreamfetch.DownloadToTemp(ctx, h.deps.HTTPClient, ent.Path, creds,
@@ -412,9 +422,8 @@ func (h *SyncHandler) fetchAndCommit(ctx context.Context, projectName string, re
 		return 0, fmt.Errorf("apt_sync: digest mismatch on %s", ent.Filename)
 	}
 	if existing, ferr := h.deps.DEBPackages.FindByDigest(ctx, repo.ID, digest); ferr == nil && existing != nil {
-		return 0, nil
+		return 0, h.commitMembership(ctx, repo, ent, existing.SizeBytes, existing.Digest, existingPoolPath(existing))
 	}
-
 	// Pool-relative storage key reuses the deb handler convention.
 	// Consult dists/<suite>/Release for layout hints before falling
 	// back to filename-based inference. ent.Suite defaults to "stable"
@@ -428,45 +437,7 @@ func (h *SyncHandler) fetchAndCommit(ctx context.Context, projectName string, re
 
 	// Resolve / upsert apt_suites row, then insert deb_packages.
 	_, err = h.deps.Path.Replace(ctx, storageKey, tmpFile, func(int64) error {
-		return h.deps.DB.WriteTx(ctx, func(tx *sql.Tx) error {
-			suiteID, err := h.deps.AptSuites.Insert(ctx, tx, repo.ID, ent.Suite, ent.Component, ent.Arch)
-			if err != nil {
-				return err
-			}
-			if _, err := h.deps.DEBPackages.Insert(ctx, tx, &metadata.DEBPackage{
-				RepoID:       repo.ID,
-				SuiteID:      suiteID,
-				Package:      ent.Control.Package,
-				Version:      ent.Control.Version,
-				Architecture: ent.Control.Architecture,
-				Maintainer:   ent.Control.Maintainer,
-				Section:      ent.Control.Section,
-				Priority:     ent.Control.Priority,
-				Depends:      ent.Control.Depends,
-				Description:  ent.Control.Description,
-				SizeBytes:    size,
-				Digest:       digest,
-				Filename:     ent.Filename,
-				// Persist the real pool path so regen.go emits it
-				// verbatim as the Filename field. `rest` already matches the
-				// on-disk layout relPoolPath() just computed.
-				StoragePoolPath: rest,
-			}); err != nil {
-				return err
-			}
-			if err := metadata.IndexDEBDelete(ctx, tx, repo.ID, ent.Control.Package, ent.Control.Version, ent.Control.Architecture); err != nil {
-				return err
-			}
-			if err := metadata.IndexDEB(ctx, tx, repo.ID, ent.Control.Package, ent.Control.Version, ent.Control.Architecture, ent.Control.Description); err != nil {
-				return err
-			}
-			if repo.AutoScan && h.deps.Scans != nil {
-				if _, err := h.deps.Scans.Enqueue(ctx, tx, repo.ID, "deb", ent.Filename); err != nil {
-					return err
-				}
-			}
-			return h.deps.Repos.SetMetadataState(ctx, tx, repo.ID, metadata.MetadataStateDirty)
-		})
+		return h.commitMembership(ctx, repo, ent, size, digest, rest)
 	})
 	if err != nil {
 		return 0, fmt.Errorf("apt_sync: commit %s: %w", ent.Filename, err)
@@ -497,4 +468,53 @@ func truncateErr(s string) string {
 		return s
 	}
 	return s[:max] + "...[truncated]"
+}
+
+func (h *SyncHandler) commitMembership(ctx context.Context, repo *metadata.Repo, ent UpstreamEntry, size int64, digest, rest string) error {
+	return h.deps.DB.WriteTx(ctx, func(tx *sql.Tx) error {
+		suiteID, err := h.deps.AptSuites.Insert(ctx, tx, repo.ID, ent.Suite, ent.Component, ent.Arch)
+		if err != nil {
+			return err
+		}
+		if _, err := h.deps.DEBPackages.Insert(ctx, tx, &metadata.DEBPackage{
+			RepoID:       repo.ID,
+			SuiteID:      suiteID,
+			Package:      ent.Control.Package,
+			Version:      ent.Control.Version,
+			Architecture: ent.Control.Architecture,
+			Maintainer:   ent.Control.Maintainer,
+			Section:      ent.Control.Section,
+			Priority:     ent.Control.Priority,
+			Depends:      ent.Control.Depends,
+			Description:  ent.Control.Description,
+			SizeBytes:    size,
+			Digest:       digest,
+			Filename:     ent.Filename,
+			// Persist the real pool path so regen.go emits it
+			// verbatim as the Filename field. `rest` already matches the
+			// on-disk layout relPoolPath() just computed.
+			StoragePoolPath: rest,
+		}); err != nil {
+			return err
+		}
+		if err := metadata.IndexDEBDelete(ctx, tx, repo.ID, ent.Control.Package, ent.Control.Version, ent.Control.Architecture); err != nil {
+			return err
+		}
+		if err := metadata.IndexDEB(ctx, tx, repo.ID, ent.Control.Package, ent.Control.Version, ent.Control.Architecture, ent.Control.Description); err != nil {
+			return err
+		}
+		if repo.AutoScan && h.deps.Scans != nil {
+			if _, err := h.deps.Scans.Enqueue(ctx, tx, repo.ID, "deb", ent.Filename); err != nil {
+				return err
+			}
+		}
+		return h.deps.Repos.SetMetadataState(ctx, tx, repo.ID, metadata.MetadataStateDirty)
+	})
+}
+
+func existingPoolPath(p *metadata.DEBPackage) string {
+	if p.StoragePoolPath != "" {
+		return p.StoragePoolPath
+	}
+	return p.Filename
 }

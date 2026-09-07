@@ -4,20 +4,12 @@
 // super-admin via POST /api/v1/admin/gc. The algorithm is mark-and-sweep,
 // single-pass per run:
 //
-//  1. Snapshot blob_uploads digest set into an in-memory map. This BEFORE
-//     iterating any candidates is the race-proof guarantee:
-//     because the OCI PUT path inserts blob_uploads.Start BEFORE
-//     cas.PutFromPath, a digest the snapshot misses is
-//     guaranteed to either still be in the upload session (CAS file not
-//     yet promoted) OR already promoted into docker_blobs (then protected
-//     by ref_count > 0 or last_touched_at quiescence).
-//  2. Read GC candidates from docker_blobs (ref_count==0 AND
-//     last_touched_at < now - quiescence).
-//  3. For each candidate NOT in the snapshot: DELETE the docker_blobs row
-//     guarded by ref_count==0 FIRST, then cas.Delete(digest) only when the
-//     row was actually removed (serialises against a concurrent IncRef
-//     so GC can never delete a file out from under a re-referenced blob).
-//     Per-file failures logged at WARN, run continues (best-effort).
+//  1. Snapshot active uploads and enumerate quiescent zero-ref candidates.
+//  2. For each candidate, acquire the shared CAS digest lifecycle lock.
+//  3. Recheck upload markers, age and refcount inside the writer transaction,
+//     delete the row, then unlink while still holding the digest lock. CAS
+//     Put/PutFromPath use the same lock before their deduplication check so
+//     re-publication cannot race with a pending GC unlink.
 //  4. Sweep trash entries older than retention (best-effort).
 //  5. Prune blob_upload_sessions older than now and remove their tmp
 //     upload files at <DataRoot>/tmp/uploads/<uuid>.
@@ -98,7 +90,7 @@ func (g *GCHandler) Handle(ctx context.Context, jobID int64) error {
 	var report GCReport
 
 	// Step 1: snapshot blob_uploads.Active into an in-memory set BEFORE
-	// touching docker_blobs. This is the race gate.
+	// touching docker_blobs. The transactional recheck remains authoritative.
 	activeDigests, err := g.BlobUploads.Active(ctx)
 	if err != nil {
 		return fmt.Errorf("gc: snapshot blob_uploads: %w", err)
@@ -120,60 +112,36 @@ func (g *GCHandler) Handle(ctx context.Context, jobID int64) error {
 		if _, inFlight := snapshot[c.Digest]; inFlight {
 			continue
 		}
-		// Order: guarded row DELETE FIRST, then cas.Delete only if the row was
-		// actually removed. Deleting the CAS file first opened a TOCTOU:
-		// between GCCandidates (reader pool) and cas.Delete a concurrent
-		// manifest push could IncRef this quiescent blob (re-referencing a
-		// promoted, ref_count=0 base layer — that path skips blob_uploads.Start
-		// because HEAD already returned 200, so the snapshot misses it). The
-		// file would then be deleted while ref_count became 1 and the guarded
-		// row delete no-op'd, leaving a docker_blobs row pointing at a missing
-		// file (dangling reference → pull 404). By deleting the row under
-		// ref_count=0 FIRST, the writer tx serialises against IncRef: a
-		// concurrent IncRef either commits before us (RowsAffected=0 → we skip
-		// cas.Delete, blob preserved) or after (it finds no row and the push
-		// fails cleanly, re-uploading the blob). Worst case on a cas.Delete
-		// error after the row is gone is a harmless orphan file (no row points
-		// at it) — the opposite, and far safer than, a dangling reference.
-		var deleted bool
-		txErr := g.DB.WriteTx(ctx, func(tx *sql.Tx) error {
-			// Re-check blob_uploads ATOMICALLY inside the writer tx, not just
-			// against the pre-loop snapshot: an upload (or re-upload) that
-			// registered its blob_uploads marker AFTER the snapshot would
-			// otherwise be missed, and the guarded delete could remove a blob
-			// whose referencing manifest PUT is still in flight. The predicate
-			// mirrors BlobUploadsRepo.Active (expires_at >= now).
-			res, err := tx.ExecContext(ctx,
-				`DELETE FROM docker_blobs
-				   WHERE digest=? AND ref_count=0
-				     AND NOT EXISTS (
-				       SELECT 1 FROM blob_uploads WHERE digest=? AND expires_at >= ?
-				     )`,
-				c.Digest, c.Digest, time.Now().UTC())
-			if err != nil {
+		err := storage.CASLifecycle(ctx, c.Digest, func(ctx context.Context) error {
+			var deleted bool
+			if err := g.DB.WriteTx(ctx, func(tx *sql.Tx) error {
+				res, err := tx.ExecContext(ctx, `DELETE FROM docker_blobs
+                    WHERE digest=? AND ref_count=0
+                    AND last_touched_at < datetime('now', ?)
+                    AND NOT EXISTS (SELECT 1 FROM blob_uploads WHERE digest=? AND expires_at >= ?)`,
+					c.Digest, fmt.Sprintf("-%d seconds", int64(g.Quiescence.Seconds())), c.Digest, time.Now().UTC())
+				if err != nil {
+					return err
+				}
+				n, err := res.RowsAffected()
+				deleted = n > 0
+				return err
+			}); err != nil {
 				return err
 			}
-			n, _ := res.RowsAffected()
-			deleted = n > 0
+			if !deleted {
+				return nil
+			}
+			if err := g.CAS.Delete(ctx, c.Digest); err != nil {
+				return err
+			}
+			report.BlobsDeleted++
+			report.BytesFreed += c.SizeBytes
 			return nil
 		})
-		if txErr != nil {
-			slog.WarnContext(ctx, "gc.row.delete.failed",
-				"digest", c.Digest, "err", txErr)
-			continue
+		if err != nil {
+			slog.WarnContext(ctx, "gc.blob.delete.failed", "digest", c.Digest, "err", err)
 		}
-		if !deleted {
-			// Re-referenced (or already gone) since the snapshot — leave the
-			// file in place; it is no longer an orphan.
-			continue
-		}
-		if delErr := g.CAS.Delete(ctx, c.Digest); delErr != nil {
-			slog.WarnContext(ctx, "gc.cas.delete.failed_after_row_delete",
-				"digest", c.Digest, "err", delErr)
-			continue
-		}
-		report.BlobsDeleted++
-		report.BytesFreed += c.SizeBytes
 	}
 
 	// Step 4: trash retention sweep.

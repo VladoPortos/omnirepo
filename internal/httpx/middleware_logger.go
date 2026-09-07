@@ -77,6 +77,12 @@ func newLogger(cfg config.Config) *slog.Logger {
 	return slog.New(slog.NewJSONHandler(os.Stderr, hopts))
 }
 
+// ConfigureLogging applies the configured format and level to application logs
+// as well as the access logger. Call once during startup before boot work.
+func ConfigureLogging(cfg config.Config) {
+	slog.SetDefault(newLogger(cfg))
+}
+
 func parseLevel(s string) slog.Level {
 	switch strings.ToLower(s) {
 	case "debug":

@@ -88,6 +88,15 @@ func (h *Handler) blobMount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	owned, err := h.blobs.HasInRepo(r.Context(), src.ID, digest)
+	if err != nil {
+		writeOCIErr(w, http.StatusInternalServerError, ErrCodeUnknown, err)
+		return
+	}
+	if !owned {
+		h.blobUploadPost(w, r)
+		return
+	}
 	// Is the blob actually in CAS?
 	_, exists, err := h.cas.Stat(r.Context(), digest)
 	if err != nil {
@@ -114,18 +123,15 @@ func (h *Handler) blobMount(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err := h.db.WriteTx(r.Context(), func(tx *sql.Tx) error {
-		// Ensure the docker_blobs row exists (it should, since CAS has
-		// the bytes from a previous upload, but be robust against
-		// direct-CAS-import paths). If absent, upsert at ref_count=0
-		// with size=0 — the manifest PUT will refine it via Touch.
-		b, serr := h.blobs.Stat(r.Context(), digest)
-		if serr != nil {
-			return serr
+		owned, err := h.blobs.HasInRepoTx(r.Context(), tx, src.ID, digest)
+		if err != nil {
+			return err
 		}
-		if b == nil {
-			if err := h.blobs.UpsertZeroRef(r.Context(), tx, digest, 0); err != nil {
-				return err
-			}
+		if !owned {
+			return fmt.Errorf("source blob no longer available")
+		}
+		if err := h.blobs.Link(r.Context(), tx, dest.repo.ID, digest); err != nil {
+			return err
 		}
 		return h.blobs.Touch(r.Context(), tx, digest)
 	}); err != nil {

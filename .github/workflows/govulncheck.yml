@@ -6,9 +6,9 @@ name: govulncheck
 
 on:
   push:
-    branches: [main]
+    branches: [release]
   pull_request:
-    branches: [main]
+    branches: [release]
   schedule:
     - cron: "15 3 * * 1"
 

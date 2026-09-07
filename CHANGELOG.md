@@ -9,6 +9,29 @@ for security fixes against an active minor.
 
 ## [Unreleased]
 
+## [v1.1.1] — 2026-09-07
+
+### Security
+- Enforce repository ownership for OCI blobs and authorization for S3 copy sources.
+- Bind Git mirror credentials to their configured upstream host.
+- Count secret and UNKNOWN scan findings without persisting matched secret values.
+
+### Fixed
+- Preserve artifact bytes across failed S3/npm publications and concurrent OCI garbage collection.
+- Preserve DEB suite memberships/shared pool files and refresh PyPI hashes and yank metadata.
+- Load complete project lists, RAW directories, scan history and vulnerability reports.
+- Repair authenticated browser RAW uploads and Trivy pull completion polling.
+- Keep authentication and Git reads available in maintenance mode; apply configured application logging and coalesce authentication timestamps.
+- Include all protocol tables in development resets.
+
+### Changed
+- Use `release` as the default integration branch and require exact-commit CI before publishing release images.
+- Prevent prerelease and older tags from replacing stable image aliases; run frontend and strict browser checks in CI.
+
+### Upgrade notes
+- Migration 044 derives OCI blob ownership from stored manifests. Legacy uploads without manifest references may require re-upload.
+- Migration 045 persists PyPI yank metadata. Existing unsupported S3 path aliases may need manual recovery; already-lost bytes cannot be reconstructed by these repairs.
+
 ## [v1.1.0] — 2026-06-10
 
 Three new hosted repository types (Go module proxy, npm registry, Maven),

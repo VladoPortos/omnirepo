@@ -684,6 +684,7 @@ export interface DashboardScanFindings {
   high: number;
   medium?: number;
   low?: number;
+  unknown?: number;
 }
 
 export interface DashboardActivityItem {

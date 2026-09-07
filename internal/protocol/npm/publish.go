@@ -1,6 +1,7 @@
 package npm
 
 import (
+	"bytes"
 	"crypto/sha1" //nolint:gosec // npm's wire format mandates sha1 shasums
 	"crypto/sha512"
 	"database/sql"
@@ -17,6 +18,7 @@ import (
 	"github.com/vladoportos/omnirepo/internal/audit"
 	"github.com/vladoportos/omnirepo/internal/auth"
 	"github.com/vladoportos/omnirepo/internal/metadata"
+	"github.com/vladoportos/omnirepo/internal/storage"
 )
 
 // publishBody mirrors the JSON document `npm publish` PUTs: the package
@@ -140,41 +142,53 @@ func (h *Handler) publish(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Immutability + concurrency: the row insert is the gate. The UNIQUE
-	// (repo, name, version) constraint serializes concurrent publishes of
-	// the same version — the loser maps to 403 below and never touches
-	// the tarball path. (A write-tarball-then-insert ordering had a race
-	// where the loser overwrote the winner's tarball bytes and then
-	// rollback-deleted the path the winner's committed row references.)
-	var rowID int64
-	if err := h.db.WriteTx(r.Context(), func(tx *sql.Tx) error {
-		id, err := h.packages.Insert(r.Context(), tx, &metadata.NPMPackage{
-			RepoID:      res.repo.ID,
-			Name:        res.req.Name,
-			Version:     version,
-			Description: dist.Description,
-			VersionJSON: string(manifestRaw),
-			Tarball:     wantFile,
-			SizeBytes:   int64(len(tarball)),
-			Shasum:      shasum,
-			Integrity:   integrity,
-		})
-		if err != nil {
-			return err
+	// Serialize publication and deletion before checking immutability. Stage
+	// bytes before metadata becomes visible, and let Replace roll back the
+	// payload if the metadata transaction fails (including cancellation).
+	mu := h.writeLocks.For(storage.RepoKey{Project: res.project.Name, Type: "npm", Repo: res.repo.Name})
+	mu.Lock()
+	defer mu.Unlock()
+	if _, err := h.packages.FindByNameVersion(r.Context(), res.repo.ID, res.req.Name, version); !errors.Is(err, metadata.ErrNotFound) {
+		if err == nil {
+			h.auditEvent(r, audit.EvtNPMUpload, res.req.Name+"@"+version, "rejected", map[string]any{
+				"project": res.project.Name, "repo": res.repo.Name, "reason": "version_exists",
+			})
+			http.Error(w, "cannot publish over existing version", http.StatusForbidden)
+		} else {
+			http.Error(w, "storage error", http.StatusInternalServerError)
 		}
-		rowID = id
-		for tag, v := range body.DistTags {
-			if v != version || tag == "" {
-				continue // tags may only point at the version being published
-			}
-			if err := h.packages.SetDistTag(r.Context(), tx, res.repo.ID, res.req.Name, tag, version); err != nil {
+		return
+	}
+	storageKey := storageKeyFor(res.project.Name, res.repo.Name, res.req.Name, wantFile)
+	if _, err := h.pathStore.Replace(r.Context(), storageKey, bytes.NewReader(tarball), func(size int64) error {
+		return h.db.WriteTx(r.Context(), func(tx *sql.Tx) error {
+			_, err := h.packages.Insert(r.Context(), tx, &metadata.NPMPackage{
+				RepoID:      res.repo.ID,
+				Name:        res.req.Name,
+				Version:     version,
+				Description: dist.Description,
+				VersionJSON: string(manifestRaw),
+				Tarball:     wantFile,
+				SizeBytes:   size,
+				Shasum:      shasum,
+				Integrity:   integrity,
+			})
+			if err != nil {
 				return err
 			}
-		}
-		if err := metadata.IndexArtifactDelete(r.Context(), tx, res.repo.ID, integrity); err != nil {
-			return err
-		}
-		return metadata.IndexArtifact(r.Context(), tx, res.repo.ID, res.req.Name, version, integrity)
+			for tag, v := range body.DistTags {
+				if v != version || tag == "" {
+					continue // tags may only point at the version being published
+				}
+				if err := h.packages.SetDistTag(r.Context(), tx, res.repo.ID, res.req.Name, tag, version); err != nil {
+					return err
+				}
+			}
+			if err := metadata.IndexArtifactDelete(r.Context(), tx, res.repo.ID, integrity); err != nil {
+				return err
+			}
+			return metadata.IndexArtifact(r.Context(), tx, res.repo.ID, res.req.Name, version, integrity)
+		})
 	}); err != nil {
 		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
 			h.auditEvent(r, audit.EvtNPMUpload, res.req.Name+"@"+version, "rejected", map[string]any{
@@ -186,30 +200,6 @@ func (h *Handler) publish(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		slog.ErrorContext(r.Context(), "npm.publish.commit_failed",
-			slog.String("incident_id", chimw.GetReqID(r.Context())),
-			slog.String("package", res.req.Name),
-			slog.Any("err", err),
-		)
-		http.Error(w, "storage error", http.StatusInternalServerError)
-		return
-	}
-
-	// Row committed → this request owns the tarball path; write it.
-	storageKey := storageKeyFor(res.project.Name, res.repo.Name, res.req.Name, wantFile)
-	if _, err := h.pathStore.Put(r.Context(), storageKey, strings.NewReader(string(tarball))); err != nil {
-		// Compensate: remove the row so the version can be re-published —
-		// a row without its tarball would be permanently broken under the
-		// immutability rule.
-		_ = h.db.WriteTx(r.Context(), func(tx *sql.Tx) error {
-			if derr := h.packages.Delete(r.Context(), tx, rowID); derr != nil {
-				return derr
-			}
-			if derr := h.packages.DeleteDistTagsPointingAt(r.Context(), tx, res.repo.ID, res.req.Name, version); derr != nil {
-				return derr
-			}
-			return metadata.IndexArtifactDelete(r.Context(), tx, res.repo.ID, integrity)
-		})
-		slog.ErrorContext(r.Context(), "npm.publish.storage_failed",
 			slog.String("incident_id", chimw.GetReqID(r.Context())),
 			slog.String("package", res.req.Name),
 			slog.Any("err", err),

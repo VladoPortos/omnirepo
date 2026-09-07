@@ -4,6 +4,7 @@
  */
 
 import { useState, useMemo } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { useParams } from 'react-router-dom';
 import {
   Folder,
@@ -61,6 +62,7 @@ interface RawRepoPageProps {
 }
 
 export function RawRepoPage({ repo }: RawRepoPageProps) {
+  const queryClient = useQueryClient();
   const { name: projectName } = useParams<{ name: string }>();
   const [currentPath, setCurrentPath] = useState('');
   const [filter, setFilter] = useState('');
@@ -73,7 +75,7 @@ export function RawRepoPage({ repo }: RawRepoPageProps) {
   const canUpload = isMaintainer;
   const hostname = window.location.host;
 
-  const { data: contentRows } = useRepoContent(projectName ?? '', 'raw', repo.name);
+  const { data: contentRows, isLoading: contentLoading, isError: contentError } = useRepoContent(projectName ?? '', 'raw', repo.name);
   // Per-file rescan. Raw uses the file path as artifact_id (see put.go),
   // so we key busy state on path instead of a numeric id.
   const rescanRow = useRescanArtifact(projectName ?? '', 'raw', repo.name);
@@ -294,10 +296,14 @@ export function RawRepoPage({ repo }: RawRepoPageProps) {
   const handleUpload = async (file: File, onProgress: (pct: number) => void) => {
     const uploadPath = currentPath ? `${currentPath}/${file.name}` : file.name;
     await api.upload(
-      `/projects/${encodeURIComponent(projectName ?? '')}/repos/raw/${encodeURIComponent(repo.name)}/artifacts/${uploadPath}`,
+      `/projects/${encodeURIComponent(projectName ?? '')}/repos/raw/${encodeURIComponent(repo.name)}/artifacts/${uploadPath.split('/').map(encodeURIComponent).join('/')}`,
       file,
       onProgress,
     );
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ['repo-content', projectName, 'raw', repo.name] }),
+      queryClient.invalidateQueries({ queryKey: ['projects', projectName, 'repos', 'raw', repo.name] }),
+    ]);
   };
 
   return (
@@ -367,7 +373,11 @@ export function RawRepoPage({ repo }: RawRepoPageProps) {
         {/* File listing — empty state when repo has no artifacts at all.
             Per-subdirectory emptiness keeps the informational inline
             message since snippets don't help within a specific subpath. */}
-        {!currentPath && (contentRows?.length ?? 0) === 0 ? (
+        {contentLoading ? (
+          <p role="status" className="py-8 text-sm text-muted-foreground">Loading files…</p>
+        ) : contentError ? (
+          <p role="alert" className="py-8 text-sm text-destructive">Failed to load files. Refresh to try again.</p>
+        ) : !currentPath && (contentRows?.length ?? 0) === 0 ? (
           canUpload ? (
             <EmptyState
               icon={Terminal}

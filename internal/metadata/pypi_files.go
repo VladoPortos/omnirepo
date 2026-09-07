@@ -19,6 +19,8 @@ type PyPIFile struct {
 	Filename          string
 	Kind              string
 	RequiresPython    string
+	Yanked            bool
+	YankedReason      string
 	SizeBytes         int64
 	Digest            string
 	CoreMetadataJSON  string
@@ -50,8 +52,8 @@ func (r *PyPIFilesRepo) Insert(ctx context.Context, tx *sql.Tx, p *PyPIFile) (in
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO pypi_files(
 			repo_id, project_normalized, version, filename, kind,
-			requires_python, size_bytes, digest, core_metadata_json
-		) VALUES (?,?,?,?,?,?,?,?,?)
+			requires_python, size_bytes, digest, core_metadata_json, yanked, yanked_reason
+		) VALUES (?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(repo_id, filename) DO UPDATE SET
 			project_normalized = excluded.project_normalized,
 			version            = excluded.version,
@@ -60,9 +62,11 @@ func (r *PyPIFilesRepo) Insert(ctx context.Context, tx *sql.Tx, p *PyPIFile) (in
 			size_bytes         = excluded.size_bytes,
 			digest             = excluded.digest,
 			core_metadata_json = excluded.core_metadata_json,
+			yanked = excluded.yanked,
+			yanked_reason = excluded.yanked_reason,
 			uploaded_at        = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
 	`, p.RepoID, p.ProjectNormalized, p.Version, p.Filename, p.Kind,
-		p.RequiresPython, p.SizeBytes, p.Digest, coreMeta); err != nil {
+		p.RequiresPython, p.SizeBytes, p.Digest, coreMeta, p.Yanked, p.YankedReason); err != nil {
 		return 0, fmt.Errorf("pypi_files: upsert: %w", err)
 	}
 	var id int64
@@ -101,7 +105,7 @@ func (r *PyPIFilesRepo) FindByFilename(ctx context.Context, repoID int64, filena
 func (r *PyPIFilesRepo) FindByFilenameTx(ctx context.Context, tx *sql.Tx, repoID int64, filename string) (*PyPIFile, error) {
 	row := tx.QueryRowContext(ctx, `
 		SELECT id, repo_id, project_normalized, version, filename, kind,
-		       requires_python, size_bytes, digest, core_metadata_json, uploaded_at
+		       requires_python, size_bytes, digest, core_metadata_json, yanked, yanked_reason, uploaded_at
 		FROM pypi_files WHERE repo_id=? AND filename=?
 	`, repoID, filename)
 	p, err := scanPyPIFile(row)
@@ -124,7 +128,7 @@ func (r *PyPIFilesRepo) FindByDigest(ctx context.Context, repoID int64, digest s
 func (r *PyPIFilesRepo) ListByProject(ctx context.Context, repoID int64, projectNormalized string) ([]PyPIFile, error) {
 	rows, err := r.db.Reader.QueryContext(ctx, `
 		SELECT id, repo_id, project_normalized, version, filename, kind,
-		       requires_python, size_bytes, digest, core_metadata_json, uploaded_at
+		       requires_python, size_bytes, digest, core_metadata_json, yanked, yanked_reason, uploaded_at
 		FROM pypi_files WHERE repo_id=? AND project_normalized=?
 		ORDER BY version DESC, filename
 	`, repoID, projectNormalized)
@@ -149,7 +153,7 @@ func (r *PyPIFilesRepo) ListByProject(ctx context.Context, repoID int64, project
 func (r *PyPIFilesRepo) ListByRepo(ctx context.Context, repoID int64) ([]PyPIFile, error) {
 	rows, err := r.db.Reader.QueryContext(ctx, `
 		SELECT id, repo_id, project_normalized, version, filename, kind,
-		       requires_python, size_bytes, digest, core_metadata_json, uploaded_at
+		       requires_python, size_bytes, digest, core_metadata_json, yanked, yanked_reason, uploaded_at
 		FROM pypi_files WHERE repo_id=?
 		ORDER BY project_normalized, version DESC, filename
 	`, repoID)
@@ -193,7 +197,7 @@ func (r *PyPIFilesRepo) ListProjects(ctx context.Context, repoID int64) ([]strin
 func (r *PyPIFilesRepo) scanOne(ctx context.Context, where string, args ...any) (*PyPIFile, error) {
 	row := r.db.Reader.QueryRowContext(ctx, `
 		SELECT id, repo_id, project_normalized, version, filename, kind,
-		       requires_python, size_bytes, digest, core_metadata_json, uploaded_at
+		       requires_python, size_bytes, digest, core_metadata_json, yanked, yanked_reason, uploaded_at
 		FROM pypi_files WHERE `+where, args...)
 	p, err := scanPyPIFile(row)
 	if err != nil {
@@ -210,10 +214,16 @@ func scanPyPIFile(rs scanner) (*PyPIFile, error) {
 	var uploaded string
 	if err := rs.Scan(
 		&p.ID, &p.RepoID, &p.ProjectNormalized, &p.Version, &p.Filename, &p.Kind,
-		&p.RequiresPython, &p.SizeBytes, &p.Digest, &p.CoreMetadataJSON, &uploaded,
+		&p.RequiresPython, &p.SizeBytes, &p.Digest, &p.CoreMetadataJSON, &p.Yanked, &p.YankedReason, &uploaded,
 	); err != nil {
 		return nil, err
 	}
 	p.UploadedAt, _ = time.Parse("2006-01-02T15:04:05.000Z", uploaded)
 	return &p, nil
+}
+
+// SetYanked updates release availability without replacing artifact bytes.
+func (r *PyPIFilesRepo) SetYanked(ctx context.Context, tx *sql.Tx, repoID int64, filename string, yanked bool, reason string) error {
+	_, err := tx.ExecContext(ctx, `UPDATE pypi_files SET yanked=?, yanked_reason=? WHERE repo_id=? AND filename=?`, yanked, reason, repoID, filename)
+	return err
 }

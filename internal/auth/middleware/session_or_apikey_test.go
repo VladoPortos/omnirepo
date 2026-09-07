@@ -98,6 +98,73 @@ func TestBearerAPIKeyUpdatesLastUsedAt(t *testing.T) {
 	}
 }
 
+func TestAPIKeyUsageTimestampIsCoalesced(t *testing.T) {
+	e := newEnv(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	e.Deps.Clock = func() time.Time { return now }
+	h := middleware.SessionOrAPIKey(e.Deps)(okHandler())
+	request := func() time.Time {
+		req := httptest.NewRequest("GET", "/", nil)
+		req.Header.Set("Authorization", "Bearer "+e.AliceAPIKey.Plaintext)
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		if w.Code != 200 {
+			t.Fatalf("status=%d", w.Code)
+		}
+		row, err := e.APIKeys.FindByPrefixSha(context.Background(), e.AliceAPIKey.Prefix, e.AliceAPIKey.SHA256)
+		if err != nil || row.LastUsedAt == nil {
+			t.Fatalf("timestamp lookup: %v", err)
+		}
+		return *row.LastUsedAt
+	}
+	first := request()
+	now = now.Add(10 * time.Second)
+	if got := request(); !got.Equal(first) {
+		t.Fatal("frequent request rewrote usage timestamp")
+	}
+	now = now.Add(time.Minute)
+	if got := request(); !got.Equal(now) {
+		t.Fatal("usage timestamp was not refreshed")
+	}
+}
+
+func TestSessionActivityTimestampIsCoalesced(t *testing.T) {
+	e := newEnv(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	e.Deps.Clock = func() time.Time { return now }
+	s, err := auth.GenerateSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.Sessions.Create(context.Background(), e.AliceID, s.Prefix, s.SHA256, now.Add(-time.Hour), now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	h := middleware.SessionOrAPIKey(e.Deps)(okHandler())
+	request := func() time.Time {
+		req := httptest.NewRequest("GET", "/", nil)
+		req.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: s.Plaintext})
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		if w.Code != 200 {
+			t.Fatalf("status=%d", w.Code)
+		}
+		row, err := e.Sessions.FindByPrefixSha(context.Background(), s.Prefix, s.SHA256)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return row.LastSeenAt
+	}
+	first := request()
+	now = now.Add(10 * time.Second)
+	if got := request(); !got.Equal(first) {
+		t.Fatal("frequent request rewrote session timestamp")
+	}
+	now = now.Add(time.Minute)
+	if got := request(); !got.Equal(now) {
+		t.Fatal("session timestamp was not refreshed")
+	}
+}
+
 // TestBasicAPIKeySuccess covers that /api/v1 must accept HTTP Basic with an
 // API key in the password field (the same shape accepted by protocol
 // endpoints via BasicOrAPIKey).

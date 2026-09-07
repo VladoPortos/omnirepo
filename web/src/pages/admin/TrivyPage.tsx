@@ -15,6 +15,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Progress } from '@/components/ui/progress';
 import { toast } from 'sonner';
 import { formatDate, formatDurationSeconds } from '@/lib/format';
+import { completedPull, supersededPull, type PullRequestMarker } from '@/lib/trivy-pull';
 import {
   Database,
   Upload,
@@ -117,6 +118,7 @@ export default function TrivyPage() {
   const [polling, setPolling] = useState(false);
   const { data: pullStatus } = useTrivyDBPullStatus(polling);
   const lastStateRef = useRef<TrivyDBPullStatus['state'] | undefined>(undefined);
+  const pullRequestRef = useRef<PullRequestMarker | null>(null);
 
   // A pull is in flight when the operator just started one (polling) or
   // the backend reports one running (e.g. page mounted mid-pull; the
@@ -140,29 +142,42 @@ export default function TrivyPage() {
     const cur = pullStatus?.state;
     if (!cur) return;
     lastStateRef.current = cur;
-    if (prev === 'running' && cur === 'success') {
+    if (pullRequestRef.current && !polling) return;
+    if (!completedPull(pullStatus, prev, pullRequestRef.current)) return;
+    const superseded = supersededPull(pullStatus, pullRequestRef.current);
+    pullRequestRef.current = null;
+    if (superseded) {
+      toast.info(`A newer Trivy database pull ${cur === 'success' ? 'succeeded' : 'failed'}. The result of your requested pull is no longer available.`);
+    } else if (cur === 'success') {
       toast.success('Trivy database updated from the internet.');
-      qc.invalidateQueries({ queryKey: ['admin', 'trivy'] });
-      setPolling(false);
-    } else if (prev === 'running' && cur === 'failure') {
+    } else if (cur === 'failure') {
       toast.error(
         pullStatus?.error ??
           'Failed to pull Trivy DB. See the Trivy Database page for details.',
       );
-      setPolling(false);
     }
-  }, [pullStatus?.state, pullStatus?.error, qc]);
+    qc.invalidateQueries({ queryKey: ['admin', 'trivy'] });
+    setPolling(false);
+  }, [pullStatus, polling, qc]);
 
   const handlePull = useCallback(async () => {
+    pullRequestRef.current = { previousStartedAt: pullStatus?.started_at };
     try {
-      await pullStart.mutateAsync();
+      const started = await pullStart.mutateAsync();
+      pullRequestRef.current = { previousStartedAt: pullStatus?.started_at, expectedStartedAt: started.started_at };
       setPolling(true);
+      qc.invalidateQueries({ queryKey: ['admin', 'trivy', 'pull-status'] });
     } catch (err) {
       if (err instanceof ApiError && err.status === 409) {
         // Another pull is already running — just start polling it.
+        if (pullStatus?.state === 'running') {
+          pullRequestRef.current = { expectedStartedAt: pullStatus.started_at };
+        }
         setPolling(true);
+        qc.invalidateQueries({ queryKey: ['admin', 'trivy', 'pull-status'] });
         return;
       }
+      pullRequestRef.current = null;
       if (err instanceof ApiError && (err.status === 0 || err.status >= 500)) {
         toast.error(
           'Unable to start the Trivy DB pull. Check that the server is reachable.',
@@ -171,7 +186,7 @@ export default function TrivyPage() {
         toast.error(err instanceof Error ? err.message : 'Failed to start pull');
       }
     }
-  }, [pullStart]);
+  }, [pullStart, pullStatus, qc]);
 
   const handleUpload = useCallback(
     async (file: File, onProgress: (pct: number) => void) => {

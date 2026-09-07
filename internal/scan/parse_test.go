@@ -36,6 +36,30 @@ func TestParseTrivyEmptyReturnsErr(t *testing.T) {
 	}
 }
 
+func TestParseTrivySecretsCountWithoutPersistingMatchedValue(t *testing.T) {
+	res, err := scan.ParseTrivyJSON([]byte(`{"Results":[{"Target":"config.env","Secrets":[
+		{"RuleID":"private-key","Title":"Private key","Severity":"CRITICAL","StartLine":3,"EndLine":6,"Match":"never-persist-this-secret","Code":{"Lines":[{"Content":"never-persist-this-secret"}]}},
+		{"RuleID":"future-rule","Severity":"UNRATED","StartLine":9}
+	]}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Summary["critical"] != 1 || res.Summary["unknown"] != 1 || len(res.Vulnerabilities) != 2 {
+		t.Fatalf("secret findings lost: %+v", res)
+	}
+	first := res.Vulnerabilities[0]
+	if first.CVEID != "SECRET-private-key" || first.Package != "config.env" || !strings.Contains(first.Description, "3") {
+		t.Fatalf("missing safe rule/location information: %+v", first)
+	}
+	encoded, err := json.Marshal(res)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "never-persist-this-secret") {
+		t.Fatal("matched secret persisted")
+	}
+}
+
 func TestParseTrivyMalformedJSONWraps(t *testing.T) {
 	_, err := scan.ParseTrivyJSON([]byte("{not-json"))
 	if err == nil {

@@ -3,6 +3,7 @@ package s3
 import (
 	"context"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -187,6 +188,10 @@ func RequireBucketAccess(lookup BucketProjectLookup) func(http.Handler) http.Han
 				return
 			}
 			if !found {
+				if r.Header.Get("X-Amz-Copy-Source") != "" {
+					writeAccessDenied(w)
+					return
+				}
 				// Let gofakes3 handle the NoSuchBucket error naturally.
 				next.ServeHTTP(w, r)
 				return
@@ -208,6 +213,33 @@ func RequireBucketAccess(lookup BucketProjectLookup) func(http.Handler) http.Han
 			if !allowed {
 				writeAccessDenied(w)
 				return
+			}
+			if source := r.Header.Get("X-Amz-Copy-Source"); source != "" {
+				// Mirror gofakes3.copyObject: split first, decode the entire
+				// value only when the slash separator itself was encoded.
+				parts := strings.SplitN(strings.TrimPrefix(source, "/"), "/", 2)
+				if len(parts) < 2 {
+					decoded, decodeErr := url.QueryUnescape(source)
+					if decodeErr != nil {
+						sigv4.WriteError(w, r, sigv4.ErrInvalidRequest)
+						return
+					}
+					parts = strings.SplitN(strings.TrimPrefix(decoded, "/"), "/", 2)
+				}
+				if len(parts) < 2 {
+					sigv4.WriteError(w, r, sigv4.ErrInvalidRequest)
+					return
+				}
+				sourceProject, exists, lookupErr := lookup(r.Context(), parts[0])
+				if lookupErr != nil {
+					sigv4.WriteError(w, r, sigv4.ErrInvalidRequest)
+					return
+				}
+				readAllowed, _ := auth.Can(r.Context(), actor, auth.ActionS3BucketRead, auth.Target{Kind: "bucket", ProjectID: sourceProject})
+				if !exists || !readAllowed {
+					writeAccessDenied(w)
+					return
+				}
 			}
 			next.ServeHTTP(w, r)
 		})

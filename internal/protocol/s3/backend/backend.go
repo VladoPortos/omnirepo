@@ -14,10 +14,9 @@
 //     intercepts, app shutdown, the orphan sweeper), ctx-aware variants
 //     exist instead (CreateMultipartUploadCtx, abortMultipartUploadCtx);
 //     add new ones in that style rather than new Background() sites.
-//   - Every write path uses storage.WriteAndRename so mid-stream client
-//     disconnects never leave partial files at the canonical key path.
-//   - Per-bucket writes are serialized via storage.Locks. Reads are
-//     lock-free — they go straight to the reader pool.
+//   - Object publication uses storage.PathStore.Replace so failed metadata
+//     commits restore the previous payload.
+//   - Per-bucket writes and metadata/file-open reads share storage.Locks.
 //   - PutObject computes sha256 + md5 in a single io.TeeReader stream.
 //     ETag for single-object put = hex(md5). MetadataJSON is the JSON
 //     serialization of the user-metadata header map.
@@ -173,8 +172,11 @@ func validateObjectKey(key string) error {
 	if strings.HasPrefix(key, "/") {
 		return gofakes3.ErrorMessage(gofakes3.ErrInvalidArgument, "key must not start with '/'")
 	}
+	if strings.Split(key, "/")[0] == ".tmp" {
+		return gofakes3.ErrorMessage(gofakes3.ErrInvalidArgument, "key uses a reserved storage directory")
+	}
 	for _, seg := range strings.Split(key, "/") {
-		if seg == ".." || seg == "." {
+		if seg == "" || seg == ".." || seg == "." || strings.ContainsAny(seg, "\\:") {
 			return gofakes3.ErrorMessage(gofakes3.ErrInvalidArgument, "key must not contain '.' or '..' segments")
 		}
 	}
@@ -436,9 +438,8 @@ func (b *Backend) ForceDeleteBucket(name string) error {
 	return nil
 }
 
-// PutObject streams the body via storage.WriteAndRename (atomic temp+rename)
-// and upserts the s3_objects row. Mid-stream errors leave NO file at the
-// canonical path and NO row in the DB.
+// PutObject publishes through PathStore.Replace and upserts the s3_objects
+// row. Failed writes preserve the previously committed payload and metadata.
 func (b *Backend) PutObject(bucketName, key string, meta map[string]string, input io.Reader, size int64, conditions *gofakes3.PutConditions) (gofakes3.PutObjectResult, error) {
 	ctx := context.Background()
 	if err := validateObjectKey(key); err != nil {
@@ -459,21 +460,15 @@ func (b *Backend) PutObject(bucketName, key string, meta map[string]string, inpu
 	// Conditional write check (If-Match / If-None-Match).
 	if conditions != nil {
 		existing, err := b.Objects.FindByBucketAndKey(ctx, id, key)
-		info := &gofakes3.ConditionalObjectInfo{}
-		switch {
-		case errors.Is(err, metadata.ErrNotFound):
-			info.Exists = false
-		case err != nil:
+		if err != nil && !errors.Is(err, metadata.ErrNotFound) {
 			return gofakes3.PutObjectResult{}, err
-		default:
-			info.Exists = true
-			// existing.ETag in storage may or may not be hex-only; treat as hex md5.
-			if h, hexErr := hex.DecodeString(stripQuotes(existing.ETag)); hexErr == nil {
-				info.Hash = h
-			}
 		}
-		if err := gofakes3.CheckPutConditions(conditions, info); err != nil {
-			return gofakes3.PutObjectResult{}, err
+		exists := err == nil
+		if conditions.IfNoneMatch != nil && *conditions.IfNoneMatch == "*" && exists {
+			return gofakes3.PutObjectResult{}, gofakes3.ErrPreconditionFailed
+		}
+		if conditions.IfMatch != nil && (!exists || (stripQuotes(*conditions.IfMatch) != "*" && stripQuotes(*conditions.IfMatch) != stripQuotes(existing.ETag))) {
+			return gofakes3.PutObjectResult{}, gofakes3.ErrPreconditionFailed
 		}
 	}
 
@@ -481,37 +476,32 @@ func (b *Backend) PutObject(bucketName, key string, meta map[string]string, inpu
 	md := md5.New()
 	tee := io.TeeReader(input, io.MultiWriter(h256, md))
 
-	dst := filepath.Join(b.bucketRoot(bucketName), filepath.FromSlash(key))
-	written, err := storage.WriteAndRename(ctx, b.tmpRoot(), dst, tee)
-	if err != nil {
-		return gofakes3.PutObjectResult{}, fmt.Errorf("backend: write: %w", err)
-	}
-
-	etag := hex.EncodeToString(md.Sum(nil))
-	sha := hex.EncodeToString(h256.Sum(nil))
-	metaJSON := marshalMeta(meta)
-	contentType := ""
-	if meta != nil {
-		contentType = meta["Content-Type"]
-		if contentType == "" {
-			contentType = meta["content-type"]
+	_, err = storage.NewPathStore(b.bucketRoot(bucketName)).Replace(ctx, key, tee, func(written int64) error {
+		etag := hex.EncodeToString(md.Sum(nil))
+		sha := hex.EncodeToString(h256.Sum(nil))
+		metaJSON := marshalMeta(meta)
+		contentType := ""
+		if meta != nil {
+			contentType = meta["Content-Type"]
+			if contentType == "" {
+				contentType = meta["content-type"]
+			}
 		}
-	}
 
-	if err := b.DB.WriteTx(ctx, func(tx *sql.Tx) error {
-		_, err := b.Objects.Upsert(ctx, tx, &metadata.S3Object{
-			BucketID:     id,
-			Key:          key,
-			SizeBytes:    written,
-			ETag:         etag,
-			ContentType:  contentType,
-			MetadataJSON: metaJSON,
-			SHA256:       sha,
+		return b.DB.WriteTx(ctx, func(tx *sql.Tx) error {
+			_, err := b.Objects.Upsert(ctx, tx, &metadata.S3Object{
+				BucketID:     id,
+				Key:          key,
+				SizeBytes:    written,
+				ETag:         etag,
+				ContentType:  contentType,
+				MetadataJSON: metaJSON,
+				SHA256:       sha,
+			})
+			return err
 		})
-		return err
-	}); err != nil {
-		// Best-effort: remove the file we just wrote since the row failed.
-		_ = os.Remove(dst)
+	})
+	if err != nil {
 		return gofakes3.PutObjectResult{}, fmt.Errorf("backend: upsert: %w", err)
 	}
 	_ = size // advisory; written is the source of truth
@@ -527,6 +517,9 @@ func (b *Backend) GetObject(bucketName, key string, rangeRequest *gofakes3.Objec
 	if err := validateObjectKey(key); err != nil {
 		return nil, err
 	}
+	mu := b.bucketLock(bucketName)
+	mu.Lock()
+	defer mu.Unlock()
 	ctx := context.Background()
 	id, ok, err := b.findBucketID(ctx, bucketName)
 	if err != nil {
@@ -564,7 +557,7 @@ func (b *Backend) GetObject(bucketName, key string, rangeRequest *gofakes3.Objec
 	hash, _ := hex.DecodeString(row.ETag)
 	return &gofakes3.Object{
 		Name:     key,
-		Metadata: enrichMetaWithLastModified(unmarshalMeta(row.MetadataJSON, row.ContentType), row.CreatedAt),
+		Metadata: objectMeta(row),
 		Size:     row.SizeBytes,
 		Contents: body,
 		Hash:     hash,
@@ -574,6 +567,12 @@ func (b *Backend) GetObject(bucketName, key string, rangeRequest *gofakes3.Objec
 
 // HeadObject returns the same metadata as GetObject without opening the body.
 func (b *Backend) HeadObject(bucketName, key string) (*gofakes3.Object, error) {
+	if err := validateObjectKey(key); err != nil {
+		return nil, err
+	}
+	mu := b.bucketLock(bucketName)
+	mu.Lock()
+	defer mu.Unlock()
 	ctx := context.Background()
 	id, ok, err := b.findBucketID(ctx, bucketName)
 	if err != nil {
@@ -592,7 +591,7 @@ func (b *Backend) HeadObject(bucketName, key string) (*gofakes3.Object, error) {
 	hash, _ := hex.DecodeString(row.ETag)
 	return &gofakes3.Object{
 		Name:     key,
-		Metadata: enrichMetaWithLastModified(unmarshalMeta(row.MetadataJSON, row.ContentType), row.CreatedAt),
+		Metadata: objectMeta(row),
 		Size:     row.SizeBytes,
 		Contents: io.NopCloser(bytes.NewReader(nil)),
 		Hash:     hash,
@@ -652,9 +651,33 @@ func (b *Backend) DeleteMulti(bucketName string, objects ...string) (gofakes3.Mu
 	return res, nil
 }
 
-// CopyObject is implemented via the stock Get+Put helper.
+// CopyObject streams Get+Put and returns the new destination's validator.
 func (b *Backend) CopyObject(srcBucket, srcKey, dstBucket, dstKey string, meta map[string]string) (gofakes3.CopyObjectResult, error) {
-	return gofakes3.CopyObject(b, srcBucket, srcKey, dstBucket, dstKey, meta)
+	obj, err := b.GetObject(srcBucket, srcKey, nil)
+	if err != nil {
+		return gofakes3.CopyObjectResult{}, err
+	}
+	defer func() { _ = obj.Contents.Close() }()
+	h := md5.New()
+	if _, err := b.PutObject(dstBucket, dstKey, meta, io.TeeReader(obj.Contents, h), obj.Size, nil); err != nil {
+		return gofakes3.CopyObjectResult{}, err
+	}
+	return gofakes3.CopyObjectResult{ETag: `"` + hex.EncodeToString(h.Sum(nil)) + `"`, LastModified: newContentTime(time.Now())}, nil
+}
+
+// OpaqueETagHeader carries the stored validator across gofakes3's MD5-only
+// Object interface. The HTTP bridge removes it before sending the response.
+const OpaqueETagHeader = "X-Omnirepo-Object-Etag"
+
+func objectMeta(row *metadata.S3Object) map[string]string {
+	m := enrichMetaWithLastModified(unmarshalMeta(row.MetadataJSON, row.ContentType), row.CreatedAt)
+	for k := range m {
+		if strings.EqualFold(k, OpaqueETagHeader) {
+			delete(m, k)
+		}
+	}
+	m[OpaqueETagHeader] = `"` + stripQuotes(row.ETag) + `"`
+	return m
 }
 
 // -- helpers --------------------------------------------------------------

@@ -2,12 +2,13 @@ package httpx
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/vladoportos/omnirepo/internal/httperr"
 	"github.com/vladoportos/omnirepo/internal/metadata"
 )
 
-// maintenanceToggleRoute is the one write endpoint that must bypass the
+// maintenanceToggleRoute is the administrative write endpoint that bypasses the
 // maintenance gate — otherwise enabling maintenance mode permanently bricks
 // the instance (the toggle itself is a POST). Admin auth is still enforced
 // downstream by authmw.RequireCan(ActionTriggerGC) on the handler.
@@ -15,9 +16,8 @@ const maintenanceToggleRoute = "/api/v1/admin/maintenance"
 
 // MaintenanceMode returns middleware that blocks write-method requests when the
 // settings table has maintenance_mode="true". GET, HEAD, OPTIONS always pass
-// through (reads allowed during maintenance). The maintenance-toggle
-// POST endpoint itself is also allowed through so operators can disable
-// maintenance from the UI.
+// through (reads allowed during maintenance). Authentication, the maintenance
+// toggle, and Git upload-pack POST reads also remain available.
 //
 // When settings is nil (test mode, backward compat) the middleware
 // passes through unconditionally.
@@ -30,11 +30,8 @@ func MaintenanceMode(settings *metadata.SettingsRepo) func(next http.Handler) ht
 				next.ServeHTTP(w, r)
 				return
 			}
-			// Self-unbrick: allow the POST that toggles maintenance so the
-			// operator can disable it once it's enabled. PUT/PATCH/DELETE
-			// on the same path stay gated (chi 405s them anyway since the
-			// handler only registers POST + GET, but be explicit).
-			if r.Method == http.MethodPost && r.URL.Path == maintenanceToggleRoute {
+			// Preserve administrative recovery and protocol reads.
+			if maintenanceRecoveryOrRead(r) {
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -61,4 +58,20 @@ func MaintenanceMode(settings *metadata.SettingsRepo) func(next http.Handler) ht
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// Authentication remains available so an administrator can recover an
+// instance after their session expires. Git upload-pack is a read RPC even
+// though the wire protocol uses POST. Match only the mounted route shapes.
+func maintenanceRecoveryOrRead(r *http.Request) bool {
+	if r.Method != http.MethodPost {
+		return false
+	}
+	switch r.URL.Path {
+	case maintenanceToggleRoute, "/api/v1/auth/login", "/api/v1/auth/logout", "/api/v1/auth/change-password":
+		return true
+	}
+	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/"), "/")
+	return len(parts) == 4 && parts[3] == "git-upload-pack" &&
+		(parts[0] == "git" || parts[1] == "git") && parts[0] != "" && parts[1] != "" && parts[2] != ""
 }

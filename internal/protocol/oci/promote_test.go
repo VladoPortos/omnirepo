@@ -190,6 +190,9 @@ func TestPromote_ZeroBlobCopy(t *testing.T) {
 
 	// Each ref_count bumped by exactly 1.
 	for _, d := range []string{configDig, layerDig} {
+		if owned, err := p.blobs.HasInRepo(context.Background(), p.dstRepoID, d); err != nil || !owned {
+			t.Fatalf("promoted blob not owned: %v %v", owned, err)
+		}
 		b, _ := p.blobs.Stat(context.Background(), d)
 		if b == nil {
 			t.Fatalf("blob %s disappeared", d)

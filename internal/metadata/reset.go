@@ -7,65 +7,6 @@ import (
 	"strings"
 )
 
-// resetTables is the authoritative wipe list. Every migration
-// that adds a physical or FTS5 virtual table MUST append its name here. The
-// invariant test TestResetCoversEveryTable (reset_test.go) queries
-// sqlite_master and fails if any table is missing from this slice AND not
-// in the explicit excludes set (schema_migrations, users, settings — users +
-// settings are handled by the preservation clauses in Reset below).
-//
-// Ordering doesn't matter — Reset applies PRAGMA foreign_keys=OFF at the
-// connection level before BEGIN, so FK cycles cannot trip us. DELETE
-// statements run in whatever order this slice specifies; PRAGMA
-// foreign_key_check runs as a pre-commit audit.
-//
-// FTS5 virtual tables (post-migration-005 they own their content; DELETE
-// FROM works) ARE included. FTS5 auxiliary shadow tables (*_data, *_idx,
-// *_content, *_docsize, *_config) are auto-maintained by SQLite when you
-// DELETE FROM the parent virtual table — do NOT list them here.
-var resetTables = []string{
-	// 001_initial
-	"sessions", "projects", "project_members", "api_keys", "repos",
-	"s3_buckets", "audit_log", "blob_uploads",
-	"repos_fts", "artifacts_fts", "cves_fts",
-	// 002_jobs
-	"sync_jobs", "scans", "vulnerabilities",
-	// 003_oci
-	"docker_blobs", "docker_manifests", "docker_tags",
-	"blob_upload_sessions",
-	// 004_upstream_creds
-	"upstream_creds",
-	// 006_raw_files
-	"raw_files",
-	// 008_signing_keys
-	"signing_keys",
-	// 009_apt_suites
-	"apt_suites",
-	// 010_rpm_packages
-	"rpm_packages",
-	// 011_deb_packages
-	"deb_packages",
-	// 012_pypi_files
-	"pypi_files",
-	// 013_helm_charts
-	"helm_charts",
-	// 014_protocol_fts
-	"rpm_fts", "deb_fts", "pypi_fts", "helm_fts",
-	// 016_s3_access_keys
-	"s3_access_keys",
-	// 017_git_extensions
-	"git_refs",
-	// 018_s3_objects
-	"s3_objects",
-	// 019_s3_multipart
-	"s3_multipart_uploads", "s3_multipart_parts",
-	// 020_maintenance_trivydb
-	"trivy_db_meta",
-	// NOTE: users + settings are handled separately (preservation clauses
-	// in DB.Reset). schema_migrations is NEVER wiped (reset is a data op,
-	// not a schema op).
-}
-
 // preservedSettingsKeys are the rows that MUST survive a Reset.
 //
 //  1. Bootstrap secrets — app.Run materialises in-memory handles for
@@ -128,8 +69,34 @@ func (db *DB) Reset(ctx context.Context) (err error) {
 		}
 	}()
 
-	for _, table := range resetTables {
-		if _, err = tx.ExecContext(ctx, "DELETE FROM "+table); err != nil {
+	// Derive the inventory from the current schema. table_list distinguishes
+	// FTS shadow tables from their virtual parents; only the parents are wiped.
+	rows, queryErr := tx.QueryContext(ctx, `SELECT name FROM pragma_table_list
+        WHERE schema='main' AND type IN ('table','virtual')
+        AND name NOT GLOB 'sqlite_*'
+        AND name NOT IN ('schema_migrations','users','settings')`)
+	if queryErr != nil {
+		return fmt.Errorf("metadata.Reset: list tables: %w", queryErr)
+	}
+	var tables []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		tables = append(tables, name)
+	}
+	rowsErr := rows.Err()
+	closeErr := rows.Close()
+	if rowsErr != nil {
+		return rowsErr
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	for _, table := range tables {
+		if _, err = tx.ExecContext(ctx, `DELETE FROM "`+strings.ReplaceAll(table, `"`, `""`)+`"`); err != nil {
 			return fmt.Errorf("metadata.Reset: wipe %s: %w", table, err)
 		}
 	}

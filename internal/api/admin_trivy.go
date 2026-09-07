@@ -505,6 +505,7 @@ func (d Deps) handleTrivyDBPull(w http.ResponseWriter, r *http.Request) {
 	}
 	pullJob.state = "running"
 	pullJob.startedAt = time.Now()
+	startedAt := pullJob.startedAt
 	pullJob.finishedAt = time.Time{}
 	pullJob.errorMsg = ""
 	pullJob.bytes.Store(0)
@@ -535,7 +536,7 @@ func (d Deps) handleTrivyDBPull(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusAccepted, map[string]any{
 		"status":     "started",
-		"started_at": pullJob.startedAt.UTC().Format(time.RFC3339),
+		"started_at": startedAt.UTC().Format(time.RFC3339Nano),
 	})
 }
 
@@ -681,7 +682,7 @@ func (d Deps) handleTrivyDBPullStatus(w http.ResponseWriter, r *http.Request) {
 		"bytes_downloaded": pullJob.bytes.Load(),
 	}
 	if !startedAt.IsZero() {
-		resp["started_at"] = startedAt.UTC().Format(time.RFC3339)
+		resp["started_at"] = startedAt.UTC().Format(time.RFC3339Nano)
 	}
 	if !finishedAt.IsZero() {
 		resp["finished_at"] = finishedAt.UTC().Format(time.RFC3339)

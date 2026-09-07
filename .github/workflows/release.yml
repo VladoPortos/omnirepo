@@ -41,6 +41,7 @@ jobs:
           git fetch --tags origin
           node scripts/release-policy.mjs
           test "$(git rev-parse HEAD)" = "$(git rev-parse --verify "refs/tags/${RELEASE_TAG}^{commit}")"
+          echo "image=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
 
       - name: Log in to GHCR
         uses: docker/login-action@v4
@@ -53,7 +54,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v6
         with:
-          images: ghcr.io/${{ github.repository }}
+          images: ${{ steps.version.outputs.image }}
           flavor: latest=false
           tags: |
             type=raw,value=${{ steps.version.outputs.version }}
@@ -63,6 +64,7 @@ jobs:
       - uses: docker/setup-buildx-action@v4
 
       - name: Build and push (linux/amd64)
+        id: publish
         uses: docker/build-push-action@v7
         with:
           context: .
@@ -75,11 +77,17 @@ jobs:
           provenance: false
           sbom: false
 
+      - name: Verify published image
+        env:
+          IMAGE: ${{ steps.version.outputs.image }}
+          IMAGE_DIGEST: ${{ steps.publish.outputs.digest }}
+        run: docker buildx imagetools inspect "$IMAGE@$IMAGE_DIGEST"
+
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: ${{ github.ref_name }}
-          IMAGE_REPOSITORY: ghcr.io/${{ github.repository }}
+          IMAGE_REPOSITORY: ${{ steps.version.outputs.image }}
           IMAGE_VERSION: ${{ steps.version.outputs.version }}
           IMAGE_SERIES: ${{ steps.version.outputs.series }}
           IS_PRERELEASE: ${{ steps.version.outputs.prerelease }}

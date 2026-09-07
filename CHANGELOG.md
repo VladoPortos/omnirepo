@@ -15,6 +15,8 @@ for security fixes against an active minor.
 - Enforce repository ownership for OCI blobs and authorization for S3 copy sources.
 - Bind Git mirror credentials to their configured upstream host.
 - Count secret and UNKNOWN scan findings without persisting matched secret values.
+- Update Go to 1.26.7 and patch go-git, Chi, and Go crypto/text dependencies for newly reported reachable advisories.
+- Ignore untrusted forwarded client-IP headers when identifying peers for audit and IP-based controls.
 
 ### Fixed
 - Preserve artifact bytes across failed S3/npm publications and concurrent OCI garbage collection.
@@ -31,6 +33,7 @@ for security fixes against an active minor.
 ### Upgrade notes
 - Migration 044 derives OCI blob ownership from stored manifests. Legacy uploads without manifest references may require re-upload.
 - Migration 045 persists PyPI yank metadata. Existing unsupported S3 path aliases may need manual recovery; already-lost bytes cannot be reconstructed by these repairs.
+- Source builds now require Go 1.26. Reverse-proxy deployments report the proxy's socket address rather than trusting caller-supplied forwarding headers.
 
 ## [v1.1.0] — 2026-06-10
 

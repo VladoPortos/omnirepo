@@ -7,7 +7,6 @@ package httpx
 
 import (
 	"github.com/go-chi/chi/v5"
-	"github.com/go-chi/chi/v5/middleware"
 
 	"github.com/vladoportos/omnirepo/internal/config"
 	"github.com/vladoportos/omnirepo/internal/metadata"
@@ -34,7 +33,6 @@ type Deps struct {
 func New(d Deps) chi.Router {
 	r := chi.NewRouter()
 	r.Use(IncidentIDMiddleware)
-	r.Use(middleware.RealIP)
 	r.Use(EnvelopeRecoverer)
 	r.Use(StructuredLogger(d.Config, d.LoginBoxSeeder))
 	r.Use(AuditEnter)

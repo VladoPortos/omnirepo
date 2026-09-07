@@ -210,7 +210,10 @@ func (f *manifestFixture) seedBlob(content []byte) string {
 	sum := sha256.Sum256(content)
 	digest := "sha256:" + hex.EncodeToString(sum[:])
 	err := f.db.WriteTx(context.Background(), func(tx *sql.Tx) error {
-		return f.blobs.UpsertZeroRef(context.Background(), tx, digest, int64(len(content)))
+		if err := f.blobs.UpsertZeroRef(context.Background(), tx, digest, int64(len(content))); err != nil {
+			return err
+		}
+		return f.blobs.Link(context.Background(), tx, f.repoID, digest)
 	})
 	if err != nil {
 		f.t.Fatalf("seed blob: %v", err)

@@ -118,12 +118,16 @@ export function ScanReportPage() {
       .slice(0, 8);
   }, [vulns]);
 
-  if (scanQ.isLoading) {
+  if (scanQ.isLoading || vulnsQ.isLoading) {
     return (
       <div className="space-y-4">
         <SkeletonCard />
       </div>
     );
+  }
+
+  if (vulnsQ.isError) {
+    return <EmptyState icon={ShieldAlert} title="Unable to load findings" description="The complete report could not be loaded. Refresh to try again." />;
   }
   if (scanQ.isError || !scanQ.data) {
     return (

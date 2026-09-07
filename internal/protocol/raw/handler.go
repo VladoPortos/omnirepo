@@ -145,6 +145,12 @@ func (h *Handler) Mount(parent chi.Router) {
 	})
 }
 
+// PutREST reuses the complete RAW write path (permissions, validation,
+// limits, rollback-safe publication and audit) after REST authentication.
+func (h *Handler) PutREST(w http.ResponseWriter, r *http.Request) {
+	h.put(w, r)
+}
+
 // resolved wraps a successful repo+path lookup.
 type resolved struct {
 	project *metadata.Project
@@ -182,6 +188,9 @@ func (h *Handler) resolveRepoAndPath(w http.ResponseWriter, r *http.Request, req
 // that need to force a strictness level.
 func (h *Handler) resolveRepoAndPathWithMode(w http.ResponseWriter, r *http.Request, requirePath, strict bool) (resolved, bool) {
 	projectName := chi.URLParam(r, "project")
+	if projectName == "" {
+		projectName = chi.URLParam(r, "name")
+	}
 	repoName := chi.URLParam(r, "repo")
 	rest := chi.URLParam(r, "*")
 

@@ -15,12 +15,12 @@ name: CodeQL
 
 on:
   push:
-    branches: [main]
+    branches: [release]
   pull_request:
-    branches: [main]
+    branches: [release]
   schedule:
     # Weekly Monday 03:00 UTC — picks up new CodeQL queries against the
-    # current main even when no commits land.
+    # current release branch even when no commits land.
     - cron: "0 3 * * 1"
 
 # Default deny — any job without an explicit permissions: block runs with
@@ -55,13 +55,13 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       # setup-go is needed for the Go matrix entry so autobuild's
-      # `go build ./...` runs on the project's pinned toolchain (1.25)
+      # `go build ./...` runs on the project's pinned toolchain (1.26.7)
       # against the vendored deps. Harmless no-op for the JS matrix entry.
       - name: Setup Go
         if: matrix.language == 'go'
         uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
-          go-version: "1.25"
+          go-version: "1.26.7"
           cache: false
 
       # Build the React frontend first so `//go:embed dist/*` in

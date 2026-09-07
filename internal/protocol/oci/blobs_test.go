@@ -489,7 +489,7 @@ func TestBlobGet_UnknownDigest_DoesNotLeakFSPath(t *testing.T) {
 	}
 }
 
-// TestBlobDelete_RefCountZero_AllowsDelete removes the docker_blobs row
+// TestBlobDelete_RefCountZero_AllowsDelete removes repository ownership
 // when ref_count==0 and emits the oci.blob.deleted audit event.
 func TestBlobDelete_RefCountZero_AllowsDelete(t *testing.T) {
 	f := newBlobFixture(t)
@@ -505,9 +505,13 @@ func TestBlobDelete_RefCountZero_AllowsDelete(t *testing.T) {
 	if resp.StatusCode != http.StatusAccepted {
 		t.Fatalf("status=%d, want 202", resp.StatusCode)
 	}
-	b, _ := f.blobs.Stat(context.Background(), digest)
-	if b != nil {
-		t.Fatalf("row still present after delete: %+v", b)
+	owned, err := f.blobs.HasInRepo(context.Background(), f.repoID, digest)
+	if err != nil || owned {
+		t.Fatalf("ownership after delete: %v %v", owned, err)
+	}
+	b, err := f.blobs.Stat(context.Background(), digest)
+	if err != nil || b == nil {
+		t.Fatalf("global GC row must remain: %v %v", b, err)
 	}
 	if !containsStr(f.audit.kinds(), string(audit.EvtOCIBlobDeleted)) {
 		t.Fatalf("missing audit event; kinds=%v", f.audit.kinds())
@@ -684,6 +688,9 @@ func TestBlobMount_CrossRepoSameProject(t *testing.T) {
 	}
 	if got := resp.Header.Get("Docker-Content-Digest"); got != digest {
 		t.Fatalf("digest header=%q", got)
+	}
+	if owned, err := f.blobs.HasInRepo(context.Background(), rid2, digest); err != nil || !owned {
+		t.Fatalf("mounted blob not owned: %v %v", owned, err)
 	}
 	wantLoc := "/v2/proj/docker/app2/blobs/" + digest
 	if got := resp.Header.Get("Location"); got != wantLoc {

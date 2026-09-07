@@ -126,6 +126,7 @@ type scanFindings struct {
 	High     int64 `json:"high"`
 	Medium   int64 `json:"medium"`
 	Low      int64 `json:"low"`
+	Unknown  int64 `json:"unknown"`
 }
 
 type activityRow struct {
@@ -226,7 +227,7 @@ func (d Deps) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	storageUsed += s3Used
 
 	// Scan findings: count all severity levels.
-	var critical, high, medium, low int64
+	var critical, high, medium, low, unknown int64
 	vulnArgs := make([]any, len(scopeArgs))
 	copy(vulnArgs, scopeArgs)
 	// Same join shape for both branches so the global case also filters
@@ -237,13 +238,14 @@ func (d Deps) handleDashboard(w http.ResponseWriter, r *http.Request) {
 			COALESCE(SUM(CASE WHEN v.severity='CRITICAL' THEN 1 ELSE 0 END), 0),
 			COALESCE(SUM(CASE WHEN v.severity='HIGH' THEN 1 ELSE 0 END), 0),
 			COALESCE(SUM(CASE WHEN v.severity='MEDIUM' THEN 1 ELSE 0 END), 0),
-			COALESCE(SUM(CASE WHEN v.severity='LOW' THEN 1 ELSE 0 END), 0)
+			COALESCE(SUM(CASE WHEN v.severity='LOW' THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN v.severity NOT IN ('CRITICAL','HIGH','MEDIUM','LOW') THEN 1 ELSE 0 END), 0)
 		FROM vulnerabilities v
 		JOIN scans s ON s.id = v.scan_id
 		JOIN repos r ON r.id = s.repo_id
 		JOIN projects p ON p.id = r.project_id
 		WHERE r.deleted_at IS NULL AND p.deleted_at IS NULL`+strings.Replace(scopeClause, "project_id", "r.project_id", 1),
-		vulnArgs...).Scan(&critical, &high, &medium, &low), "scan_findings")
+		vulnArgs...).Scan(&critical, &high, &medium, &low, &unknown), "scan_findings")
 
 	// Project count. Exclude soft-deleted projects so the dashboard tile
 	// matches /api/v1/projects list semantics.
@@ -371,7 +373,7 @@ func (d Deps) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		ProjectCount:      projectCount,
 		RepoCount:         repoCount,
 		UserCount:         userCount,
-		ScanFindings:      scanFindings{Critical: critical, High: high, Medium: medium, Low: low},
+		ScanFindings:      scanFindings{Critical: critical, High: high, Medium: medium, Low: low, Unknown: unknown},
 		HighSeverity:      highSev,
 		RecentActivity:    activity,
 	})

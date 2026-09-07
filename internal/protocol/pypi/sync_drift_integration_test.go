@@ -43,12 +43,14 @@ type pypiDriftFixture struct {
 	projName    string
 	// upstreamFiles holds the per-filename (bytes, sha256) currently being
 	// served. setUpstream swaps this atomically between syncs.
+	downloads     atomic.Int64
 	upstreamFiles atomic.Value // map[string]pypiFileBytes
 }
 
 type pypiFileBytes struct {
 	bytes  []byte
 	digest string
+	yanked any
 }
 
 func (f *pypiDriftFixture) setUpstream(t *testing.T, filenames ...string) {
@@ -91,8 +93,8 @@ func newPyPIDriftFixture(t *testing.T) *pypiDriftFixture {
 		var parts []string
 		for fn, fb := range files {
 			parts = append(parts, fmt.Sprintf(
-				`{"filename":%q,"url":"/packages/%s","hashes":{"sha256":%q},"size":%d}`,
-				fn, fn, fb.digest, len(fb.bytes),
+				`{"filename":%q,"url":"/packages/%s","hashes":{"sha256":%q},"size":%d,"yanked":%s}`,
+				fn, fn, fb.digest, len(fb.bytes), mustYankJSON(fb.yanked),
 			))
 		}
 		body := fmt.Sprintf(`{"meta":{"api-version":"1.0"},"name":"acme","files":[%s]}`, strings.Join(parts, ","))
@@ -101,6 +103,7 @@ func newPyPIDriftFixture(t *testing.T) *pypiDriftFixture {
 	})
 	// /packages/<fn> — serve bytes from upstreamFiles.
 	mux.HandleFunc("/packages/", func(w http.ResponseWriter, r *http.Request) {
+		f.downloads.Add(1)
 		fn := strings.TrimPrefix(r.URL.Path, "/packages/")
 		files := f.upstreamFiles.Load().(map[string]pypiFileBytes)
 		fb, ok := files[fn]
@@ -402,3 +405,5 @@ func TestPyPIMirrorSync_DriftPurge_EmptyUpstreamGuard(t *testing.T) {
 		t.Errorf("summary.drift_purged present on empty-upstream; want absent")
 	}
 }
+
+func mustYankJSON(v any) string { b, _ := json.Marshal(v); return string(b) }

@@ -244,7 +244,12 @@ func (h *SyncHandler) Handle(ctx context.Context, payload string, projectID, rep
 				C: keyDigest,
 			})
 			// Idempotency by filename — matches pypi_files UNIQUE(repo_id, filename).
-			if existing, ferr := h.deps.PyPIFiles.FindByFilename(ctx, repoID, f.Filename); ferr == nil && existing != nil {
+			if existing, ferr := h.deps.PyPIFiles.FindByFilename(ctx, repoID, f.Filename); ferr == nil && existing != nil && (f.SHA256 == "" || strings.EqualFold(existing.Digest, "sha256:"+f.SHA256)) {
+				if existing.Yanked != f.Yanked || existing.YankedReason != f.YankedReason {
+					if err := h.refreshYank(ctx, repo.ID, f); err != nil {
+						downloadErrors = append(downloadErrors, err)
+					}
+				}
 				continue
 			}
 			toFetch = append(toFetch, fileToFetch{project: project, file: f})
@@ -428,8 +433,8 @@ func (h *SyncHandler) fail(ctx context.Context, repoID int64, pl SyncPayload, st
 
 func (h *SyncHandler) fetchAndCommit(ctx context.Context, projectName string, repo *metadata.Repo, normalizedProject string, f UpstreamFile, creds AuthCreds, progress *jobs.ProgressWriter, step string, accumulatedDone *int64, totalBytes int64) (int64, error) {
 	// Re-check FindByFilename inside the goroutine for race safety.
-	if existing, ferr := h.deps.PyPIFiles.FindByFilename(ctx, repo.ID, f.Filename); ferr == nil && existing != nil {
-		return 0, nil
+	if existing, ferr := h.deps.PyPIFiles.FindByFilename(ctx, repo.ID, f.Filename); ferr == nil && existing != nil && (f.SHA256 == "" || strings.EqualFold(existing.Digest, "sha256:"+f.SHA256)) {
+		return 0, h.refreshYank(ctx, repo.ID, f)
 	}
 
 	// Filenames flow through parseWheelFilename / parseSdistFilename
@@ -486,6 +491,8 @@ func (h *SyncHandler) fetchAndCommit(ctx context.Context, projectName string, re
 				Filename:          f.Filename,
 				Kind:              kind,
 				RequiresPython:    f.RequiresPython,
+				Yanked:            f.Yanked,
+				YankedReason:      f.YankedReason,
 				SizeBytes:         size,
 				Digest:            digest,
 			}); err != nil {
@@ -557,4 +564,13 @@ func reasonFromErr(err error) string {
 	default:
 		return "pep440_invalid"
 	}
+}
+
+func (h *SyncHandler) refreshYank(ctx context.Context, repoID int64, f UpstreamFile) error {
+	return h.deps.DB.WriteTx(ctx, func(tx *sql.Tx) error {
+		if err := h.deps.PyPIFiles.SetYanked(ctx, tx, repoID, f.Filename, f.Yanked, f.YankedReason); err != nil {
+			return err
+		}
+		return h.deps.Repos.SetMetadataState(ctx, tx, repoID, metadata.MetadataStateDirty)
+	})
 }

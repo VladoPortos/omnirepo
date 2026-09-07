@@ -102,6 +102,8 @@ func (c *cas) Put(ctx context.Context, r io.Reader) (string, int64, error) {
 	}
 
 	digest := "sha256:" + hex.EncodeToString(h.Sum(nil))
+	_, unlock := lockCASLifecycle(ctx, digest)
+	defer unlock()
 	final, err := c.blobPath(digest)
 	if err != nil {
 		return "", 0, err
@@ -160,6 +162,8 @@ func (c *cas) PutFromPath(ctx context.Context, srcPath string) (string, int64, e
 	}
 
 	digest := "sha256:" + hex.EncodeToString(h.Sum(nil))
+	_, unlock := lockCASLifecycle(ctx, digest)
+	defer unlock()
 	final, err := c.blobPath(digest)
 	if err != nil {
 		return "", 0, err
@@ -231,6 +235,8 @@ func (c *cas) Exists(ctx context.Context, digest string) (bool, error) {
 }
 
 func (c *cas) Delete(ctx context.Context, digest string) error {
+	_, unlock := lockCASLifecycle(ctx, digest)
+	defer unlock()
 	if err := ctx.Err(); err != nil {
 		return err
 	}

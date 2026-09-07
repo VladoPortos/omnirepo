@@ -40,6 +40,17 @@ type trivyReportBlock struct {
 	Type              string               `json:"Type"`
 	Vulnerabilities   []trivyReportVuln    `json:"Vulnerabilities"`
 	Misconfigurations []trivyReportMisconf `json:"Misconfigurations"`
+	Secrets           []trivyReportSecret  `json:"Secrets"`
+}
+
+// Deliberately omit Match and Code: scanner output can contain the secret
+// itself, which must never enter scan rows, search indexes, or API responses.
+type trivyReportSecret struct {
+	RuleID    string `json:"RuleID"`
+	Title     string `json:"Title"`
+	Severity  string `json:"Severity"`
+	StartLine int    `json:"StartLine"`
+	EndLine   int    `json:"EndLine"`
 }
 
 type trivyReportVuln struct {
@@ -91,6 +102,22 @@ func ParseTrivyJSON(b []byte) (Result, error) {
 	}
 	var vulns []Vuln
 	for _, block := range r.Results {
+		for i, secret := range block.Secrets {
+			sev := strings.ToLower(secret.Severity)
+			if _, ok := summary[sev]; !ok {
+				sev = "unknown"
+			}
+			summary[sev]++
+			id := secret.RuleID
+			if id == "" {
+				id = fmt.Sprintf("finding-%d", i)
+			}
+			vulns = append(vulns, Vuln{
+				CVEID: "SECRET-" + id, Package: block.Target,
+				Severity: strings.ToUpper(sev), Title: secret.Title,
+				Description: fmt.Sprintf("Secret detected at lines %d-%d. Matched content is not retained.", secret.StartLine, secret.EndLine),
+			})
+		}
 		for _, v := range block.Vulnerabilities {
 			sev := strings.ToLower(v.Severity)
 			if _, ok := summary[sev]; !ok {

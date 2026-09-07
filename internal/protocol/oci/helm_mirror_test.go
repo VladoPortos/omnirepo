@@ -113,6 +113,9 @@ func (f *helmMirrorFixture) seedCASBlob(content []byte) string {
 	); err != nil {
 		f.t.Fatalf("blobs upsert: %v", err)
 	}
+	if _, err := f.db.Writer.ExecContext(context.Background(), `INSERT OR IGNORE INTO docker_repo_blobs(repo_id, digest) SELECT id, ? FROM repos`, digest); err != nil {
+		f.t.Fatal(err)
+	}
 	return digest
 }
 

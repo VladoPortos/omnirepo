@@ -411,6 +411,9 @@ func (h *Handler) blobUploadPut(w http.ResponseWriter, r *http.Request) {
 		if err := h.blobs.UpsertZeroRef(r.Context(), tx, actual, size); err != nil {
 			return err
 		}
+		if err := h.blobs.Link(r.Context(), tx, rr.repo.ID, actual); err != nil {
+			return err
+		}
 		if err := h.blobs.Touch(r.Context(), tx, actual); err != nil {
 			return err
 		}
@@ -512,6 +515,9 @@ func (h *Handler) blobMonolithicPost(w http.ResponseWriter, r *http.Request) {
 		if err := h.blobs.UpsertZeroRef(r.Context(), tx, actual, size); err != nil {
 			return err
 		}
+		if err := h.blobs.Link(r.Context(), tx, rr.repo.ID, actual); err != nil {
+			return err
+		}
 		return h.blobs.Touch(r.Context(), tx, actual)
 	}); err != nil {
 		writeOCIErr(w, http.StatusInternalServerError, ErrCodeUnknown, err)
@@ -581,6 +587,10 @@ func (h *Handler) blobGet(w http.ResponseWriter, r *http.Request) {
 			fmt.Errorf("malformed digest %q", digest))
 		return
 	}
+	if !h.requireBlobOwnership(w, r, rr.repo.ID, digest) {
+		return
+	}
+
 	// http.ServeContent wants io.ReadSeeker; open the CAS file directly.
 	path, err := h.casFilePath(digest)
 	if err != nil {
@@ -630,6 +640,10 @@ func (h *Handler) blobHead(w http.ResponseWriter, r *http.Request) {
 			fmt.Errorf("malformed digest %q", digest))
 		return
 	}
+	if !h.requireBlobOwnership(w, r, rr.repo.ID, digest) {
+		return
+	}
+
 	size, exists, err := h.cas.Stat(r.Context(), digest)
 	if err != nil {
 		writeOCIErr(w, http.StatusInternalServerError, ErrCodeUnknown, err)
@@ -645,10 +659,8 @@ func (h *Handler) blobHead(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-// blobDelete is only allowed at ref_count==0 across all repos. Non-zero
-// → 405 MethodNotAllowed. CAS file is NOT removed here (live-data invariant:
-// only GC deletes CAS bytes — see Pitfall 8 in repos.WipeDocker). Deleting
-// the docker_blobs row at ref_count==0 hands it off to the next GC sweep.
+// blobDelete revokes this repository's ownership when the blob has no live
+// manifest references. The global row remains for GC and for other owners.
 func (h *Handler) blobDelete(w http.ResponseWriter, r *http.Request) {
 	rr := h.resolveRepo(w, r)
 	if rr == nil {
@@ -666,6 +678,9 @@ func (h *Handler) blobDelete(w http.ResponseWriter, r *http.Request) {
 	if !validDigest(digest) {
 		writeOCIErr(w, http.StatusBadRequest, ErrCodeDigestInvalid,
 			fmt.Errorf("malformed digest %q", digest))
+		return
+	}
+	if !h.requireBlobOwnership(w, r, rr.repo.ID, digest) {
 		return
 	}
 
@@ -690,7 +705,8 @@ func (h *Handler) blobDelete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.db.WriteTx(r.Context(), func(tx *sql.Tx) error {
-		return h.blobs.Delete(r.Context(), tx, digest)
+		_, err := tx.ExecContext(r.Context(), `DELETE FROM docker_repo_blobs WHERE repo_id=? AND digest=? AND EXISTS (SELECT 1 FROM docker_blobs WHERE digest=? AND ref_count=0)`, rr.repo.ID, digest, digest)
+		return err
 	}); err != nil {
 		writeOCIErr(w, http.StatusInternalServerError, ErrCodeUnknown, err)
 		return
@@ -824,6 +840,20 @@ func validDigest(d string) bool {
 		default:
 			return false
 		}
+	}
+	return true
+}
+
+// requireBlobOwnership prevents a readable repository from acting as a global CAS oracle.
+func (h *Handler) requireBlobOwnership(w http.ResponseWriter, r *http.Request, repoID int64, digest string) bool {
+	ok, err := h.blobs.HasInRepo(r.Context(), repoID, digest)
+	if err != nil {
+		writeOCIErr(w, http.StatusInternalServerError, ErrCodeUnknown, err)
+		return false
+	}
+	if !ok {
+		writeOCIErr(w, http.StatusNotFound, ErrCodeBlobUnknown, errors.New("blob unknown"))
+		return false
 	}
 	return true
 }

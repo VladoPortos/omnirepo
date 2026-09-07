@@ -101,7 +101,7 @@ function summarizeScanError(raw: string): string {
 function StatusBadge({ scan }: { scan: Scan }) {
   if (scan.status === 'done') {
     const counts = parseSummary(scan.severity_summary_json);
-    const total = counts.critical + counts.high + counts.medium + counts.low;
+    const total = counts.critical + counts.high + counts.medium + counts.low + counts.unknown;
     if (total === 0) {
       return (
         <Badge variant="outline" className="bg-teal-500/10 text-teal-600 border-teal-500/20 dark:text-teal-400">
@@ -470,6 +470,7 @@ function ScanRowsTable({
               <th className="px-3 py-2 text-right">High</th>
               <th className="px-3 py-2 text-right">Med</th>
               <th className="px-3 py-2 text-right">Low</th>
+              <th className="px-3 py-2 text-right">Unknown</th>
               <th className="px-3 py-2">Finished</th>
               <th className="px-3 py-2 text-right">Report</th>
             </tr>
@@ -518,6 +519,9 @@ function ScanRowsTable({
                       value={counts.low}
                       className="font-medium text-teal-600 dark:text-teal-400"
                     />
+                  </td>
+                  <td className="px-3 py-2 text-right">
+                    <CountCell label="Unknown" value={counts.unknown} className="font-medium text-muted-foreground" />
                   </td>
                   <td className="px-3 py-2 text-xs text-muted-foreground">
                     {scan.finished_at ? formatDate(scan.finished_at) : '—'}

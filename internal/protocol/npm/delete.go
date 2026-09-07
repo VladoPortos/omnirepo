@@ -15,6 +15,7 @@ import (
 	"github.com/vladoportos/omnirepo/internal/audit"
 	"github.com/vladoportos/omnirepo/internal/auth"
 	"github.com/vladoportos/omnirepo/internal/metadata"
+	"github.com/vladoportos/omnirepo/internal/storage"
 )
 
 // delete handles DELETE /<name>/-/<version>.
@@ -49,6 +50,9 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	target := res.req.Name + "@" + res.req.Version
+	mu := h.writeLocks.For(storage.RepoKey{Project: res.project.Name, Type: "npm", Repo: res.repo.Name})
+	mu.Lock()
+	defer mu.Unlock()
 	row, err := h.packages.FindByNameVersion(r.Context(), res.repo.ID, res.req.Name, res.req.Version)
 	if err != nil || row == nil {
 		http.Error(w, "not found", http.StatusNotFound)

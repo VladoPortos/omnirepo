@@ -56,19 +56,20 @@ export interface ArtifactDetailProps {
   deletePending?: boolean;
 }
 
-const SEVERITY_ORDER: Array<keyof ArtifactDetailProps['severity'] extends
-  infer _ ? 'critical' | 'high' | 'medium' | 'low' : never> = [
+const SEVERITY_ORDER = [
   'critical',
   'high',
   'medium',
   'low',
-];
+  'unknown',
+] as const;
 
 const SEVERITY_CLASS: Record<string, string> = {
   critical: 'bg-status-critical text-status-critical-fg',
   high: 'bg-status-high text-status-high-fg',
   medium: 'bg-status-medium text-status-medium-fg',
   low: 'bg-status-low text-status-low-fg',
+  unknown: 'bg-muted text-muted-foreground border-border',
 };
 
 function truncateDigest(d: string): string {

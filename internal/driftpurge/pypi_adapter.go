@@ -55,9 +55,15 @@ func (a *pypiAdapter) LocalRows(ctx context.Context, _ *sql.Tx, repoID int64) ([
 	if err != nil {
 		return nil, err
 	}
+	hashless := make(map[Key]bool)
+	for _, key := range a.upstream {
+		if key.C == "" {
+			hashless[key] = true
+		}
+	}
 	out := make([]Row, len(rows))
 	for i := range rows {
-		out[i] = &pypiRow{inner: &rows[i]}
+		out[i] = &pypiRow{inner: &rows[i], hashless: hashless[Key{A: rows[i].ProjectNormalized, B: rows[i].Filename}]}
 	}
 	return out, nil
 }
@@ -78,6 +84,8 @@ func (a *pypiAdapter) Purge(ctx context.Context, tx *sql.Tx, row Row, actor stri
 		"filename":           inner.Filename,
 		"kind":               inner.Kind,
 		"requires_python":    inner.RequiresPython,
+		"yanked":             inner.Yanked,
+		"yanked_reason":      inner.YankedReason,
 		"size_bytes":         inner.SizeBytes,
 		"digest":             inner.Digest,
 		"core_metadata_json": inner.CoreMetadataJSON,
@@ -90,11 +98,16 @@ func (a *pypiAdapter) Purge(ctx context.Context, tx *sql.Tx, row Row, actor stri
 // pypiRow wraps *metadata.PyPIFile with the Row interface required by
 // the engine. Key uses {project_normalized, filename, digest}.
 type pypiRow struct {
-	inner *metadata.PyPIFile
+	inner    *metadata.PyPIFile
+	hashless bool
 }
 
 func (r *pypiRow) Key() Key {
-	return Key{A: r.inner.ProjectNormalized, B: r.inner.Filename, C: r.inner.Digest}
+	digest := r.inner.Digest
+	if r.hashless {
+		digest = ""
+	}
+	return Key{A: r.inner.ProjectNormalized, B: r.inner.Filename, C: digest}
 }
 
 func (r *pypiRow) SampleFilename() string { return r.inner.Filename }

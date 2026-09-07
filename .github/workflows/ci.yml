@@ -5,19 +5,22 @@ name: CI
 # bodies, no commit messages, no head refs) — only fixed make / go commands.
 
 on:
+  workflow_call:
   pull_request:
   push:
-    branches: [main]
+    branches: [release]
 
 jobs:
   build-test:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
 
       - uses: actions/setup-go@v6
         with:
-          go-version: '1.25'
+          go-version: '1.26.7'
           cache: true
 
       - name: Install git (spike requirement)
@@ -47,6 +50,12 @@ jobs:
         # does `npm ci && npm run build` and produces web/dist/.
         run: make frontend
 
+      - name: Frontend unit tests and lint
+        run: |
+          npm --prefix web test
+          npm --prefix web run lint
+          node --test scripts/release-policy.test.mjs
+
       - name: Lint
         run: make lint
 
@@ -56,15 +65,21 @@ jobs:
       - name: Unit tests + air-gap boot test
         run: make test
 
-      - name: Air-gap invariant (explicit gate re-run)
-        run: make test-airgap
-
       - name: SQLite contention bench
         # D-42 acceptance bar: 30s duration, 16 workers, zero SQLITE_BUSY.
         # The Makefile default is BENCH_DURATION=30s; we inherit it here
         # rather than shortening in CI (WR-07). Adds ~25s to the pipeline,
         # which is acceptable for a foundation P2 mitigation gate.
         run: make bench-sqlite
+
+      - name: Install browser smoke dependencies
+        working-directory: web
+        run: npx playwright install --with-deps chromium
+
+      - name: Real-server browser smoke
+        working-directory: web
+        # Playwright boots the built Go server on an isolated mktemp data root.
+        run: npx playwright test e2e/login.spec.ts e2e/projects.spec.ts e2e/upload.spec.ts --project=chromium
 
       # Phase 4 D-28: spike retired; production gogit+gitkit backends are
       # covered by the default `make test` unit suite. No dedicated job.
@@ -78,10 +93,12 @@ jobs:
     needs: build-test
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
 
       - uses: actions/setup-go@v6
         with:
-          go-version: '1.25'
+          go-version: '1.26.7'
           cache: true
 
       - uses: actions/setup-node@v4
@@ -115,10 +132,12 @@ jobs:
     needs: build-test
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
 
       - uses: actions/setup-go@v6
         with:
-          go-version: '1.25'
+          go-version: '1.26.7'
           cache: true
 
       - uses: actions/setup-node@v4
@@ -159,10 +178,12 @@ jobs:
     needs: build-test
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
 
       - uses: actions/setup-go@v6
         with:
-          go-version: '1.25'
+          go-version: '1.26.7'
           cache: true
 
       - uses: actions/setup-node@v4
@@ -199,10 +220,12 @@ jobs:
     needs: build-test
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
 
       - uses: actions/setup-go@v6
         with:
-          go-version: '1.25'
+          go-version: '1.26.7'
           cache: true
 
       - uses: actions/setup-node@v4

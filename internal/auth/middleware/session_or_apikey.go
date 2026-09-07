@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/vladoportos/omnirepo/internal/auth"
 	"github.com/vladoportos/omnirepo/internal/metadata"
@@ -162,7 +163,10 @@ func authenticateAPIKey(ctx context.Context, d Deps, bearer string) (auth.Actor,
 	// request path; we tolerate errors (log nothing here — the middleware
 	// must not 500 because of a timestamp update). The audit layer
 	// will pick up the identification event regardless.
-	_ = d.APIKeys.TouchLastUsed(ctx, row.ID, d.clock())
+	now := d.clock()
+	if row.LastUsedAt == nil || now.Sub(*row.LastUsedAt) >= time.Minute {
+		_ = d.APIKeys.TouchLastUsed(ctx, row.ID, now)
+	}
 	return actor, true
 }
 
@@ -206,7 +210,12 @@ func authenticateSession(ctx context.Context, d Deps, token string) (auth.Actor,
 	if newExpires.After(hardCap) {
 		newExpires = hardCap
 	}
-	_ = d.Sessions.SlideExpiry(ctx, row.ID, now, newExpires)
+	// Persist activity at most once per minute (more often for short TTLs).
+	// Authentication still reads the row on every request so revocation is immediate.
+	interval := min(time.Minute, d.sessionTTL()/10)
+	if now.Sub(row.LastSeenAt) >= interval || row.ExpiresAt.Sub(now) <= interval {
+		_ = d.Sessions.SlideExpiry(ctx, row.ID, now, newExpires)
+	}
 	return auth.Actor{
 		ID:                 u.ID,
 		Login:              u.Login,

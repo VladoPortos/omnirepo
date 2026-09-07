@@ -15,6 +15,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"html"
 	"net/http"
 	"net/url"
 	"path/filepath"
@@ -44,6 +45,8 @@ type UpstreamFile struct {
 	SHA256         string
 	RequiresPython string
 	Size           int64
+	Yanked         bool
+	YankedReason   string
 }
 
 // AuthCreds carries optional Basic / Bearer credentials threaded into the
@@ -84,14 +87,6 @@ type pep691Index struct {
 type pep691IndexEnt struct {
 	Name string `json:"name"`
 }
-
-// htmlFileRE matches `<a href="<url>#sha256=<hex>" data-requires-python="...">filename</a>`.
-// PEP 503 only mandates the href-with-fragment shape; data-requires-python
-// is optional. Filename comes from the inner text.
-var htmlFileRE = regexp.MustCompile(`(?is)<a\s+[^>]*href="([^"#]+)#sha256=([0-9a-fA-F]+)"[^>]*>([^<]+)</a>`)
-
-// htmlRequiresPythonRE extracts data-requires-python when present.
-var htmlRequiresPythonRE = regexp.MustCompile(`(?i)data-requires-python="([^"]*)"`)
 
 // htmlAnchorRE matches the project list at /simple/.
 var htmlAnchorRE = regexp.MustCompile(`(?is)<a\s+[^>]*href="[^"]+"[^>]*>([^<]+)</a>`)
@@ -217,42 +212,63 @@ func ParseUpstreamProject(ctx context.Context, client *http.Client, upstream, no
 					continue
 				}
 				abs := resolveURL(base, f.URL)
+				yanked, reason := false, ""
+				switch v := f.Yanked.(type) {
+				case bool:
+					yanked = v
+				case string:
+					yanked = true
+					reason = v
+				}
 				out = append(out, UpstreamFile{
 					Filename:       f.Filename,
 					URL:            abs,
 					SHA256:         f.Hashes["sha256"],
 					RequiresPython: f.RequiresPython,
 					Size:           f.Size,
+					Yanked:         yanked,
+					YankedReason:   reason,
 				})
 			}
 			return out, nil
 		}
 	}
-	// HTML fallback.
+	// Preserve optional hashes and yank attributes, including empty reasons.
 	out := make([]UpstreamFile, 0, 16)
-	matches := htmlFileRE.FindAllStringSubmatchIndex(string(body), -1)
-	for _, m := range matches {
-		hrefURL := string(body[m[2]:m[3]])
-		sha := string(body[m[4]:m[5]])
-		filename := strings.TrimSpace(string(body[m[6]:m[7]]))
-		// Look back at the surrounding anchor for data-requires-python.
-		anchorStart := m[0]
-		anchorEnd := m[1]
-		anchor := string(body[anchorStart:anchorEnd])
-		var rp string
-		if rm := htmlRequiresPythonRE.FindStringSubmatch(anchor); len(rm) >= 2 {
-			rp = rm[1]
+	for _, anchor := range htmlProjectAnchorRE.FindAllStringSubmatch(string(body), -1) {
+		f := UpstreamFile{Filename: strings.TrimSpace(html.UnescapeString(anchor[2]))}
+		var href string
+		for _, attr := range htmlAttributeRE.FindAllStringSubmatch(anchor[1], -1) {
+			value := attr[2] + attr[3] + attr[4]
+			value = html.UnescapeString(value)
+			switch strings.ToLower(attr[1]) {
+			case "href":
+				href = value
+			case "data-requires-python":
+				f.RequiresPython = value
+			case "data-yanked":
+				f.Yanked = true
+				f.YankedReason = value
+			}
 		}
-		abs := resolveURL(base, hrefURL)
-		out = append(out, UpstreamFile{
-			Filename:       filename,
-			URL:            abs,
-			SHA256:         strings.ToLower(sha),
-			RequiresPython: rp,
-		})
+		if href == "" || f.Filename == "" {
+			continue
+		}
+		u, parseErr := url.Parse(href)
+		if parseErr != nil {
+			continue
+		}
+		hashes, _ := url.ParseQuery(u.Fragment)
+		f.SHA256 = strings.ToLower(hashes.Get("sha256"))
+		u.Fragment = ""
+		f.URL = resolveURL(base, u.String())
+		out = append(out, f)
 	}
 	return out, nil
 }
+
+var htmlProjectAnchorRE = regexp.MustCompile(`(?is)<a\s+((?:"[^"]*"|'[^']*'|[^'">])*)>([^<]+)</a>`)
+var htmlAttributeRE = regexp.MustCompile(`(?is)([a-zA-Z][a-zA-Z0-9-]*)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+)))?`)
 
 func isJSON(ct string) bool {
 	ct = strings.ToLower(ct)

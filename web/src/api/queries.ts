@@ -93,11 +93,9 @@ export function useRepoScans(
     queryFn: () => {
       const params: Record<string, string> = {};
       if (opts?.status) params.status = opts.status;
-      if (opts?.limit != null) params.limit = String(opts.limit);
-      if (opts?.offset != null) params.offset = String(opts.offset);
-      return api.get<Scan[]>(
+      return fetchArrayWindow<Scan>(
         `/projects/${enc(projectName)}/repos/${enc(repoType)}/${enc(repoName)}/scans`,
-        params,
+        500, opts?.limit ?? 100, opts?.offset ?? 0, params,
       );
     },
     // Scans progress; keep data fresh while a user watches the tab.
@@ -173,14 +171,33 @@ export function useScan(scanID: number | null | undefined) {
 
 /**
  * useScanVulnerabilities — GET /scans/{id}/vulnerabilities. Backend
- * caps the response at 1000 rows; that's the v1 contract.
+ * Each response is capped at 1000 rows; collect all pages for the report.
  */
 export function useScanVulnerabilities(scanID: number | null | undefined) {
   return useQuery({
     queryKey: ['scan-vulns', scanID ?? 0],
     enabled: scanID != null && scanID > 0,
-    queryFn: () => api.get<Vulnerability[]>(`/scans/${scanID}/vulnerabilities`),
+    queryFn: () => fetchArrayWindow<Vulnerability>(`/scans/${scanID}/vulnerabilities`, 1000),
   });
+}
+
+async function fetchArrayWindow<T>(
+  path: string,
+  pageSize: number,
+  limit = Infinity,
+  offset = 0,
+  params: Record<string, string> = {},
+): Promise<T[]> {
+  const items: T[] = [];
+  while (items.length < limit) {
+    const size = Math.min(pageSize, limit - items.length);
+    const page = await api.get<T[]>(path, {
+      ...params, limit: String(size), offset: String(offset + items.length),
+    });
+    items.push(...page);
+    if (page.length < size) break;
+  }
+  return items;
 }
 
 /**
@@ -421,8 +438,12 @@ export function useRepoContent(
   opts?: { limit?: number; offset?: number },
 ) {
   return useQuery({
-    queryKey: ['repo-content', projectName, repoType, repoName, opts?.limit ?? 100, opts?.offset ?? 0],
-    queryFn: () => fetchRepoContentPage(projectName, repoType, repoName, opts),
+    queryKey: ['repo-content', projectName, repoType, repoName, repoType === 'raw' && opts == null ? 'all' : opts?.limit ?? 100, opts?.offset ?? 0],
+    // RAW derives its entire directory tree and folder sizes from this list.
+    // Resolve every page before presenting it as a complete tree.
+    queryFn: () => repoType === 'raw' && opts == null
+      ? fetchAllRepoContent(projectName, repoType, repoName)
+      : fetchRepoContentPage(projectName, repoType, repoName, opts),
     staleTime: 15_000,
     select: (page: RepoContentPage) => page.items,
     // While any row is mid-scan (status="scanning"), poll so the severity
@@ -434,6 +455,18 @@ export function useRepoContent(
       return page.items.some((r) => r.scan_severity === 'scanning') ? 3_000 : false;
     },
   });
+}
+
+async function fetchAllRepoContent(project: string, type: string, repo: string): Promise<RepoContentPage> {
+  const items: RepoContentEntry[] = [];
+  let offset = 0;
+  for (;;) {
+    const page = await fetchRepoContentPage(project, type, repo, { limit: 100, offset });
+    items.push(...page.items);
+    if (page.next_offset == null) return { ...page, items };
+    if (page.next_offset <= offset) throw new Error('Content pagination did not advance.');
+    offset = page.next_offset;
+  }
 }
 
 
@@ -855,7 +888,19 @@ export function useTriggerDBHealthCheck() {
 export function useProjects() {
   return useQuery({
     queryKey: ['projects'],
-    queryFn: () => api.get<PaginatedResponse<ProjectListItem>>('/projects'),
+    queryFn: async () => {
+      const items: ProjectListItem[] = [];
+      const seen = new Set<string>();
+      let cursor: string | null = null;
+      do {
+        const page: PaginatedResponse<ProjectListItem> = await api.get<PaginatedResponse<ProjectListItem>>('/projects', cursor ? { cursor } : {});
+        items.push(...page.items);
+        cursor = page.next_cursor;
+        if (cursor && seen.has(cursor)) throw new Error('Project pagination did not advance.');
+        if (cursor) seen.add(cursor);
+      } while (cursor);
+      return { items, next_cursor: null };
+    },
     staleTime: 30_000,
   });
 }

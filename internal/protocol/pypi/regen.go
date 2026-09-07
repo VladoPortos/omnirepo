@@ -142,6 +142,8 @@ func RegenFor(d RegenDeps) regen.RegenFn {
 					URL:            urlPrefix + r.Filename,
 					SHA256:         storage.TrimSHA256Prefix(r.Digest),
 					RequiresPython: r.RequiresPython,
+					Yanked:         r.Yanked,
+					YankedReason:   r.YankedReason,
 				})
 			}
 			projDir := filepath.Join(simpleDir, projNorm)

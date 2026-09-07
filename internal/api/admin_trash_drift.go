@@ -81,10 +81,11 @@ func (d Deps) handleDriftRestore(
 	}
 	childPath := filepath.Join(e.Path, filepath.Base(e.OriginalPath))
 	dstPath := e.OriginalPath
+	retainedDEB := e.Empty && e.Kind == "deb_package_drift"
 
 	// Pre-check destination collision so the operator gets a clean 409
 	// rather than a generic 500 from Trash.Restore.
-	if _, statErr := os.Stat(dstPath); statErr == nil {
+	if _, statErr := os.Stat(dstPath); statErr == nil && !retainedDEB {
 		writeJSONError(w, r, http.StatusConflict, ErrConflict,
 			"destination "+dstPath+" already exists; purge the live item or rename it before restoring")
 		return
@@ -104,13 +105,18 @@ func (d Deps) handleDriftRestore(
 		return
 	}
 
-	// Move the file back FIRST.
-	if err := d.Trash.Restore(r.Context(), childPath, dstPath); err != nil {
+	// Retained DEB snapshots restore only a publication; the pool bytes
+	// remain owned by another membership and must never be renamed.
+	if retainedDEB {
+		if info, err := os.Stat(dstPath); err != nil || !info.Mode().IsRegular() {
+			writeJSONError(w, r, http.StatusConflict, ErrConflict, "shared pool file is no longer available; restore its payload first")
+			return
+		}
+	} else if err := d.Trash.Restore(r.Context(), childPath, dstPath); err != nil {
 		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal,
 			"trash file restore failed: "+err.Error())
 		return
 	}
-
 	// Per-kind UPSERT inside a single write tx.
 	if err := d.DB.WriteTx(r.Context(), func(tx *sql.Tx) error {
 		switch e.Kind {
@@ -133,6 +139,19 @@ func (d Deps) handleDriftRestore(
 				return errors.New("deb_packages repo not configured")
 			}
 			p := rebuildDEBPackage(snap)
+			if retainedDEB {
+				path := p.StoragePoolPath
+				if path == "" {
+					path = p.Filename
+				}
+				var refs int
+				if err := tx.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM deb_packages WHERE repo_id=? AND COALESCE(NULLIF(storage_pool_path,''),filename)=? AND digest=?`, p.RepoID, path, p.Digest).Scan(&refs); err != nil {
+					return err
+				}
+				if refs == 0 {
+					return errors.New("shared pool file no longer has a matching live publication")
+				}
+			}
 			_, err := d.DEBPackages.Insert(r.Context(), tx, &p)
 			return err
 		case "helm_chart_drift":
@@ -148,6 +167,11 @@ func (d Deps) handleDriftRestore(
 		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal,
 			"restore row UPSERT failed: "+err.Error())
 		return
+	}
+
+	if retainedDEB {
+		_ = os.Remove(filepath.Join(e.Path, "omnirepo-trash.json"))
+		_ = os.Remove(e.Path)
 	}
 
 	if a, ok := auth.ActorFromContext(r.Context()); ok {
@@ -216,6 +240,8 @@ func rebuildPyPIFile(snap map[string]any) metadata.PyPIFile {
 		Filename:          snapStr(snap, "filename"),
 		Kind:              snapStr(snap, "kind"),
 		RequiresPython:    snapStr(snap, "requires_python"),
+		Yanked:            snap["yanked"] == true,
+		YankedReason:      snapStr(snap, "yanked_reason"),
 		SizeBytes:         snapInt64(snap, "size_bytes"),
 		Digest:            snapStr(snap, "digest"),
 		CoreMetadataJSON:  snapStr(snap, "core_metadata_json"),

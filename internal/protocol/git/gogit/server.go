@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/go-git/go-billy/v6/osfs"
+	"github.com/go-git/go-git/v6/plumbing/protocol"
 	"github.com/go-git/go-git/v6/plumbing/transport"
 	"github.com/go-git/go-git/v6/storage"
 )
@@ -86,7 +87,7 @@ func (h *repoHandler) handleInfoRefs(w http.ResponseWriter, r *http.Request) {
 	// ("# service=<svc>\n" + flush) plus the capability/ref advertisement.
 	// The preamble is emitted by AdvertiseRefs itself when smart=true — the
 	// caller MUST NOT pktline-encode it again.
-	if err := transport.AdvertiseRefs(r.Context(), st, w, service, true); err != nil {
+	if err := transport.AdvertiseRefs(r.Context(), st, w, service, true, protocol.V0); err != nil {
 		slog.WarnContext(r.Context(), "gogit.advertise_refs failed", "err", err)
 	}
 }

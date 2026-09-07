@@ -43,6 +43,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -147,9 +148,13 @@ func (h *SyncHandler) Handle(ctx context.Context, payload string, projectID, rep
 	// skip this whole block — pl.CredID is nil for public repos.
 	var authMethod *gogithttp.BasicAuth
 	if pl.CredID != nil {
-		user, pw, _, _, lerr := h.deps.Creds.Lookup(ctx, projectID, *pl.CredID)
+		user, pw, _, host, lerr := h.deps.Creds.Lookup(ctx, projectID, *pl.CredID)
 		if lerr != nil {
 			return h.fail(ctx, repoID, pl, startedAt, httpx.SanitizeUpstreamErr(fmt.Errorf("git_sync: cred lookup: %w", lerr)))
+		}
+		u, perr := url.Parse(pl.UpstreamURL)
+		if perr != nil || u.Host != host || u.Host == "" {
+			return h.fail(ctx, repoID, pl, startedAt, fmt.Errorf("cred_host_mismatch: credential is not bound to upstream host"))
 		}
 		// HTTPS+PAT only — the password field carries the
 		// personal access token for GitHub/GitLab/Bitbucket. Empty user is
@@ -217,6 +222,7 @@ func (h *SyncHandler) Handle(ctx context.Context, payload string, projectID, rep
 		gitRepo = opened
 		ferr := gitRepo.FetchContext(ctx, &gogit.FetchOptions{
 			RemoteName:    "origin",
+			RemoteURL:     pl.UpstreamURL,
 			ClientOptions: clientOpts,
 			Progress:      sink,
 			Force:         true,

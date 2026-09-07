@@ -512,6 +512,9 @@ func (r *ReposRepo) Update(ctx context.Context, tx *sql.Tx, repoID int64, f Upda
 // other repos; GC is the only code path allowed to delete CAS bytes.
 // artifacts_fts entries for each manifest digest are removed in the same tx.
 func (r *ReposRepo) WipeDocker(ctx context.Context, tx *sql.Tx, repoID int64) (int64, int64, error) {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM docker_repo_blobs WHERE repo_id=?`, repoID); err != nil {
+		return 0, 0, err
+	}
 	// 1) Collect every blob digest referenced by a manifest in this repo
 	//    (referenced = config digest + all layer digests encoded in body). The
 	//    single pattern of ref-tracking is:

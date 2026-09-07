@@ -7,12 +7,14 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -39,6 +41,10 @@ type fixture struct {
 }
 
 func newFixture(t *testing.T) *fixture {
+	return newFixtureWithPath(t, nil)
+}
+
+func newFixtureWithPath(t *testing.T, wrap func(storage.PathStore) storage.PathStore) *fixture {
 	t.Helper()
 	db := sqlitetest.New(t)
 	users := metadata.NewUsersRepo(db)
@@ -72,6 +78,10 @@ func newFixture(t *testing.T) *fixture {
 		t.Fatalf("audit: %v", err)
 	}
 
+	pathStore := storage.NewPathStore(repoRoot)
+	if wrap != nil {
+		pathStore = wrap(pathStore)
+	}
 	h := npmpkg.New(npmpkg.Deps{
 		DB:          db,
 		Users:       users,
@@ -81,7 +91,7 @@ func newFixture(t *testing.T) *fixture {
 		Projects:    projects,
 		Members:     metadata.NewMembersRepo(db),
 		Packages:    packages,
-		Path:        storage.NewPathStore(repoRoot),
+		Path:        pathStore,
 		Trash:       storage.NewTrash(trashRoot),
 		Audit:       auditLogger,
 		MaxPutBytes: 32 << 20,
@@ -97,6 +107,77 @@ func newFixture(t *testing.T) *fixture {
 		t: t, db: db, repos: repos, projects: projects, packages: packages,
 		srv: srv, repoRoot: repoRoot, login: login, password: password, userID: uid,
 	}
+}
+
+type failingPublishStore struct {
+	storage.PathStore
+	fail      atomic.Bool
+	onFailure func()
+}
+
+func (s *failingPublishStore) Put(ctx context.Context, key string, r io.Reader) (int64, error) {
+	if s.fail.Load() {
+		if s.onFailure != nil {
+			s.onFailure()
+		}
+		return 0, errors.New("disk unavailable")
+	}
+	return s.PathStore.Put(ctx, key, r)
+}
+func (s *failingPublishStore) Replace(ctx context.Context, key string, r io.Reader, commit func(int64) error) (int64, error) {
+	if s.fail.Load() {
+		if s.onFailure != nil {
+			s.onFailure()
+		}
+		return 0, errors.New("disk unavailable")
+	}
+	return s.PathStore.Replace(ctx, key, r, commit)
+}
+
+func TestFailedPublishPreservesPreviousLatest(t *testing.T) {
+	var store *failingPublishStore
+	f := newFixtureWithPath(t, func(p storage.PathStore) storage.PathStore {
+		store = &failingPublishStore{PathStore: p}
+		return store
+	})
+	f.seedRepo("acme", "js", false)
+	resp := f.do(t, "PUT", "/acme/npm/js/pkg", publishJSON(t, "pkg", "1.0.0", []byte("old")), true)
+	if resp.StatusCode != 201 {
+		t.Fatal(mustBody(t, resp))
+	}
+	_ = resp.Body.Close()
+	store.onFailure = func() {
+		var n int
+		if err := f.db.Reader.QueryRow(`SELECT COUNT(*) FROM npm_packages`).Scan(&n); err != nil {
+			t.Error(err)
+		}
+		if n != 1 {
+			t.Errorf("unpublished bytes already visible in metadata: %d versions", n)
+		}
+	}
+	store.fail.Store(true)
+	resp = f.do(t, "PUT", "/acme/npm/js/pkg", publishJSON(t, "pkg", "2.0.0", []byte("new")), true)
+	if resp.StatusCode != 500 {
+		t.Fatalf("status=%d", resp.StatusCode)
+	}
+	_ = resp.Body.Close()
+	resp = f.do(t, "GET", "/acme/npm/js/pkg", nil, true)
+	var pack struct {
+		DistTags map[string]string `json:"dist-tags"`
+		Versions map[string]any    `json:"versions"`
+	}
+	if err := json.Unmarshal([]byte(mustBody(t, resp)), &pack); err != nil {
+		t.Fatal(err)
+	}
+	if pack.DistTags["latest"] != "1.0.0" || len(pack.Versions) != 1 {
+		t.Fatalf("failed publication damaged packument: %+v", pack)
+	}
+	store.fail.Store(false)
+	resp = f.do(t, "PUT", "/acme/npm/js/pkg", publishJSON(t, "pkg", "2.0.0", []byte("new")), true)
+	if resp.StatusCode != 201 {
+		t.Fatalf("retry=%d body=%s", resp.StatusCode, mustBody(t, resp))
+	}
+	_ = resp.Body.Close()
 }
 
 func (f *fixture) seedRepo(projName, repoName string, publicRead bool) (projectID, repoID int64) {

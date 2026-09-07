@@ -117,10 +117,10 @@ func (r *S3ObjectsRepo) ListByBucket(ctx context.Context, bucketID int64, prefix
 	rows, err := r.db.Reader.QueryContext(ctx, `
 		SELECT id, bucket_id, key, size_bytes, etag, content_type, metadata_json, sha256, created_at
 		FROM s3_objects
-		WHERE bucket_id = ? AND key > ? AND key LIKE ? || '%'
+		WHERE bucket_id = ? AND key > ? AND substr(key, 1, length(?)) = ? COLLATE BINARY
 		ORDER BY key
 		LIMIT ?
-	`, bucketID, marker, prefix, maxKeys+1)
+	`, bucketID, marker, prefix, prefix, maxKeys+1)
 	if err != nil {
 		return ListPage{}, fmt.Errorf("s3_objects: list: %w", err)
 	}

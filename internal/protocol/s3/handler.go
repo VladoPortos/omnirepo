@@ -54,6 +54,7 @@ func (d *Deps) Mount(parent chi.Router) {
 		gofakes3.WithTimeSkewLimit(0),
 		gofakes3.WithLogger(slogAdapter{}),
 	).Server()
+	server = opaqueETags(server)
 
 	parent.Route("/s3", func(r chi.Router) {
 		r.Use(RejectNonSigV4)

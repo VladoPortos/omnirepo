@@ -162,6 +162,7 @@ type RunOptions struct {
 // `omnirepo serve` subcommand in particular) convert these to exit code 2
 // for bootstrap atomicity.
 func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
+	httpx.ConfigureLogging(cfg)
 	// 1. Data-root layout.
 	if err := EnsureDirs(cfg.DataRoot); err != nil {
 		return fmt.Errorf("app.Run: ensure dirs: %w", err)
@@ -727,6 +728,33 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 		metadata.NewHelmChartsRepo(db),
 	)
 
+	// RAW handler serves its native protocol route and the session-authenticated
+	// REST upload bridge below. Construct it before api.Mount to share writes.
+	repoRoot := filepath.Join(cfg.DataRoot, "repos")
+	rawHandler := raw.New(raw.Deps{
+		DB:       db,
+		Users:    metadata.NewUsersRepo(db),
+		APIKeys:  metadata.NewAPIKeysRepo(db),
+		Sessions: metadata.NewSessionsRepo(db),
+		Repos:    metadata.NewReposRepo(db),
+		Projects: metadata.NewProjectsRepo(db),
+		Files:    metadata.NewRawFilesRepo(db),
+		Scans:    metadata.NewScansRepo(db),
+		Members:  metadata.NewMembersRepo(db),
+		Path:     storage.NewPathStore(repoRoot),
+		Trash:    storage.NewTrash(filepath.Join(cfg.DataRoot, "trash")),
+		Audit:    auditLogger,
+		RepoRoot: repoRoot,
+		// block_on_severity gate.
+		SeverityGate: raw.NewSeverityGate(
+			metadata.NewReposRepo(db),
+			metadata.NewScansRepo(db),
+			severityCache,
+			auditLogger,
+		),
+	})
+	rawHandler.Mount(router)
+
 	api.Mount(router, api.Deps{
 		DB:            db,
 		Users:         metadata.NewUsersRepo(db),
@@ -778,6 +806,8 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 			Promote:      promoteREST,
 			DeleteTag:    deleteTagREST,
 		},
+		// Session-authenticated RAW uploads reuse the native write handler.
+		ProtocolUploads: &api.ProtocolUploadsDeps{RAW: rawHandler},
 		// session-authed row-delete shims.
 		// The four protocol handlers already implement DELETE; these
 		// re-expose them under /api/v1 where SessionOrAPIKey is active
@@ -806,34 +836,6 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 	// goroutine, which hasn't started yet.
 	go syncPool.Run(ctx)
 	go scanPool.Run(ctx)
-
-	// 6c. RAW pass-through handler. Mounted on
-	// the root router because the URL path includes the project slug —
-	// no /api/v1 prefix.
-	repoRoot := filepath.Join(cfg.DataRoot, "repos")
-	rawHandler := raw.New(raw.Deps{
-		DB:       db,
-		Users:    metadata.NewUsersRepo(db),
-		APIKeys:  metadata.NewAPIKeysRepo(db),
-		Sessions: metadata.NewSessionsRepo(db),
-		Repos:    metadata.NewReposRepo(db),
-		Projects: metadata.NewProjectsRepo(db),
-		Files:    metadata.NewRawFilesRepo(db),
-		Scans:    metadata.NewScansRepo(db),
-		Members:  metadata.NewMembersRepo(db),
-		Path:     storage.NewPathStore(repoRoot),
-		Trash:    storage.NewTrash(filepath.Join(cfg.DataRoot, "trash")),
-		Audit:    auditLogger,
-		RepoRoot: repoRoot,
-		// block_on_severity gate.
-		SeverityGate: raw.NewSeverityGate(
-			metadata.NewReposRepo(db),
-			metadata.NewScansRepo(db),
-			severityCache,
-			auditLogger,
-		),
-	})
-	rawHandler.Mount(router)
 
 	// Protocol handlers + sync wiring already constructed above
 	// (moved before api.Mount so the SyncDeps closure can reference each

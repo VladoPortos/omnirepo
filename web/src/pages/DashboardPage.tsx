@@ -297,7 +297,8 @@ export function DashboardPage() {
     (findings?.critical ?? 0) +
     (findings?.high ?? 0) +
     (findings?.medium ?? 0) +
-    (findings?.low ?? 0);
+    (findings?.low ?? 0) +
+    (findings?.unknown ?? 0);
 
   // Derived composition-card signals (undefined-safe; each card also
   // guards on isLoading / isError independently).
@@ -459,6 +460,12 @@ export function DashboardPage() {
                       <span className="flex items-center gap-1 text-sm">
                         <SeverityBadge severity="low" />
                         <span className="tabular-nums">{findings!.low}</span>
+                      </span>
+                    )}
+                    {(findings?.unknown ?? 0) > 0 && (
+                      <span className="flex items-center gap-1 text-sm">
+                        <SeverityBadge severity="unknown" />
+                        <span className="tabular-nums">{findings!.unknown}</span>
                       </span>
                     )}
                   </div>

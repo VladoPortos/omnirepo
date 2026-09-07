@@ -3,6 +3,7 @@ package driftpurge
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 
 	"github.com/vladoportos/omnirepo/internal/metadata"
@@ -136,9 +137,29 @@ func (a *debAdapter) Purge(ctx context.Context, tx *sql.Tx, row Row, actor strin
 		"filename":          inner.Filename,
 		"storage_pool_path": inner.StoragePoolPath,
 	}
-	return purgeRow(ctx, tx, a.trash, "deb adapter",
+	move, err := purgeRow(ctx, tx, a.trash, "deb adapter",
 		`DELETE FROM deb_packages WHERE id = ?`, "deb_package_drift",
 		inner.ID, snap, a.pathFn(inner), actor)
+	if err != nil {
+		return PendingMove{}, err
+	}
+	// Count all retained memberships, including suites outside this sync.
+	var refs int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM deb_packages WHERE repo_id=? AND COALESCE(NULLIF(storage_pool_path,''), filename)=?`, inner.RepoID, func() string {
+		if inner.StoragePoolPath != "" {
+			return inner.StoragePoolPath
+		}
+		return inner.Filename
+	}()).Scan(&refs); err != nil {
+		return PendingMove{}, err
+	}
+	if refs > 0 {
+		if _, ok := a.trash.(retainedSnapshotter); !ok {
+			return PendingMove{}, fmt.Errorf("deb adapter: trash cannot snapshot retained pool file")
+		}
+		move.trash = retainedDEBTrash{Trash: a.trash}
+	}
+	return move, nil
 }
 
 // debRow wraps *metadata.DEBPackage with the resolved (suite, component)
@@ -164,4 +185,15 @@ func (r *debRow) SampleFilename() string {
 		return r.inner.Filename
 	}
 	return fmt.Sprintf("%s_%s_%s.deb", r.inner.Package, r.inner.Version, r.inner.Architecture)
+}
+
+type retainedSnapshotter interface {
+	SnapshotRetained(context.Context, string, string, int64, string, json.RawMessage) (string, error)
+}
+
+// Redirect the post-commit move to a metadata-only snapshot for shared files.
+type retainedDEBTrash struct{ storage.Trash }
+
+func (t retainedDEBTrash) MoveWithSnapshot(ctx context.Context, path, kind string, id int64, actor string, snapshot json.RawMessage) (string, error) {
+	return t.Trash.(retainedSnapshotter).SnapshotRetained(ctx, path, kind, id, actor, snapshot)
 }

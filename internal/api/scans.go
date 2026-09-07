@@ -795,13 +795,20 @@ func (d Deps) handleListScanVulns(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	limit, offset := int64(1000), int64(0)
+	if n, err := strconv.ParseInt(r.URL.Query().Get("limit"), 10, 64); err == nil && n > 0 && n <= 1000 {
+		limit = n
+	}
+	if n, err := strconv.ParseInt(r.URL.Query().Get("offset"), 10, 64); err == nil && n >= 0 {
+		offset = n
+	}
 	rows, err := d.DB.Reader.QueryContext(r.Context(), `
 		SELECT id, scan_id, cve_id, severity, package_name, package_version,
 		       fixed_version, title, COALESCE(description, '')
 		FROM vulnerabilities WHERE scan_id=?
 		ORDER BY id ASC
-		LIMIT 1000
-	`, s.ID)
+		LIMIT ? OFFSET ?
+	`, s.ID, limit, offset)
 	if err != nil {
 		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 		return

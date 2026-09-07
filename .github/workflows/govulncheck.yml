@@ -6,9 +6,9 @@ name: govulncheck
 
 on:
   push:
-    branches: [main]
+    branches: [release]
   pull_request:
-    branches: [main]
+    branches: [release]
   schedule:
     - cron: "15 3 * * 1"
 
@@ -30,7 +30,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
-          go-version: "1.25.12"
+          go-version: "1.26.7"
           check-latest: true
           cache: true
 
@@ -41,20 +41,23 @@ jobs:
         shell: bash
         run: |
           set +e
-          govulncheck -format sarif ./... > govulncheck.sarif
+          govulncheck -scan symbol -format sarif ./... > govulncheck.sarif
           scan_status=$?
           set -e
 
-          # Exit 3 means vulnerabilities were found. Any other non-zero status
-          # is a scanner/build failure and must never be allowlisted.
-          if [[ "$scan_status" -ne 0 && "$scan_status" -ne 3 ]]; then
+          # SARIF mode returns zero even for findings. A non-zero status is a
+          # scanner/build failure and must never be allowlisted.
+          if [[ "$scan_status" -ne 0 ]]; then
             cat govulncheck.sarif
             exit "$scan_status"
           fi
 
-          jq -e '.runs' govulncheck.sarif >/dev/null
+          jq -e '.runs | type == "array" and length > 0' govulncheck.sarif >/dev/null
+          jq -r '.runs[].results[]? | [.level, .ruleId, .message.text] | @tsv' govulncheck.sarif
+          # In symbol mode, error means a vulnerable symbol is called;
+          # warning/note mean imported/module-only, without a detected call.
           mapfile -t findings < <(
-            jq -r '.runs[].results[]?.ruleId' govulncheck.sarif | sort -u
+            jq -r '.runs[].results[]? | select(.level == "error") | .ruleId' govulncheck.sarif | sort -u
           )
           printf '%s\n' "${findings[@]}"
 
@@ -75,5 +78,13 @@ jobs:
           fi
 
           if [[ "${#findings[@]}" -gt 0 ]]; then
-            echo "::warning::Only reviewed, non-reachable, no-fix advisories were reported"
+            echo "::warning::Call-level findings match existing reviewed exceptions; see SARIF for all findings"
           fi
+
+      - name: Upload vulnerability report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: govulncheck-sarif
+          path: govulncheck.sarif
+          if-no-files-found: ignore

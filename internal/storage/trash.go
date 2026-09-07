@@ -116,7 +116,7 @@ func NewTrash(root string) Trash {
 }
 
 func (t *trashImpl) Move(ctx context.Context, srcPath, kind string, id int64, actor string) (string, error) {
-	return t.moveInternal(ctx, srcPath, kind, id, actor, nil)
+	return t.moveInternal(ctx, srcPath, kind, id, actor, nil, false)
 }
 
 // MoveWithSnapshot is the drift-purge ingress: identical to Move
@@ -124,13 +124,13 @@ func (t *trashImpl) Move(ctx context.Context, srcPath, kind string, id int64, ac
 // field. Passing nil is equivalent to plain Move (the JSON tag is
 // omitempty so the key never appears for nil snapshots).
 func (t *trashImpl) MoveWithSnapshot(ctx context.Context, srcPath, kind string, id int64, actor string, rowSnapshot json.RawMessage) (string, error) {
-	return t.moveInternal(ctx, srcPath, kind, id, actor, rowSnapshot)
+	return t.moveInternal(ctx, srcPath, kind, id, actor, rowSnapshot, false)
 }
 
 // moveInternal is the shared body for Move + MoveWithSnapshot.
 // rowSnapshot is nil for plain Move; non-nil snapshots are stamped
 // into the sidecar's RowSnapshot field for drift-purge restore.
-func (t *trashImpl) moveInternal(ctx context.Context, srcPath, kind string, id int64, actor string, rowSnapshot json.RawMessage) (string, error) {
+func (t *trashImpl) moveInternal(ctx context.Context, srcPath, kind string, id int64, actor string, rowSnapshot json.RawMessage, keepSource bool) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
@@ -191,7 +191,7 @@ func (t *trashImpl) moveInternal(ctx context.Context, srcPath, kind string, id i
 		OriginalID:    id,
 		MovedAtUnix:   now.Unix(),
 		DeletedByUser: actor,
-		Empty:         missing,
+		Empty:         missing || keepSource,
 		RowSnapshot:   rowSnapshot,
 	}
 	b, err := json.Marshal(meta)
@@ -203,7 +203,7 @@ func (t *trashImpl) moveInternal(ctx context.Context, srcPath, kind string, id i
 		_ = os.Remove(dstDir)
 		return "", fmt.Errorf("trash: write sidecar: %w", err)
 	}
-	if !missing {
+	if !missing && !keepSource {
 		if err := os.Rename(srcPath, dst); err != nil {
 			_ = os.Remove(filepath.Join(dstDir, trashMetaFile))
 			_ = os.Remove(dstDir)
@@ -335,4 +335,10 @@ func parseTrashHolder(name string) (TrashEntry, bool) {
 		Kind:       kind,
 		OriginalID: id,
 	}, true
+}
+
+// SnapshotRetained records a removed publication while its shared bytes remain live.
+// Optional extension of Trash: existing implementations need not support it.
+func (t *trashImpl) SnapshotRetained(ctx context.Context, srcPath, kind string, id int64, actor string, rowSnapshot json.RawMessage) (string, error) {
+	return t.moveInternal(ctx, srcPath, kind, id, actor, rowSnapshot, true)
 }

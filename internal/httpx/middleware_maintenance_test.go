@@ -129,3 +129,34 @@ func TestMaintenanceMode_NilSettingsPassThrough(t *testing.T) {
 		t.Fatalf("expected 200, got %d", rec.Code)
 	}
 }
+
+func TestMaintenanceAllowsAuthenticationAndGitReadsOnly(t *testing.T) {
+	settings := metadata.NewSettingsRepo(sqlitetest.New(t))
+	if err := settings.Set(context.Background(), "maintenance_mode", "true"); err != nil {
+		t.Fatal(err)
+	}
+	h := httpx.MaintenanceMode(settings)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(204) }))
+	for _, tc := range []struct {
+		method, path string
+		want         int
+	}{
+		{"POST", "/api/v1/auth/login", 204},
+		{"POST", "/api/v1/auth/logout", 204},
+		{"POST", "/api/v1/auth/change-password", 204},
+		{"POST", "/team/git/repo.git/git-upload-pack", 204},
+		{"POST", "/git/team/repo.git/git-upload-pack", 204},
+		{"POST", "/team/git/repo.git/git-receive-pack", 503},
+		{"PUT", "/team/raw/repo/git-upload-pack", 503},
+		{"POST", "/team/raw/repo/git-upload-pack", 503},
+		{"POST", "/api/v1/admin/gc", 503},
+		{"POST", "/api/v1/setup/superadmin", 503},
+	} {
+		t.Run(tc.method+tc.path, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, httptest.NewRequest(tc.method, tc.path, nil))
+			if w.Code != tc.want {
+				t.Fatalf("status=%d want=%d", w.Code, tc.want)
+			}
+		})
+	}
+}

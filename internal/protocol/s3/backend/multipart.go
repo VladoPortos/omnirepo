@@ -222,6 +222,9 @@ func (b *Backend) UploadPart(bucket, object string, id gofakes3.UploadID, partNu
 // CompleteMultipartUpload concats parts in ascending order, writes the final
 // object atomically, upserts s3_objects, and cleans up the staging tree.
 func (b *Backend) CompleteMultipartUpload(bucket, object string, id gofakes3.UploadID, input *gofakes3.CompleteMultipartUploadRequest) (versionID gofakes3.VersionID, etag string, err error) {
+	if err := validateObjectKey(object); err != nil {
+		return "", "", err
+	}
 	ctx := context.Background()
 	uploadID := string(id)
 	if err := validateUploadID(uploadID); err != nil {
@@ -341,31 +344,30 @@ func (b *Backend) CompleteMultipartUpload(bucket, object string, id gofakes3.Upl
 
 	finalETag := fmt.Sprintf("%s-%d", hex.EncodeToString(mergeHasher.Sum(nil)), len(parts))
 
-	// Rename first, then commit the DB tx. If rename fails, nothing
-	// changed (DB still consistent, tmp cleaned up by deferred cleanup). If
-	// rename succeeds but DB commit fails, we delete the freshly-renamed
-	// final file so the DB row never points to an object that survives.
-	if err := os.Rename(tmpName, dst); err != nil {
-		return "", "", fmt.Errorf("backend: rename: %w", err)
+	// Retain the previous payload until metadata commits. Replace restores it
+	// on failure; the bucket lock also excludes PUT, DELETE, and readers.
+	merged, err := os.Open(tmpName)
+	if err != nil {
+		return "", "", err
 	}
-	cleanup = false
-	if err := b.DB.WriteTx(ctx, func(tx *sql.Tx) error {
-		if _, err := b.Objects.Upsert(ctx, tx, &metadata.S3Object{
-			BucketID:     bucketID,
-			Key:          object,
-			SizeBytes:    total,
-			ETag:         finalETag,
-			ContentType:  contentTypeFromMeta(up.MetadataJSON),
-			MetadataJSON: up.MetadataJSON,
-			SHA256:       "multipart:" + finalETag,
-		}); err != nil {
-			return err
-		}
-		return b.Multipart.DeleteUpload(ctx, tx, uploadID)
-	}); err != nil {
-		// Compensating file delete — the DB row was never persisted, so
-		// the final file is now an orphan. Best-effort.
-		_ = os.Remove(dst)
+	defer func() { _ = merged.Close() }()
+	_, err = storage.NewPathStore(b.bucketRoot(bucket)).Replace(ctx, object, merged, func(int64) error {
+		return b.DB.WriteTx(ctx, func(tx *sql.Tx) error {
+			if _, err := b.Objects.Upsert(ctx, tx, &metadata.S3Object{
+				BucketID:     bucketID,
+				Key:          object,
+				SizeBytes:    total,
+				ETag:         finalETag,
+				ContentType:  contentTypeFromMeta(up.MetadataJSON),
+				MetadataJSON: up.MetadataJSON,
+				SHA256:       "multipart:" + finalETag,
+			}); err != nil {
+				return err
+			}
+			return b.Multipart.DeleteUpload(ctx, tx, uploadID)
+		})
+	})
+	if err != nil {
 		return "", "", fmt.Errorf("backend: commit multipart: %w", err)
 	}
 	if pf, err := os.Open(filepath.Dir(dst)); err == nil {

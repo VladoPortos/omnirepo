@@ -9,11 +9,6 @@ import (
 	"github.com/vladoportos/omnirepo/internal/metadata/sqlitetest"
 )
 
-// resetTablesSlice returns the package-private resetTables via a test-only
-// probe. We can't import the unexported slice, so the invariant test below
-// derives the expected set from a query against the DB and compares against
-// sqlite_master — indirect but sufficient to catch migration drift.
-
 // seedSuperAdmin inserts a super-admin users row suitable for Reset
 // preservation assertions.
 func seedSuperAdmin(t *testing.T, db *metadata.DB) int64 {
@@ -56,12 +51,9 @@ func seedBootstrapSettings(t *testing.T, db *metadata.DB) {
 // sqlite_master for every physical + virtual table (filtering the FTS5
 // auxiliary shadow tables) and asserts the set is wiped by DB.Reset.
 //
-// Strategy: seed one row into every table we can, call Reset, assert every
-// real table is empty (or its preservation clause took effect). If a NEW
-// migration adds a table that isn't in resetTables, at least one of these
-// rows will survive and the test fails loudly. We do NOT need access to
-// the unexported resetTables slice — the observable behaviour is
-// "every wipeable table is empty post-Reset".
+// Checks the fresh-schema empty-state reset and preservation clauses.
+// TestDBReset_CoversLaterAndFutureTables additionally seeds protocol tables
+// and a synthetic future table to verify occupied tables are really wiped.
 func TestResetCoversEveryTable(t *testing.T) {
 	db := sqlitetest.New(t)
 	ctx := context.Background()
@@ -117,8 +109,8 @@ func TestResetCoversEveryTable(t *testing.T) {
 	}
 
 	// For every enumerated table that isn't preserved, assert it is empty.
-	// If a future migration adds a table absent from resetTables, this
-	// failing query/assertion will call it out.
+	// The seeded regression below verifies that this also holds for occupied
+	// tables introduced by later migrations.
 	for _, name := range all {
 		if preserved[name] {
 			continue
@@ -129,7 +121,7 @@ func TestResetCoversEveryTable(t *testing.T) {
 			t.Fatalf("count %s: %v", name, err)
 		}
 		if count != 0 {
-			t.Errorf("table %s has %d row(s) after Reset; add it to resetTables", name, count)
+			t.Errorf("table %s has %d row(s) after Reset", name, count)
 		}
 	}
 
@@ -155,7 +147,7 @@ func TestDBReset_WipesNonBootstrapState(t *testing.T) {
 
 	// Seed a project + repo + session + api key + audit row + upstream
 	// cred + s3_access_key — a representative cross-section of the
-	// resetTables inventory that also exercises the FK-OFF path because
+	// wipe inventory that also exercises the FK-OFF path because
 	// audit_log / upstream_creds / s3_access_keys carry NO-ACTION FKs
 	// against users(id).
 	var pid int64
@@ -340,5 +332,49 @@ func TestDBReset_PreservesSchemaMigrations(t *testing.T) {
 	}
 	if after != before {
 		t.Errorf("schema_migrations count = %d, want %d (never wipe the migration ledger)", after, before)
+	}
+}
+
+// New protocol tables must be reset even when the migration author has not
+// updated a second table inventory. Include a future schema table so this
+// exercises the schema-driven contract, rather than just today's names.
+func TestDBReset_CoversLaterAndFutureTables(t *testing.T) {
+	db := sqlitetest.New(t)
+	ctx := context.Background()
+	seedSuperAdmin(t, db)
+	for _, q := range []string{
+		`INSERT INTO projects(id,name) VALUES(1,'reset-late')`,
+		`INSERT INTO repos(id,project_id,type,name) VALUES(1,1,'docker','late')`,
+		`INSERT INTO docker_blobs(digest,size_bytes) VALUES('sha256:owned',1)`,
+		`INSERT INTO docker_repo_blobs(repo_id,digest) VALUES(1,'sha256:owned')`,
+		`INSERT INTO go_modules(repo_id,module_path,version,digest) VALUES(1,'example.org/m','v1.0.0','digest')`,
+		`INSERT INTO npm_packages(repo_id,name,version,version_json,tarball) VALUES(1,'pkg','1.0.0','{}','pkg.tgz')`,
+		`INSERT INTO npm_dist_tags(repo_id,name,tag,version) VALUES(1,'pkg','latest','1.0.0')`,
+		`INSERT INTO maven_artifacts(repo_id,group_id,artifact_id,version,extension,filename,path) VALUES(1,'org.example','a','1','jar','a.jar','a.jar')`,
+		`CREATE TABLE "future_protocol_data"(id INTEGER PRIMARY KEY, value TEXT)`,
+		`INSERT INTO "future_protocol_data" VALUES(1,'must disappear')`,
+	} {
+		if _, err := db.Writer.ExecContext(ctx, q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := db.Reset(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"docker_repo_blobs", "go_modules", "npm_packages", "npm_dist_tags", "maven_artifacts", "future_protocol_data"} {
+		var n int
+		if err := db.Reader.QueryRowContext(ctx, `SELECT COUNT(*) FROM "`+name+`"`).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		if n != 0 {
+			t.Errorf("%s retains %d rows after Reset", name, n)
+		}
+	}
+	var adminCount int
+	if err := db.Reader.QueryRowContext(ctx, `SELECT COUNT(*) FROM users WHERE is_super_admin=1`).Scan(&adminCount); err != nil {
+		t.Fatal(err)
+	}
+	if adminCount != 1 {
+		t.Fatalf("admin count=%d", adminCount)
 	}
 }

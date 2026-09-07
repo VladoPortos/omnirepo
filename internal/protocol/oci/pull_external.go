@@ -443,6 +443,9 @@ func (p *PullExternalHandler) streamImageBlobs(
 			_ = progress.Set(ctx, cfgStep, *accumDone, totalBytes)
 		}
 	}}
+	if err := p.protectPullBlob(ctx, computeMfDigest(cfg)); err != nil {
+		return err
+	}
 	if _, _, err := p.deps.CAS.Put(ctx, cr); err != nil {
 		return fmt.Errorf("pull_external: cas put config: %w", err)
 	}
@@ -468,6 +471,13 @@ func (p *PullExternalHandler) streamLayer(
 			_ = progress.Set(ctx, step, *accumDone, totalBytes)
 		}
 	}}
+	digest, err := l.Digest()
+	if err != nil {
+		return httpx.SanitizeUpstreamErr(err)
+	}
+	if err := p.protectPullBlob(ctx, digest.String()); err != nil {
+		return err
+	}
 	if _, _, err := p.deps.CAS.Put(ctx, cr); err != nil {
 		return fmt.Errorf("pull_external: cas put layer: %w", err)
 	}
@@ -728,4 +738,15 @@ func writeActionOK(w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(body)
+}
+
+// Keep re-used zero-ref blobs alive from CAS deduplication through manifest
+// publication. Extend beyond the job deadline so large downloads cannot let
+// an early layer's marker expire before its final manifest transaction.
+func (p *PullExternalHandler) protectPullBlob(ctx context.Context, digest string) error {
+	ttl := time.Hour
+	if deadline, ok := ctx.Deadline(); ok {
+		ttl += time.Until(deadline)
+	}
+	return metadata.NewBlobUploadsRepo(p.deps.DB).Start(ctx, digest, ttl)
 }

@@ -22,9 +22,9 @@ name: Trivy
 
 on:
   push:
-    branches: [main]
+    branches: [release]
   pull_request:
-    branches: [main]
+    branches: [release]
   schedule:
     - cron: "45 3 * * 1"
 

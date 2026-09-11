@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"mime"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	chimw "github.com/go-chi/chi/v5/middleware"
 
@@ -127,7 +129,7 @@ func (h *Handler) head(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ct := h.contentTypeFor(absPath, res.relPath)
-	w.Header().Set("Content-Type", ct)
+	setFileResponseHeaders(w.Header(), ct, res.relPath)
 	w.Header().Set("Content-Length", strconv.FormatInt(info.Size(), 10))
 	w.WriteHeader(http.StatusOK)
 }
@@ -148,13 +150,48 @@ func (h *Handler) serveFile(w http.ResponseWriter, r *http.Request, absPath stri
 	defer func() { _ = f.Close() }()
 
 	ct := h.contentTypeFor(absPath, relPath)
-	w.Header().Set("Content-Type", ct)
+	setFileResponseHeaders(w.Header(), ct, relPath)
 	w.Header().Set("Content-Length", strconv.FormatInt(info.Size(), 10))
 	w.WriteHeader(http.StatusOK)
 	if r.Method == http.MethodHead {
 		return
 	}
 	_, _ = io.Copy(w, f)
+}
+
+// setFileResponseHeaders prevents browser-active RAW artifacts from executing
+// in OmniRepo's authenticated origin. Non-active artifacts retain their
+// detected media type so package clients and ordinary downloads are unchanged.
+func setFileResponseHeaders(header http.Header, contentType, relPath string) {
+	header.Set("X-Content-Type-Options", "nosniff")
+	if !isBrowserActiveContentType(contentType) {
+		header.Set("Content-Type", contentType)
+		return
+	}
+
+	header.Set("Content-Type", "application/octet-stream")
+	header.Set("Content-Security-Policy", "sandbox; default-src 'none'")
+	disposition := mime.FormatMediaType("attachment", map[string]string{
+		"filename": filepath.Base(relPath),
+	})
+	if disposition == "" {
+		disposition = "attachment"
+	}
+	header.Set("Content-Disposition", disposition)
+}
+
+func isBrowserActiveContentType(contentType string) bool {
+	mediaType, _, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		mediaType = strings.ToLower(strings.TrimSpace(strings.Split(contentType, ";")[0]))
+	}
+	mediaType = strings.ToLower(mediaType)
+	return mediaType == "text/html" ||
+		mediaType == "application/xhtml+xml" ||
+		mediaType == "text/xml" ||
+		mediaType == "application/xml" ||
+		mediaType == "image/svg+xml" ||
+		strings.HasSuffix(mediaType, "+xml")
 }
 
 // contentTypeFor implements a two-tier resolution:

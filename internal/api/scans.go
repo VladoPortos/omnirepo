@@ -37,6 +37,7 @@ import (
 
 	"github.com/vladoportos/omnirepo/internal/audit"
 	"github.com/vladoportos/omnirepo/internal/auth"
+	authmw "github.com/vladoportos/omnirepo/internal/auth/middleware"
 	"github.com/vladoportos/omnirepo/internal/metadata"
 )
 
@@ -87,7 +88,8 @@ func (d Deps) mountScans(r chi.Router) {
 	if d.ScanDeps == nil || d.ScanDeps.Scans == nil {
 		return
 	}
-	r.Post("/projects/{name}/repos/{type}/{repo}/artifacts/{id}/rescan", d.handleRescan)
+	r.With(authmw.RequireCanWith(auth.ActionUpdateRepo, d.resolveProjectTargetFromURL)).
+		Post("/projects/{name}/repos/{type}/{repo}/artifacts/{id}/rescan", d.handleRescan)
 	r.Get("/projects/{name}/repos/{type}/{repo}/artifacts/{id}/scans", d.handleListArtifactScans)
 	// Repo-level scans list — declared in openapi.yaml, previously absent
 	// from the router so requests fell through to the SPA. Populates the
@@ -97,12 +99,14 @@ func (d Deps) mountScans(r chi.Router) {
 	// handles retries one-by-one, but operators also want a single button
 	// after a Trivy DB refresh or after past scans failed en masse (e.g.
 	// DB not yet installed when uploads landed).
-	r.Post("/projects/{name}/repos/{type}/{repo}/rescan", d.handleRescanRepo)
+	r.With(authmw.RequireCanWith(auth.ActionUpdateRepo, d.resolveProjectTargetFromURL)).
+		Post("/projects/{name}/repos/{type}/{repo}/rescan", d.handleRescanRepo)
 	// Prune historical scan rows, keeping only the latest per
 	// (artifact_kind, artifact_id). Operators repeatedly rescanning after
 	// DB updates otherwise accumulate long history in the Scan Results
 	// tab; this button makes the history reflect current state.
-	r.Post("/projects/{name}/repos/{type}/{repo}/scans/prune", d.handleScanPrune)
+	r.With(authmw.RequireCanWith(auth.ActionUpdateRepo, d.resolveProjectTargetFromURL)).
+		Post("/projects/{name}/repos/{type}/{repo}/scans/prune", d.handleScanPrune)
 	r.Get("/scans/{id}", d.handleGetScan)
 	r.Get("/scans/{id}/vulnerabilities", d.handleListScanVulns)
 	r.Get("/scans/{id}/sbom", d.handleGetSBOM)

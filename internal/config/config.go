@@ -165,6 +165,7 @@ type Docker struct {
 }
 
 type ServerConfig struct {
+	HTTPEnabled       bool     `koanf:"http_enabled"`
 	HTTPPort          int      `koanf:"http_port"`
 	HTTPSPort         int      `koanf:"https_port"`
 	Hostname          string   `koanf:"hostname"`
@@ -223,6 +224,7 @@ var defaultConfigPath = "/var/lib/omnirepo/config/omnirepo.yaml"
 func Defaults() Config {
 	return Config{
 		Server: ServerConfig{
+			HTTPEnabled:       true,
 			HTTPPort:          8080,
 			HTTPSPort:         8443,
 			ExternalHostnames: []string{},

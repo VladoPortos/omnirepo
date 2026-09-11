@@ -31,6 +31,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/vladoportos/omnirepo/internal/httperr"
+	"github.com/vladoportos/omnirepo/internal/httpx"
 	"github.com/vladoportos/omnirepo/internal/metadata"
 	"golang.org/x/text/unicode/norm"
 )
@@ -108,6 +109,10 @@ func validateMirrorUpstreamURL(raw, repoType string) bool {
 		if repoType != "helm" {
 			return false
 		}
+		u, err := url.Parse(raw)
+		if err != nil || httpx.ValidateOutboundHost(u.Hostname()) != nil {
+			return false
+		}
 		return classifyHelmUpstream(raw) == nil
 	}
 	u, err := url.Parse(raw)
@@ -118,6 +123,9 @@ func validateMirrorUpstreamURL(raw, repoType string) bool {
 		return false
 	}
 	if u.Host == "" {
+		return false
+	}
+	if err := httpx.ValidateOutboundHost(u.Hostname()); err != nil {
 		return false
 	}
 	return true

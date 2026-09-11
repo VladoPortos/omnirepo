@@ -7,10 +7,30 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/vladoportos/omnirepo/internal/auth"
 	"github.com/vladoportos/omnirepo/internal/auth/middleware"
 )
+
+func TestPasswordAttemptThrottle_RejectsBeforeSecondBasicPasswordAttempt(t *testing.T) {
+	e := newEnv(t)
+	limiter := auth.NewAttemptLimiter(auth.AttemptLimiterConfig{
+		Burst: 1, RefillInterval: time.Hour, MaxPeers: 8, MaxConcurrent: 1,
+	})
+	h := middleware.PasswordAttemptThrottle(limiter)(middleware.BasicOrAPIKey(e.Deps)(okHandler()))
+
+	for attempt, want := range []int{http.StatusUnauthorized, http.StatusTooManyRequests} {
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.RemoteAddr = "192.0.2.44:1234"
+		req.Header.Set("Authorization", basicAuthHeader("alice", "wrong-password"))
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		if w.Code != want {
+			t.Fatalf("attempt %d: status=%d want %d body=%q", attempt+1, w.Code, want, w.Body.String())
+		}
+	}
+}
 
 func basicAuthHeader(login, password string) string {
 	return "Basic " + base64.StdEncoding.EncodeToString([]byte(login+":"+password))

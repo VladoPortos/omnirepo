@@ -260,6 +260,29 @@ func TestLogin_WrongPassword(t *testing.T) {
 	}
 }
 
+func TestLogin_ThrottledPeerReturns429(t *testing.T) {
+	limiter := auth.NewAttemptLimiter(auth.AttemptLimiterConfig{
+		Burst: 1, RefillInterval: time.Hour, MaxPeers: 8, MaxConcurrent: 1,
+	})
+	s := newTestServer(t, func(d *api.Deps) { d.AuthLimiter = limiter })
+
+	resp, _ := s.do(t, http.MethodPost, "/api/v1/auth/login", "", api.LoginRequest{
+		Login: "alice", Password: "wrong-password",
+	})
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("first status=%d want 401", resp.StatusCode)
+	}
+	resp, body := s.do(t, http.MethodPost, "/api/v1/auth/login", "", api.LoginRequest{
+		Login: "alice", Password: "wrong-password",
+	})
+	if resp.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("second status=%d want 429 body=%v", resp.StatusCode, body)
+	}
+	if resp.Header.Get("Retry-After") == "" {
+		t.Fatal("Retry-After missing")
+	}
+}
+
 // TestLoginTimingOracle is the regression gate for login timing: login
 // attempts with
 // (a) a nonexistent user, (b) a malformed login, and (c) a real user with a

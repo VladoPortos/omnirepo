@@ -16,6 +16,9 @@ func TestDefaults(t *testing.T) {
 	if d.Server.HTTPPort != 8080 {
 		t.Errorf("Server.HTTPPort = %d, want 8080", d.Server.HTTPPort)
 	}
+	if !d.Server.HTTPEnabled {
+		t.Error("Server.HTTPEnabled=false want true")
+	}
 	if d.Server.HTTPSPort != 8443 {
 		t.Errorf("Server.HTTPSPort = %d, want 8443", d.Server.HTTPSPort)
 	}
@@ -78,6 +81,7 @@ func TestLoadYAML(t *testing.T) {
 
 func TestEnvOverride(t *testing.T) {
 	t.Setenv("OMNIREPO_SERVER__HTTP_PORT", "9000")
+	t.Setenv("OMNIREPO_SERVER__HTTP_ENABLED", "false")
 	t.Setenv("OMNIREPO_LOG__LEVEL", "debug")
 
 	cfg, err := config.Load("testdata/omnirepo.example.yaml")
@@ -86,6 +90,9 @@ func TestEnvOverride(t *testing.T) {
 	}
 	if cfg.Server.HTTPPort != 9000 {
 		t.Errorf("Server.HTTPPort = %d, want 9000 (env override)", cfg.Server.HTTPPort)
+	}
+	if cfg.Server.HTTPEnabled {
+		t.Error("Server.HTTPEnabled=true want false (env override)")
 	}
 	if cfg.Log.Level != "debug" {
 		t.Errorf("Log.Level = %q, want debug (env override)", cfg.Log.Level)

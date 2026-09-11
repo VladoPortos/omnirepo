@@ -39,6 +39,9 @@ type Deps struct {
 	Repos         *metadata.ReposRepo
 	Settings      *metadata.SettingsRepo
 	UpstreamCreds *metadata.UpstreamCredsRepo
+	// AuthLimiter bounds unauthenticated Argon2 work. Nil keeps isolated unit
+	// tests backward-compatible; app.Run always provides the shared limiter.
+	AuthLimiter *auth.AttemptLimiter
 
 	// S3 access-key CRUD. nil-safe — when nil, the routes are not mounted.
 	S3Keys *metadata.S3KeysRepo
@@ -400,6 +403,14 @@ func (d Deps) resolveProjectTargetFromURL(r *http.Request) auth.Target {
 // -----------------------------------------------------------------------------
 
 func (d Deps) handleLogin(w http.ResponseWriter, r *http.Request) {
+	if d.AuthLimiter != nil {
+		permit, retry, ok := d.AuthLimiter.Acquire(r.RemoteAddr)
+		if !ok {
+			authmw.WriteAuthRateLimited(w, r, retry)
+			return
+		}
+		defer permit.Release()
+	}
 	// Close the user-enumeration timing oracle by ensuring every
 	// negative path burns the same argon2id CPU+memory cost as a real
 	// password verification. Any early return on a failure path MUST have

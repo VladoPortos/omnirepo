@@ -106,6 +106,9 @@ type PullExternalDeps struct {
 	OCI *Handler
 	// Timeout bounds a single job. Zero → DefaultPullExternalTimeout.
 	Timeout time.Duration
+	// Transport applies the process outbound-destination policy to registry
+	// and registry-auth requests. app.Run always wires a guarded transport.
+	Transport http.RoundTripper
 }
 
 // PullExternalHandler is the sync-pool job handler for kind="pull_external".
@@ -197,6 +200,9 @@ func (p *PullExternalHandler) Handle(ctx context.Context, payload string, projec
 
 	// Build remote options.
 	opts := []remote.Option{remote.WithContext(ctx)}
+	if p.deps.Transport != nil {
+		opts = append(opts, remote.WithTransport(p.deps.Transport))
+	}
 	var usedCredID int64
 	switch {
 	case job.CredID != 0:

@@ -47,6 +47,6 @@ VOLUME ["/var/lib/omnirepo"]
 EXPOSE 8080 8443
 
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
-    CMD wget -qO- http://localhost:8080/healthz || exit 1
+    CMD wget --no-check-certificate -qO- https://localhost:8443/healthz || exit 1
 
 ENTRYPOINT ["omnirepo", "serve"]

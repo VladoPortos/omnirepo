@@ -21,6 +21,7 @@ import (
 	"github.com/vladoportos/omnirepo/internal/api"
 	"github.com/vladoportos/omnirepo/internal/audit"
 	"github.com/vladoportos/omnirepo/internal/auth"
+	authmw "github.com/vladoportos/omnirepo/internal/auth/middleware"
 	"github.com/vladoportos/omnirepo/internal/config"
 	omrcrypto "github.com/vladoportos/omnirepo/internal/crypto"
 	"github.com/vladoportos/omnirepo/internal/httpx"
@@ -434,6 +435,9 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 		Settings:       metadata.NewSettingsRepo(db),
 		LoginBoxSeeder: seedLoginBox,
 	})
+	authLimiter := auth.NewAttemptLimiter(auth.AttemptLimiterConfig{})
+	router.Use(authmw.PasswordAttemptThrottle(authLimiter))
+	outboundTransport := httpx.NewSafeTransport(nil)
 
 	// 6a. S3 virtual-host rewrite. MUST be registered
 	// as global middleware BEFORE any routes so chi's route matching sees
@@ -606,8 +610,9 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 		Creds:    upstreamCreds,
 		Audit:    auditLogger,
 		// sync-jobs repo for throttled progress writes.
-		SyncJobs: metadata.NewSyncJobsRepo(db),
-		OCI:      ociHandler,
+		SyncJobs:  metadata.NewSyncJobsRepo(db),
+		OCI:       ociHandler,
+		Transport: outboundTransport,
 	})
 	syncHandlers[oci.PullExternalJobKind] = func(c context.Context, j *jobs.JobView) error {
 		return pullExternalJob.Handle(c, j.Payload, j.ProjectID, j.RepoID, j.ID)
@@ -711,6 +716,7 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 		debRegistry:  debRegistry,
 		pypiRegistry: pypiRegistry,
 		helmRegistry: helmRegistry,
+		transport:    outboundTransport,
 	}.wireSync()
 
 	// S3 backend is constructed here (ahead of the 6e mount site below) so
@@ -765,6 +771,7 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 		Repos:         metadata.NewReposRepo(db).WithReindexer(ftsReindexer),
 		Settings:      metadata.NewSettingsRepo(db),
 		UpstreamCreds: upstreamCreds,
+		AuthLimiter:   authLimiter,
 		// S3 access-key CRUD. Reuses the same per-install
 		// AEAD master key as upstream_creds.
 		S3Keys:        metadata.NewS3KeysRepo(db),
@@ -887,20 +894,26 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 		slog.InfoContext(ctx, "spa.mode", "handler", "embedded")
 	}
 
-	// 7. Listeners.
-	httpLn := opts.HTTPListener
-	if httpLn == nil {
-		ln, err := net.Listen("tcp", fmt.Sprintf(":%d", cfg.Server.HTTPPort))
-		if err != nil {
-			return fmt.Errorf("app.Run: listen http: %w", err)
+	// 7. Listeners. HTTPS is always present; HTTP can be disabled explicitly
+	// so credentials and artifact traffic are never accepted over plaintext.
+	var httpLn net.Listener
+	if cfg.Server.HTTPEnabled {
+		httpLn = opts.HTTPListener
+		if httpLn == nil {
+			ln, err := net.Listen("tcp", fmt.Sprintf(":%d", cfg.Server.HTTPPort))
+			if err != nil {
+				return fmt.Errorf("app.Run: listen http: %w", err)
+			}
+			httpLn = ln
 		}
-		httpLn = ln
 	}
 	httpsLn := opts.HTTPSListener
 	if httpsLn == nil {
 		ln, err := net.Listen("tcp", fmt.Sprintf(":%d", cfg.Server.HTTPSPort))
 		if err != nil {
-			_ = httpLn.Close()
+			if httpLn != nil {
+				_ = httpLn.Close()
+			}
 			return fmt.Errorf("app.Run: listen https: %w", err)
 		}
 		httpsLn = ln
@@ -932,13 +945,16 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 
 	errs := make(chan error, 2)
 	var wg sync.WaitGroup
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
-		if err := httpSrv.Serve(httpLn); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			errs <- fmt.Errorf("http serve: %w", err)
-		}
-	}()
+	wg.Add(1)
+	if httpLn != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := httpSrv.Serve(httpLn); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				errs <- fmt.Errorf("http serve: %w", err)
+			}
+		}()
+	}
 	go func() {
 		defer wg.Done()
 		tlsLn := stdtls.NewListener(httpsLn, httpsSrv.TLSConfig)
@@ -947,7 +963,11 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 		}
 	}()
 
-	slog.InfoContext(ctx, "http.listen", "addr", httpLn.Addr().String())
+	if httpLn != nil {
+		slog.InfoContext(ctx, "http.listen", "addr", httpLn.Addr().String())
+	} else {
+		slog.InfoContext(ctx, "http.disabled")
+	}
 	slog.InfoContext(ctx, "https.listen", "addr", httpsLn.Addr().String())
 
 	if opts.Ready != nil {
@@ -958,7 +978,9 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 	select {
 	case <-ctx.Done():
 	case err := <-errs:
-		_ = httpSrv.Close()
+		if httpLn != nil {
+			_ = httpSrv.Close()
+		}
 		_ = httpsSrv.Close()
 		wg.Wait()
 		return err
@@ -982,7 +1004,9 @@ func Run(ctx context.Context, cfg config.Config, opts RunOptions) error {
 
 	shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	_ = httpSrv.Shutdown(shutCtx)
+	if httpLn != nil {
+		_ = httpSrv.Shutdown(shutCtx)
+	}
 	_ = httpsSrv.Shutdown(shutCtx)
 	wg.Wait()
 	return nil

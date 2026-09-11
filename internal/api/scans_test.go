@@ -376,6 +376,36 @@ func TestScansREST_CrossProjectAccessDenied(t *testing.T) {
 	}
 }
 
+func TestScansREST_ViewerCanReadButCannotMutateScans(t *testing.T) {
+	s := newScanRESTServer(t)
+	uid, pw := seedTestUser(t, s.db, "viewer", "viewer@x", false, false)
+	cookie, _, _ := s.login(t, "viewer", pw)
+	proj, repo, projectID, _ := seedScanProject(t, s, uid, "docker")
+	if _, err := s.db.Writer.ExecContext(context.Background(),
+		`UPDATE project_members SET role='viewer' WHERE project_id=? AND user_id=?`, projectID, uid); err != nil {
+		t.Fatal(err)
+	}
+
+	readResp, _ := s.do(t, http.MethodGet,
+		"/api/v1/projects/"+proj+"/repos/docker/"+repo+"/artifacts/sha256:none/scans",
+		cookie, nil)
+	if readResp.StatusCode != http.StatusOK {
+		t.Fatalf("viewer read status=%d want 200", readResp.StatusCode)
+	}
+
+	paths := []string{
+		"/api/v1/projects/" + proj + "/repos/docker/" + repo + "/artifacts/sha256:none/rescan",
+		"/api/v1/projects/" + proj + "/repos/docker/" + repo + "/rescan",
+		"/api/v1/projects/" + proj + "/repos/docker/" + repo + "/scans/prune",
+	}
+	for _, path := range paths {
+		resp, body := s.do(t, http.MethodPost, path, cookie, nil)
+		if resp.StatusCode != http.StatusForbidden {
+			t.Errorf("POST %s status=%d want 403 body=%v", path, resp.StatusCode, body)
+		}
+	}
+}
+
 func TestScansREST_ListArtifactScans(t *testing.T) {
 	s := newScanRESTServer(t)
 	uid, pw := seedTestUser(t, s.db, "alice", "a@x", false, false)

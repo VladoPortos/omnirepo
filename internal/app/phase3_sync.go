@@ -41,6 +41,7 @@ type syncDeps struct {
 	debRegistry  *regen.Registry
 	pypiRegistry *regen.Registry
 	helmRegistry *regen.Registry
+	transport    http.RoundTripper
 }
 
 // wireSync constructs and registers the four sync handlers + builds the
@@ -48,7 +49,11 @@ type syncDeps struct {
 func (d syncDeps) wireSync() *api.SyncRESTAdapter {
 	repoRoot := filepath.Join(d.cfg.DataRoot, "repos")
 	pathStore := storage.NewPathStore(repoRoot)
-	httpClient := &http.Client{Timeout: defaultSyncHTTPTimeout(d.cfg)}
+	transport := d.transport
+	if transport == nil {
+		transport = httpx.NewSafeTransport(nil)
+	}
+	httpClient := &http.Client{Transport: transport, Timeout: defaultSyncHTTPTimeout(d.cfg)}
 
 	reposRepo := metadata.NewReposRepo(d.db)
 	projectsRepo := metadata.NewProjectsRepo(d.db)

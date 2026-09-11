@@ -72,6 +72,7 @@ func BasicOrAPIKey(d Deps) func(http.Handler) http.Handler {
 
 			// Password path (argon2id).
 			actor, authed := authenticatePassword(r.Context(), d, login, pw)
+			releaseAttemptPermit(r.Context())
 			if !authed {
 				writeJSON401Basic(w, r)
 				return

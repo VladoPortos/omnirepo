@@ -172,6 +172,10 @@ func TestValidateMirrorUpstreamURL(t *testing.T) {
 	}{
 		{"https://archive.ubuntu.com/ubuntu", true},
 		{"http://repo.example/deb", true},
+		{"http://127.0.0.1/admin", false},
+		{"http://169.254.169.254/latest/meta-data", false},
+		{"http://10.20.30.40/internal", false},
+		{"http://[::1]/private", false},
 		{"file:///etc/passwd", false},
 		{"ftp://legacy.example/pub", false},
 		{"javascript:alert(1)", false},

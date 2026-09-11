@@ -111,6 +111,45 @@ func TestRunHappyPath(t *testing.T) {
 	}
 }
 
+func TestRun_HTTPDisabledDoesNotBindHTTPPort(t *testing.T) {
+	cfg := newTestConfig(t, "")
+	cfg.Server.HTTPEnabled = false
+
+	occupied, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer occupied.Close()
+	cfg.Server.HTTPPort = occupied.Addr().(*net.TCPAddr).Port
+
+	unusedHTTP, httpsLn := tcpPair(t)
+	// tcpPair's HTTP listener is intentionally unused in this test.
+	// Close it immediately so only the HTTPS listener is handed to Run.
+	unusedHTTP.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	ready := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- app.Run(ctx, cfg, app.RunOptions{HTTPSListener: httpsLn, Ready: ready})
+	}()
+	select {
+	case <-ready:
+	case err := <-done:
+		t.Fatalf("Run returned before ready: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not become ready")
+	}
+
+	tr := &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}
+	resp := waitFor(t, "https://"+httpsLn.Addr().String()+"/healthz", tr, 3*time.Second)
+	resp.Body.Close()
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Run returned: %v", err)
+	}
+}
+
 func TestRun_FirstBootWritesSelfSignedCert(t *testing.T) {
 	cfg := newTestConfig(t, "")
 	httpLn, httpsLn := tcpPair(t)

@@ -11,6 +11,8 @@
 #   (double underscore is the nesting separator)
 
 server:
+  # Disable this listener to enforce HTTPS-only service.
+  http_enabled: true
   http_port: 8080
   https_port: 8443
   hostname: omnirepo.example.com

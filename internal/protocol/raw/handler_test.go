@@ -405,6 +405,45 @@ func TestRawAnonymousGet_PublicRead(t *testing.T) {
 	resp.Body.Close()
 }
 
+// TestRawAnonymousGet_ActiveContentDownloaded catches same-origin stored XSS:
+// a public RAW HTML artifact must never be rendered as active browser content.
+func TestRawAnonymousGet_ActiveContentDownloaded(t *testing.T) {
+	f := newRawFixture(t)
+	f.seedRepo("pub-active", "r", true, false)
+
+	body := []byte(`<!doctype html><script>document.body.dataset.pwned="yes"</script>`)
+	resp := f.put(t, "/pub-active/raw/r/payload.html", body, true)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("PUT: %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	resp = f.get(t, "/pub-active/raw/r/payload.html", false, "")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("anonymous GET: %d", resp.StatusCode)
+	}
+	got, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	if !bytes.Equal(got, body) {
+		t.Fatalf("body changed: got %q want %q", got, body)
+	}
+	if got := resp.Header.Get("Content-Type"); got != "application/octet-stream" {
+		t.Fatalf("Content-Type=%q want application/octet-stream", got)
+	}
+	if got := resp.Header.Get("Content-Disposition"); !strings.HasPrefix(got, `attachment;`) {
+		t.Fatalf("Content-Disposition=%q want attachment", got)
+	}
+	if got := resp.Header.Get("X-Content-Type-Options"); got != "nosniff" {
+		t.Fatalf("X-Content-Type-Options=%q want nosniff", got)
+	}
+	if got := resp.Header.Get("Content-Security-Policy"); got != "sandbox; default-src 'none'" {
+		t.Fatalf("Content-Security-Policy=%q", got)
+	}
+}
+
 func TestRawAnonymousGet_PrivateRepoBlocked(t *testing.T) {
 	f := newRawFixture(t)
 	f.seedRepo("priv", "r", false, false) // public_read=false

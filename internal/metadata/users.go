@@ -32,6 +32,16 @@ type User struct {
 // serialize on the writer pool and share BEGIN IMMEDIATE semantics (see tx.go).
 type UsersRepo struct{ db *DB }
 
+// AdminUserPatch is applied atomically by ApplyAdminPatch. PasswordHash must
+// already be derived by the caller so expensive Argon2 work never holds the
+// SQLite writer lock.
+type AdminUserPatch struct {
+	Email              *string
+	IsSuperAdmin       *bool
+	MustChangePassword *bool
+	PasswordHash       *string
+}
+
 // NewUsersRepo constructs a repo bound to db.
 func NewUsersRepo(db *DB) *UsersRepo { return &UsersRepo{db: db} }
 
@@ -103,6 +113,64 @@ func (r *UsersRepo) SetIsSuperAdmin(ctx context.Context, id int64, v bool) error
 		_, err := tx.ExecContext(ctx, `UPDATE users SET is_super_admin=? WHERE id=?`, boolInt(v), id)
 		if err != nil {
 			return fmt.Errorf("users: set is_super_admin %d: %w", id, err)
+		}
+		return nil
+	})
+}
+
+// ApplyAdminPatch updates all administrative user fields in one writer
+// transaction. Demoting the last live super-admin is rejected without any
+// partial field changes. A password change revokes all sessions atomically.
+func (r *UsersRepo) ApplyAdminPatch(ctx context.Context, id int64, patch AdminUserPatch) error {
+	return r.db.WriteTx(ctx, func(tx *sql.Tx) error {
+		var currentSuperAdmin int64
+		if err := tx.QueryRowContext(ctx,
+			`SELECT is_super_admin FROM users WHERE id=? AND deleted_at IS NULL`, id,
+		).Scan(&currentSuperAdmin); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return ErrNotFound
+			}
+			return fmt.Errorf("users: admin patch lookup %d: %w", id, err)
+		}
+
+		if currentSuperAdmin == 1 && patch.IsSuperAdmin != nil && !*patch.IsSuperAdmin {
+			var live int64
+			if err := tx.QueryRowContext(ctx,
+				`SELECT COUNT(*) FROM users WHERE is_super_admin=1 AND deleted_at IS NULL`,
+			).Scan(&live); err != nil {
+				return fmt.Errorf("users: admin patch count super-admins: %w", err)
+			}
+			if live <= 1 {
+				return ErrLastSuperAdmin
+			}
+		}
+
+		if patch.Email != nil {
+			if _, err := tx.ExecContext(ctx, `UPDATE users SET email=? WHERE id=?`, *patch.Email, id); err != nil {
+				return fmt.Errorf("users: admin patch email %d: %w", id, err)
+			}
+		}
+		if patch.IsSuperAdmin != nil {
+			if _, err := tx.ExecContext(ctx, `UPDATE users SET is_super_admin=? WHERE id=?`, boolInt(*patch.IsSuperAdmin), id); err != nil {
+				return fmt.Errorf("users: admin patch super-admin %d: %w", id, err)
+			}
+		}
+		if patch.PasswordHash != nil {
+			if _, err := tx.ExecContext(ctx, `
+				UPDATE users
+				SET password_hash=?, password_changed_at=CURRENT_TIMESTAMP, must_change_password=0
+				WHERE id=?
+			`, *patch.PasswordHash, id); err != nil {
+				return fmt.Errorf("users: admin patch password %d: %w", id, err)
+			}
+			if _, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE user_id=?`, id); err != nil {
+				return fmt.Errorf("users: admin patch revoke sessions %d: %w", id, err)
+			}
+		}
+		if patch.MustChangePassword != nil {
+			if _, err := tx.ExecContext(ctx, `UPDATE users SET must_change_password=? WHERE id=?`, boolInt(*patch.MustChangePassword), id); err != nil {
+				return fmt.Errorf("users: admin patch must-change %d: %w", id, err)
+			}
 		}
 		return nil
 	})

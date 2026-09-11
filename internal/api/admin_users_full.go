@@ -9,6 +9,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"time"
 
@@ -175,31 +176,17 @@ func (d Deps) handlePatchUser(w http.ResponseWriter, r *http.Request) {
 
 	// Diff-audit pattern: track what changed.
 	changes := map[string]any{}
-
 	if patch.Email != nil && *patch.Email != u.Email {
-		if err := d.Users.UpdateEmail(r.Context(), u.ID, *patch.Email); err != nil {
-			writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
-			return
-		}
 		changes["email"] = map[string]string{"from": u.Email, "to": *patch.Email}
 	}
-
 	if patch.IsSuperAdmin != nil && *patch.IsSuperAdmin != u.IsSuperAdmin {
-		if err := d.Users.SetIsSuperAdmin(r.Context(), u.ID, *patch.IsSuperAdmin); err != nil {
-			writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
-			return
-		}
 		changes["is_super_admin"] = *patch.IsSuperAdmin
 	}
-
 	if patch.MustChangePassword != nil && *patch.MustChangePassword != u.MustChangePassword {
-		if err := d.Users.SetMustChangePassword(r.Context(), u.ID, *patch.MustChangePassword); err != nil {
-			writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
-			return
-		}
 		changes["must_change_password"] = *patch.MustChangePassword
 	}
 
+	var passwordHash *string
 	if patch.NewPassword != nil && *patch.NewPassword != "" {
 		// Admin force-reset MUST also enforce the password
 		// floor — without this an admin could PATCH a user to "abc" via
@@ -213,19 +200,23 @@ func (d Deps) handlePatchUser(w http.ResponseWriter, r *http.Request) {
 			writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
 			return
 		}
-		if err := d.Users.UpdatePasswordHash(r.Context(), u.ID, hash); err != nil {
-			writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
-			return
-		}
-		if patch.MustChangePassword != nil && *patch.MustChangePassword {
-			_ = d.Users.SetMustChangePassword(r.Context(), u.ID, true)
-		}
-		// Admin-forced reset invalidates every session for this user.
-		// Unlike self-service change, there is no "preserve current session"
-		// — an admin reset is precisely the scenario where we want every
-		// cookie for the victim to die.
-		_ = d.Sessions.DeleteAllForUser(r.Context(), u.ID)
+		passwordHash = &hash
 		changes["password"] = "reset"
+	}
+
+	err = d.Users.ApplyAdminPatch(r.Context(), u.ID, metadata.AdminUserPatch{
+		Email:              patch.Email,
+		IsSuperAdmin:       patch.IsSuperAdmin,
+		MustChangePassword: patch.MustChangePassword,
+		PasswordHash:       passwordHash,
+	})
+	if errors.Is(err, metadata.ErrLastSuperAdmin) {
+		writeJSONError(w, r, http.StatusConflict, ErrConflict, "cannot demote the last super-admin")
+		return
+	}
+	if err != nil {
+		writeJSONError(w, r, http.StatusInternalServerError, ErrInternal, "")
+		return
 	}
 
 	if len(changes) > 0 {

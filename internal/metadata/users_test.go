@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/vladoportos/omnirepo/internal/metadata"
 	"github.com/vladoportos/omnirepo/internal/metadata/sqlitetest"
@@ -33,6 +34,62 @@ func TestUsersRepo_CreateAndFindByLogin(t *testing.T) {
 	}
 	if u.IsSuperAdmin {
 		t.Fatalf("IsSuperAdmin: true, want false")
+	}
+}
+
+func TestUsersRepo_ApplyAdminPatchIsAtomicAndProtectsLastSuperAdmin(t *testing.T) {
+	db := sqlitetest.New(t)
+	users := metadata.NewUsersRepo(db)
+	sessions := metadata.NewSessionsRepo(db)
+	ctx := context.Background()
+	rootID, err := users.Create(ctx, "root", "old@example.com", "old-hash", true, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	newEmail := "new@example.com"
+	demote := false
+	err = users.ApplyAdminPatch(ctx, rootID, metadata.AdminUserPatch{
+		Email: &newEmail, IsSuperAdmin: &demote,
+	})
+	if !errors.Is(err, metadata.ErrLastSuperAdmin) {
+		t.Fatalf("ApplyAdminPatch=%v want ErrLastSuperAdmin", err)
+	}
+	root, err := users.FindByID(ctx, rootID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if root.Email != "old@example.com" || !root.IsSuperAdmin {
+		t.Fatalf("rejected patch partially applied: %+v", root)
+	}
+
+	if _, err := users.Create(ctx, "root2", "root2@example.com", "hash", true, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sessions.Create(ctx, rootID, "prefix", "sha", time.Now(), time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	mustChange := true
+	newHash := "new-hash"
+	err = users.ApplyAdminPatch(ctx, rootID, metadata.AdminUserPatch{
+		Email: &newEmail, IsSuperAdmin: &demote, MustChangePassword: &mustChange, PasswordHash: &newHash,
+	})
+	if err != nil {
+		t.Fatalf("ApplyAdminPatch: %v", err)
+	}
+	root, err = users.FindByID(ctx, rootID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if root.Email != newEmail || root.IsSuperAdmin || !root.MustChangePassword || root.PasswordHash != newHash || root.PasswordChangedAt == nil {
+		t.Fatalf("patch not fully applied: %+v", root)
+	}
+	var sessionCount int
+	if err := db.Reader.QueryRowContext(ctx, `SELECT COUNT(*) FROM sessions WHERE user_id=?`, rootID).Scan(&sessionCount); err != nil {
+		t.Fatal(err)
+	}
+	if sessionCount != 0 {
+		t.Fatalf("session count=%d want 0", sessionCount)
 	}
 }
 

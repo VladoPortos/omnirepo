@@ -218,6 +218,27 @@ func TestAdminUsersFull_PatchSuperAdmin(t *testing.T) {
 	}
 }
 
+func TestAdminUsersFull_PatchCannotDemoteLastSuperAdmin(t *testing.T) {
+	s := newTestServer(t)
+	_, pw := seedTestUser(t, s.db, "root", "r@x", true, false)
+	cookie, _, _ := s.login(t, "root", pw)
+
+	resp, body := s.do(t, http.MethodPatch, "/api/v1/admin/users/root", cookie, map[string]any{
+		"email":          "changed@example.com",
+		"is_super_admin": false,
+	})
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("status=%d want 409 body=%v", resp.StatusCode, body)
+	}
+	u, err := metadata.NewUsersRepo(s.db).FindByLogin(context.Background(), "root")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !u.IsSuperAdmin || u.Email != "r@x" {
+		t.Fatalf("rejected patch partially applied: %+v", u)
+	}
+}
+
 func TestAdminUsersFull_NonSuperAdmin403(t *testing.T) {
 	s := newTestServer(t)
 	_, pw := seedTestUser(t, s.db, "alice", "a@x", false, false)

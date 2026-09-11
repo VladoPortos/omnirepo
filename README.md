@@ -145,6 +145,8 @@ OmniRepo reads a YAML config (path via `--config` flag or `$OMNIREPO_CONFIG`). E
 
 ```yaml
 server:
+  # Set false (or OMNIREPO_SERVER__HTTP_ENABLED=false) for HTTPS-only operation.
+  http_enabled: true
   http_port: 8080
   https_port: 8443
   hostname: omnirepo.example.com
